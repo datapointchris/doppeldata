@@ -1,10 +1,27 @@
+import enum
 import importlib.metadata
 import json
 from typing import Annotated
 
 import typer
+from doppeldata.profile import schema_text
 
 app = typer.Typer(no_args_is_help=True)
+schema_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas doppeldata validates its files against.')
+app.add_typer(schema_app, name='schema')
+
+
+class SchemaName(enum.StrEnum):
+    PROFILE = 'profile'
+
+
+SCHEMAS = {SchemaName.PROFILE: schema_text}
+
+
+@schema_app.command('show')
+def schema_show(name: Annotated[SchemaName, typer.Argument(help='Which schema to print.')]) -> None:
+    """Print a JSON Schema (Draft 2020-12)."""
+    typer.echo(SCHEMAS[name](), nl=False)
 
 
 def installed_commit() -> str | None:

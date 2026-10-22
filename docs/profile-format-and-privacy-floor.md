@@ -7,7 +7,9 @@ the committed form, because a reviewer reads it, diffs it and comments on it in 
 is accepted on input. One JSON Schema validates both.
 
 - **`profile_version` changes only on a breaking format change.** An added field keeps it. The tool
-  records its own version separately, under `generated.tool`.
+  records its own version separately, under `generated.tool`. A breaking change must ship with
+  `profile upgrade`, which rewrites an older file in place. A profile newer than the installed
+  library refuses to load and names its version.
 - **Every section is optional.** A profile imported from a data catalog or a data contract has types
   and no statistics, and the generator falls back to defaults for what is missing.
 - **Unknown fields survive a read and a rewrite.** An older tool never strips what a newer one wrote.
@@ -16,12 +18,14 @@ is accepted on input. One JSON Schema validates both.
 ## The schema is derived from the Rust model, so Python and Rust cannot disagree
 
 The generator deserializes a profile into Rust structs with serde, and schemars derives the JSON
-Schema (Draft 2020-12) from the same structs. The schema must be committed in the library, and CI
-must regenerate it and fail on a difference. The Python profiler validates against that committed
-file.
+Schema (Draft 2020-12) from the same structs. The schema is committed at
+`library/src/doppeldata/schemas/profile.v1.json`, and a cargo test fails when it differs from what
+the model derives. The Python profiler validates against that committed file.
 
 JSON Schema cannot express ordering, such as quantiles rising or rates summing to 1. A second Python
-pass checks those and reports them in the same shape as a schema error.
+pass checks those and reports them in the same shape as a schema error. Each problem carries a code,
+a JSON Pointer to the field and a message, so a reviewer is pointed at the line. A schema error's
+code names the keyword that failed, such as `schema-maximum`.
 
 ## A profile's identity ignores formatting
 
@@ -31,7 +35,26 @@ not change it. The hash is taken over the RFC 8785 canonical JSON form of the pr
 identity.
 
 YAML is parsed only in Python, because serde_yaml is deprecated. Python sends the canonical bytes to
-Rust, and both hash the same bytes.
+Rust, which deserializes them into its model before hashing. So a profile the engine cannot read
+never gets an identity.
+
+## A bundle is one file or a directory, and both forms share one identity
+
+A bundle holds several table profiles and the relationships between them. It is written as one file
+with `kind: bundle` and every table inline, or as a directory whose `bundle.yaml` names one file per
+table. The directory form lets each table be reviewed and regenerated alone. The digest is taken
+with every table inline, so moving between the forms keeps the identity. A table file's `name` must
+match the key the index gives it.
+
+A relationship stores its fan-out as shares and quantiles, never key values. So join skew survives
+into synthetic data while no key leaves the source.
+
+## Generated files name the profile they came from
+
+Every Parquet and Arrow file the generator writes carries schema-level key-value metadata: the
+profile's name, version and digest, the scenario's name, and the seed. The keys are the
+`doppeldata.*` constants in the core crate's `profile::provenance`. So the next profiler can tell
+synthetic data from real.
 
 ## Sketches are an optional sidecar, never written for a sensitive column
 

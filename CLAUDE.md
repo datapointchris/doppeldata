@@ -18,8 +18,13 @@ docs/           the design pages
   are imported only under `cli/`. Code that imports the library, including inside AWS Glue jobs,
   must never pull them in.
 - **`crates/core` knows nothing of Python.** `crates/python` is the only crate that imports pyo3,
-  and it builds as `doppeldata._core`. Everything the extension exposes is typed in
-  `library/src/doppeldata/_core.pyi`, which mypy reads in place of the compiled module.
+  and it builds as `doppeldata._core`. `task generate` writes its stub,
+  `library/src/doppeldata/_core.pyi`, from the crate's pyo3 introspection. mypy reads the stub in
+  place of the compiled module. The extension is an inline `#[pymodule] mod`, the only form maturin
+  generates a stub from.
+- **The profile's JSON Schema is derived from the Rust model, never edited.** `task generate` writes
+  `library/src/doppeldata/schemas/profile.v1.json`. `task check-generated` fails when the schema or
+  the stub differs from what the crates generate, and runs in the hooks.
 - **A library dependency lands on every consumer's Glue job.** Add one only if the library cannot do
   without it. It must install on CPython 3.11 from a wheel. It arrives in the change that first
   imports it. A heavy engine used by one feature, such as pyspark or scipy, is imported lazily and
@@ -38,7 +43,7 @@ as 3.11 and runs its tests there.
 ## The tag is the version of everything
 
 `crates/Cargo.toml` carries `version = "0.0.0"`. `build-library.yml` runs `crates/set-version.sh`
-with the tagged version before maturin builds, so the wheel and `doppeldata._core.__version__` both
+with the tagged version before maturin builds, so the wheel and `doppeldata._core.VERSION` both
 name the tag. The CLI's version comes from the tag through uv-dynamic-versioning, and it requires the
 library at exactly that version. A release is cut from `main` by conventional commits, and nothing
 is committed back.
@@ -52,6 +57,8 @@ merge can tag. The release builds the commit again before it tags.
 task setup      # uv sync --all-packages: builds the extension, installs both members
 task test       # cargo test in crates/, then pytest
 task lint       # ruff, mypy, rustfmt and clippy, writing nothing
+task generate   # rewrite the profile's JSON Schema and the extension's stub from the crates
+task check-generated   # fail when either committed file is not what the crates generate
 ```
 
 `uv sync` rebuilds the extension when `crates/` changes. A `cargo` command runs from `crates/`,

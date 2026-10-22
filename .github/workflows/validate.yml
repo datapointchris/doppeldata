@@ -81,6 +81,15 @@ jobs:
           if [ "$code" -eq 0 ] || [ "$code" -eq 5 ]; then exit 0; fi
           exit 1
 
+      # > custom:after:python-library - the committed _core.pyi is the one maturin generates
+      #
+      # The stub's text depends on the maturin that writes it, so this pins the
+      # release Taskfile.yml's MATURIN_VERSION names.
+      - name: Check the committed stub is current
+        run: |
+          uvx maturin@1.15.0 generate-stubs --quiet --out "$RUNNER_TEMP/stubs"
+          diff -u src/doppeldata/_core.pyi "$RUNNER_TEMP/stubs/doppeldata/_core.pyi"
+
   python-cli:
     runs-on: ubuntu-26.04
     defaults:

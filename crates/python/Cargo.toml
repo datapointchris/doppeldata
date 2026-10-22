@@ -18,4 +18,4 @@ crate-type = ["cdylib"]
 # library's pyproject.toml, so `cargo test` here still links libpython.
 [dependencies]
 doppeldata-core = { path = "../core" }
-pyo3 = "0.30"
+pyo3 = { version = "0.30", features = ["experimental-inspect"] }

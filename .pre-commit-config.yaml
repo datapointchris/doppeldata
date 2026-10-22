@@ -266,6 +266,17 @@ repos:
         pass_filenames: false
         files: '^crates/'
 
+# > custom:after:rust - the committed schema and stub are what the crates generate
+  - repo: local
+    hooks:
+      - id: generated-files-current
+        name: profile schema and _core.pyi are current
+        entry: task check-generated
+        language: system
+        files: '^(crates/|library/src/doppeldata/(_core\.pyi|schemas/))'
+        pass_filenames: false
+        stages: [pre-commit]
+
 # generated:github-actions - GitHub Actions
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12
