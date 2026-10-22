@@ -1,5 +1,7 @@
 import copy
 import json
+import math
+import re
 from pathlib import Path
 
 import pytest
@@ -15,14 +17,9 @@ def write_json(path: Path, document: dict) -> Path:
     return path
 
 
-def test_the_engine_reads_every_section_the_schema_accepts():
-    digest = Profile.load(EXAMPLE).digest
-    assert digest.startswith('sha256:')
-    assert len(digest) == len('sha256:') + 64
-
-
 def test_the_digest_ignores_format_comments_key_order_and_when_and_by_what_it_was_profiled(tmp_path):
     original = Profile.load(EXAMPLE)
+    assert re.fullmatch(r'sha256:[0-9a-f]{64}', original.digest)
     reordered = dict(reversed(list(original.to_plain().items())))
     reordered['generated'] |= {'at': '2030-01-01T00:00:00Z', 'tool': 'doppeldata 9.9.9'}
     assert Profile.load(write_json(tmp_path / 'orders.json', reordered)).digest == original.digest
@@ -32,7 +29,7 @@ def test_the_digest_ignores_format_comments_key_order_and_when_and_by_what_it_wa
 
 
 def test_saving_changes_only_the_edited_value_and_keeps_fields_this_version_does_not_know(tmp_path):
-    text = EXAMPLE.read_text().replace('kind: table\n', 'kind: table\nfrom_a_newer_tool: {kept: true}\n')
+    text = EXAMPLE.read_text().replace('kind: table\n', 'kind: table\nfrom_a_newer_tool: {kept: true, since: 2026-01-01}\n')
     path = tmp_path / 'orders.profile.yaml'
     path.write_text(text)
     profile = Profile.load(path)
@@ -47,6 +44,8 @@ def test_saving_changes_only_the_edited_value_and_keeps_fields_this_version_does
         (lambda p: p['columns'][1].update(null_rate=1.5), {('schema-maximum', '/columns/1/null_rate')}),
         (lambda p: p['dataset']['keys'].update(primary={'uniqueness': 1.0}), {('schema-required', '/dataset/keys/primary')}),
         (lambda p: p.update(profile_version=2), {('newer-profile-version', '/profile_version')}),
+        (lambda p: p['columns'][1]['numeric'].update(skew=math.nan), {('not-finite', '/columns/1/numeric/skew')}),
+        (lambda p: p['columns'][1]['numeric']['quantiles'].update(p5=1.0), {('schema-pattern', '/columns/1/numeric/quantiles')}),
         (
             lambda p: (
                 p['columns'][1]['numeric']['quantiles'].update(p95=50.0),
@@ -60,7 +59,14 @@ def test_saving_changes_only_the_edited_value_and_keeps_fields_this_version_does
             },
         ),
     ],
-    ids=['out-of-range rate', 'missing required field', 'newer version', 'orderings the schema cannot state'],
+    ids=[
+        'out-of-range rate',
+        'missing required field',
+        'newer version',
+        'NaN',
+        'ambiguous quantile name',
+        'orderings the schema cannot state',
+    ],
 )
 def test_each_fault_is_reported_at_the_field_that_holds_it(tmp_path, edit, expected):
     document = copy.deepcopy(Profile.load(EXAMPLE).to_plain())
@@ -90,3 +96,5 @@ def test_a_bundle_directory_and_its_single_file_form_share_one_digest(tmp_path):
     single = write_json(tmp_path / 'shop.json', index | {'tables': {'orders': orders, 'customers': customers}})
 
     assert Bundle.load(directory).digest == Bundle.load(single).digest
+    with pytest.raises(ValueError, match='save needs a path'):
+        Bundle.load(single).tables['orders'].save()

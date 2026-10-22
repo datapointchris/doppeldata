@@ -23,9 +23,15 @@ Schema (Draft 2020-12) from the same structs. The schema is committed at
 the model derives. The Python profiler validates against that committed file.
 
 JSON Schema cannot express ordering, such as quantiles rising or rates summing to 1. A second Python
-pass checks those and reports them in the same shape as a schema error. Each problem carries a code,
-a JSON Pointer to the field and a message, so a reviewer is pointed at the line. A schema error's
-code names the keyword that failed, such as `schema-maximum`.
+pass checks those at the fields the model gives that meaning, and reports them in the same shape as
+a schema error. Each problem carries a code, a JSON Pointer to the field and a message, so a
+reviewer is pointed at the line. A schema error's code names the keyword that failed, such as
+`schema-maximum`.
+
+The schema's integer widths, such as `uint32`, are checked too. A number canonical JSON cannot
+write exactly is refused before the schema runs: NaN, an infinity, or an integer beyond ±2^53.
+Polars returns NaN for the skew of a constant column, so a profiler must write such a statistic as
+null.
 
 ## A profile's identity ignores formatting
 
@@ -34,9 +40,10 @@ not change it. The hash is taken over the RFC 8785 canonical JSON form of the pr
 `generated.at` and `generated.tool` are left out, so re-profiling unchanged data gives the same
 identity.
 
-YAML is parsed only in Python, because serde_yaml is deprecated. Python sends the canonical bytes to
-Rust, which deserializes them into its model before hashing. So a profile the engine cannot read
-never gets an identity.
+The library alone computes the digest, and the generator takes it as an argument. Every way into
+the generator passes through the library, so one implementation leaves nothing to disagree with.
+YAML is parsed only in Python, because serde_yaml is deprecated. A YAML timestamp is read as the
+text written, so `low: 2020-01-03` and `low: "2020-01-03"` are one value.
 
 ## A bundle is one file or a directory, and both forms share one identity
 
@@ -51,7 +58,7 @@ into synthetic data while no key leaves the source.
 
 ## Generated files name the profile they came from
 
-Every Parquet and Arrow file the generator writes carries schema-level key-value metadata: the
+Every Parquet and Arrow file the generator writes must carry schema-level key-value metadata: the
 profile's name, version and digest, the scenario's name, and the seed. The keys are the
 `doppeldata.*` constants in the core crate's `profile::provenance`. So the next profiler can tell
 synthetic data from real.

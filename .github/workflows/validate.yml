@@ -83,11 +83,11 @@ jobs:
 
       # > custom:after:python-library - the committed _core.pyi is the one maturin generates
       #
-      # The stub's text depends on the maturin that writes it, so this pins the
-      # release Taskfile.yml's MATURIN_VERSION names.
+      # The same check as `task check-generated`, with the maturin the dev group
+      # pins. The schema half runs in the rust-crates job's cargo test.
       - name: Check the committed stub is current
         run: |
-          uvx maturin@1.15.0 generate-stubs --quiet --out "$RUNNER_TEMP/stubs"
+          uv run maturin generate-stubs --quiet --out "$RUNNER_TEMP/stubs"
           diff -u src/doppeldata/_core.pyi "$RUNNER_TEMP/stubs/doppeldata/_core.pyi"
 
   python-cli:

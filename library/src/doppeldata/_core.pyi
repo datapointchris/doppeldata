@@ -4,13 +4,17 @@ doppeldata's engine, compiled.
 
 from typing import Final
 
+FORMAT_VERSION: Final[int]
+"""
+The profile format version the engine reads.
+"""
+
 VERSION: Final[str]
 """
 The engine's release, which is the tag the wheel was built from.
 """
 
-def profile_digest(canonical: bytes) -> str:
+def schema_file_names() -> dict[str, str]:
     """
-    Reads a profile from its canonical JSON and returns ``sha256:<hex>`` over those bytes, or
-    raises ValueError when the engine cannot read it.
+    The file name under ``doppeldata/schemas/`` of each JSON Schema the library ships, by name.
     """

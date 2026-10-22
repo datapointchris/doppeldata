@@ -7,7 +7,7 @@ use super::values::ProfileVersion;
 use super::values::Quantiles;
 use super::values::Rate;
 
-/// An object whose fields a later format revision or another issue defines.
+/// An object whose fields format v1 leaves open. Its fields are kept as written and checked by nothing.
 pub type OpenObject = serde_json::Map<String, serde_json::Value>;
 
 /// One table's profile. Every section is optional, and the generator falls back to defaults.
@@ -25,7 +25,7 @@ pub struct TableProfile {
 /// How and when the profile was made. `at` and `tool` are left out of the profile's digest.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Generated {
-    /// The tool and its version, such as `doppeldata 0.1.0`.
+    /// The tool and its version, as `doppeldata <version>`.
     pub tool: Option<String>,
     /// When profiling finished, in RFC 3339.
     pub at: Option<String>,
@@ -41,6 +41,8 @@ pub enum Engine {
     Polars,
     Duckdb,
     Spark,
+    /// Read from a catalog or a data contract rather than computed from data.
+    Import,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
@@ -96,8 +98,8 @@ pub struct Suppression {
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct AuditEntry {
     pub column: String,
-    /// How many literals of the column the profile keeps.
-    pub values: u64,
+    /// How many literals of the column the profile keeps, where the rule admits a count of them.
+    pub values: Option<u64>,
     pub rule: String,
 }
 
@@ -134,6 +136,7 @@ pub enum Compression {
     Zstd,
     Snappy,
     Lz4,
+    Lzo,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]

@@ -22,9 +22,10 @@ docs/           the design pages
   `library/src/doppeldata/_core.pyi`, from the crate's pyo3 introspection. mypy reads the stub in
   place of the compiled module. The extension is an inline `#[pymodule] mod`, the only form maturin
   generates a stub from.
-- **The profile's JSON Schema is derived from the Rust model, never edited.** `task generate` writes
-  `library/src/doppeldata/schemas/profile.v1.json`. `task check-generated` fails when the schema or
-  the stub differs from what the crates generate, and runs in the hooks.
+- **The JSON Schemas are derived from the Rust model, never edited.** `published_schemas::all()` in
+  `crates/core` lists each one with its file name, and `task generate` writes them into
+  `library/src/doppeldata/schemas/`. `task check-generated` fails when a schema or the stub differs
+  from what the crates generate, and runs in the hooks.
 - **A library dependency lands on every consumer's Glue job.** Add one only if the library cannot do
   without it. It must install on CPython 3.11 from a wheel. It arrives in the change that first
   imports it. A heavy engine used by one feature, such as pyspark or scipy, is imported lazily and
@@ -57,8 +58,8 @@ merge can tag. The release builds the commit again before it tags.
 task setup      # uv sync --all-packages: builds the extension, installs both members
 task test       # cargo test in crates/, then pytest
 task lint       # ruff, mypy, rustfmt and clippy, writing nothing
-task generate   # rewrite the profile's JSON Schema and the extension's stub from the crates
-task check-generated   # fail when either committed file is not what the crates generate
+task generate   # rewrite the JSON Schemas and the extension's stub from the crates
+task check-generated   # fail when a committed schema or the stub is not what the crates generate
 ```
 
 `uv sync` rebuilds the extension when `crates/` changes. A `cargo` command runs from `crates/`,

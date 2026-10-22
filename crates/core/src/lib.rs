@@ -2,6 +2,7 @@
 //! output goes to its caller.
 
 pub mod profile;
+pub mod published_schemas;
 
 /// The engine's release, which is the tag the wheel was built from.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

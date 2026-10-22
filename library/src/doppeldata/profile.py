@@ -1,14 +1,15 @@
 """Profile format v1: read, validate, save and identify a profile file.
 
 A profile is committed as YAML and accepted as JSON. Both validate against the JSON Schema derived
-from the engine's Rust model, and a profile's identity is the SHA-256 the engine takes over its
-RFC 8785 canonical JSON.
+from the engine's Rust model. A profile's identity is the SHA-256 of its RFC 8785 canonical JSON,
+which the library alone computes and hands to the generator.
 """
 
 import dataclasses as dc
+import hashlib
 import importlib.resources
 import json
-import re
+import math
 from collections.abc import Iterator
 from collections.abc import Mapping
 from functools import cache
@@ -19,19 +20,30 @@ import jsonschema
 import jsonschema.exceptions
 import rfc8785
 from ruamel.yaml import YAML
+from ruamel.yaml.constructor import RoundTripConstructor
+from ruamel.yaml.error import YAMLError
 from ruamel.yaml.nodes import ScalarNode
 from ruamel.yaml.representer import RoundTripRepresenter
 
 from doppeldata import _core
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = _core.FORMAT_VERSION
 BUNDLE_INDEX = 'bundle.yaml'
 # Left out of the digest, so profiling unchanged data again keeps the profile's identity.
 UNHASHED_GENERATED_FIELDS = ('at', 'tool')
 # Stored rates are rounded, so a set meant to sum to 1 is allowed this far off.
 RATE_SUM_TOLERANCE = 0.01
-QUANTILE_NAME = re.compile(r'^p[0-9]+$')
-RATE_SETS_SUMMING_TO_ONE = ('type_mix', 'by_month', 'by_dow', 'by_hour')
+# RFC 8785 writes numbers as IEEE 754 doubles, which hold every integer only up to this magnitude.
+LARGEST_EXACT_INTEGER = 2**53 - 1
+INTEGER_FORMAT_RANGES = {
+    'int32': (-(2**31), 2**31 - 1),
+    'int64': (-(2**63), 2**63 - 1),
+    'uint32': (0, 2**32 - 1),
+    'uint64': (0, 2**64 - 1),
+}
+TEMPORAL_RATE_SETS = ('by_month', 'by_dow', 'by_hour')
+
+PointerParts = tuple[str | int, ...]
 
 
 @dc.dataclass(frozen=True)
@@ -51,35 +63,66 @@ class InvalidProfile(ValueError):
         super().__init__(f'{source} is not a valid profile:\n{listed}')
 
 
-def schema_text() -> str:
-    """The profile's JSON Schema, as committed in the package."""
-    return importlib.resources.files('doppeldata').joinpath('schemas/profile.v1.json').read_text()
+def schema_names() -> list[str]:
+    """The names of the JSON Schemas the library ships, as `doppeldata schema show` takes them."""
+    return list(_core.schema_file_names())
+
+
+def schema_text(name: str) -> str:
+    """A JSON Schema the library ships, as committed in the package."""
+    return importlib.resources.files('doppeldata').joinpath('schemas', _core.schema_file_names()[name]).read_text()
+
+
+def integer_format_checker() -> jsonschema.FormatChecker:
+    """Checks the integer widths the Rust model declares, which jsonschema leaves unchecked by default."""
+    checker = jsonschema.FormatChecker()
+    for name, (low, high) in INTEGER_FORMAT_RANGES.items():
+        checker.checks(name)(lambda value, low=low, high=high: not isinstance(value, int) or low <= value <= high)
+    return checker
 
 
 @cache
 def validators() -> dict[str | None, jsonschema.Draft202012Validator]:
     """One validator per `kind`, so an error inside a table is not reported as a bundle's."""
-    schema = json.loads(schema_text())
+    schema = json.loads(schema_text('profile'))
+    checker = integer_format_checker()
     root = {key: value for key, value in schema.items() if key != 'oneOf'}
-    by_kind: dict[str | None, jsonschema.Draft202012Validator] = {None: jsonschema.Draft202012Validator(schema)}
+    by_kind: dict[str | None, jsonschema.Draft202012Validator] = {None: jsonschema.Draft202012Validator(schema, format_checker=checker)}
     for branch in schema['oneOf']:
-        by_kind[branch['properties']['kind']['const']] = jsonschema.Draft202012Validator(root | branch)
+        by_kind[branch['properties']['kind']['const']] = jsonschema.Draft202012Validator(root | branch, format_checker=checker)
     return by_kind
 
 
-class NullWrittenOut(RoundTripRepresenter):
+class TimestampText(str):
+    """A YAML timestamp kept as the text written, so it validates as a string and saves as written."""
+
+
+class ProfileConstructor(RoundTripConstructor):
+    def construct_timestamp_text(self, node: ScalarNode) -> TimestampText:
+        return TimestampText(self.construct_scalar(node))
+
+
+ProfileConstructor.add_constructor('tag:yaml.org,2002:timestamp', ProfileConstructor.construct_timestamp_text)
+
+
+class ProfileRepresenter(RoundTripRepresenter):
     """Writes None as `null`, where ruamel's round trip would leave the value empty."""
 
     def represent_none(self, data: None) -> ScalarNode:
         return self.represent_scalar('tag:yaml.org,2002:null', 'null')
 
+    def represent_timestamp_text(self, data: TimestampText) -> ScalarNode:
+        return self.represent_scalar('tag:yaml.org,2002:timestamp', str(data))
 
-NullWrittenOut.add_representer(type(None), NullWrittenOut.represent_none)
+
+ProfileRepresenter.add_representer(type(None), ProfileRepresenter.represent_none)
+ProfileRepresenter.add_representer(TimestampText, ProfileRepresenter.represent_timestamp_text)
 
 
 def yaml() -> YAML:
     loader = YAML()
-    loader.Representer = NullWrittenOut
+    loader.Constructor = ProfileConstructor
+    loader.Representer = ProfileRepresenter
     loader.preserve_quotes = True
     loader.width = 4096
     loader.indent(mapping=2, sequence=4, offset=2)
@@ -88,18 +131,27 @@ def yaml() -> YAML:
 
 def read_document(path: Path) -> Any:
     """A profile file as written: comments, key order and unknown fields kept."""
-    if path.suffix == '.json':
-        return json.loads(path.read_text())
-    with path.open() as fh:
-        return yaml().load(fh)
+    try:
+        if path.suffix == '.json':
+            return json.loads(path.read_text())
+        with path.open() as fh:
+            return yaml().load(fh)
+    except (json.JSONDecodeError, YAMLError) as error:
+        raise InvalidProfile(str(path), [Issue('not-parseable', '', str(error))]) from error
 
 
 def write_document(document: Any, path: Path) -> None:
-    if path.suffix == '.json':
-        path.write_text(json.dumps(to_plain(document), indent=2) + '\n')
-        return
-    with path.open('w') as fh:
-        yaml().dump(document, fh)
+    """Write beside the target, then rename over it, so a write that fails leaves the old file whole."""
+    staged = path.with_name(f'.{path.name}.tmp')
+    try:
+        if path.suffix == '.json':
+            staged.write_text(json.dumps(to_plain(document), indent=2, allow_nan=False) + '\n')
+        else:
+            with staged.open('w') as fh:
+                yaml().dump(document, fh)
+        staged.replace(path)
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 def to_plain(value: Any) -> Any:
@@ -124,63 +176,111 @@ def without_unhashed_fields(plain: dict[str, Any]) -> dict[str, Any]:
     return plain | {'generated': kept}
 
 
-def pointer(path: list[Any]) -> str:
+def digest_of(canonical: bytes) -> str:
+    return 'sha256:' + hashlib.sha256(canonical).hexdigest()
+
+
+def pointer(path: PointerParts) -> str:
     return ''.join('/' + str(part).replace('~', '~0').replace('/', '~1') for part in path)
 
 
 def check(plain: Any) -> list[Issue]:
-    """Every reason the document is not a valid profile: the schema's, then the orderings it cannot state."""
+    """Every reason the document is not a valid profile: numbers RFC 8785 cannot write, the schema's, then the orderings it cannot state."""
     if not isinstance(plain, dict):
         return [Issue('not-a-mapping', '', 'a profile is a mapping of sections')]
     version = plain.get('profile_version')
     if isinstance(version, int) and not isinstance(version, bool) and version > FORMAT_VERSION:
         message = f'profile_version {version} is newer than {FORMAT_VERSION}, the version this doppeldata reads; upgrade doppeldata'
         return [Issue('newer-profile-version', '/profile_version', message)]
-    kind = plain.get('kind')
-    validator = validators().get(kind if isinstance(kind, str) else None, validators()[None])
-    issues = []
-    for error in validator.iter_errors(plain):
-        cause = jsonschema.exceptions.best_match([error])
-        issues.append(Issue(f'schema-{cause.validator}', pointer(list(cause.absolute_path)), cause.message))
+    issues = list(unrepresentable_numbers(plain, ()))
     if issues:
         return issues
-    return list(ordering_issues(plain, ''))
+    kind = plain.get('kind')
+    validator = validators().get(kind if isinstance(kind, str) else None, validators()[None])
+    for error in validator.iter_errors(plain):
+        cause = cause_of(error)
+        issues.append(Issue(f'schema-{cause.validator}', pointer(tuple(cause.absolute_path)), cause.message))
+    if issues:
+        return issues
+    if kind == 'bundle':
+        return list(bundle_ordering_issues(plain))
+    return list(table_ordering_issues(plain, ()))
 
 
-def ordering_issues(value: Any, at: str) -> Iterator[Issue]:
-    """What JSON Schema cannot express: quantiles rising, rates summing to 1, bins matching edges."""
-    if isinstance(value, list):
+def cause_of(error: jsonschema.exceptions.ValidationError) -> jsonschema.exceptions.ValidationError:
+    """The error inside an `anyOf` or `oneOf` that names the fault, past the `null` branch every optional field has."""
+    while error.context:
+        branches = [inner for inner in error.context if not (inner.validator == 'type' and inner.validator_value == 'null')]
+        best = jsonschema.exceptions.best_match(branches or error.context)
+        if best is None:
+            break
+        error = best
+    return error
+
+
+def unrepresentable_numbers(value: Any, at: PointerParts) -> Iterator[Issue]:
+    """Numbers anywhere in the document, unknown fields included, that canonical JSON cannot write."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from unrepresentable_numbers(item, (*at, key))
+    elif isinstance(value, list):
         for index, item in enumerate(value):
-            yield from ordering_issues(item, f'{at}/{index}')
-        return
-    if not isinstance(value, dict):
-        return
-    if len(value) > 1 and all(isinstance(key, str) and QUANTILE_NAME.match(key) for key in value):
-        yield from quantile_issues(value, at)
-    for name in RATE_SETS_SUMMING_TO_ONE:
-        rates = value.get(name)
-        if rates:
-            yield from rate_sum_issues(rates.values() if isinstance(rates, dict) else rates, f'{at}/{name}')
-    if isinstance(value.get('given'), str) and isinstance(value.get('table'), dict):
-        for given, row in value['table'].items():
-            yield from rate_sum_issues(row.values(), f'{at}/table/{given}')
-    histogram = value.get('histogram')
-    if isinstance(histogram, dict):
-        yield from histogram_issues(histogram, f'{at}/histogram')
-    extremes = value.get('extremes')
+            yield from unrepresentable_numbers(item, (*at, index))
+    elif isinstance(value, float) and not math.isfinite(value):
+        yield Issue('not-finite', pointer(at), f'{value} is not a finite number')
+    elif isinstance(value, int) and not isinstance(value, bool) and abs(value) > LARGEST_EXACT_INTEGER:
+        yield Issue('integer-too-large', pointer(at), f'{value} is beyond ±2^53, the largest integer canonical JSON writes exactly')
+
+
+def bundle_ordering_issues(bundle: dict[str, Any]) -> Iterator[Issue]:
+    for name, table in bundle['tables'].items():
+        if not isinstance(table, dict):
+            continue
+        if table['name'] != name:
+            yield Issue('table-name-mismatch', pointer(('tables', name, 'name')), f'the table under {name!r} is named {table["name"]!r}')
+        yield from table_ordering_issues(table, ('tables', name))
+    for index, relationship in enumerate(bundle.get('relationships') or []):
+        fanout = relationship.get('fanout') or {}
+        yield from quantile_issues(fanout.get('quantiles'), ('relationships', index, 'fanout', 'quantiles'))
+
+
+def table_ordering_issues(table: dict[str, Any], at: PointerParts) -> Iterator[Issue]:
+    """What JSON Schema cannot express, checked at the fields the model gives each meaning."""
+    layout = (table.get('source') or {}).get('layout') or {}
+    yield from quantile_issues(layout.get('rows_per_file'), (*at, 'source', 'layout', 'rows_per_file'))
+    for index, conditional in enumerate((table.get('dataset') or {}).get('conditionals') or []):
+        for given, row in conditional['table'].items():
+            yield from rate_sum_issues(row.values(), (*at, 'dataset', 'conditionals', index, 'table', given))
+    for index, column in enumerate(table.get('columns') or []):
+        yield from column_ordering_issues(column, (*at, 'columns', index))
+
+
+def column_ordering_issues(column: dict[str, Any], at: PointerParts) -> Iterator[Issue]:
+    if column.get('type_mix'):
+        yield from rate_sum_issues(column['type_mix'].values(), (*at, 'type_mix'))
+    numeric = column.get('numeric') or {}
+    yield from quantile_issues(numeric.get('quantiles'), (*at, 'numeric', 'quantiles'))
+    if numeric.get('histogram'):
+        yield from histogram_issues(numeric['histogram'], (*at, 'numeric', 'histogram'))
+    extremes = numeric.get('extremes') or {}
     if (
-        isinstance(extremes, dict)
-        and all(isinstance(extremes.get(end), float | int) for end in ('low', 'high'))
+        isinstance(extremes.get('low'), int | float)
+        and isinstance(extremes.get('high'), int | float)
         and extremes['low'] > extremes['high']
     ):
-        yield Issue('extremes-reversed', f'{at}/extremes', f'low {extremes["low"]} is above high {extremes["high"]}')
-    tables = value.get('tables')
-    if value.get('kind') == 'bundle' and isinstance(tables, dict):
-        for name, table in tables.items():
-            if isinstance(table, dict) and table.get('name') != name:
-                yield Issue('table-name-mismatch', f'{at}/tables/{name}/name', f'the table under {name!r} is named {table.get("name")!r}')
-    for key, item in value.items():
-        yield from ordering_issues(item, f'{at}/{key}')
+        yield Issue('extremes-reversed', pointer((*at, 'numeric', 'extremes')), f'low {extremes["low"]} is above high {extremes["high"]}')
+    temporal = column.get('temporal') or {}
+    for name in TEMPORAL_RATE_SETS:
+        if temporal.get(name):
+            yield from rate_sum_issues(temporal[name], (*at, 'temporal', name))
+    length = (column.get('string') or {}).get('length') or {}
+    yield from quantile_issues(length.get('quantiles'), (*at, 'string', 'length', 'quantiles'))
+    listed = column.get('list') or {}
+    yield from quantile_issues(listed.get('length'), (*at, 'list', 'length'))
+    if listed.get('element'):
+        yield from column_ordering_issues(listed['element'], (*at, 'list', 'element'))
+    for index, field in enumerate((column.get('struct') or {}).get('fields') or []):
+        yield from column_ordering_issues(field, (*at, 'struct', 'fields', index))
 
 
 def quantile_level(name: str) -> float:
@@ -188,25 +288,26 @@ def quantile_level(name: str) -> float:
     return float('0.' + name[1:])
 
 
-def quantile_issues(quantiles: dict[str, float], at: str) -> Iterator[Issue]:
-    by_level = sorted(quantiles.items(), key=lambda item: quantile_level(item[0]))
+def quantile_issues(quantiles: dict[str, float] | None, at: PointerParts) -> Iterator[Issue]:
+    by_level = sorted((quantiles or {}).items(), key=lambda item: quantile_level(item[0]))
     for (lower, low), (upper, high) in zip(by_level, by_level[1:], strict=False):
         if high < low:
-            yield Issue('quantiles-not-rising', f'{at}/{upper}', f'{upper} ({high}) is below {lower} ({low})')
+            yield Issue('quantiles-not-rising', pointer((*at, upper)), f'{upper} ({high}) is below {lower} ({low})')
 
 
-def rate_sum_issues(rates: Any, at: str) -> Iterator[Issue]:
+def rate_sum_issues(rates: Any, at: PointerParts) -> Iterator[Issue]:
     total = sum(rates)
     if abs(total - 1) > RATE_SUM_TOLERANCE:
-        yield Issue('rates-not-summing-to-one', at, f'the rates sum to {total:.4g}, not 1')
+        yield Issue('rates-not-summing-to-one', pointer(at), f'the rates sum to {total:.4g}, not 1')
 
 
-def histogram_issues(histogram: dict[str, Any], at: str) -> Iterator[Issue]:
-    edges, counts = histogram.get('edges', []), histogram.get('counts', [])
+def histogram_issues(histogram: dict[str, Any], at: PointerParts) -> Iterator[Issue]:
+    edges, counts = histogram['edges'], histogram['counts']
     if len(counts) != len(edges) - 1:
-        yield Issue('histogram-bins-mismatch', at, f'{len(edges)} edges bound {len(edges) - 1} bins, and there are {len(counts)} counts')
+        message = f'{len(edges)} edges bound {len(edges) - 1} bins, and there are {len(counts)} counts'
+        yield Issue('histogram-bins-mismatch', pointer(at), message)
     if any(high <= low for low, high in zip(edges, edges[1:], strict=False)):
-        yield Issue('histogram-edges-not-rising', f'{at}/edges', 'each edge must be above the one before it')
+        yield Issue('histogram-edges-not-rising', pointer((*at, 'edges')), 'each edge must be above the one before it')
 
 
 class Profile:
@@ -236,19 +337,19 @@ class Profile:
         return to_plain(self.document)
 
     def canonical(self) -> bytes:
-        """The RFC 8785 canonical JSON the digest is taken over, without `generated.at` and `generated.tool`."""
+        """The RFC 8785 canonical JSON the digest is taken over, without the unhashed generated fields."""
         return rfc8785.dumps(without_unhashed_fields(self.to_plain()))
 
     @property
     def digest(self) -> str:
-        """`sha256:<hex>` over the canonical form, taken by the engine that reads it."""
-        return _core.profile_digest(self.canonical())
+        """`sha256:<hex>` over the canonical form."""
+        return digest_of(self.canonical())
 
     def save(self, path: str | Path | None = None) -> None:
         """Write the profile as YAML, or as JSON to a `.json` path, keeping comments, order and unknown fields."""
         target = Path(path) if path is not None else self.path
         if target is None:
-            raise ValueError('this profile was never read from a file, so save needs a path')
+            raise ValueError('this profile has no file of its own, so save needs a path')
         write_document(self.document, target)
         self.path = target
 
@@ -263,7 +364,10 @@ class Bundle:
 
     @classmethod
     def load(cls, path: str | Path) -> 'Bundle':
-        """Read a bundle and every table it names, raising InvalidProfile when any of them does not validate."""
+        """Read a bundle and every table it names, raising InvalidProfile when any of them does not validate.
+
+        A table written inline has no file of its own, so its `save` needs a path.
+        """
         path = Path(path)
         index = path / BUNDLE_INDEX if path.is_dir() else path
         document = read_document(index)
@@ -275,12 +379,15 @@ class Bundle:
         tables = {}
         for name, entry in document['tables'].items():
             if not isinstance(entry, str):
-                tables[name] = Profile(entry, index)
+                tables[name] = Profile(entry)
                 continue
-            table = Profile.load(index.parent / entry)
+            member = index.parent / entry
+            if not member.is_file():
+                raise InvalidProfile(str(index), [Issue('table-file-missing', pointer(('tables', name)), f'{entry} does not exist')])
+            table = Profile.load(member)
             if table.document['name'] != name:
                 message = f'{entry} is named {table.document["name"]!r}, and the bundle names it {name!r}'
-                raise InvalidProfile(str(index), [Issue('table-name-mismatch', f'/tables/{name}', message)])
+                raise InvalidProfile(str(index), [Issue('table-name-mismatch', pointer(('tables', name)), message)])
             tables[name] = table
         return cls(document, index, tables)
 
@@ -295,4 +402,4 @@ class Bundle:
 
     @property
     def digest(self) -> str:
-        return _core.profile_digest(self.canonical())
+        return digest_of(self.canonical())

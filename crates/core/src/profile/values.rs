@@ -74,7 +74,8 @@ impl JsonSchema for Rate {
     }
 }
 
-/// Values at named quantiles: `p05` is the 5th percentile, `p50` the median, `p999` the 99.9th.
+/// Values at named quantiles: `p05` is the 5th percentile, `p50` the median, `p999` the 99.9th. A
+/// name's digits after `p` are the level's decimal digits, so `p5` and `p100` are refused.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(transparent)]
 pub struct Quantiles(pub BTreeMap<String, f64>);
@@ -86,9 +87,9 @@ impl JsonSchema for Quantiles {
 
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
-            "description": "Values at named quantiles: p05 is the 5th percentile, p50 the median, p999 the 99.9th.",
+            "description": "Values at named quantiles: p05 is the 5th percentile, p50 the median, p999 the 99.9th. The digits after p are the level's decimal digits, at least two and never ending in 0 past the second.",
             "type": "object",
-            "propertyNames": { "pattern": "^p[0-9]+$" },
+            "propertyNames": { "pattern": "^p[0-9]{2}([0-9]*[1-9])?$" },
             "additionalProperties": { "type": "number" },
         })
     }
