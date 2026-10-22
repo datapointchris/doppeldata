@@ -50,7 +50,5 @@ jobs:
           --python-executable "$RUNNER_TEMP/library/bin/python"
           library/src
 
-      # pytest exits 5 when it collects nothing, which the library before its
-      # first test is not a failure of.
       - name: Test the library on Python 3.11
-        run: '"$RUNNER_TEMP/library/bin/python" -m pytest library || test $? -eq 5'
+        run: '"$RUNNER_TEMP/library/bin/python" -m pytest library'

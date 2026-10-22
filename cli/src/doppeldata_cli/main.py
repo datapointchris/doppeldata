@@ -3,8 +3,20 @@ import json
 from typing import Annotated
 
 import typer
+from doppeldata.profile import schema_names
+from doppeldata.profile import schema_text
 
 app = typer.Typer(no_args_is_help=True)
+schema_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas doppeldata validates its files against.')
+app.add_typer(schema_app, name='schema')
+
+
+@schema_app.command('show')
+def schema_show(name: Annotated[str, typer.Argument(help=f'Which schema to print: {", ".join(schema_names())}.')]) -> None:
+    """Print a JSON Schema (Draft 2020-12)."""
+    if name not in schema_names():
+        raise typer.BadParameter(f'{name!r} is not a schema doppeldata ships; choose from {", ".join(schema_names())}', param_hint='NAME')
+    typer.echo(schema_text(name), nl=False)
 
 
 def installed_commit() -> str | None:

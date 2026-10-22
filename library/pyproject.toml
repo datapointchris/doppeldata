@@ -11,7 +11,11 @@ requires-python = ">=3.11"
 # maturin reads the version from crates/python/Cargo.toml, which the release
 # job sets from the tag.
 dynamic = ["version"]
-dependencies = []
+dependencies = [
+    "jsonschema>=4.26.0",
+    "rfc8785>=0.1.4",
+    "ruamel-yaml>=0.19.1",
+]
 
 [project.urls]
 Repository = "https://github.com/datapointchris/doppeldata"

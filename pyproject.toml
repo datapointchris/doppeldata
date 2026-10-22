@@ -136,6 +136,8 @@ pinned = ["ruff"]
 
 [dependency-groups]
 dev = [
+    # Pinned, because the stub text it generates changes between releases.
+    "maturin==1.15.0",
     "mypy>=2.4.0",
     "ruff==0.17.1",
 ]

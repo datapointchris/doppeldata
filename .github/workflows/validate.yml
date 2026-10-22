@@ -81,6 +81,15 @@ jobs:
           if [ "$code" -eq 0 ] || [ "$code" -eq 5 ]; then exit 0; fi
           exit 1
 
+      # > custom:after:python-library - the committed _core.pyi is the one maturin generates
+      #
+      # The same check as `task check-generated`, with the maturin the dev group
+      # pins. The schema half runs in the rust-crates job's cargo test.
+      - name: Check the committed stub is current
+        run: |
+          uv run maturin generate-stubs --quiet --out "$RUNNER_TEMP/stubs"
+          diff -u src/doppeldata/_core.pyi "$RUNNER_TEMP/stubs/doppeldata/_core.pyi"
+
   python-cli:
     runs-on: ubuntu-26.04
     defaults:
