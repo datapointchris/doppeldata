@@ -6,9 +6,8 @@ members = ["library", "cli"]
 
 # Both distributions release from one tag, so one table serves them.
 [tool.semantic_release]
-# A feature release on 0.x stays on 0.x. Set explicitly, so a
-# python-semantic-release whose default is false never turns the next 0.x
-# release into 1.0.0.
+# A feature release on 0.x stays on 0.x. python-semantic-release v10 defaults
+# this to false, which makes the next release of a 0.x project 1.0.0.
 allow_zero_version = true
 # 1.0 is a compatibility promise, so a breaking change on 0.x is a minor bump.
 # Removing this key is how the project reaches 1.0.
