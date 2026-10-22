@@ -1,8 +1,10 @@
 [project]
 name = "doppeldata-cli"
-description = "Command line for doppeldata: profile, check, export and generate."
+description = "The doppeldata command line."
 authors = [{ name = "Chris Birch", email = "chrisbirch@fastmail.com" }]
 license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
 requires-python = ">=3.13"
 dynamic = ["version", "dependencies"]
 

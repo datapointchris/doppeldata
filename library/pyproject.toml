@@ -3,8 +3,10 @@ name = "doppeldata"
 description = "Profile a dataset into a reviewable file holding no rows, then generate synthetic data from it at any scale."
 authors = [{ name = "Chris Birch", email = "chrisbirch@fastmail.com" }]
 license = "MIT"
-# 3.11 is the Python AWS Glue 5.0 and 5.1 run, and the library runs inside
-# their executors.
+license-files = ["LICENSE"]
+readme = "README.md"
+# The floor is the Python of the oldest Glue in docs/aws-glue-support.md,
+# because the library runs inside Glue executors.
 requires-python = ">=3.11"
 # maturin reads the version from crates/python/Cargo.toml, which the release
 # job sets from the tag.
@@ -19,13 +21,16 @@ requires = ["maturin>=1.9,<2"]
 build-backend = "maturin"
 
 # uv rebuilds a local package only when one of these changes, and the
-# extension's source sits outside this directory.
+# extension's source sits outside this directory. Each glob stops short of
+# crates/target, where build scripts write .rs files of their own.
 [tool.uv]
 cache-keys = [
     { file = "pyproject.toml" },
     { file = "../crates/Cargo.lock" },
-    { file = "../crates/**/Cargo.toml" },
-    { file = "../crates/**/*.rs" },
+    { file = "../crates/Cargo.toml" },
+    { file = "../crates/*/Cargo.toml" },
+    { file = "../crates/*/src/**/*.rs" },
+    { file = "../crates/*/build.rs" },
 ]
 
 [tool.maturin]
