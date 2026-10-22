@@ -16,8 +16,9 @@ is accepted on input. One JSON Schema validates both.
 ## The schema is derived from the Rust model, so Python and Rust cannot disagree
 
 The generator deserializes a profile into Rust structs with serde, and schemars derives the JSON
-Schema (Draft 2020-12) from the same structs. The schema is committed in the library, and CI
-regenerates it and fails on a difference. The Python profiler validates against that committed file.
+Schema (Draft 2020-12) from the same structs. The schema must be committed in the library, and CI
+must regenerate it and fail on a difference. The Python profiler validates against that committed
+file.
 
 JSON Schema cannot express ordering, such as quantiles rising or rates summing to 1. A second Python
 pass checks those and reports them in the same shape as a schema error.
@@ -63,10 +64,10 @@ The `default` policy:
 
 `strict` also treats quasi-identifiers as identifiers, and drops every lookup and conditional table
 involving one. `none` writes everything. It exists for data that is already synthetic or public, and
-`profile check` always reports a `none` profile.
+`profile check` must always report a `none` profile.
 
 ## Every literal in the file is listed with the rule that admitted it
 
 The profile's `privacy.audit` list names each literal it keeps and the rule that allowed it, so a
-review is one read. `profile check` reads the file alone, with no data, and recomputes each rule from
-what the file states.
+review is one read. `profile check` must read the file alone, with no data, and recompute each rule
+from what the file states.

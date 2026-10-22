@@ -13,10 +13,9 @@ dbldatagen's license allows use only in connection with Databricks Services. dop
 laptop, in AWS Glue and in any Spark. Its `baseColumn` idea, deriving one column from another, is
 borrowed as an idea and no code.
 
-## jenga is GPL-3.0 and inactive, so its vocabulary is borrowed and its code is not
+## jenga is GPL-3.0, so its vocabulary is borrowed and its code is not
 
-jenga corrupts values in pandas frames, and it is under the GPL-3.0. Its last push was in 2023.
-badgers (BSD-3-Clause) does similar work. doppeldata's value perturbations take their names from both,
+jenga corrupts values in pandas frames, and it is under the GPL-3.0. badgers (BSD-3-Clause) does similar work. doppeldata's value perturbations take their names from both,
 so a perturbation reads the same to someone who knows either.
 
 ## Soda Core is under the Elastic License 2.0
@@ -34,4 +33,5 @@ the profile as the reviewed artifact. doppeldata works without a model.
 ## Differential privacy is an optional policy, not the default
 
 Differential-privacy noise distorts the tails and the skew that a performance scenario exists to
-reproduce. It is available as a privacy policy for data that needs it.
+reproduce. It is never the default. Data that needs it gets a policy of its own beside `default`,
+`strict` and `none`.

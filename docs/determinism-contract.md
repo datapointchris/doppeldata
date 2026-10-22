@@ -10,7 +10,7 @@ A generated dataset is a pure function of:
 4. the seed;
 5. the row count.
 
-The manifest written beside the output records all five, plus a SHA-256 over them. Three committed
+The manifest written beside the output must record all five, plus a SHA-256 over them. Three committed
 files — profile, scenario and seed — reproduce a dataset anywhere.
 
 ## Each column draws from a stream named for it, never numbered
