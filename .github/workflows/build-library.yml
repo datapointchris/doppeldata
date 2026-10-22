@@ -1,0 +1,91 @@
+name: Build the library
+
+# The library's wheels and sdist. A pull request builds them unstamped, so every
+# row has built before a merge can tag. release.yml calls this before tagging,
+# on the commit it would tag, and again after, with the tag and its version.
+#
+# push is left out because release.yml calls this on every push to main.
+
+on:
+  pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to check out. Empty builds the commit that started the run.
+        type: string
+        default: ""
+      version:
+        description: The version written into crates/Cargo.toml. Empty keeps 0.0.0.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  # One wheel per platform something installs on, each cp311-abi3, so it
+  # installs on every Python from 3.11 up:
+  #   x86_64-unknown-linux-gnu  AWS Glue, and Linux workstations. manylinux2014
+  #                             is glibc 2.17, which every Glue version in
+  #                             docs/aws-glue-support.md accepts.
+  #   x86_64-apple-darwin       Intel Macs.
+  # Anywhere else installs the sdist, which compiles the crates.
+  wheels:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-26.04
+          - target: x86_64-apple-darwin
+            runner: macos-26-intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Write the release version into the crates
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: crates/set-version.sh "$VERSION"
+
+      # No toolchain input. rustup reads the root rust-toolchain.toml, and a
+      # second pin here would fight it.
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: library
+          target: ${{ matrix.target }}
+          manylinux: "2014"
+          args: --release --out dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: library-${{ inputs.version || 'unstamped' }}-${{ matrix.target }}
+          path: library/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Write the release version into the crates
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: crates/set-version.sh "$VERSION"
+
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: library
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: library-${{ inputs.version || 'unstamped' }}-sdist
+          path: library/dist/*.tar.gz
+          if-no-files-found: error

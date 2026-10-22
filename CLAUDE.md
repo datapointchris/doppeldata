@@ -9,8 +9,8 @@ the privacy policy, the generator's streams or what the library installs.
 ```text
 pyproject.toml  the uv workspace, the release config, and every Python tool's config for both members
 crates/         the cargo workspace: core (the engine, no Python) and python (the pyo3 extension)
-library/        doppeldata: imported as `doppeldata`, Python >=3.11, built by maturin, no scripts
-cli/            doppeldata-cli: imported as `doppeldata_cli`, Python >=3.13, the `doppeldata` command
+library/        doppeldata: imported as `doppeldata`, built by maturin, no scripts
+cli/            doppeldata-cli: imported as `doppeldata_cli`, the `doppeldata` command
 docs/           the design pages
 ```
 
@@ -28,12 +28,23 @@ docs/           the design pages
   part of a generated dataset's identity. `docs/determinism-contract.md` says what else must never
   change.
 
+## Library code must run on Python 3.11
+
+The library's floor is the Python of the oldest Glue in `docs/aws-glue-support.md`, while `uv sync`
+resolves the workspace at the CLI's later floor. ruff checks `library/` against 3.11 at commit
+time. `library-on-python-3.11.yml` builds the library on 3.11, imports the extension, type-checks it
+as 3.11 and runs its tests there.
+
 ## The tag is the version of everything
 
-`crates/Cargo.toml` carries `version = "0.0.0"`, and the release job sets the tagged version before
-building, so the wheel and `doppeldata._core.__version__` both name the tag. The CLI's version comes
-from the tag through uv-dynamic-versioning, and it requires the library at exactly that version. A
-release is cut from `main` by conventional commits, and nothing is committed back.
+`crates/Cargo.toml` carries `version = "0.0.0"`. `build-library.yml` runs `crates/set-version.sh`
+with the tagged version before maturin builds, so the wheel and `doppeldata._core.__version__` both
+name the tag. The CLI's version comes from the tag through uv-dynamic-versioning, and it requires the
+library at exactly that version. A release is cut from `main` by conventional commits, and nothing
+is committed back.
+
+Every pull request runs `build-library.yml` unstamped, so each wheel in its matrix has built before a
+merge can tag. The release builds the commit again before it tags.
 
 ## Commands
 
@@ -41,7 +52,6 @@ release is cut from `main` by conventional commits, and nothing is committed bac
 task setup      # uv sync --all-packages: builds the extension, installs both members
 task test       # cargo test in crates/, then pytest
 task lint       # ruff, mypy, rustfmt and clippy, writing nothing
-task build      # wheels and sdists into dist/
 ```
 
 `uv sync` rebuilds the extension when `crates/` changes. A `cargo` command runs from `crates/`,

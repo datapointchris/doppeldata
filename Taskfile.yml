@@ -14,13 +14,6 @@ tasks:
     cmds:
       - uv sync --all-packages
 
-  build:
-    desc: Build the library's wheel and sdist and the CLI's into dist/
-    cmds:
-      - cd library && uvx maturin build --release --out ../dist
-      - cd library && uvx maturin sdist --out ../dist
-      - uv build --package doppeldata-cli --out-dir dist
-
   test:
     desc: Run the Rust and Python suites
     cmds:
