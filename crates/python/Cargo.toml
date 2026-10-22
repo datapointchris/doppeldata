@@ -1,0 +1,21 @@
+[package]
+name = "doppeldata-python"
+description = "The Python extension module doppeldata._core, over doppeldata-core."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# The library name is the module's last segment, so Python imports it as
+# doppeldata._core.
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+
+# extension-module and abi3-py311 are switched on by maturin, from the
+# library's pyproject.toml, so `cargo test` here still links libpython.
+[dependencies]
+doppeldata-core = { path = "../core" }
+pyo3 = "0.30"

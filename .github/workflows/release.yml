@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+# Scoped per job rather than here: validate only reads, and it is the job that
+# runs the most third-party code.
+permissions:
+  contents: read
+
+# Two pushes to main inside one run's window would otherwise race. Both runs
+# resolve the same version, and the later one fails pushing its tag.
+# Never cancel-in-progress: a canceled release can leave a tag with no release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Without this, release publishes whatever is on main, tested or not.
+  validate:
+    uses: ./.github/workflows/validate.yml
+
+  release:
+    needs: validate
+    uses: datapointchris/reusable-workflows/.github/workflows/python-semantic-release.yml@v1
+    permissions:
+      contents: write
+
+  # One wheel per platform. abi3 makes each one cp311-abi3, so it installs on
+  # every Python from 3.11 up. manylinux2014 is glibc 2.17, which AWS Glue 5.0,
+  # 5.1 and 6.0 accept, and Glue installs wheels only, since it cannot compile.
+  wheels:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-26.04
+          # Cross-compiled in maturin's manylinux cross container, so no arm
+          # runner is needed.
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-26.04
+          - target: aarch64-apple-darwin
+            runner: macos-26
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The tag, not the branch, because main may already have moved past
+          # what was released.
+          ref: ${{ needs.release.outputs.tag }}
+
+      # Cargo.toml carries 0.0.0 in git. The wheel's version and the engine's
+      # own come from here, so both name the tag.
+      - name: Set the version from the tag
+        working-directory: crates
+        run: |
+          cargo install cargo-edit --locked
+          cargo set-version --workspace "$VERSION"
+
+      # No toolchain input. rustup reads the root rust-toolchain.toml from
+      # inside the container as on the host, and a second pin here would fight
+      # it.
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: library
+          target: ${{ matrix.target }}
+          manylinux: "2014"
+          args: --release --out dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-${{ matrix.target }}
+          path: library/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-26.04
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Set the version from the tag
+        working-directory: crates
+        run: |
+          cargo install cargo-edit --locked
+          cargo set-version --workspace "$VERSION"
+
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: library
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: library/dist/*.tar.gz
+          if-no-files-found: error
+
+  # A separate job, so the index credentials are reachable from these steps
+  # only. In the same workflow, because a tag pushed with GITHUB_TOKEN starts no
+  # other workflow run.
+  publish:
+    needs: [release, wheels, sdist]
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+
+      # Built at the tag, so uv-dynamic-versioning names the tag exactly and the
+      # CLI requires the library at the same version.
+      - run: uv build --package doppeldata-cli --out-dir dist
+
+      # pypiserver rejects a second upload of a filename it already holds and
+      # offers no yank, so every file is checked while the upload is still
+      # avoidable.
+      - run: uv run --no-project --with twine twine check dist/*
+
+      - name: Publish to the package index
+        run: uv publish --publish-url https://pypi.ichrisbirch.com/ dist/*
+        env:
+          UV_PUBLISH_USERNAME: ${{ secrets.PYPI_ICB_USERNAME }}
+          UV_PUBLISH_PASSWORD: ${{ secrets.PYPI_ICB_PASSWORD }}

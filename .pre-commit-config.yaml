@@ -1,4 +1,4 @@
-# forge-toolchain: 49
+# forge-toolchain: 51
 fail_fast: true
 default_stages: [pre-commit]
 repos:
@@ -193,9 +193,82 @@ repos:
       - id: refcheck
         args: [--moves]
 
+# generated:python-format - Python: dependency lock
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.12.24
+    hooks:
+      - id: uv-lock
+
+  # Python: formatting
+  #
+  # types_or leaves out markdown, which ruff-pre-commit's ruff-format selects.
+  # ruff formats a Python fence in Markdown as source, and a fence here is often
+  # a figure: aligned comments and right-aligned paths, which the reflow
+  # destroys.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1
+    hooks:
+      - id: ruff-format
+        types_or: [python, pyi, jupyter]
+
+# generated:python-lint - Python: linting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+
+  # Python: type checking (uses uv for full dependency visibility)
+  #
+  # --all-extras, because some repos keep mypy itself in a `dev` extra, and a
+  # plain `uv run` installs no extras. It also gives mypy the types an extra
+  # brings.
+  #
+  # mypy runs only where the project declares it. Without the guard, `uv run`
+  # falls back to whatever mypy is on PATH: a workstation's passes the commit,
+  # and a runner has none. The probe exits 3 for an absent mypy, a status
+  # neither uv nor python uses, so a sync that fails still fails the hook.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: >-
+          bash -c 'uv run --all-extras python -c "import importlib.util as u, sys; sys.exit(0 if u.find_spec(sys.argv[1]) else 3)" mypy;
+          status=$?; case $status in
+          0) exec uv run --all-extras mypy . --install-types --non-interactive ;;
+          3) echo "mypy is not a project dependency, so nothing is type-checked" ;;
+          *) exit $status ;;
+          esac'
+        language: system
+        types: [python]
+        pass_filenames: false
+
+# generated:rust - Rust
+  #
+  # One pair per declared Rust directory, each run from inside it, where cargo
+  # finds that directory's Cargo.toml. A workspace in crates/ has no manifest at
+  # the root, so a cargo call there fails before checking anything. Filenames
+  # are never passed, so files only decides when they fire.
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: bash -c 'cd crates && exec cargo fmt'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        files: '^crates/'
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: bash -c 'cd crates && exec cargo clippy --all-targets --all-features -- -D warnings'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        files: '^crates/'
+
 # generated:github-actions - GitHub Actions
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.7
+    rev: v1.7.12
     hooks:
       - id: actionlint
         args: ["-color", "-shellcheck="]

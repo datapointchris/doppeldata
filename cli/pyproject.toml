@@ -1,0 +1,45 @@
+[project]
+name = "doppeldata-cli"
+description = "Command line for doppeldata: profile, check, export and generate."
+authors = [{ name = "Chris Birch", email = "chrisbirch@fastmail.com" }]
+license = "MIT"
+requires-python = ">=3.13"
+dynamic = ["version", "dependencies"]
+
+[project.urls]
+Repository = "https://github.com/datapointchris/doppeldata"
+
+[project.scripts]
+doppeldata = "doppeldata_cli.main:app"
+
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
+
+# The release tag is the version. python-semantic-release finds no file to
+# stamp, so it tags the merge commit itself and writes no release commit.
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+style = "semver"
+
+# The CLI and the library release from one tag, so the CLI requires the library
+# at exactly its own version.
+[tool.hatch.metadata.hooks.uv-dynamic-versioning]
+dependencies = ["doppeldata=={{ version }}", "typer>=0.27"]
+
+# Inside the workspace the library is the checkout beside this one, whatever
+# version either reports.
+[tool.uv.sources]
+doppeldata = { workspace = true }
+
+# A new commit or tag changes the version, so it has to invalidate uv's cache.
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/doppeldata_cli"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src"]

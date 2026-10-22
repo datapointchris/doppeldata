@@ -1,0 +1,51 @@
+version: "3"
+
+tasks:
+  default:
+    desc: List the available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  # Syncing the library builds the Rust extension through maturin and installs
+  # it in place, so the first run compiles the crates.
+  setup:
+    desc: Install both distributions into the workspace's virtualenv
+    cmds:
+      - uv sync --all-packages
+
+  build:
+    desc: Build the library's wheel and sdist and the CLI's into dist/
+    cmds:
+      - cd library && uvx maturin build --release --out ../dist
+      - cd library && uvx maturin sdist --out ../dist
+      - uv build --package doppeldata-cli --out-dir dist
+
+  test:
+    desc: Run the Rust and Python suites
+    cmds:
+      - cd crates && cargo test
+      # pytest exits 5 when it collects nothing, which a member with no tests
+      # yet is not a failure of.
+      - uv run --with pytest pytest || test $? -eq 5
+
+  lint:
+    desc: Run every check without writing any file
+    cmds:
+      - uv run ruff format --check .
+      - uv run ruff check .
+      - task: typecheck
+      - cd crates && cargo fmt --check
+      - cd crates && cargo clippy --all-targets --all-features -- -D warnings
+
+  typecheck:
+    desc: Type check both distributions with mypy
+    cmds:
+      - uv run mypy .
+
+  format:
+    desc: Apply ruff's and rustfmt's formatting and autofixes
+    cmds:
+      - uv run ruff format .
+      - uv run ruff check --fix .
+      - cd crates && cargo fmt
