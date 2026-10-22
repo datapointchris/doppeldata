@@ -1,0 +1,40 @@
+[project]
+name = "doppeldata"
+description = "Profile a dataset into a reviewable file holding no rows, then generate synthetic data from it at any scale."
+authors = [{ name = "Chris Birch", email = "chrisbirch@fastmail.com" }]
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+# The floor is the Python of the oldest Glue in docs/aws-glue-support.md,
+# because the library runs inside Glue executors.
+requires-python = ">=3.11"
+# maturin reads the version from crates/python/Cargo.toml, which the release
+# job sets from the tag.
+dynamic = ["version"]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/datapointchris/doppeldata"
+
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+# uv rebuilds a local package only when one of these changes, and the
+# extension's source sits outside this directory. Each glob stops short of
+# crates/target, where build scripts write .rs files of their own.
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "../crates/Cargo.lock" },
+    { file = "../crates/Cargo.toml" },
+    { file = "../crates/*/Cargo.toml" },
+    { file = "../crates/*/src/**/*.rs" },
+    { file = "../crates/*/build.rs" },
+]
+
+[tool.maturin]
+manifest-path = "../crates/python/Cargo.toml"
+python-source = "src"
+module-name = "doppeldata._core"
+features = ["pyo3/extension-module", "pyo3/abi3-py311"]

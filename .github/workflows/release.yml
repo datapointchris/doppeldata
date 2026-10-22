@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+# Scoped per job rather than here: validate only reads, and it is the job that
+# runs the most third-party code.
+permissions:
+  contents: read
+
+# Two pushes to main inside one run's window would otherwise race. Both runs
+# resolve the same version, and the later one fails pushing its tag.
+# Never cancel-in-progress: a canceled release can leave a tag with no release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Without these, release publishes whatever is on main, tested or not.
+  validate:
+    uses: ./.github/workflows/validate.yml
+
+  library-on-python-3-11:
+    uses: ./.github/workflows/library-on-python-3.11.yml
+
+  # The tag cannot be taken back, so the commit it would name builds on every
+  # platform first.
+  build-before-tagging:
+    uses: ./.github/workflows/build-library.yml
+
+  release:
+    needs: [validate, library-on-python-3-11, build-before-tagging]
+    uses: datapointchris/reusable-workflows/.github/workflows/python-semantic-release.yml@v1
+    permissions:
+      contents: write
+
+  # The tag, not the branch, because main may already have moved past what was
+  # released.
+  build:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    uses: ./.github/workflows/build-library.yml
+    with:
+      ref: ${{ needs.release.outputs.tag }}
+      version: ${{ needs.release.outputs.version }}
+
+  # A separate job, so the index credentials are reachable from these steps
+  # only. In the same workflow, because a tag pushed with GITHUB_TOKEN starts no
+  # other workflow run.
+  publish:
+    needs: [release, build]
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: library-${{ needs.release.outputs.version }}-*
+          path: dist
+          merge-multiple: true
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.24"
+
+      # Built at the tag, so uv-dynamic-versioning names the tag exactly and the
+      # CLI requires the library at the same version.
+      - run: uv build --package doppeldata-cli --out-dir dist
+
+      # The index rejects a second upload of a filename it already holds and
+      # offers no yank, so every file is checked while the upload is still
+      # avoidable.
+      - run: uv run --no-project --with twine twine check dist/*
+
+      # --check-url skips a file the index already holds. A re-run of a publish
+      # that failed partway through its upload then finishes it, where the
+      # index's 409 for that file would otherwise stop the job.
+      - name: Publish to the package index
+        run: uv publish --publish-url https://pypi.ichrisbirch.com/ --check-url https://pypi.ichrisbirch.com/simple/ dist/*
+        env:
+          UV_PUBLISH_USERNAME: ${{ secrets.PYPI_ICB_USERNAME }}
+          UV_PUBLISH_PASSWORD: ${{ secrets.PYPI_ICB_PASSWORD }}

@@ -1,0 +1,10 @@
+__pycache__/
+.coverage
+coverage.xml
+dist/
+*.egg-info/
+/crates/target
+
+# maturin's editable install writes the compiled extension beside the package.
+/library/src/doppeldata/_core.*.so
+/library/src/doppeldata/_core.*.pyd

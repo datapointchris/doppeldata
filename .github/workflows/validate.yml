@@ -1,9 +1,7 @@
-# forge-toolchain: 49
+# forge-toolchain: 51
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_call:
 
@@ -11,6 +9,117 @@ permissions:
   contents: read
 
 jobs:
+
+  rust-crates:
+    runs-on: ubuntu-26.04
+    defaults:
+      run:
+        working-directory: crates
+    steps:
+
+      - uses: actions/checkout@v7
+
+      # generated:rust-crates
+      # No toolchain step. rustup reads the repo's rust-toolchain.toml, and
+      # fetches that release on the first cargo call.
+      - run: cargo build --all-targets
+
+      - run: cargo test
+
+      # Reads Cargo.lock against the RustSec advisory database. It fails on a
+      # vulnerability and only prints an unmaintained or unsound crate, which
+      # is a warning in cargo-audit's own default. The release is a static musl
+      # binary, so the job needs no cargo install. The tag holds a slash, which
+      # the download URL carries as %2F.
+      - name: Vulnerabilities
+        run: |
+          cargo_audit_version="0.22.2"
+          release="cargo-audit-x86_64-unknown-linux-musl-v${cargo_audit_version}"
+          mkdir -p "$RUNNER_TEMP/cargo-audit"
+          curl -fsSL --retry 3 "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${cargo_audit_version}/${release}.tgz" \
+            | tar -xzf - -C "$RUNNER_TEMP/cargo-audit" --strip-components=1 "${release}/cargo-audit"
+          "$RUNNER_TEMP/cargo-audit/cargo-audit" --version
+          "$RUNNER_TEMP/cargo-audit/cargo-audit" audit
+
+  python-library:
+    runs-on: ubuntu-26.04
+    defaults:
+      run:
+        working-directory: library
+    steps:
+
+      - uses: actions/checkout@v7
+
+      # generated:python-library
+      # enable-cache is left at setup-uv's `auto`, which caches on a hosted
+      # runner only. Every repo's self-hosted runner shares one ~/.cache/uv
+      # that outlives the job, so there the post step's prune and upload are
+      # work the disk already did, and two jobs pruning at once collide on the
+      # same files. version is the release the uv-lock hook pins, so the sync
+      # here and the lock check in the hooks job run one uv.
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.24"
+
+      - run: uv sync --all-extras --dev
+
+      # --with pytest, because skipping is the wrong answer here: a repo with a
+      # real test suite that never declared pytest as a dependency would
+      # silently stop being tested. Supplying the runner runs the tests; a suite
+      # needing plugins still declares those itself.
+      #
+      # pytest exits 5 when it collects nothing, which is not a failure for a
+      # repo that has no tests yet. Written explicitly rather than as an && chain
+      # because the runner uses `bash -e`, where the concise form depends on
+      # subtle errexit-exemption rules.
+      - name: Test
+        run: |
+          set +e
+          uv run --with pytest pytest
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ] || [ "$code" -eq 5 ]; then exit 0; fi
+          exit 1
+
+  python-cli:
+    runs-on: ubuntu-26.04
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+
+      - uses: actions/checkout@v7
+
+      # generated:python-cli
+      # enable-cache is left at setup-uv's `auto`, which caches on a hosted
+      # runner only. Every repo's self-hosted runner shares one ~/.cache/uv
+      # that outlives the job, so there the post step's prune and upload are
+      # work the disk already did, and two jobs pruning at once collide on the
+      # same files. version is the release the uv-lock hook pins, so the sync
+      # here and the lock check in the hooks job run one uv.
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.24"
+
+      - run: uv sync --all-extras --dev
+
+      # --with pytest, because skipping is the wrong answer here: a repo with a
+      # real test suite that never declared pytest as a dependency would
+      # silently stop being tested. Supplying the runner runs the tests; a suite
+      # needing plugins still declares those itself.
+      #
+      # pytest exits 5 when it collects nothing, which is not a failure for a
+      # repo that has no tests yet. Written explicitly rather than as an && chain
+      # because the runner uses `bash -e`, where the concise form depends on
+      # subtle errexit-exemption rules.
+      - name: Test
+        run: |
+          set +e
+          uv run --with pytest pytest
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ] || [ "$code" -eq 5 ]; then exit 0; fi
+          exit 1
 
   hooks:
     runs-on: ubuntu-26.04
@@ -197,6 +306,12 @@ jobs:
             bats
             codespell
             refcheck
+            uv-lock
+            ruff-format
+            ruff-check
+            mypy
+            cargo-fmt
+            cargo-clippy
             actionlint
           )
           # Every hook runs whatever the one before it found, so one push

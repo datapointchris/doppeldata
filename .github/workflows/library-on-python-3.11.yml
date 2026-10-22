@@ -1,0 +1,56 @@
+name: Library on Python 3.11
+
+# The workspace resolves at one Python, the intersection of its members'
+# requires-python, so validate.yml runs the library at 3.13. The library's floor
+# is 3.11, the Python of the oldest Glue in docs/aws-glue-support.md, and this is
+# the only workflow that runs it there.
+#
+# push is left out because release.yml calls this on every push to main.
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  library:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.24"
+
+      - name: Install the library into a 3.11 environment
+        run: |
+          uv venv --python 3.11 "$RUNNER_TEMP/library"
+          uv pip install --python "$RUNNER_TEMP/library" ./library
+          uv pip install --python "$RUNNER_TEMP/library" pytest
+
+      # An abi3 feature in library/pyproject.toml naming a later Python still
+      # builds here, and fails only on import, with an undefined symbol.
+      - name: Import the extension on Python 3.11
+        run: '"$RUNNER_TEMP/library/bin/python" -c "import doppeldata._core"'
+
+      # compileall parses every module with the 3.11 interpreter, so syntax from
+      # a later Python fails here even in a module no test imports.
+      - name: Compile every module with Python 3.11
+        run: '"$RUNNER_TEMP/library/bin/python" -m compileall -q library/src'
+
+      # mypy comes from the workspace's locked dev group and reads the root
+      # config. --python-version 3.11 rejects a standard-library name added
+      # later.
+      - name: Type-check the library as 3.11
+        run: >-
+          uv run --frozen --only-group dev mypy
+          --python-version 3.11
+          --python-executable "$RUNNER_TEMP/library/bin/python"
+          library/src
+
+      # pytest exits 5 when it collects nothing, which the library before its
+      # first test is not a failure of.
+      - name: Test the library on Python 3.11
+        run: '"$RUNNER_TEMP/library/bin/python" -m pytest library || test $? -eq 5'
