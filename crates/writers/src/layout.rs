@@ -194,14 +194,18 @@ fn fixed_sizes(rows: u64, range_rows: u64) -> Vec<u64> {
 }
 
 /// Range sizes from the engine's draws over `quantiles`, each scaled by the partition values, until
-/// they cover `rows`. The last range takes the remainder.
+/// they cover `rows`. The last range takes the remainder. A remainder under half the range drawn
+/// before it folds into that range, so no partition gets a sliver file the source never held.
 fn drawn_sizes(rows: u64, seed: u64, quantiles: &Quantiles, scale: u64) -> Result<Vec<u64>, LayoutError> {
     let mut draws = file_rows_draws(seed, quantiles).map_err(LayoutError::RowsPerFile)?;
     let mut sizes = Vec::new();
     let mut covered = 0;
     while covered < rows {
         let drawn = draws.next().expect("the draws never end").round() as u64;
-        let size = drawn.max(1).saturating_mul(scale).min(rows - covered);
+        let mut size = drawn.max(1).saturating_mul(scale).min(rows - covered);
+        if rows - covered - size < size / 2 {
+            size = rows - covered;
+        }
         sizes.push(size);
         covered += size;
     }

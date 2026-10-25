@@ -31,6 +31,9 @@ print the files a run will write before a byte is written.
 - **A range's size is `file_rows`, or drawn from the profile's `source.layout.rows_per_file`
   quantiles.** The engine's `file_rows_draws` makes the draw, through the quantile interpolation the
   samplers use. Its stream is keyed by the seed alone, so the split is the same on every run.
+- **A drawn split's last range folds in a remainder under half the range before it.** Otherwise a
+  draw just short of the rows leaves a sliver range, and a partitioned one writes a tiny second file
+  into every partition.
 - **The split never moves a value.** Blocks are a fixed `BLOCK_ROWS`, so a range cut mid-block takes
   a slice of the block. Two neighboring ranges each generate the block they share.
 - **`planned_ranges` gives each range with the path its files take.** A partitioned range becomes
