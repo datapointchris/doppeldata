@@ -17,6 +17,7 @@ use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 
+use crate::format_settings::Output;
 use crate::perturbations::ScenarioFault;
 use crate::perturbations::pointer_token;
 use crate::plan::PlanError;
@@ -121,7 +122,7 @@ pub enum FaultKind {
     TypeInvalid,
     /// A lone continuation byte or the bytes C3 28 inside a field.
     InvalidUtf8,
-    /// A record past DuckDB's default `max_line_size` of 2,097,152 bytes.
+    /// A record past DuckDB's default `max_line_size`.
     LineTooLong,
     /// The file's last record cut mid-field, with no line break, as a cut-off upload leaves it.
     TruncatedLine,
@@ -149,70 +150,83 @@ pub enum FaultKind {
     ParquetDecimalScaleDrift,
 }
 
+/// What breaks, as a fault kind places it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Breaks {
+    Row,
+    File,
+}
+
+/// The formats whose bytes can hold a fault kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaultFormats {
+    /// CSV and TSV.
+    Delimited,
+    /// CSV, TSV, JSON and NDJSON.
+    Text,
+    /// JSON and NDJSON.
+    Json,
+    Parquet,
+}
+
+impl FaultFormats {
+    /// Whether a file `output` writes can hold the fault.
+    pub fn hold(self, output: &Output) -> bool {
+        match output {
+            Output::Csv(_) | Output::Tsv(_) => matches!(self, Self::Delimited | Self::Text),
+            Output::Json(_) | Output::Ndjson(_) => matches!(self, Self::Text | Self::Json),
+            Output::Parquet(_) => self == Self::Parquet,
+            Output::Arrow(_) => false,
+        }
+    }
+}
+
 impl FaultKind {
-    /// Every kind, in the order the schema lists them.
-    pub const ALL: [Self; 19] = [
-        Self::RaggedShort,
-        Self::RaggedLong,
-        Self::UnescapedQuote,
-        Self::EmbeddedNewline,
-        Self::TypeInvalid,
-        Self::InvalidUtf8,
-        Self::LineTooLong,
-        Self::TruncatedLine,
-        Self::Bom,
-        Self::MixedLineEndings,
-        Self::WrongDelimiter,
-        Self::HeaderDrift,
-        Self::Latin1File,
-        Self::JsonLayoutMix,
-        Self::JsonUnbalanced,
-        Self::JsonTypeFlip,
-        Self::ParquetTimestampUnitDrift,
-        Self::ParquetInt96,
-        Self::ParquetDecimalScaleDrift,
-    ];
+    /// The kind's name as `kinds` spells it, what it breaks, and the formats that hold it. Every
+    /// fact about a kind is decided here, so a kind added fails to compile until it is described.
+    const fn facts(self) -> (&'static str, Breaks, FaultFormats) {
+        use Breaks::File;
+        use Breaks::Row;
+        use FaultFormats::Delimited;
+        use FaultFormats::Json;
+        use FaultFormats::Parquet;
+        use FaultFormats::Text;
+        match self {
+            Self::RaggedShort => ("ragged_short", Row, Delimited),
+            Self::RaggedLong => ("ragged_long", Row, Delimited),
+            Self::UnescapedQuote => ("unescaped_quote", Row, Delimited),
+            Self::EmbeddedNewline => ("embedded_newline", Row, Delimited),
+            Self::TypeInvalid => ("type_invalid", Row, Text),
+            Self::InvalidUtf8 => ("invalid_utf8", Row, Delimited),
+            Self::LineTooLong => ("line_too_long", Row, Delimited),
+            Self::TruncatedLine => ("truncated_line", File, Text),
+            Self::Bom => ("bom", File, Delimited),
+            Self::MixedLineEndings => ("mixed_line_endings", File, Delimited),
+            Self::WrongDelimiter => ("wrong_delimiter", File, Delimited),
+            Self::HeaderDrift => ("header_drift", File, Delimited),
+            Self::Latin1File => ("latin1_file", File, Delimited),
+            Self::JsonLayoutMix => ("json_layout_mix", File, Json),
+            Self::JsonUnbalanced => ("json_unbalanced", Row, Json),
+            Self::JsonTypeFlip => ("json_type_flip", Row, Json),
+            Self::ParquetTimestampUnitDrift => ("parquet_timestamp_unit_drift", File, Parquet),
+            Self::ParquetInt96 => ("parquet_int96", File, Parquet),
+            Self::ParquetDecimalScaleDrift => ("parquet_decimal_scale_drift", File, Parquet),
+        }
+    }
 
     /// The kind's name, as `kinds` spells it.
     pub fn name(self) -> &'static str {
-        match self {
-            Self::RaggedShort => "ragged_short",
-            Self::RaggedLong => "ragged_long",
-            Self::UnescapedQuote => "unescaped_quote",
-            Self::EmbeddedNewline => "embedded_newline",
-            Self::TypeInvalid => "type_invalid",
-            Self::InvalidUtf8 => "invalid_utf8",
-            Self::LineTooLong => "line_too_long",
-            Self::TruncatedLine => "truncated_line",
-            Self::Bom => "bom",
-            Self::MixedLineEndings => "mixed_line_endings",
-            Self::WrongDelimiter => "wrong_delimiter",
-            Self::HeaderDrift => "header_drift",
-            Self::Latin1File => "latin1_file",
-            Self::JsonLayoutMix => "json_layout_mix",
-            Self::JsonUnbalanced => "json_unbalanced",
-            Self::JsonTypeFlip => "json_type_flip",
-            Self::ParquetTimestampUnitDrift => "parquet_timestamp_unit_drift",
-            Self::ParquetInt96 => "parquet_int96",
-            Self::ParquetDecimalScaleDrift => "parquet_decimal_scale_drift",
-        }
+        self.facts().0
     }
 
     /// Whether the kind breaks a whole file, so `files_share` places it rather than `rate`.
     pub fn is_file_kind(self) -> bool {
-        matches!(
-            self,
-            Self::TruncatedLine
-                | Self::Bom
-                | Self::MixedLineEndings
-                | Self::WrongDelimiter
-                | Self::HeaderDrift
-                | Self::Latin1File
-                | Self::JsonLayoutMix
-                | Self::ParquetTimestampUnitDrift
-                | Self::ParquetInt96
-                | Self::ParquetDecimalScaleDrift
-        )
+        self.facts().1 == Breaks::File
+    }
+
+    /// The formats whose files can hold the kind.
+    pub fn formats(self) -> FaultFormats {
+        self.facts().2
     }
 }
 

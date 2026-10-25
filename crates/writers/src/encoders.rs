@@ -122,24 +122,7 @@ pub(crate) fn fault_refusal(output: &Output, schema: &SchemaRef, kind: FaultKind
         Output::Parquet(_) => "parquet",
         Output::Arrow(_) => "arrow",
     };
-    let legal = match output {
-        Output::Csv(_) | Output::Tsv(_) => !matches!(
-            kind,
-            K::JsonLayoutMix
-                | K::JsonUnbalanced
-                | K::JsonTypeFlip
-                | K::ParquetTimestampUnitDrift
-                | K::ParquetInt96
-                | K::ParquetDecimalScaleDrift
-        ),
-        Output::Json(_) | Output::Ndjson(_) => matches!(
-            kind,
-            K::TypeInvalid | K::TruncatedLine | K::JsonLayoutMix | K::JsonUnbalanced | K::JsonTypeFlip
-        ),
-        Output::Parquet(_) => matches!(kind, K::ParquetTimestampUnitDrift | K::ParquetInt96 | K::ParquetDecimalScaleDrift),
-        Output::Arrow(_) => false,
-    };
-    if !legal {
+    if !kind.formats().hold(output) {
         return Some((
             ScenarioFault::OpNotForFormat,
             format!("{} is not a fault a {format} file can hold", kind.name()),

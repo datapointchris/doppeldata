@@ -178,7 +178,7 @@
           "const": "invalid_utf8"
         },
         {
-          "description": "A record past DuckDB's default `max_line_size` of 2,097,152 bytes.",
+          "description": "A record past DuckDB's default `max_line_size`.",
           "type": "string",
           "const": "line_too_long"
         },
@@ -863,7 +863,7 @@
       }
     },
     "Rate": {
-      "description": "A share of rows, from 0 to 1.",
+      "description": "A share, from 0 to 1.",
       "type": "number",
       "maximum": 1,
       "minimum": 0
