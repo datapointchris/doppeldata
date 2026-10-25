@@ -3,7 +3,7 @@
 use crate::profile;
 
 pub struct PublishedSchema {
-    /// The name `doppeldata schema show` takes.
+    /// The name `doppeldata schemas show` takes.
     pub name: &'static str,
     pub file_name: String,
     pub derive: fn() -> String,

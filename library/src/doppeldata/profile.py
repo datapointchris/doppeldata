@@ -48,10 +48,10 @@ PointerParts = tuple[str | int, ...]
 
 @dc.dataclass(frozen=True)
 class Issue:
-    """One reason a profile is invalid, located by a JSON Pointer into the document."""
+    """One reason a profile is invalid. `field` is an RFC 6901 JSON Pointer, because map keys hold category values with dots and slashes."""
 
     code: str
-    pointer: str
+    field: str
     message: str
 
 
@@ -59,18 +59,33 @@ class InvalidProfile(ValueError):
     def __init__(self, source: str, issues: list[Issue]) -> None:
         self.source = source
         self.issues = issues
-        listed = '\n'.join(f'  {issue.pointer or "/"}: {issue.message} [{issue.code}]' for issue in issues)
+        listed = '\n'.join(f'  {issue.field or "/"}: {issue.message} [{issue.code}]' for issue in issues)
         super().__init__(f'{source} is not a valid profile:\n{listed}')
 
 
+@dc.dataclass(frozen=True)
+class SchemaSummary:
+    """One JSON Schema the library ships: the name `doppeldata schemas show` takes, and the schema's own title and description."""
+
+    name: str
+    title: str
+    description: str
+
+
 def schema_names() -> list[str]:
-    """The names of the JSON Schemas the library ships, as `doppeldata schema show` takes them."""
+    """The names of the JSON Schemas the library ships, as `doppeldata schemas show` takes them."""
     return list(_core.schema_file_names())
 
 
 def schema_text(name: str) -> str:
     """A JSON Schema the library ships, as committed in the package."""
     return importlib.resources.files('doppeldata').joinpath('schemas', _core.schema_file_names()[name]).read_text()
+
+
+def schema_summaries() -> list[SchemaSummary]:
+    """Every JSON Schema the library ships, by name, with the title and description each document carries."""
+    documents = {name: json.loads(schema_text(name)) for name in schema_names()}
+    return [SchemaSummary(name, document['title'], document['description']) for name, document in documents.items()]
 
 
 def integer_format_checker() -> jsonschema.FormatChecker:

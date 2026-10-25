@@ -73,7 +73,7 @@ def test_each_fault_is_reported_at_the_field_that_holds_it(tmp_path, edit, expec
     edit(document)
     with pytest.raises(InvalidProfile) as raised:
         Profile.load(write_json(tmp_path / 'orders.json', document))
-    assert {(issue.code, issue.pointer) for issue in raised.value.issues} == expected
+    assert {(issue.code, issue.field) for issue in raised.value.issues} == expected
 
 
 def test_a_bundle_directory_and_its_single_file_form_share_one_digest(tmp_path):

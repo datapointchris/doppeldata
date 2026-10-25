@@ -3,7 +3,7 @@ from doppeldata_cli.main import app
 from typer.testing import CliRunner
 
 
-def test_schema_show_profile_prints_the_schema_profiles_are_validated_against():
-    result = CliRunner().invoke(app, ['schema', 'show', 'profile'])
+def test_schemas_show_profile_prints_the_schema_profiles_are_validated_against():
+    result = CliRunner().invoke(app, ['schemas', 'show', 'profile'])
     assert result.exit_code == 0
     assert result.output == schema_text('profile')
