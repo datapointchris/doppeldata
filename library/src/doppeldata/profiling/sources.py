@@ -12,6 +12,7 @@ import botocore.exceptions
 
 from doppeldata.errors import SourceError
 from doppeldata.profiling.backend import FORMAT_TRAITS
+from doppeldata.profiling.backend import TEXT_CODEC_SUFFIXES
 from doppeldata.profiling.backend import TEXT_FORMATS
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFile
@@ -24,8 +25,8 @@ from doppeldata.s3_access import endpoint_named
 from doppeldata.s3_access import s3_session
 
 SUFFIX_FORMATS = {suffix: source_format for source_format, traits in FORMAT_TRAITS.items() for suffix in traits.suffixes}
-# DuckDB reads a text file through any of these, so the format is the suffix before it.
-COMPRESSION_SUFFIXES = ('.gz', '.zst', '.bz2')
+# The format of a text file compressed with one of these is the suffix before it.
+COMPRESSION_SUFFIXES = tuple(TEXT_CODEC_SUFFIXES)
 # A doppeldata write claims its destination with this file, and removes it once every file is written.
 UNFINISHED_WRITE = PurePosixPath('_manifest.partial.json')
 

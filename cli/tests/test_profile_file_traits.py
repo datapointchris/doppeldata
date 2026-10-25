@@ -6,7 +6,8 @@ from doppeldata import generate
 from doppeldata_cli.main import app
 from typer.testing import CliRunner
 
-# A quoted comma, a stray quote, a short row, a long row and a date that does not parse, which DuckDB's sniffer misreads.
+# A quoted comma, a stray quote, a short row, a long row, and an amount and a date that do not parse, which DuckDB's sniffer
+# misreads.
 MESSY_CSV = """id|name|amount|dt|flag
 1|"Smith, J"|10.5|2024-01-03|true
 2|Lee|11.25|2024-01-04|false

@@ -1,6 +1,8 @@
 """Profiling a dataset into a profile. The library declares no engine, so a job that only generates installs none."""
 
+import dataclasses as dc
 import importlib
+import importlib.metadata
 import importlib.util
 import warnings
 from collections.abc import Sequence
@@ -19,22 +21,48 @@ from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
 
 DEFAULT_K_MIN = 11
-# Each engine's backend class, as its module and name, the packages that module imports, which install under the same names,
-# and the packages it imports to read a source of one format.
+
+
+@dc.dataclass(frozen=True)
+class EnginePackage:
+    """A package an engine imports, by its distribution and module names, and the formats whose files it reads or sniffs.
+
+    One `everywhere` is imported to profile any source, and any other only to profile a source of a format it reads.
+    `generated.readers` records the version of each that reads the source's format.
+    """
+
+    distribution: str
+    module: str
+    reads: frozenset[SourceFormat]
+    everywhere: bool = True
+
+
+@dc.dataclass(frozen=True)
+class Engine:
+    """An engine's backend class, as its module and name, and the packages that module imports."""
+
+    module: str
+    backend: str
+    packages: tuple[EnginePackage, ...]
+
+
+DELIMITED = frozenset({SourceFormat.CSV, SourceFormat.TSV})
 ENGINES = {
-    'polars': (
+    'polars': Engine(
         'doppeldata.profiling.polars_backend',
         'PolarsBackend',
-        ('polars', 'duckdb', 'pyarrow'),
-        {
-            SourceFormat.CSV: ('clevercsv', 'charset_normalizer'),
-            SourceFormat.TSV: ('clevercsv', 'charset_normalizer'),
-        },
+        (
+            EnginePackage('polars', 'polars', frozenset({SourceFormat.PARQUET, SourceFormat.ARROW})),
+            EnginePackage('duckdb', 'duckdb', DELIMITED | {SourceFormat.JSON, SourceFormat.NDJSON}),
+            EnginePackage('pyarrow', 'pyarrow', frozenset({SourceFormat.PARQUET})),
+            EnginePackage('clevercsv', 'clevercsv', DELIMITED, everywhere=False),
+            EnginePackage('charset-normalizer', 'charset_normalizer', DELIMITED, everywhere=False),
+        ),
     )
 }
-# The module that lists what was named, and what it imports to list S3, which profiling needs whatever the engine.
+# The module that lists what was named, and the packages it imports to list S3, which profiling needs whatever the engine.
 SOURCES_MODULE = 'doppeldata.profiling.sources'
-LISTING_PACKAGES = ('boto3',)
+LISTING_PACKAGES = (EnginePackage('boto3', 'boto3', frozenset()),)
 
 
 def profile(
@@ -70,26 +98,29 @@ def profile(
         raise ValueError(f'sample must be a positive number of rows, not {sample}')
     if k_min < 1:
         raise ValueError(f'k_min must be at least 1, not {k_min}')
-    module_name, class_name, packages, format_packages = ENGINES[engine]
-    missing = uninstalled((*packages, *LISTING_PACKAGES))
+    chosen = ENGINES[engine]
+    missing = uninstalled([package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
     if missing:
         raise ProfilingEnginesMissing(engine, missing)
     # Imported by name, because each imports packages a library-only install lacks.
-    backend = getattr(importlib.import_module(module_name), class_name)()
+    backend = getattr(importlib.import_module(chosen.module), chosen.backend)()
     enabled = enabled_packs(packs)
     sources = importlib.import_module(SOURCES_MODULE)
     source = sources.resolve(data)
-    missing = uninstalled(format_packages.get(source.format, ()))
+    reading = [package for package in chosen.packages if source.format in package.reads]
+    missing = uninstalled(reading)
     if missing:
         raise ProfilingEnginesMissing(engine, missing)
+    readers = {package.distribution: importlib.metadata.version(package.distribution) for package in reading}
     if edges_from is not None:
-        readers = backend.readers(source.format)
         changed = what_changed(edges_from, source.fingerprint, engine=engine, sample=sample, k_min=k_min, packs=enabled, readers=readers)
         if changed is None:
             return edges_from
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=2)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
-    profiled = Profile(table_profile.profile_table(backend, source, sample=sample, k_min=k_min, packs=enabled, frozen=frozen))
+    profiled = Profile(
+        table_profile.profile_table(backend, source, sample=sample, k_min=k_min, packs=enabled, readers=readers, frozen=frozen)
+    )
     sources.check_unchanged(source)
     issues = profiled.validate()
     if issues:
@@ -102,8 +133,8 @@ def profile(
     return profiled
 
 
-def uninstalled(packages: Sequence[str]) -> list[str]:
-    return [package for package in packages if importlib.util.find_spec(package) is None]
+def uninstalled(packages: Sequence[EnginePackage]) -> list[str]:
+    return [package.distribution for package in packages if importlib.util.find_spec(package.module) is None]
 
 
 def column_names(document: dict[str, Any]) -> list[str]:

@@ -182,11 +182,13 @@ identity.
 ## The library declares no engine, so a job that only generates installs none
 
 The profiling packages are imported only by the modules that profile, and boto3 also by a write to
-S3. `ENGINES` in `doppeldata.profiling` names each engine's packages, and the ones it needs to read
-a source of one format, such as CleverCSV for CSV. `LISTING_PACKAGES` names the ones listing S3
-needs whatever the engine. `profile()` checks the engine's and the listing's before it imports one,
-and a format's once the source is listed. Either check raises `ProfilingEnginesMissing` naming each
-missing package. `doppeldata-cli` declares every one, because `profile create` is one of its verbs.
+S3. `ENGINES` in `doppeldata.profiling` names each engine's packages, each with the formats whose
+files it reads or sniffs, and whether a source of any format needs it. CleverCSV, for one, is
+needed only for CSV and TSV. `LISTING_PACKAGES` names the ones listing S3 needs whatever the engine.
+`profile()` checks those any source needs before it imports one, and a format's own once the source
+is listed. Either check raises `ProfilingEnginesMissing` naming each missing distribution.
+`generated.readers` records the version of each package that reads the source's format, from the
+same table. `doppeldata-cli` declares every one, because `profile create` is one of its verbs.
 
 ## A text column is read as the type most of its values parse as
 
@@ -224,18 +226,25 @@ The dialect comes from the first `FIRST_BLOCK_BYTES` of the first file holding a
 decompressed. A block cut mid-record is trimmed at its last line break. A source none of whose
 files holds a record is refused with a `SourceError` naming them.
 
-- **The encoding is charset-normalizer's guess**, recorded as `detected_encoding`. A UTF-8 BOM is
-  recorded as `bom` and stripped. A block named one of `LATIN1_ENCODINGS` is read as Latin-1, and
-  any other as UTF-8.
+- **A block that decodes as UTF-8 is read as UTF-8, and any other as Latin-1.** A UTF-8 BOM is
+  recorded as `bom` and stripped. charset-normalizer's name for the block is recorded as
+  `detected_encoding`, and decides nothing, because it names a short Latin-1 block `cp1250` or
+  `cp775`.
 - **DuckDB's `sniff_csv` and CleverCSV each name a delimiter, a quote and an escape.** CleverCSV is
   held to `GLUE_DELIMITERS`, the ones Glue's CSV classifier tries, as the AWS Glue Developer Guide's
   "Defining and managing classifiers" lists them. DuckDB's dialect is read where the two agree on
-  the delimiter and the quote, or where CleverCSV finds none. Otherwise CleverCSV's is.
+  the delimiter and the quote, or where CleverCSV finds none. Otherwise CleverCSV's is, and where
+  neither names one, `chosen` is `default` and the format's own is read.
 - **A quote neither sniffer names is read as `"`.** A block quoting no field names none, and a
   later file of the source may quote one. Reading `"` keeps that file's quoted delimiters inside
   their fields, where reading no quote splits them. An escape neither names doubles the quote.
-- **`detector` records the two sniffers, whether they agreed, and which was read.** Its `confidence`
-  is the share of the block's records splitting into the most common number of fields.
+- **`detector` records the two sniffers, whether they agreed, and which was read.** Its `sniffed`
+  holds what each named, so a quote neither named shows as null there. Its `confidence` is the share
+  of the block's records splitting into the most common number of fields.
+- **Every other file's first record is checked against the dialect**, up to `FILES_CHECKED` of
+  them, a sample seeded by `FILES_CHECKED_SEED` beyond that. Where there is a header, each file must
+  start with the same one. Where there is none, its first record must split into as many fields. A
+  file that does not is named in a `SourceError`, because the files are read as one table.
 - **DuckDB misreads a file whose rows disagree.** On a pipe-delimited file holding a quoted comma, a
   stray quote, a short row and a long one, DuckDB 2.0.0 names `;` and one column. CleverCSV 0.8.5
   names `|` with no quote. `cli/tests/test_profile_file_traits.py` profiles that file.
@@ -244,7 +253,8 @@ files holds a record is refused with a `SourceError` naming them.
   be text, neither a number nor a boolean. Each but the last must be shorter than
   `GLUE_HEADER_FIELD_LENGTH`. Every one must match `GLUE_COLUMN_NAME`, the "Single-line string
   pattern" of the AWS Glue API's "Common data types". Some later record must hold a field that is
-  not text. Where Glue would classify no CSV, DuckDB's sniffed header is read.
+  not text. Where Glue would classify no CSV, DuckDB's sniffed header is read. So is it where every
+  field is text, because Glue then reads none, and an all-text table's names would become a row.
 - **`quoting` is read from the block's fields.** It is `always` where every field is quoted, and
   `non_numeric` where exactly the fields that are not numbers are. Otherwise it is `necessary`,
   including where no field is quoted, because a writer that never quotes writes that block alike.
@@ -263,9 +273,12 @@ is left out of the table, and counted once, under its first error by position.
   as `unparsed_rows`, because a read with every column as text casts nothing.
 - **Each type's rate is a share of the data rows**, those read and those rejected. A type fewer
   than `k_min` rows give is left out, and `malformed.rate` is the sum of the rest.
-- **DuckDB 2.0.0 reads in strict mode, which rejects a stray quote as `unquoted_value`.** With
-  quote `"`, the field `"bad "quote"` gives `UNQUOTED VALUE`, where `strict_mode = false` gives
-  `MISSING COLUMNS`. The profiler keeps DuckDB's default.
+- **A sampled profile's rates are still shares of every row read.** DuckDB rejects rows over the
+  whole read, before the sample is drawn. `cast` is counted in the sample, so its share of the
+  sample is scaled to the rows read.
+- **The profiler reads in DuckDB's strict mode, which rejects a stray quote as `unquoted_value`.**
+  With quote `"`, the field `"bad "quote"` gives `UNQUOTED VALUE` in DuckDB 2.0.0, where
+  `strict_mode = false` gives `MISSING COLUMNS`. `read_delimited` passes `strict_mode = true`.
 
 ## A Parquet footer gives the layout, and never a value
 
@@ -300,8 +313,13 @@ statistic is taken from the rows, under the floor below.
 
 DuckDB's `json_group_structure` merges every record's structure into one tree. Each scalar path is
 read as text beside its `json_type`, and each array path as its length. An array's elements are a
-table of their own, profiled as a table is. A file whose first byte is not `[` is NDJSON, whatever
-its suffix.
+table of their own, profiled as a table is.
+
+- **A file is NDJSON where every whole line of its first block holds one JSON value**, whatever its
+  suffix. `source.format` then says `ndjson`.
+- **Any other `.json` file is read with DuckDB's `auto` format, unless it opens with `[`.** That
+  reads objects concatenated with no delimiter, as Kinesis Data Firehose writes them unless its
+  newline delimiter is turned on, and pretty-printed ones.
 
 - **A field's `presence` is the share of its parent's objects holding its key.** Three records with
   an `addr` object, one holding `apt`, give `addr.apt` 0.333. The generator draws a field only where

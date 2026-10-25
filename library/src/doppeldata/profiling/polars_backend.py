@@ -1,7 +1,7 @@
 """The Polars backend. Polars computes every statistic, and DuckDB only reads CSV, TSV and JSON as text."""
 
 import dataclasses as dc
-import importlib.metadata
+import importlib
 import json
 import re
 from collections.abc import Callable
@@ -27,6 +27,7 @@ from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import SourceRead
+from doppeldata.profiling.first_blocks import FIRST_BLOCK_BYTES
 from doppeldata.profiling.first_blocks import first_block
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
@@ -56,15 +57,6 @@ FILE_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_file'
 DELIMITED_DIALECT_MODULE = 'doppeldata.profiling.delimited_dialect'
 # The directory value Hive and Spark write a null partition value under, as SQL text.
 HIVE_NULL = "'__HIVE_DEFAULT_PARTITION__'"
-# The packages that read or sniff each format's files.
-READERS = {
-    SourceFormat.PARQUET: ('polars', 'pyarrow'),
-    SourceFormat.ARROW: ('polars',),
-    SourceFormat.CSV: ('duckdb', 'clevercsv', 'charset-normalizer'),
-    SourceFormat.TSV: ('duckdb', 'clevercsv', 'charset-normalizer'),
-    SourceFormat.JSON: ('duckdb',),
-    SourceFormat.NDJSON: ('duckdb',),
-}
 # Each rejected row once, under its first error, counted by error.
 REJECTED_ROWS = (
     'select error_type, count(*) from (select distinct on (file_id, line) error_type from reject_errors '
@@ -284,9 +276,6 @@ class PolarsBackend:
     def scan(self, source: Source) -> pl.LazyFrame:
         return self.read(source).table
 
-    def readers(self, source_format: SourceFormat | None) -> dict[str, str]:
-        return versions(*READERS[source_format]) if source_format else {}
-
     def read(self, source: Source) -> SourceRead:
         read = SourceRead(pl.DataFrame(source.table).lazy()) if source.table is not None else read_files(source)
         return dc.replace(read, table=read.table.with_columns(cs.categorical().cast(pl.String), cs.enum().cast(pl.String)))
@@ -390,10 +379,6 @@ def read_files(source: Source) -> SourceRead:
     return dc.replace(read, table=table)
 
 
-def versions(*distributions: str) -> dict[str, str]:
-    return {distribution: importlib.metadata.version(distribution) for distribution in distributions}
-
-
 def first_line(error: Exception) -> str:
     return str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
 
@@ -410,7 +395,7 @@ def read_delimited(source: Source) -> SourceRead:
     dialect = found.dialect
     query = (
         'select * from read_csv($paths, auto_detect = false, columns = $columns, delim = $delimiter, quote = $quote, '
-        'escape = $escape, header = $header, encoding = $encoding, allow_quoted_nulls = false, store_rejects = true, '
+        'escape = $escape, header = $header, encoding = $encoding, allow_quoted_nulls = false, strict_mode = true, store_rejects = true, '
         'filename = $file_column, hive_partitioning = $hive)'
     )
     parameters = {
@@ -435,11 +420,24 @@ def rows_by_file(frame: pl.DataFrame, source: Source) -> tuple[int, ...]:
     return tuple(counted.get(file.path, 0) for file in source.files)
 
 
+def ends_each_line(block: bytes) -> bool:
+    """Whether every whole line of a file's first block holds one JSON value, as NDJSON's lines do."""
+    whole = block.splitlines()[:-1] if len(block) >= FIRST_BLOCK_BYTES else block.splitlines()
+    try:
+        held = [json.loads(line) for line in whole if line.strip()]
+    except ValueError:
+        return False
+    return bool(held) and not block.lstrip().startswith(b'[')
+
+
 def read_json(source: Source) -> SourceRead:
     """JSON read through DuckDB, a flat column for each path and a table for each array's elements, handed to Polars."""
     paths = [file.path for file in source.files]
-    lines = source.format is SourceFormat.NDJSON or not first_block(paths[0]).lstrip().startswith(b'[')
-    layout = sql_text('newline_delimited' if lines else 'array')
+    block = first_block(paths[0])
+    lines = source.format is SourceFormat.NDJSON or ends_each_line(block)
+    # DuckDB's `auto` reads objects concatenated with no delimiter, as Firehose writes them without its newline
+    # delimiter, and pretty-printed ones.
+    layout = sql_text('newline_delimited' if lines else 'array' if block.lstrip().startswith(b'[') else 'auto')
     records = f'read_json_objects($paths, format = {layout}, filename = {sql_text(FILE_COLUMN)})'
     parameters = {'paths': paths}
     with duckdb.connect(config=DUCKDB_CONFIG) as connection:

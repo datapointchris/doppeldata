@@ -46,6 +46,8 @@ FORMAT_TRAITS = {
     SourceFormat.NDJSON: FormatTraits(('.ndjson', '.jsonl'), text=True),
 }
 TEXT_FORMATS = frozenset(source_format for source_format, traits in FORMAT_TRAITS.items() if traits.text)
+# The codec a text file is compressed with, by the suffix after its format's. DuckDB reads each.
+TEXT_CODEC_SUFFIXES = {'.gz': 'gzip', '.zst': 'zstd', '.bz2': 'bzip2'}
 
 unspelled = sorted({source_format.value for source_format in SourceFormat} - set(published_enum('SourceFormat')))
 if unspelled:
@@ -73,11 +75,12 @@ class DialectFound:
     """A delimited source's dialect, how each sniffer read the first block, and what that block's bytes hold."""
 
     dialect: CsvDialect
-    # Each sniffer's delimiter, quote and escape, or None where it found no dialect.
-    duckdb: tuple[str, str, str] | None
-    clevercsv: tuple[str, str, str] | None
+    # Each sniffer's delimiter, quote and escape by its name, the one read first leading, or None where it found no
+    # dialect. A quote or escape it named none of is empty.
+    named: dict[str, tuple[str, str, str] | None]
     # Whether the two read the same delimiter and quote, a quote neither names being read as `"`.
     agreed: bool
+    # The sniffer whose dialect was read, or `default` where neither named one.
     chosen: str
     # The share of the block's records that split into the most common number of fields under `dialect`.
     confidence: float
@@ -248,10 +251,6 @@ class Backend(Protocol):
 
     def read(self, source: Source) -> SourceRead:
         """The source's table, with what reading its files found beside the rows."""
-        ...
-
-    def readers(self, source_format: SourceFormat | None) -> dict[str, str]:
-        """Each package that reads or sniffs a source of the format, with its installed version."""
         ...
 
     def schema(self, table: Table) -> list[ColumnSpec]: ...

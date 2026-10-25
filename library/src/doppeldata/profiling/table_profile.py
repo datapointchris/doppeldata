@@ -165,6 +165,7 @@ def profile_table(
     sample: int | None,
     k_min: int,
     packs: list[EnabledPack],
+    readers: dict[str, str],
     frozen: FrozenLayout | None = None,
 ) -> dict[str, Any]:
     """The profile document of `source`, from every row or from a seeded sample of `sample` rows.
@@ -189,7 +190,7 @@ def profile_table(
     generated: dict[str, Any] = {
         'tool': TOOL,
         'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
-    } | derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None, packs, backend.readers(source.format))
+    } | derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None, packs, readers)
     generated['sample'] = {'strategy': 'reservoir', 'rows_read': profiled.described} if profiled.described < rows else {'strategy': 'full'}
     document: dict[str, Any] = {
         'profile_version': _core.FORMAT_VERSION,
@@ -199,7 +200,7 @@ def profile_table(
         'privacy': {'k_min': k_min},
     }
     if source.format:
-        document['source'] = file_traits.source_section(backend, source, read, profiled, k_min)
+        document['source'] = file_traits.source_section(backend, source, read, profiled, rows, k_min)
     document['dataset'] = {'row_count': rows}
     document['columns'] = profiled.columns
     return reviewable(document)

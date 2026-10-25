@@ -9,12 +9,14 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from doppeldata.profiling import json_paths
+from doppeldata.profiling.backend import TEXT_CODEC_SUFFIXES
 from doppeldata.profiling.backend import Backend
 from doppeldata.profiling.backend import DialectFound
 from doppeldata.profiling.backend import ParquetFooter
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import SourceRead
+from doppeldata.profiling.recorded_counts import RATE_DIGITS
 from doppeldata.profiling.recorded_counts import TOP_VALUES_THRESHOLD
 from doppeldata.profiling.recorded_counts import kept_values
 from doppeldata.profiling.recorded_counts import rate
@@ -26,16 +28,26 @@ from doppeldata.published_schemas import published_enum
 if TYPE_CHECKING:
     from doppeldata.profiling.table_profile import ProfiledColumns
 
-# A text file's codec, by its suffix.
-TEXT_CODECS = {'.gz': 'gzip', '.zst': 'zstd', '.bz2': 'bzip2'}
 # The codecs a text writer writes, which a profile's `csv` and `json` settings take, as the profile schema publishes them.
 WRITTEN_TEXT_CODECS = frozenset(published_enum('TextCompression'))
 # Each Parquet codec, as a footer names it, by the `source.compression` and writer setting it is.
 PARQUET_CODECS = {'UNCOMPRESSED': 'none', 'SNAPPY': 'snappy', 'GZIP': 'gzip', 'ZSTD': 'zstd', 'LZ4': 'lz4', 'LZ4_RAW': 'lz4', 'LZO': 'lzo'}
 WRITTEN_PARQUET_CODECS = frozenset(published_enum('ParquetCompression'))
+# The text encoding a writer writes for each DuckDB reads, as the profile schema spells it. UTF-16 has none.
+WRITTEN_ENCODINGS = {'utf-8': 'utf8', 'latin-1': 'latin1'}
+
+unwritten = sorted(set(WRITTEN_ENCODINGS.values()) - set(published_enum('TextEncoding')))
+if unwritten:
+    raise RuntimeError(f'the profile format has no text encoding {", ".join(unwritten)}')
 
 
-def source_section(backend: Backend, source: Source, read: SourceRead, profiled: 'ProfiledColumns', k_min: int) -> dict[str, Any]:
+def source_section(
+    backend: Backend, source: Source, read: SourceRead, profiled: 'ProfiledColumns', rows: int, k_min: int
+) -> dict[str, Any]:
+    """The source's section. `rows` counts every row read, where `profiled` may describe a sample of them.
+
+    A setting no writer takes, such as a `bzip2` text codec, is left out, so a writer writes its own default.
+    """
     assert source.format is not None
     lines = read.json is not None and read.json.lines
     section: dict[str, Any] = {'format': SourceFormat.NDJSON.value if lines else source.format.value}
@@ -45,24 +57,23 @@ def source_section(backend: Backend, source: Source, read: SourceRead, profiled:
     layout = layout_section(backend, source, read, profiled, k_min)
     if layout:
         section['layout'] = layout
-    text_codec = codec if codec in WRITTEN_TEXT_CODECS else 'none'
+    text_codec = {'compression': codec} if codec in WRITTEN_TEXT_CODECS else {}
     if read.dialect is not None:
-        section['csv'] = csv_section(read.dialect, read.rejected, profiled, k_min) | {'compression': text_codec}
+        section['csv'] = csv_section(read.dialect, read.rejected, profiled, rows, k_min) | text_codec
     if read.footers:
         section['parquet'] = parquet_section(read.footers)
     if read.json is not None and profiled.json is not None:
         section['json'] = {
             'explicit_nulls': any(counts.null for counts in all_counts(profiled.json)),
-            'compression': text_codec,
             'max_depth': json_paths.depth(read.json.paths),
-        }
+        } | text_codec
     return section
 
 
 def compression(source: Source, footers: tuple[ParquetFooter, ...]) -> str | None:
     if footers:
         return PARQUET_CODECS.get(most_common(footer.codec for footer in footers) or '')
-    suffixes = {TEXT_CODECS.get(PurePosixPath(file.path).suffix.lower(), 'none') for file in source.files}
+    suffixes = {TEXT_CODEC_SUFFIXES.get(PurePosixPath(file.path).suffix.lower(), 'none') for file in source.files}
     return suffixes.pop() if len(suffixes) == 1 and source.format is not SourceFormat.ARROW else None
 
 
@@ -110,45 +121,61 @@ def sort_order(footers: tuple[ParquetFooter, ...], profiled: 'ProfiledColumns') 
     return []
 
 
-def csv_section(found: DialectFound, rejected: dict[str, int], profiled: 'ProfiledColumns', k_min: int) -> dict[str, Any]:
+def csv_section(found: DialectFound, rejected: dict[str, int], profiled: 'ProfiledColumns', rows: int, k_min: int) -> dict[str, Any]:
     """The writer's dialect, what the first block's bytes hold, how the two sniffers read it, and the malformed rows."""
     dialect = found.dialect
     breaks = sum(found.line_terminators.values())
-    data_rows = profiled.described + sum(rejected.values())
-    return {
+    primary, confirm = found.named
+    section = {
         'delimiter': dialect.delimiter,
-        'quote': dialect.quote or '"',
+        'quote': dialect.quote,
         'escape': dialect.escape if dialect.escape and dialect.escape != dialect.quote else None,
         'quoting': found.quoting,
         'header': dialect.header,
         'null': profiled.null_token,
         'line_terminator': 'crlf' if found.line_terminators['crlf'] > found.line_terminators['lf'] else 'lf',
         'bom': found.bom,
-        'encoding': 'latin1' if dialect.encoding == 'latin-1' else 'utf8',
         'detected_encoding': found.detected_encoding,
         'line_terminator_mix': {name: rate(count, breaks) for name, count in found.line_terminators.items() if count},
         'trailing_delimiter': found.trailing_delimiter,
         'detector': {
-            'primary': 'duckdb',
-            'confirm': 'clevercsv',
+            'primary': primary,
+            'confirm': confirm,
             'agreed': found.agreed,
             'chosen': found.chosen,
-            'confidence': significant(found.confidence, 4),
+            'confidence': significant(found.confidence, RATE_DIGITS),
+            'sniffed': [sniffed_dialect(sniffer, named) for sniffer, named in found.named.items()],
         },
-        'malformed': malformed_rows(rejected | {'cast': profiled.unparsed_rows}, data_rows, k_min),
+        'malformed': malformed_rows(rejected, profiled.unparsed_rows, rows, profiled.described, k_min),
     }
+    if dialect.encoding in WRITTEN_ENCODINGS:
+        section['encoding'] = WRITTEN_ENCODINGS[dialect.encoding]
+    return section
 
 
-def malformed_rows(rejected: dict[str, int], data_rows: int, k_min: int) -> dict[str, Any]:
-    """Each reason's share of the data rows, leaving out a reason fewer than k_min rows give, and their sum."""
-    kept = {reason: rows for reason, rows in sorted(rejected.items()) if rows >= k_min}
-    return {'rate': rate(sum(kept.values()), data_rows), 'by_type': {reason: rate(rows, data_rows) for reason, rows in kept.items()}}
+def sniffed_dialect(sniffer: str, named: tuple[str, str, str] | None) -> dict[str, Any]:
+    delimiter, quote, escape = named or ('', '', '')
+    return {'sniffer': sniffer, 'delimiter': delimiter or None, 'quote': quote or None, 'escape': escape or None}
+
+
+def malformed_rows(rejected: dict[str, int], unparsed: int, rows: int, described: int, k_min: int) -> dict[str, Any]:
+    """Each reason's share of the data rows, leaving out a reason fewer than k_min rows give, and their sum.
+
+    A reader rejects a row over every row read, of which `rows` were not rejected, and `cast` is counted over the
+    `described` rows a sample keeps of those. So `cast`'s share of the sample is scaled to the rows read.
+    """
+    data_rows = rows + sum(rejected.values())
+    shares = {reason: count / data_rows for reason, count in rejected.items() if count >= k_min}
+    if unparsed >= k_min:
+        shares['cast'] = unparsed / described * rows / data_rows
+    by_type = {reason: significant(share, RATE_DIGITS) for reason, share in sorted(shares.items())}
+    return {'rate': significant(sum(shares.values()), RATE_DIGITS), 'by_type': by_type}
 
 
 def parquet_section(footers: tuple[ParquetFooter, ...]) -> dict[str, Any]:
     """The writer settings that reproduce the files' layout, and what their footers say of the writer that made them."""
     groups = sorted(rows for footer in footers for rows, _ in footer.row_groups)
-    codec = PARQUET_CODECS.get(most_common(footer.codec for footer in footers) or '', 'zstd')
+    codec = PARQUET_CODECS.get(most_common(footer.codec for footer in footers) or '')
     statistics = (
         'page' if most(footer.page_index for footer in footers) else 'chunk' if most(footer.statistics for footer in footers) else 'none'
     )
@@ -172,8 +199,8 @@ def parquet_section(footers: tuple[ParquetFooter, ...]) -> dict[str, Any]:
         for column, scale in footer.decimal_scales.items():
             scales[column].add(scale)
     section: dict[str, Any] = {
-        'compression': codec if codec in WRITTEN_PARQUET_CODECS else 'zstd',
-        'row_group_rows': max(groups) if groups else 1024 * 1024,
+        'compression': codec if codec in WRITTEN_PARQUET_CODECS else None,
+        'row_group_rows': max(groups) if groups else None,
         'statistics': statistics,
         'dictionary_columns': None if set(dictionary) == every_column else dictionary,
         'timestamp_unit': reproducible.pop() if len(reproducible) == 1 and 'int96' not in units.values() else None,

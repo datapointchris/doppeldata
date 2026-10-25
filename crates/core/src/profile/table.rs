@@ -36,8 +36,8 @@ pub struct Generated {
     /// Each detector pack the profiler typed columns with, by name, with the distribution that
     /// provides it and its version, as `doppeldata <version>`.
     pub detector_packs: Option<BTreeMap<String, String>>,
-    /// Each package that read or sniffed the source files, with its version, such as
-    /// `{duckdb: 2.0.0, clevercsv: 0.8.5}`.
+    /// Each package that read or sniffed the source files, by its distribution name, with its
+    /// installed version.
     pub readers: Option<BTreeMap<String, String>>,
     /// When profiling finished, in RFC 3339.
     pub at: Option<String>,
@@ -146,7 +146,8 @@ pub struct CsvSource {
 }
 
 /// How the dialect was found. DuckDB's sniffer reads the files first, and CleverCSV confirms its
-/// dialect on the first block. Where the two disagree, CleverCSV's dialect is read.
+/// dialect on the first block. DuckDB's is read where the two agree or CleverCSV names none, and
+/// CleverCSV's where they disagree.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct DialectDetection {
     pub primary: Option<DialectSniffer>,
@@ -157,6 +158,19 @@ pub struct DialectDetection {
     /// The share of the first block's records that split into the most common number of fields
     /// under the chosen dialect.
     pub confidence: Option<Rate>,
+    /// What each sniffer named, the one read first leading. So a quote read where neither named
+    /// one shows as the format's own rather than a sniffer's.
+    pub sniffed: Option<Vec<SniffedDialect>>,
+}
+
+/// One sniffer's dialect. Each part it named none of is null, and all are where it found no
+/// dialect.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct SniffedDialect {
+    pub sniffer: Option<DialectSniffer>,
+    pub delimiter: Option<String>,
+    pub quote: Option<String>,
+    pub escape: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -164,6 +178,8 @@ pub struct DialectDetection {
 pub enum DialectSniffer {
     Duckdb,
     Clevercsv,
+    /// Neither sniffer named a dialect, so the format's own was read.
+    Default,
 }
 
 /// The data rows a reader rejects, as shares of every data row the files hold. A type held by
