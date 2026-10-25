@@ -102,22 +102,24 @@ Every kind of column is measured. A float column whose source holds cents, gener
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.
 
-## `layout` measures the files against the source's, scaled to the rows checked
+## Three metrics measure the files against the source's layout, scaled to the rows checked
 
-A source profile with a `source.layout` gets a `layout` row for the table and one per Hive key with
-value shares. Each value is a relative change, as `distinct_ratio_delta`'s is.
+A source profile with a `source.layout` gets three metrics, one statistic each. Each value is a
+relative change, as `distinct_ratio_delta`'s is, and each defaults to at most 0.10.
 
-- **The table's row is the larger of two changes.** One is the file count, against the source's
-  scaled to the rows checked. So a check at the profile's row count holds the source's file count,
-  and one at a tenth of it holds a tenth. The other is the median rows per file, against the
-  source's or the rows checked over the files expected, where that is fewer.
+- **`file_count_delta` is the file count's change.** The count expected is the source's scaled to
+  the rows checked. So a check at the profile's row count holds the source's file count, and one at
+  a tenth of it holds a tenth.
 - **The file count expected is never under one file for each partition the rows can fill.** A
   partitioned writer writes a file for every combination of the keys' values. So the count is at
   least the product of each key's value count, or the rows checked where those are fewer.
-- **A Hive key's row is the largest change in one value's share of rows**, over the values the
-  source lists. A value the data lacks has a share of 0, so its change is 1.
-- **Data whose profile records no layout leaves the table's row unmeasured**, as a table in memory
-  does. A source profile with no layout, as a hand-written one may be, gets no `layout` row.
+- **`rows_per_file_delta` is the median rows per file's change**, against the source's, or the
+  rows checked over the files expected where that is fewer.
+- **`partition_share_delta` has a row per Hive key the source lists value shares of.** Its value is
+  the largest change in one value's share of rows. A value the data lacks has a share of 0, so its
+  change is 1.
+- **Data whose profile records no layout leaves each of the three unmeasured**, as a table in
+  memory does. A source profile with no layout, as a hand-written one may be, gets none of them.
 
 ## A metric the other profile cannot supply is a row with no value
 

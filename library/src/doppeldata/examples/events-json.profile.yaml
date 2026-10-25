@@ -45,7 +45,7 @@ columns:
     nullable: false
     null_rate: 0.0
     type_mix: {integer: 0.75, string: 0.25}
-    distinct: {approx: 18000, ratio: 0.075}
+    distinct: {approx: 25000, ratio: 0.1042}
     numeric:
       integral: true
       extremes: {low: 1, high: 25000}
