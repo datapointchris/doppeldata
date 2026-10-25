@@ -92,7 +92,10 @@ value:
 | `phone_number` | fake's `phone_number` adds an extension to half its numbers. `cell_number` starts an area code or an exchange with 0 or 1 in many of its numbers | `[2-9]\d\d-[2-9]\d\d-\d{4}` |
 | `person_name` | `name` would put full names in a first-name column | `first_name`, `last_name` or `name` |
 
-These hold for the fake version `crates/Cargo.toml` pins. `us_ssn`'s pattern spells out each
+These hold for the fake version `crates/core/Cargo.toml` pins.
+`library/tests/test_general_detector_pack.py` generates from every general-pack hint and fails
+naming each whose values stop passing its own validator, as a bump of fake or `rand_regex` could
+make them. `us_ssn`'s pattern spells out each
 excluded area, group and serial, because `rand_regex` has no lookaround. `url` draws from the
 reserved `example` domains, so no generated link reaches anyone.
 
