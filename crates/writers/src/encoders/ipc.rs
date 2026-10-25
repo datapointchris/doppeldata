@@ -7,9 +7,9 @@ use arrow_ipc::writer::IpcWriteOptions;
 use arrow_ipc::writer::StreamWriter;
 use arrow_schema::SchemaRef;
 use doppeldata_core::TextCell;
-use doppeldata_core::manifest::ArrowSettings;
-use doppeldata_core::manifest::IpcCompression;
-use doppeldata_core::manifest::IpcFormat;
+use doppeldata_core::format_settings::ArrowSettings;
+use doppeldata_core::format_settings::IpcCompression;
+use doppeldata_core::format_settings::IpcFormat;
 
 use super::FileEncoder;
 use crate::WriteError;

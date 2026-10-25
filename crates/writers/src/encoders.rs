@@ -9,8 +9,8 @@ mod parquet;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use doppeldata_core::TextCell;
-use doppeldata_core::manifest::Output;
-use doppeldata_core::manifest::TextCompression;
+use doppeldata_core::format_settings::Output;
+use doppeldata_core::format_settings::TextCompression;
 
 use crate::WriteError;
 use crate::byte_sink::ByteSink;
@@ -24,11 +24,6 @@ use crate::byte_sink::ZstdSink;
 pub(crate) trait FileEncoder: Send {
     fn write(&mut self, batch: &RecordBatch, cells: &[Vec<TextCell>]) -> Result<(), WriteError>;
     fn finish(self: Box<Self>) -> Result<WrittenObject, WriteError>;
-}
-
-/// Whether `output` prints text cells. Arrow and Parquet keep the null the batch holds.
-pub(crate) fn prints_text_cells(output: &Output) -> bool {
-    !matches!(output, Output::Parquet(_) | Output::Arrow(_))
 }
 
 /// Refuses settings no object could be written with, before any is opened.
@@ -68,13 +63,11 @@ pub(crate) fn open(output: &Output, schema: &SchemaRef, sink: Box<dyn ByteSink>)
     })
 }
 
-/// The level a text codec runs at: 0 to 9 for gzip, defaulting to 6, and 1 to 22 for zstd,
-/// defaulting to 3, as each library does.
+/// The level a text codec runs at: `level`, or the codec's default when none is given. A level
+/// outside the codec's range is refused.
 fn text_compression_level(compression: TextCompression, level: Option<i32>) -> Result<i32, WriteError> {
-    let (range, default) = match compression {
-        TextCompression::None => return Ok(0),
-        TextCompression::Gzip => (0..=9, 6),
-        TextCompression::Zstd => (1..=22, 3),
+    let Some((range, default)) = compression.levels() else {
+        return Ok(0);
     };
     let level = level.unwrap_or(default);
     if range.contains(&level) {

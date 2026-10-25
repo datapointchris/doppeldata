@@ -4,6 +4,7 @@
 //! it.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::btree_map::Entry;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -14,19 +15,19 @@ use std::thread;
 use std::time::Instant;
 use std::time::SystemTime;
 
-use bytes::Bytes;
 use doppeldata_core::BLOCK_ROWS;
 use doppeldata_core::Plan;
 use doppeldata_core::TextCell;
-use doppeldata_core::manifest::LayoutSettings;
+use doppeldata_core::format_settings::Output;
 use doppeldata_core::manifest::MANIFEST_FILE_NAME;
 use doppeldata_core::manifest::Manifest;
 use doppeldata_core::manifest::ManifestFile;
 use doppeldata_core::manifest::ManifestProfile;
-use doppeldata_core::manifest::Output;
+use doppeldata_core::manifest::PARTIAL_MANIFEST_FILE_NAME;
 use doppeldata_core::profile::provenance;
-use object_store::ObjectStoreExt;
+use object_store::PutMode;
 use tokio::runtime::Handle;
+use tokio::runtime::RuntimeFlavor;
 
 use crate::WriteError;
 use crate::byte_sink::ObjectSink;
@@ -39,45 +40,50 @@ use crate::layout::layout;
 use crate::layout::layout_from_manifest;
 use crate::partition::PartitionValues;
 use crate::partition::Partitioner;
-
-/// What to write: the format and its settings, how rows split into files, and the profile's path
-/// for the manifest to name.
-#[derive(Debug, Clone, Default)]
-pub struct WriteOptions {
-    pub output: Output,
-    pub layout: LayoutSettings,
-    pub profile_path: Option<String>,
-}
+use crate::write_options::WriteOptions;
 
 /// How to run a write. None of it changes a byte written.
 #[derive(Debug, Clone, Default)]
 pub struct RunOptions {
     /// Threads that generate and encode. Zero takes one per core.
     pub threads: usize,
-    /// Delete the objects an earlier run of this tool left at the destination, where otherwise a
-    /// destination holding anything is refused.
+    /// Delete what an earlier run of this tool left at the destination, where otherwise a
+    /// destination holding anything is refused. A write with it takes over a destination another
+    /// write is still filling, so two writes with `replace` must never share one.
     pub replace: bool,
-    /// Set from any thread to stop the write between blocks. The write then fails with
-    /// [`WriteError::Cancelled`] and a partial manifest.
+    /// Set from any thread to stop the write between blocks. Unless every range was already written,
+    /// the write then fails with [`WriteError::Cancelled`] and a partial manifest.
     pub cancel: Option<Arc<AtomicBool>>,
     /// A multi-thread tokio runtime to upload on, such as the one the caller's store already uses.
-    /// None builds one for the write and shuts it down after.
+    /// The write blocks the calling thread, so that thread must not be the runtime's only worker. A
+    /// current-thread runtime is refused. None builds one for the write and shuts it down after.
     pub runtime: Option<Handle>,
 }
 
-/// A write that failed. Once the destination was prepared, `manifest` lists every object that
-/// completed and is marked partial, and was written beside them where the store allowed.
+/// A write that failed.
 #[derive(Debug, thiserror::Error)]
 #[error("{error}")]
 pub struct WriteFailure {
     #[source]
     pub error: WriteError,
+    /// What the run wrote, marked partial when a range is missing. None when it failed before
+    /// claiming the destination.
     pub manifest: Option<Box<Manifest>>,
+    /// Whether `manifest` is in the store: as `_manifest.json` when whole, as
+    /// `_manifest.partial.json` when partial.
+    pub manifest_stored: bool,
+    /// Why storing a partial manifest failed, where `error` is why the run stopped.
+    pub manifest_error: Option<Box<WriteError>>,
 }
 
 impl From<WriteError> for WriteFailure {
     fn from(error: WriteError) -> Self {
-        Self { error, manifest: None }
+        Self {
+            error,
+            manifest: None,
+            manifest_stored: false,
+            manifest_error: None,
+        }
     }
 }
 
@@ -98,14 +104,18 @@ pub fn write(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination:
     execute(plan, &layout, manifest, run, destination)
 }
 
-/// Writes every file `manifest` names again, from `plan`, which must have the manifest's identity.
-/// Each object's SHA-256 matches the manifest's under the same tool version.
+/// Writes every file a whole `manifest` names again, from `plan`, which must have the manifest's
+/// identity, then compares each object's path, rows, bytes and SHA-256 with the record. A partial
+/// manifest is refused.
 pub fn regenerate(plan: &Plan, manifest: &Manifest, run: &RunOptions, destination: &Destination) -> Result<Manifest, WriteFailure> {
+    if manifest.partial {
+        return Err(WriteError::PartialManifest.into());
+    }
     let identity = plan.identity().digest();
-    if identity != manifest.identity {
+    if identity != manifest.dataset_digest {
         return Err(WriteError::IdentityMismatch {
             plan: identity,
-            manifest: manifest.identity.clone(),
+            manifest: manifest.dataset_digest.clone(),
         }
         .into());
     }
@@ -117,7 +127,30 @@ pub fn regenerate(plan: &Plan, manifest: &Manifest, run: &RunOptions, destinatio
         manifest.layout.clone(),
         destination.url.clone(),
     );
-    execute(plan, &layout, fresh, run, destination)
+    let written = execute(plan, &layout, fresh, run, destination)?;
+    let differ = differing_files(&manifest.files, &written.files);
+    if differ.is_empty() {
+        Ok(written)
+    } else {
+        Err(WriteFailure {
+            error: WriteError::RegeneratedFilesDiffer { files: differ },
+            manifest: Some(Box::new(written)),
+            manifest_stored: true,
+            manifest_error: None,
+        })
+    }
+}
+
+/// The paths whose record differs between `recorded` and `written`, or that only one of them lists.
+fn differing_files(recorded: &[ManifestFile], written: &[ManifestFile]) -> Vec<String> {
+    let recorded: BTreeMap<&str, &ManifestFile> = recorded.iter().map(|file| (file.path.as_str(), file)).collect();
+    let written: BTreeMap<&str, &ManifestFile> = written.iter().map(|file| (file.path.as_str(), file)).collect();
+    let paths: BTreeSet<&str> = recorded.keys().chain(written.keys()).copied().collect();
+    paths
+        .into_iter()
+        .filter(|path| recorded.get(path) != written.get(path))
+        .map(String::from)
+        .collect()
 }
 
 fn profile_record(plan: &Plan, path: Option<String>) -> ManifestProfile {
@@ -129,7 +162,6 @@ fn profile_record(plan: &Plan, path: Option<String>) -> ManifestProfile {
             .get(provenance::PROFILE_VERSION)
             .and_then(|version| version.parse().ok())
             .unwrap_or_default(),
-        digest: plan.identity().profile_digest().to_string(),
         path,
     }
 }
@@ -145,6 +177,7 @@ struct Run<'a> {
     prints_text_cells: bool,
     cancel: Option<Arc<AtomicBool>>,
     next_range: AtomicUsize,
+    completed_ranges: AtomicUsize,
     stop: AtomicBool,
     files: Mutex<Vec<ManifestFile>>,
     error: Mutex<Option<WriteError>>,
@@ -160,12 +193,17 @@ impl Run<'_> {
             let Some(range) = self.layout.ranges.get(self.next_range.fetch_add(1, Ordering::Relaxed)) else {
                 return;
             };
-            if let Err(error) = self.write_range(range) {
-                if !matches!(error, WriteError::Cancelled) {
-                    self.error.lock().expect("no worker panics holding it").get_or_insert(error);
+            match self.write_range(range) {
+                Ok(()) => {
+                    self.completed_ranges.fetch_add(1, Ordering::Relaxed);
                 }
-                self.stop.store(true, Ordering::Relaxed);
-                return;
+                Err(error) => {
+                    if !matches!(error, WriteError::Cancelled) {
+                        self.error.lock().expect("no worker panics holding it").get_or_insert(error);
+                    }
+                    self.stop.store(true, Ordering::Relaxed);
+                    return;
+                }
             }
         }
     }
@@ -210,7 +248,9 @@ impl Run<'_> {
             let written = encoder.finish()?;
             self.files.lock().expect("no worker panics holding it").push(ManifestFile {
                 path,
+                range: range.index,
                 first_row: range.first_row,
+                range_rows: range.rows,
                 rows,
                 bytes: written.bytes,
                 sha256: written.sha256,
@@ -238,6 +278,10 @@ fn slice_cells(cells: Vec<Vec<TextCell>>, start: u32, stop: u32) -> Vec<Vec<Text
         .collect()
 }
 
+fn now_rfc3339() -> String {
+    chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
 fn execute(
     plan: &Plan,
     layout: &FileLayout,
@@ -246,6 +290,13 @@ fn execute(
     destination: &Destination,
 ) -> Result<Manifest, WriteFailure> {
     let started = Instant::now();
+    if run
+        .runtime
+        .as_ref()
+        .is_some_and(|handle| handle.runtime_flavor() != RuntimeFlavor::MultiThread)
+    {
+        return Err(WriteError::CurrentThreadRuntime.into());
+    }
     let partitioner = Partitioner::new(&plan.schema(), &layout.partition_by, layout.partition_style);
     encoders::check(&manifest.output, partitioner.file_schema())?;
     let threads = match run.threads {
@@ -253,6 +304,8 @@ fn execute(
         threads => threads,
     };
     manifest.threads = threads as u32;
+    manifest.partial = true;
+    manifest.written_at = now_rfc3339();
     thread::scope(|scope| {
         scope
             .spawn(move || {
@@ -269,7 +322,7 @@ fn execute(
                         owned_runtime.handle().clone()
                     }
                 };
-                runtime.block_on(destination.prepare(run.replace))?;
+                runtime.block_on(destination.prepare(run.replace, &manifest))?;
                 let shared = Run {
                     plan,
                     layout,
@@ -277,9 +330,10 @@ fn execute(
                     partitioner,
                     destination,
                     runtime: runtime.clone(),
-                    prints_text_cells: encoders::prints_text_cells(&manifest.output),
+                    prints_text_cells: manifest.output.is_text(),
                     cancel: run.cancel.clone(),
                     next_range: AtomicUsize::new(0),
+                    completed_ranges: AtomicUsize::new(0),
                     stop: AtomicBool::new(false),
                     files: Mutex::new(Vec::new()),
                     error: Mutex::new(None),
@@ -290,7 +344,8 @@ fn execute(
                         workers_scope.spawn(|| shared.work());
                     }
                 });
-                let cancelled = shared.cancel.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed));
+                let unwritten = shared.completed_ranges.load(Ordering::Relaxed) < layout.ranges.len();
+                let cancelled = unwritten && shared.cancel.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed));
                 let error = shared
                     .error
                     .into_inner()
@@ -301,28 +356,32 @@ fn execute(
                 manifest.files = files;
                 manifest.partial = error.is_some();
                 manifest.elapsed_ms = started.elapsed().as_millis() as u64;
-                manifest.written_at =
-                    chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-                let stored = runtime.block_on(put_manifest(destination, &manifest));
-                match error.map_or(stored, Err) {
-                    Ok(()) => Ok(manifest),
-                    Err(error) => Err(WriteFailure {
-                        error,
-                        manifest: Some(Box::new(manifest)),
-                    }),
-                }
+                manifest.written_at = now_rfc3339();
+                record(&runtime, destination, manifest, error)
             })
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     })
 }
 
-async fn put_manifest(destination: &Destination, manifest: &Manifest) -> Result<(), WriteError> {
-    let mut text = serde_json::to_vec_pretty(manifest).expect("a manifest always serializes");
-    text.push(b'\n');
-    destination
-        .store
-        .put(&destination.object(MANIFEST_FILE_NAME)?, Bytes::from(text).into())
-        .await?;
-    Ok(())
+/// Stores the finished run's manifest: as `_manifest.json` once every object is whole, replacing the
+/// claim, and as `_manifest.partial.json`, over the claim, when `error` stopped the run.
+fn record(runtime: &Handle, destination: &Destination, manifest: Manifest, error: Option<WriteError>) -> Result<Manifest, WriteFailure> {
+    let failure = |error, manifest, manifest_stored, manifest_error| WriteFailure {
+        error,
+        manifest: Some(Box::new(manifest)),
+        manifest_stored,
+        manifest_error,
+    };
+    if let Some(error) = error {
+        let stored = runtime.block_on(destination.put_manifest(PARTIAL_MANIFEST_FILE_NAME, &manifest, PutMode::Overwrite));
+        return Err(failure(error, manifest, stored.is_ok(), stored.err().map(Box::new)));
+    }
+    if let Err(error) = runtime.block_on(destination.put_manifest(MANIFEST_FILE_NAME, &manifest, PutMode::Overwrite)) {
+        return Err(failure(error, manifest, false, None));
+    }
+    if let Err(error) = runtime.block_on(destination.remove(PARTIAL_MANIFEST_FILE_NAME)) {
+        return Err(failure(error, manifest, true, None));
+    }
+    Ok(manifest)
 }

@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
+use doppeldata_core::BLOCK_ROWS;
 use doppeldata_core::Plan;
-use doppeldata_core::manifest::DelimitedSettings;
+use doppeldata_core::format_settings::DelimitedSettings;
+use doppeldata_core::format_settings::Output;
+use doppeldata_core::format_settings::ParquetSettings;
 use doppeldata_core::manifest::FileRows;
 use doppeldata_core::manifest::LayoutSettings;
 use doppeldata_core::manifest::Manifest;
-use doppeldata_core::manifest::Output;
-use doppeldata_core::manifest::ParquetSettings;
 use doppeldata_core::profile::Profile;
 use doppeldata_writers::Destination;
 use doppeldata_writers::RunOptions;
@@ -29,7 +30,7 @@ fn plan() -> Plan {
             {"name": "id", "physical_type": "int64", "numeric": {"sequence": {"start": 1, "step": 1}}},
             {"name": "amount", "physical_type": "decimal128(12, 2)",
              "numeric": {"quantiles": {"p10": 5.0, "p50": 20.0, "p90": 80.0}, "extremes": {"low": 0.5, "high": 900.0}}},
-            {"name": "at", "physical_type": "timestamp[us]",
+            {"name": "at", "physical_type": "timestamp[us, tz=UTC]",
              "temporal": {"extremes": {"low": "2024-01-01T00:00:00", "high": "2024-12-31T23:59:59", "granularity": "second"}}},
             {"name": "flag", "boolean": {"true_rate": 0.3}},
             {"name": "status", "string": {"top_values": [{"value": "shipped", "rate": 0.6}, {"value": "pending", "rate": 0.3}],
@@ -80,9 +81,12 @@ fn parquet_rows(files: Vec<bytes::Bytes>) -> RecordBatch {
 }
 
 /// The reproducibility a committed manifest stands on: the split chooses the files, never the values.
-/// 40,000 and 100,000 rows per file both cut the 65,536-row blocks mid-block.
 #[test]
 fn a_dataset_holds_the_same_values_and_csv_bytes_under_any_file_split() {
+    assert!(
+        [40_000, 100_000].iter().all(|file_rows| file_rows % BLOCK_ROWS != 0),
+        "both file sizes cut blocks mid-block"
+    );
     let plan = plan();
     let parquet = |file_rows| objects(&plan, Output::Parquet(ParquetSettings::default()), file_rows);
     let (narrow, wide) = (parquet(40_000), parquet(100_000));

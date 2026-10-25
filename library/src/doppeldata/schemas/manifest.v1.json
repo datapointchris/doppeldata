@@ -4,6 +4,10 @@
   "description": "The record of a generated dataset, which with its profile regenerates every file byte for byte.",
   "type": "object",
   "properties": {
+    "dataset_digest": {
+      "description": "`sha256:` and the hex SHA-256 of `identity`'s RFC 8785 canonical JSON.",
+      "type": "string"
+    },
     "destination": {
       "description": "Where the files were written, as the caller named it, such as `s3://bucket/orders/`.",
       "type": "string"
@@ -21,8 +25,7 @@
       }
     },
     "identity": {
-      "description": "The dataset identity's digest, `sha256:` and 64 lowercase hex digits.",
-      "type": "string"
+      "$ref": "#/$defs/ManifestIdentity"
     },
     "layout": {
       "$ref": "#/$defs/LayoutSettings"
@@ -31,15 +34,11 @@
       "$ref": "#/$defs/ManifestVersion"
     },
     "partial": {
-      "description": "True when the run stopped early, so `files` lists only the objects that completed.",
+      "description": "True when the run stopped early, so `files` lists only the objects that completed. Such a\nmanifest is stored as `_manifest.partial.json`, and regenerates nothing.",
       "type": "boolean"
     },
     "profile": {
       "$ref": "#/$defs/ManifestProfile"
-    },
-    "rows": {
-      "description": "The dataset's row count, in decimal.",
-      "$ref": "#/$defs/Decimal"
     },
     "scenario": {
       "description": "The scenario applied, or null for none.",
@@ -52,16 +51,6 @@
         }
       ]
     },
-    "seed": {
-      "description": "The seed, in decimal.",
-      "$ref": "#/$defs/Decimal"
-    },
-    "stream_version": {
-      "description": "The engine's stream version, from the dataset identity.",
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0
-    },
     "threads": {
       "description": "The threads that generated and encoded. The count never changes a byte.",
       "type": "integer",
@@ -69,7 +58,7 @@
       "minimum": 0
     },
     "tool": {
-      "description": "The tool that wrote the files, as `doppeldata <version>`.",
+      "description": "The tool that wrote the files, as `doppeldata <version>`. The files' bytes are a function of\nthe identity and this version.",
       "type": "string"
     },
     "written_at": {
@@ -180,11 +169,9 @@
   "required": [
     "manifest_version",
     "tool",
-    "stream_version",
+    "dataset_digest",
     "identity",
     "profile",
-    "seed",
-    "rows",
     "layout",
     "destination",
     "files",
@@ -205,7 +192,8 @@
           "$ref": "#/$defs/IpcFormat",
           "default": "file"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Decimal": {
       "description": "A 64-bit unsigned integer in decimal, because a JSON number is exact only to 2^53.",
@@ -226,7 +214,7 @@
           "default": "none"
         },
         "compression_level": {
-          "description": "The codec's level: 1 to 22 for zstd, 0 to 9 for gzip. Null takes the codec's default.",
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
           "type": [
             "integer",
             "null"
@@ -276,7 +264,7 @@
           "default": "lf"
         },
         "null": {
-          "description": "What a null prints where the column's profile gives no missing token for it.",
+          "description": "What a null prints where the column's profile gives no missing token for it. When it is\nempty, an empty string is quoted so the two read back apart.",
           "type": "string",
           "default": ""
         },
@@ -314,10 +302,11 @@
           ],
           "default": null
         }
-      }
+      },
+      "additionalProperties": false
     },
     "FileRows": {
-      "description": "The rows each file's range holds.",
+      "description": "The rows each object holds, before a range is scaled by its partition values.",
       "anyOf": [
         {
           "description": "The same count in every range but the last.",
@@ -361,7 +350,7 @@
           "default": "none"
         },
         "compression_level": {
-          "description": "The codec's level: 1 to 22 for zstd, 0 to 9 for gzip. Null takes the codec's default.",
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
           "type": [
             "integer",
             "null"
@@ -374,7 +363,8 @@
           "type": "boolean",
           "default": false
         }
-      }
+      },
+      "additionalProperties": false
     },
     "LayoutSettings": {
       "description": "How rows are split into files and directories.",
@@ -395,6 +385,13 @@
         "partition_style": {
           "$ref": "#/$defs/PartitionStyle",
           "default": "hive"
+        },
+        "partition_values": {
+          "description": "The values the partition keys take together, as the profile counts them. A range holds\n`file_rows` times this, so each of its objects lands near `file_rows` rows.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1,
+          "minimum": 0
         }
       }
     },
@@ -406,7 +403,7 @@
       ]
     },
     "ManifestFile": {
-      "description": "One object the run wrote.",
+      "description": "One object the run wrote. A row or byte count is a JSON number, exact to 2^53 rows, which no\ndataset reaches.",
       "type": "object",
       "properties": {
         "bytes": {
@@ -415,7 +412,7 @@
           "minimum": 0
         },
         "first_row": {
-          "description": "The dataset row the object's range starts at. Every object a partitioned range splits into\ncarries the range's first row.",
+          "description": "The dataset row the range starts at.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -437,6 +434,18 @@
           "description": "The object's path under the destination, `/`-separated.",
           "type": "string"
         },
+        "range": {
+          "description": "The index of the row range the object holds, which its file name also carries.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "range_rows": {
+          "description": "The rows the range holds. A partitioned range splits them across one object per value.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
         "rows": {
           "description": "The rows in this object.",
           "type": "integer",
@@ -450,19 +459,54 @@
       },
       "required": [
         "path",
+        "range",
         "first_row",
+        "range_rows",
         "rows",
         "bytes",
         "sha256"
       ]
     },
+    "ManifestIdentity": {
+      "description": "The values a dataset's rows are a pure function of, keyed and written as the identity's canonical\nJSON, so a reader rebuilds `dataset_digest` from them with no mapping.",
+      "type": "object",
+      "properties": {
+        "dataset_rows": {
+          "description": "The dataset's row count, in decimal.",
+          "$ref": "#/$defs/Decimal"
+        },
+        "profile_digest": {
+          "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON.",
+          "type": "string"
+        },
+        "scenario_digest": {
+          "description": "The scenario's digest, or null for none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seed": {
+          "description": "The seed, in decimal.",
+          "$ref": "#/$defs/Decimal"
+        },
+        "stream_version": {
+          "description": "The engine's stream version.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "dataset_rows",
+        "profile_digest",
+        "seed",
+        "stream_version"
+      ]
+    },
     "ManifestProfile": {
       "type": "object",
       "properties": {
-        "digest": {
-          "description": "The profile's digest, `sha256:` and the hex SHA-256 of its RFC 8785 canonical JSON.",
-          "type": "string"
-        },
         "name": {
           "description": "The profile's `name`.",
           "type": "string"
@@ -483,23 +527,25 @@
       },
       "required": [
         "name",
-        "version",
-        "digest"
+        "version"
       ]
     },
     "ManifestScenario": {
       "type": "object",
       "properties": {
-        "digest": {
-          "type": "string"
-        },
         "name": {
           "type": "string"
+        },
+        "path": {
+          "description": "The scenario's path as the caller gave it, or null when it came from memory.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "name",
-        "digest"
+        "name"
       ]
     },
     "ManifestVersion": {
@@ -532,7 +578,7 @@
           "default": "zstd"
         },
         "compression_level": {
-          "description": "The codec's level: 1 to 22 for zstd, 0 to 10 for gzip. Null takes the codec's default.",
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
           "type": [
             "integer",
             "null"
@@ -563,7 +609,7 @@
           "default": "page"
         },
         "timestamp_unit": {
-          "description": "The unit every timestamp column is cast to. Null keeps each column's own. parquet 59\ncannot write INT96, so no unit reproduces it.",
+          "description": "The unit every timestamp column is cast to. Null keeps each column's own. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
           "anyOf": [
             {
               "$ref": "#/$defs/TimestampUnit"
@@ -574,7 +620,8 @@
           ],
           "default": null
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ParquetStatistics": {
       "description": "How much of the min, max and null count each column chunk records.",
@@ -622,7 +669,7 @@
       }
     },
     "Quoting": {
-      "description": "Which fields are quoted.",
+      "description": "Which fields are quoted. A null is never quoted.",
       "oneOf": [
         {
           "type": "string",
@@ -631,7 +678,7 @@
           ]
         },
         {
-          "description": "Only a field holding the delimiter, the quote or a line break.",
+          "description": "Only a field holding the delimiter, the quote or a line break, and an empty string where a\nnull prints empty.",
           "type": "string",
           "const": "necessary"
         },

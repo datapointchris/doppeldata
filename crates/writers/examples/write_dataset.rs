@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use doppeldata_core::manifest::FileRows;
 use doppeldata_core::manifest::Manifest;
-use doppeldata_core::manifest::Output;
 use doppeldata_core::profile::Profile;
 use doppeldata_core::profile::SourceFormat;
 use doppeldata_writers::Destination;
@@ -122,16 +121,6 @@ fn source_format(name: &str) -> Result<SourceFormat, String> {
     serde_json::from_value(serde_json::Value::from(name)).map_err(|_| format!("{name:?} is not a format"))
 }
 
-/// `output` with the settings in `writer`, a JSON object of the manifest's `writer` keys, laid over it.
-fn with_writer(output: Output, writer: &str) -> Result<Output, String> {
-    let mut document = serde_json::to_value(&output).map_err(|error| error.to_string())?;
-    let overrides: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(writer).map_err(|error| format!("--writer: {error}"))?;
-    let settings = document["writer"].as_object_mut().ok_or("the output has no writer settings")?;
-    settings.extend(overrides);
-    serde_json::from_value(document).map_err(|error| format!("--writer: {error}"))
-}
-
 fn run() -> Result<(), String> {
     let options = options()?;
     let (profile, digest) = example_profile(&options.example)?;
@@ -145,50 +134,52 @@ fn run() -> Result<(), String> {
         Some(path) => {
             let text = fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
             let recorded: Manifest = serde_json::from_str(&text).map_err(|error| format!("{path}: {error}"))?;
-            let plan = doppeldata_core::plan(&profile, &digest, recorded.seed, recorded.rows).map_err(|error| error.to_string())?;
+            let plan = doppeldata_core::plan(&profile, &digest, recorded.identity.seed, recorded.identity.dataset_rows)
+                .map_err(|error| error.to_string())?;
             doppeldata_writers::regenerate(&plan, &recorded, &run, &destination)
         }
         None => {
             let plan = doppeldata_core::plan(&profile, &digest, options.seed, options.rows).map_err(|error| error.to_string())?;
-            let source = match &profile {
-                Profile::Table(table) => table.source.as_ref(),
-                Profile::Bundle(_) => None,
-            };
             let format = options.format.as_deref().map(source_format).transpose()?;
-            let (mut output, mut layout) = doppeldata_writers::settings_from_source(source, format).map_err(|error| error.to_string())?;
+            let mut write = WriteOptions::from_profile(&profile, format).map_err(|error| error.to_string())?;
+            write.profile_path = Some(format!("{}.profile.yaml", options.example));
             if let Some(writer) = &options.writer {
-                output = with_writer(output, writer)?;
+                let overrides = serde_json::from_str(writer).map_err(|error| format!("--writer: {error}"))?;
+                write.override_writer(overrides).map_err(|error| error.to_string())?;
             }
             if let Some(file_rows) = options.file_rows {
-                layout.file_rows = FileRows::Fixed(file_rows);
+                write.layout.file_rows = FileRows::Fixed(file_rows);
             }
             if !options.partition_by.is_empty() {
-                layout.partition_by = options.partition_by.clone();
+                write.partition_by(&profile, options.partition_by.clone());
             }
             if let Some(style) = &options.partition_style {
-                layout.partition_style = serde_json::from_value(serde_json::Value::from(style.as_str()))
+                write.layout.partition_style = serde_json::from_value(serde_json::Value::from(style.as_str()))
                     .map_err(|_| format!("{style:?} is not hive or directory"))?;
             }
-            let write = WriteOptions {
-                output,
-                layout,
-                profile_path: Some(format!("{}.profile.yaml", options.example)),
-            };
             doppeldata_writers::write(&plan, &write, &run, &destination)
         }
     };
     let manifest = result.map_err(|failure| match failure.manifest {
-        Some(manifest) => format!("{}\npartial manifest lists {} files", failure.error, manifest.files.len()),
+        Some(manifest) => format!(
+            "{}\nthe manifest lists {} files, partial: {}, stored: {}{}",
+            failure.error,
+            manifest.files.len(),
+            manifest.partial,
+            failure.manifest_stored,
+            failure.manifest_error.map(|error| format!(" ({error})")).unwrap_or_default()
+        ),
         None => failure.error.to_string(),
     })?;
     let bytes: u64 = manifest.files.iter().map(|file| file.bytes).sum();
+    let rows = manifest.identity.dataset_rows;
     println!(
         "{} rows as {} on {} threads in {} ms: {:.2}M rows/s, {} files, {:.1} MB",
-        manifest.rows,
+        rows,
         manifest.output.format_name(),
         manifest.threads,
         manifest.elapsed_ms,
-        manifest.rows as f64 / manifest.elapsed_ms.max(1) as f64 / 1e3,
+        rows as f64 / manifest.elapsed_ms.max(1) as f64 / 1e3,
         manifest.files.len(),
         bytes as f64 / 1e6
     );

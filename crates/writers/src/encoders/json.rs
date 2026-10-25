@@ -8,7 +8,7 @@ use arrow_json::writer::EncoderOptions;
 use arrow_json::writer::make_encoder;
 use arrow_schema::SchemaRef;
 use doppeldata_core::TextCell;
-use doppeldata_core::manifest::JsonSettings;
+use doppeldata_core::format_settings::JsonSettings;
 use serde_json::Value;
 
 use super::FileEncoder;
