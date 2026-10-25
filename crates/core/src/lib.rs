@@ -19,6 +19,7 @@ pub use plan::plan;
 pub use rng::BLOCK_ROWS;
 pub use rng::STREAM_VERSION;
 pub use samplers::TextCell;
+pub use samplers::shape_of;
 
 /// The engine's release, which is the tag the wheel was built from.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

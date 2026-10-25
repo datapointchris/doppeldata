@@ -279,6 +279,21 @@ fn without_anchors(hir: &Hir) -> Hir {
     }
 }
 
+/// A value's shape, the form a profile's `string.shapes` stores and [`Shape::new`] reads back: each
+/// ASCII upper-case letter as `A`, each ASCII lower-case letter as `a`, each ASCII digit as `9`,
+/// and every other character, a non-ASCII letter included, as itself.
+pub fn shape_of(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| match c {
+            'A'..='Z' => 'A',
+            'a'..='z' => 'a',
+            '0'..='9' => '9',
+            other => other,
+        })
+        .collect()
+}
+
 /// One character of a shape: `A` an upper-case letter, `a` a lower-case one, `9` a digit, and any
 /// other character itself.
 #[derive(Debug, Clone, Copy)]

@@ -433,7 +433,8 @@ pub enum CharClass {
     Other,
 }
 
-/// A value's characters mapped to their class: `A` for a letter, `9` for a digit.
+/// A value's characters mapped to their class: `A` for an ASCII upper-case letter, `a` for an
+/// ASCII lower-case one, `9` for an ASCII digit, and any other character as itself.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Shape {
     pub shape: String,

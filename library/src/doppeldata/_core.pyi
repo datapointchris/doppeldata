@@ -25,3 +25,9 @@ def schema_file_names() -> dict[str, str]:
     """
     The file name under ``doppeldata/schemas/`` of each JSON Schema the library ships, by name.
     """
+
+def shape_of(value: str) -> str:
+    """
+    The value's shape, as a profile stores it: each ASCII upper-case letter as A, lower-case
+    letter as a and digit as 9, and every other character as itself.
+    """
