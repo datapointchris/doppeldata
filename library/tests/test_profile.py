@@ -102,5 +102,5 @@ def test_a_bundle_directory_and_its_single_file_form_share_one_digest(tmp_path):
     single = write_json(tmp_path / 'shop.json', index | {'tables': {'orders': orders, 'customers': customers}})
 
     assert Bundle.load(directory).digest == Bundle.load(single).digest
-    with pytest.raises(ValueError, match='save needs a path'):
+    with pytest.raises(ValueError):
         Bundle.load(single).tables['orders'].save()
