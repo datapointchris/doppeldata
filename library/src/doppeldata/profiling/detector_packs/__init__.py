@@ -11,6 +11,7 @@ type. So enable only a pack trusted with the data. The profile holds none of tho
 """
 
 import dataclasses as dc
+import functools
 import hashlib
 import importlib
 import importlib.metadata
@@ -107,6 +108,7 @@ def enabled_packs(names: Iterable[str]) -> list[EnabledPack]:
     A pack the library ships is found first. Any other is the entry point of that name in `ENTRY_POINT_GROUP`. Two
     packs may not declare one type, because the privacy policy reads a type's sensitivity from one pack.
     """
+    shipped_types()
     requested = sorted(set(names) - {GENERAL})
     enabled = [load(name) for name in (GENERAL, *requested)]
     owners: dict[str, str] = {}
@@ -252,11 +254,14 @@ def checked(name: str, pack: Any) -> DetectorPack:
     return pack
 
 
+@functools.cache
 def shipped_types() -> frozenset[str]:
-    """Every semantic type a pack the library ships declares."""
-    return frozenset(detector.type for name in BUILT_IN for detector in load(name).pack.detectors)
+    """Every semantic type a pack the library ships declares, once each `SAFE_HARBOR_TYPES` names is among them.
 
-
-# A Safe Harbor type is matched by name, so one no shipped pack declares would promote no column.
-if undeclared := SAFE_HARBOR_TYPES - shipped_types():
-    raise RuntimeError(f'SAFE_HARBOR_TYPES names types no shipped detector pack declares: {", ".join(sorted(undeclared))}')
+    A Safe Harbor type is matched by name, so one no shipped pack declares would promote no column. The packs import
+    pyarrow, so this runs where packs are enabled rather than when the module is imported.
+    """
+    types = frozenset(detector.type for name in BUILT_IN for detector in load(name).pack.detectors)
+    if undeclared := SAFE_HARBOR_TYPES - types:
+        raise RuntimeError(f'SAFE_HARBOR_TYPES names types no shipped detector pack declares: {", ".join(sorted(undeclared))}')
+    return types
