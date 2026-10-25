@@ -15,6 +15,12 @@ VERSION: Final[str]
 The engine's release, which is the tag the wheel was built from.
 """
 
+def fitted_families() -> dict[str, bool]:
+    """
+    Whether each scipy.stats family a profile's ``fit`` can name is discrete, by its name. Any
+    other family leaves the column a linear tail.
+    """
+
 def generalize_pattern(values: SupportsGetItem[int, str]) -> str |None:
     """
     The anchored regular expression grex generalizes the values to, with each digit as a digit

@@ -20,87 +20,142 @@ enum Standard {
     DiscreteUniform { low: f64, high: f64 },
 }
 
+/// A scipy.stats family the engine draws a tail from.
+pub struct FittedFamilyKind {
+    /// The name a profile's `fit.family` gives it, as scipy.stats does.
+    pub name: &'static str,
+    /// Whether scipy shifts it by `loc` alone, over the integers.
+    pub discrete: bool,
+    /// Other names scipy gives the same family.
+    aliases: &'static [&'static str],
+    standard: fn(&Params<'_>) -> Result<Standard, String>,
+}
+
+/// Every family a `fit` can name. Any other, such as `gamma`, `beta`, `poisson` or `skewnorm`,
+/// leaves the column a linear tail.
+pub const FITTED_FAMILIES: &[FittedFamilyKind] = &[
+    FittedFamilyKind::continuous("norm", |_| Ok(Standard::Normal)),
+    FittedFamilyKind::continuous("lognorm", |params| Ok(Standard::LogNormal { s: params.positive("s")? })),
+    FittedFamilyKind::continuous("expon", |_| Ok(Standard::Exponential)),
+    FittedFamilyKind::continuous("weibull_min", |params| Ok(Standard::Weibull { c: params.positive("c")? })),
+    FittedFamilyKind::continuous("pareto", |params| Ok(Standard::Pareto { b: params.positive("b")? })),
+    FittedFamilyKind::continuous("uniform", |_| Ok(Standard::Uniform)),
+    FittedFamilyKind::continuous("logistic", |_| Ok(Standard::Logistic)),
+    FittedFamilyKind {
+        aliases: &["reciprocal"],
+        ..FittedFamilyKind::continuous("loguniform", log_uniform)
+    },
+    FittedFamilyKind::continuous("triang", triangular),
+    FittedFamilyKind::discrete("geom", geometric),
+    FittedFamilyKind::discrete("randint", discrete_uniform),
+];
+
+impl FittedFamilyKind {
+    const fn continuous(name: &'static str, standard: fn(&Params<'_>) -> Result<Standard, String>) -> Self {
+        Self {
+            name,
+            discrete: false,
+            aliases: &[],
+            standard,
+        }
+    }
+
+    const fn discrete(name: &'static str, standard: fn(&Params<'_>) -> Result<Standard, String>) -> Self {
+        Self {
+            discrete: true,
+            ..Self::continuous(name, standard)
+        }
+    }
+}
+
+/// A fit's parameters, read by name.
+struct Params<'a>(&'a Fit);
+
+impl Params<'_> {
+    fn get(&self, name: &str) -> Result<f64, String> {
+        self.0
+            .params
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("{} has no `{name}` parameter", self.0.family))
+    }
+
+    fn positive(&self, name: &str) -> Result<f64, String> {
+        let value = self.get(name)?;
+        if value > 0.0 && value.is_finite() {
+            Ok(value)
+        } else {
+            Err(format!("{} parameter `{name}` is {value}, not positive", self.0.family))
+        }
+    }
+}
+
+fn log_uniform(params: &Params<'_>) -> Result<Standard, String> {
+    let (a, b) = (params.positive("a")?, params.positive("b")?);
+    if b <= a {
+        return Err(format!("{} needs a {a} below b {b}", params.0.family));
+    }
+    Ok(Standard::LogUniform { a, b })
+}
+
+fn triangular(params: &Params<'_>) -> Result<Standard, String> {
+    let c = params.get("c")?;
+    if !(0.0..=1.0).contains(&c) {
+        return Err(format!("triang parameter `c` is {c}, outside [0, 1]"));
+    }
+    Ok(Standard::Triangular { c })
+}
+
+fn geometric(params: &Params<'_>) -> Result<Standard, String> {
+    let p = params.get("p")?;
+    if !(p > 0.0 && p <= 1.0) {
+        return Err(format!("geom parameter `p` is {p}, outside (0, 1]"));
+    }
+    Ok(Standard::Geometric { p })
+}
+
+fn discrete_uniform(params: &Params<'_>) -> Result<Standard, String> {
+    let (low, high) = (params.get("low")?.floor(), params.get("high")?.floor());
+    if high <= low {
+        return Err(format!("randint needs low {low} below high {high}"));
+    }
+    Ok(Standard::DiscreteUniform { low, high })
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FittedFamily {
     standard: Standard,
+    discrete: bool,
     loc: f64,
     scale: f64,
 }
 
 impl FittedFamily {
-    /// The fit as a distribution, or `None` for a family with no closed-form inverse here, such as
-    /// `gamma`, `beta`, `poisson` or `skewnorm`. Such a column keeps a linear tail.
+    /// The fit as a distribution, or `None` for a family [`FITTED_FAMILIES`] does not hold.
     pub(crate) fn from_fit(fit: &Fit) -> Result<Option<Self>, String> {
-        let param = |name: &str| {
-            fit.params
-                .get(name)
-                .copied()
-                .ok_or_else(|| format!("{} has no `{name}` parameter", fit.family))
+        let name = fit.family.as_str();
+        let Some(family) = FITTED_FAMILIES
+            .iter()
+            .find(|family| family.name == name || family.aliases.contains(&name))
+        else {
+            return Ok(None);
         };
-        let positive = |name: &str| {
-            let value = param(name)?;
-            if value > 0.0 && value.is_finite() {
-                Ok(value)
-            } else {
-                Err(format!("{} parameter `{name}` is {value}, not positive", fit.family))
-            }
-        };
-        let standard = match fit.family.as_str() {
-            "norm" => Standard::Normal,
-            "lognorm" => Standard::LogNormal { s: positive("s")? },
-            "expon" => Standard::Exponential,
-            "weibull_min" => Standard::Weibull { c: positive("c")? },
-            "pareto" => Standard::Pareto { b: positive("b")? },
-            "uniform" => Standard::Uniform,
-            "logistic" => Standard::Logistic,
-            "loguniform" | "reciprocal" => {
-                let (a, b) = (positive("a")?, positive("b")?);
-                if b <= a {
-                    return Err(format!("{} needs a {a} below b {b}", fit.family));
-                }
-                Standard::LogUniform { a, b }
-            }
-            "triang" => {
-                let c = param("c")?;
-                if !(0.0..=1.0).contains(&c) {
-                    return Err(format!("triang parameter `c` is {c}, outside [0, 1]"));
-                }
-                Standard::Triangular { c }
-            }
-            "geom" => {
-                let p = param("p")?;
-                if !(p > 0.0 && p <= 1.0) {
-                    return Err(format!("geom parameter `p` is {p}, outside (0, 1]"));
-                }
-                Standard::Geometric { p }
-            }
-            "randint" => {
-                let (low, high) = (param("low")?.floor(), param("high")?.floor());
-                if high <= low {
-                    return Err(format!("randint needs low {low} below high {high}"));
-                }
-                Standard::DiscreteUniform { low, high }
-            }
-            _ => return Ok(None),
-        };
+        let standard = (family.standard)(&Params(fit))?;
         let scale = fit.params.get("scale").copied().unwrap_or(1.0);
         if !(scale > 0.0 && scale.is_finite()) {
             return Err(format!("{} parameter `scale` is {scale}, not positive", fit.family));
         }
         Ok(Some(Self {
             standard,
+            discrete: family.discrete,
             loc: fit.params.get("loc").copied().unwrap_or(0.0),
             scale,
         }))
     }
 
-    fn is_discrete(&self) -> bool {
-        matches!(self.standard, Standard::Geometric { .. } | Standard::DiscreteUniform { .. })
-    }
-
     /// P(X ≤ x).
     pub(crate) fn cdf(&self, x: f64) -> f64 {
-        if self.is_discrete() {
+        if self.discrete {
             self.discrete_cdf((x - self.loc).floor())
         } else {
             self.continuous_cdf((x - self.loc) / self.scale)
@@ -109,7 +164,7 @@ impl FittedFamily {
 
     /// P(X < x), which differs from [`Self::cdf`] only at a discrete family's support points.
     pub(crate) fn cdf_below(&self, x: f64) -> f64 {
-        if self.is_discrete() {
+        if self.discrete {
             self.discrete_cdf((x - self.loc).ceil() - 1.0)
         } else {
             self.cdf(x)
@@ -133,7 +188,7 @@ impl FittedFamily {
             Standard::Geometric { p: success } => (libm::log1p(-p) / libm::log1p(-success)).ceil().max(1.0),
             Standard::DiscreteUniform { low, high } => (low + (p * (high - low)).ceil() - 1.0).clamp(low, high - 1.0),
         };
-        if self.is_discrete() {
+        if self.discrete {
             self.loc + standard
         } else {
             self.loc + self.scale * standard

@@ -23,7 +23,6 @@ from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT
 from doppeldata.profiling.statistic_catalog import DIGITS_TEXT
 from doppeldata.profiling.statistic_catalog import INTEGER_TEXT
 from doppeldata.profiling.statistic_catalog import PADDED_DIGITS_TEXT
-from doppeldata.profiling.statistic_catalog import QUANTILES
 from doppeldata.profiling.statistic_catalog import RAW_TYPE_FOLDS
 from doppeldata.profiling.statistic_catalog import RAW_TYPE_LAYOUTS
 from doppeldata.profiling.statistic_catalog import RAW_TYPES
@@ -43,16 +42,18 @@ ROW_STAGE = '__doppeldata_stage_{}'
 DUCKDB_CONFIG: dict[str, str | bool | int | float | list[str]] = {'autoinstall_known_extensions': False, 'autoload_known_extensions': False}
 
 
-def quantile(level: float) -> Translation:
-    return lambda c, _: c.quantile(level, 'nearest')
-
-
-def length_quantile(level: float) -> Translation:
-    return lambda c, _: c.str.len_chars().quantile(level, 'nearest')
-
-
-def counts_by(part: pl.Expr, values: Iterable[int]) -> pl.Expr:
+def counts_by(part: pl.Expr, values: Iterable[Any]) -> pl.Expr:
     return pl.concat_list([(part == value).sum() for value in values])
+
+
+def histogram_counts(c: pl.Expr, edges: tuple[float, ...]) -> pl.Expr:
+    """The rows below the first edge, in each bin, and above the last, from one sort and a binary search per edge."""
+    ordered = c.drop_nulls().cast(pl.Float64).sort()
+    rows_below = ordered.search_sorted(pl.Series(edges[:-1], dtype=pl.Float64), side='left').cast(pl.Int64).implode()
+    # The last bin holds its upper edge, so its cumulative count includes the rows equal to it.
+    rows_through_last = ordered.search_sorted(float(edges[-1]), side='right').cast(pl.Int64)
+    cumulative = pl.concat_list(pl.lit(0, pl.Int64), rows_below, rows_through_last, ordered.len().cast(pl.Int64))
+    return cumulative.list.diff().list.slice(1)
 
 
 def whole(nanoseconds: int) -> Translation:
@@ -116,13 +117,16 @@ POLARS_STATISTICS: dict[str, Translation] = {
     'kurtosis': lambda c, _: c.kurtosis(),
     'zero_rate': lambda c, _: (c == 0).mean(),
     'negative_rate': lambda c, _: (c < 0).mean(),
-    **{name: quantile(level) for name, level in QUANTILES.items()},
+    # Every level from one sort, where a quantile per level would sort the column once each.
+    'quantiles': lambda c, levels: c.quantile(list(levels), 'nearest'),
+    'histogram_counts': histogram_counts,
     'step_min': lambda c, _: c.diff().min(),
     'step_max': lambda c, _: c.diff().max(),
     'length_mean': lambda c, _: c.str.len_chars().mean(),
     'length_trimmed_low': lambda c, k: c.str.len_chars().bottom_k(k).max(),
     'length_trimmed_high': lambda c, k: c.str.len_chars().top_k(k).min(),
-    **{f'length_{name}': length_quantile(level) for name, level in QUANTILES.items()},
+    'length_quantiles': lambda c, levels: c.str.len_chars().quantile(list(levels), 'nearest'),
+    'listed_value_counts': lambda c, values: counts_by(c, values),
     'whitespace_edge_rate': lambda c, _: (c.str.len_chars() != c.str.strip_chars().str.len_chars()).mean(),
     'true_rate': lambda c, _: c.mean(),
     'month_counts': lambda months, _: counts_by(months, range(1, 13)),

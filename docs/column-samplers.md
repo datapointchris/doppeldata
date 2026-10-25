@@ -7,10 +7,18 @@ extremes at levels 0 and 1. A histogram's edges, at their cumulative shares, fil
 the outermost quantiles. `zero_rate` adds a flat run at zero, starting at `negative_rate`. A knot
 that would put a value out of order is dropped, so the quantiles win where sources disagree.
 
+An edge's share counts every row, the histogram's `overflow` included. Edge `i` sits at level
+`(below + counts[0] + … + counts[i - 1]) / (below + sum(counts) + above)`, so edge 0 sits at
+`below`'s share. A profile without `overflow` has `below` and `above` at 0, and its edges run from
+level 0 to 1. A profile whose edges were frozen from an earlier one still places them at the shares
+its own rows give.
+
 Every value is one uniform draw, whatever the knots came from. So a profiler that adds a histogram
 changes the values but not the draw order, and the samplers need no change to read it.
 
-`integral` rounds the value. `precision` and `scale` quantize it, or become a decimal type. A
+`integral` rounds the value to the nearest integer. So the profiler writes an integer column's
+histogram edges halfway between integers, and each bin draws the integers it counted. `precision`
+and `scale` quantize the value, or become a decimal type. A
 `sequence` emits `start + step · row` and draws nothing.
 
 ## Beyond the outermost quantile, a fitted tail replaces the straight line

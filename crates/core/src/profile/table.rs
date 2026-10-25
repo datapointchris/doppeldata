@@ -22,12 +22,15 @@ pub struct TableProfile {
     pub columns: Option<Vec<Column>>,
 }
 
-/// How and when the profile was made. `at`, `tool` and `source_fingerprint` are left out of the
-/// profile's digest.
+/// How and when the profile was made. `at`, `tool`, `fitter` and `source_fingerprint` are left out
+/// of the profile's digest.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Generated {
     /// The tool and its version, as `doppeldata <version>`.
     pub tool: Option<String>,
+    /// The package that fits each numeric column's family, and its version, as `scipy <version>`.
+    /// Left out when scipy was not installed, so no column was fitted.
+    pub fitter: Option<String>,
     /// When profiling finished, in RFC 3339.
     pub at: Option<String>,
     pub engine: Option<Engine>,
@@ -354,12 +357,23 @@ pub enum ExtremesMethod {
     TrimmedK,
 }
 
-/// Bin edges and the rows in each bin. `counts` has one entry fewer than `edges`.
+/// Bin edges and the rows in each bin. `counts` has one entry fewer than `edges`. Each bin holds
+/// the rows from its lower edge up to its upper one, and the last bin holds its upper edge too.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Histogram {
     pub kind: HistogramKind,
     pub edges: Vec<f64>,
     pub counts: Vec<u64>,
+    /// The rows outside the edges, written when the edges were frozen from an earlier profile.
+    pub overflow: Option<HistogramOverflow>,
+}
+
+/// Rows below the first edge and above the last. A count of fewer than `k_min` rows is written as
+/// 0, and its rows are counted in the outermost bin on their side.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct HistogramOverflow {
+    pub below: u64,
+    pub above: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -379,6 +393,12 @@ pub struct Fit {
     pub aic: Option<f64>,
     /// The rows the fit was made on.
     pub sample: Option<u64>,
+    /// The share of the fitting sample's values that were zero and were left out of the fit, so
+    /// the column is the family mixed with this share of zeros.
+    pub zero_inflation: Option<Rate>,
+    /// Whether the KS statistic is above the profiler's poor-fit threshold, so the family describes
+    /// the column's tail only loosely.
+    pub poor: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -410,6 +430,16 @@ pub struct StringStats {
     pub top_values: Option<Vec<TopValue>>,
     /// The share of rows holding a value outside `top_values`.
     pub other_rate: Option<Rate>,
+    /// Written when the value list was frozen from an earlier profile.
+    pub overflow: Option<ValueOverflow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct ValueOverflow {
+    /// The rows `other_rate` holds beyond the share it held when the list was first frozen: the
+    /// earlier profile's `other_rate`, less its own `new_value_rows`. So a column whose values did
+    /// not change writes about 0. A count of fewer than `k_min` rows is written as 0.
+    pub new_value_rows: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]

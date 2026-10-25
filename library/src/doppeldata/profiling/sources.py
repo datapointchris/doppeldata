@@ -101,7 +101,8 @@ def local_files(path: Path) -> list[SourceFile]:
 
 def local_file(path: Path, relative: PurePosixPath) -> SourceFile:
     stat = path.stat()
-    return SourceFile(str(path), stat.st_size, str(stat.st_mtime_ns), partition_keys(relative))
+    # Resolved, so the same files fingerprint alike from any working directory.
+    return SourceFile(str(path.resolve()), stat.st_size, str(stat.st_mtime_ns), partition_keys(relative))
 
 
 @contextlib.contextmanager

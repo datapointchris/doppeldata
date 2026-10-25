@@ -19,6 +19,19 @@ columns:
       quantiles: {p05: 1.0, p50: 10.0, p95: 40.0}
       extremes: {low: 0.0, high: 60.0}
       histogram: {kind: equal_width, edges: [0, 10, 20, 30, 40, 50, 60], counts: [500, 250, 120, 80, 40, 10]}
+  - name: histogram_with_overflow
+    physical_type: double
+    numeric:
+      quantiles: {p05: 1.0, p50: 12.0, p95: 55.0}
+      extremes: {low: -5.0, high: 70.0}
+      histogram: {kind: equal_depth, edges: [0, 10, 20, 40], counts: [250, 300, 200], overflow: {below: 20, above: 230}}
+  - name: integral_histogram
+    physical_type: int64
+    numeric:
+      integral: true
+      quantiles: {p01: -2, p25: 1, p50: 2, p75: 4, p99: 9}
+      extremes: {low: -3, high: 9}
+      histogram: {kind: equal_depth, edges: [-0.5, 0.5, 1.5, 3.5, 9.5], counts: [200, 250, 300, 250], overflow: {below: 30, above: 0}}
   - name: zero_inflated
     physical_type: double
     numeric:

@@ -14,10 +14,119 @@ answers every request it is given in one query. Counting the most frequent value
 parsing text each need a query of their own. `doppeldata.profiling.table_profile` drives the calls,
 so a backend holds no profiling logic.
 
-A profile is one aggregate over every column, then the frequency counts, then a sample. Values are
+A profile is one aggregate over every column, then a second that counts rows against the histogram
+edges and value lists the first one chose, then the frequency counts, then samples. Values are
 counted only in string columns holding at most `TOP_VALUES_THRESHOLD` distinct values, the
 `DEFAULT_CARDINALITY_THRESHOLD` of Deequ's column profiler. Every string column's shapes are counted.
-The sample feeds grex and the date-layout trial.
+One sample feeds grex and the date-layout trial, and another the distribution fits.
+
+## A column's quantiles and bin edges come from one sort
+
+`quantiles` takes a tuple of levels and answers every one, so a numeric column's named quantiles
+and its interior bin edges are one request. Polars sorts once for a list of levels, and once per
+level for separate requests. So one list of levels is several times faster than one request per
+level.
+
+`histogram_counts` takes the edges and answers with the rows below the first, in each bin, and
+above the last. Polars sorts the column once and binary-searches each edge into it. That is faster
+than `bin_intervals` with `value_counts`, and than one comparison per bin.
+
+*Rejected:* Polars' `hist`. It is a little faster, but it is marked unstable, runs in memory only,
+and closes each bin on the right where Spark's `Bucketizer` and numpy close it on the left.
+
+## A histogram is equal-depth, and counted over every row
+
+Equal-depth bins carry a skewed column's shape in fewer bins than equal-width ones. A column has
+`HISTOGRAM_BINS` of them before the floor merges any. The outer edges are the trimmed extremes, and
+each interior edge is the quantile at a multiple of one over `HISTOGRAM_BINS`. A repeated edge is
+dropped, so a run of tied values sits in one bin.
+
+Each bin holds the rows from its lower edge up to the next, and the last one holds its upper edge
+too. The counts come from every row the profile describes, never from the fitting sample, because
+the `k_min` floor is a promise about real rows. Rows below or above the trimmed extremes number fewer
+than `k_min`, so they join the outermost bins.
+
+An integer column's edges sit half a unit below the least integer of each bin, and its last edge
+half a unit above the trimmed high. An interior quantile equal to the trimmed high is a boundary
+too, so the high value gets its own bin. The generator rounds a drawn value to the nearest
+integer, so each bin's share is then drawn to the integers it counted. *Rejected:* edges on the
+integers themselves. Rounding then drew half of each edge value's share as the integer above it, and
+a count column with 18% zeros generated 11%.
+
+## Each numeric column is fitted to the families the generator draws a tail from
+
+The candidates are the families `_core.fitted_families()` names. That is the core crate's
+`FITTED_FAMILIES`, the table `FittedFamily::from_fit` looks each fit up in, so the profiler fits
+exactly what the generator reads. A discrete family is a candidate only on an integral column. Any
+other family, such as `gamma`, leaves the column a linear tail, so it is not a candidate.
+
+- **A fit is made on a seeded sample of `FIT_SAMPLE_ROWS`.** scipy's fit time grows with the
+  values, so fitting runs on a sample.
+- **A column is fitted only with `FIT_MIN_DISTINCT` distinct values or more.** Fewer are better
+  described by their frequencies. A counting sequence is never fitted, because the generator draws
+  nothing for it.
+- **The lowest AIC wins, and its KS statistic is stored beside it.** A fit with a KS statistic
+  above `POOR_FIT_KS` is kept and written `poor: true`, so a reader can tell a loose fit from a
+  close one. `profile()` issues one `PoorFits` warning naming each such column, and each column no
+  family fits.
+- **An integral column ranks every family by the mass it gives each integer.** A discrete family's
+  mass is its own. A continuous family's is its probability over the unit interval centered on the
+  integer, which is what the generator's rounding gives it. So AIC compares masses with masses, and
+  the KS statistic compares the step functions at each integer.
+- **A zero-inflated column is fitted on the rest.** Where `zero_rate` is at least
+  `ZERO_INFLATION_RATE`, the zeros are left out of the fit. `zero_inflation` records their share of
+  the values the fit saw, which is the mixture's weight. `zero_rate` stays the share over every row,
+  and the generator's run at zero comes from it.
+- **loguniform's `loc` is searched alone, with `scale` fixed at 1.** `scale` only rescales `a` and
+  `b`. For a given `loc`, the likeliest `a` and `b` are the least and greatest values less `loc`.
+  scipy's generic fit searches all three at once. On 20k draws of `exp(uniform(0, 5))` it stopped at
+  a KS statistic of 0.082, and the search on `loc` alone reached 0.0075.
+
+Most of what fitting adds to a profile is importing scipy, and the fits come next. The histogram's
+count costs the same with fitting or without.
+
+Every profile imports scipy, so that `generated.fitter` records the version that fitted it. A scipy
+that is missing, or installed and failing to import, costs only the fits. Each column fitting
+applies to is then written `fit: null`, `generated.fitter` is left out, and `profile()` issues one
+`FitsSkipped` warning carrying the import's error. `profile create` prints every
+`ProfilingWarning` as one line on stderr. scipy's newest release can need a later Python than the
+library's floor, so a Glue job on 3.11 resolves an older scipy, which fits the same families.
+
+A fit is profile content, so it is in the profile's digest. Two scipy versions that fit different
+parameters write two profiles, and those generate different tails.
+
+## An earlier profile freezes the edges, or stands unchanged
+
+`profile(..., edges_from=earlier)` takes an earlier profile of the same table, and `profile create
+--edges-from FILE` reads one.
+
+- **Where nothing it was made from has changed, the earlier profile is returned as it is.** Its
+  `generated` fields named in `DERIVED_FROM` must equal the ones this run would write: the listing's
+  `source_fingerprint`, the engine, the `tool` and the `fitter`. Its `k_min` and sampling must match
+  the run's too. So a reviewer's edits survive a re-run, while a new doppeldata, or a scipy installed
+  since, profiles again. A profile of every row stands for a sampled run too. The fingerprint hashes
+  each file's resolved path, so the same files match from any working directory. `profile create`
+  says on stderr when it returns the earlier profile. No cache directory is written, because the
+  library runs inside Glue executors.
+- **Otherwise each column is counted against the earlier histogram edges and value list.** Values
+  outside the edges are written as `histogram.overflow`, `below` and `above`. A column only one of
+  the two tables holds issues one `ColumnsNotFrozen` warning naming it.
+- **`string.overflow.new_value_rows` is the growth of `other_rate` since the list was first
+  frozen.** It is the rows `other_rate` holds now, less the share it held then: the earlier
+  profile's `other_rate`, less that profile's own `new_value_rows`. So an unchanged column writes
+  about 0, and drift is reported against the first profile however long the chain of re-profiles.
+  With 5% of rows already outside the list, giving 10% of rows a new value writes 9.5% of rows: the
+  0.5% already outside add nothing.
+- **`new_value_rows` is counted from `other_rate`'s own rows**, so it discloses nothing that rate
+  does not. A listed value now held by fewer than `k_min` rows folds into `other_rate`, and counts as
+  growth with the rest. Counting only the rows outside the list would give that value's count away,
+  as `other_rate` less the count. The earlier profile holds no value outside its list, so a value
+  never seen before cannot be told from a rare one that grew.
+- **Two profiles of one table then compare bin for bin**, which the round-trip check and drift
+  detection read. Rebinning stays explicit, by profiling again without `edges_from`.
+
+The generator places each edge at its share of every row, the overflow included, so a frozen
+profile generates the body it describes. Reading `overflow` raised the stream version to 3.
 
 ## Polars computes every statistic, and DuckDB only reads text
 
@@ -111,6 +220,19 @@ The default `k_min` is `DEFAULT_K_MIN`, from the privacy floor in
   another name. The samplers then use the trimmed extremes as the inverse CDF's end knots.
 - **A top value** is kept only when `k_min` rows hold it. While the remainder holds 1 to `k_min - 1`
   rows, the smallest kept value folds into it, so `other_rate` never reveals a small cell.
+- **A histogram bin** of 1 to `k_min - 1` rows merges into its smaller non-empty neighbor. An empty
+  bin discloses no row, so it stays, and frozen edges are kept wherever the floor allows. So a
+  re-profile's edges are a subset of the frozen ones, and a diff sums the earlier bins over a merged
+  one.
+- **An overflow count** of 1 to `k_min - 1` rows is written as 0. A numeric column's rows join the
+  outermost bin on their side, and a string column's stay in `other_rate`.
+- **The floor holds within one profile, not across two.** A value one profile lists and the next
+  folds into `other_rate` shows its count as that rate's growth, where nothing else changed. A bin
+  merged under the floor shows the same way against the earlier bins. Holding a series of profiles to
+  the floor needs noise, which this profiler does not add.
+- **A fit** is made only on the values between the trimmed extremes. A support parameter lands on
+  the sample's own extreme, as loguniform's `b`, uniform's `scale` and randint's `high` do, so no
+  value fewer than `k_min` rows bound reaches one.
 - **A shape** is kept only when `k_min` rows hold it.
 - **A month, weekday or hour bin** of 1 to `k_min - 1` rows is emptied, and the rest are rescaled.
 - **A pattern** is generalized by grex from at least `k_min` sampled values of the dominant shape. It

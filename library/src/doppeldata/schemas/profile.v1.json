@@ -831,6 +831,13 @@
             "format": "double"
           }
         },
+        "poor": {
+          "description": "Whether the KS statistic is above the profiler's poor-fit threshold, so the family describes\nthe column's tail only loosely.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "sample": {
           "description": "The rows the fit was made on.",
           "type": [
@@ -839,6 +846,17 @@
           ],
           "format": "uint64",
           "minimum": 0
+        },
+        "zero_inflation": {
+          "description": "The share of the fitting sample's values that were zero and were left out of the fit, so\nthe column is the family mixed with this share of zeros.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -847,7 +865,7 @@
       ]
     },
     "Generated": {
-      "description": "How and when the profile was made. `at`, `tool` and `source_fingerprint` are left out of the\nprofile's digest.",
+      "description": "How and when the profile was made. `at`, `tool`, `fitter` and `source_fingerprint` are left out\nof the profile's digest.",
       "type": "object",
       "properties": {
         "at": {
@@ -865,6 +883,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "fitter": {
+          "description": "The package that fits each numeric column's family, and its version, as `scipy <version>`.\nLeft out when scipy was not installed, so no column was fitted.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "sample": {
@@ -941,7 +966,7 @@
       ]
     },
     "Histogram": {
-      "description": "Bin edges and the rows in each bin. `counts` has one entry fewer than `edges`.",
+      "description": "Bin edges and the rows in each bin. `counts` has one entry fewer than `edges`. Each bin holds\nthe rows from its lower edge up to its upper one, and the last bin holds its upper edge too.",
       "type": "object",
       "properties": {
         "counts": {
@@ -961,6 +986,17 @@
         },
         "kind": {
           "$ref": "#/$defs/HistogramKind"
+        },
+        "overflow": {
+          "description": "The rows outside the edges, written when the edges were frozen from an earlier profile.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistogramOverflow"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -974,6 +1010,26 @@
       "enum": [
         "equal_depth",
         "equal_width"
+      ]
+    },
+    "HistogramOverflow": {
+      "description": "Rows below the first edge and above the last. A count of fewer than `k_min` rows is written as\n0, and its rows are counted in the outermost bin on their side.",
+      "type": "object",
+      "properties": {
+        "above": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "below": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "below",
+        "above"
       ]
     },
     "InlineTable": {
@@ -2052,6 +2108,17 @@
             }
           ]
         },
+        "overflow": {
+          "description": "Written when the value list was frozen from an earlier profile.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValueOverflow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pattern": {
           "description": "A generalized regular expression, never an alternation of literals.",
           "type": [
@@ -2367,6 +2434,20 @@
           "minimum": 0
         }
       }
+    },
+    "ValueOverflow": {
+      "type": "object",
+      "properties": {
+        "new_value_rows": {
+          "description": "The rows `other_rate` holds beyond the share it held when the list was first frozen: the\nearlier profile's `other_rate`, less its own `new_value_rows`. So a column whose values did\nnot change writes about 0. A count of fewer than `k_min` rows is written as 0.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "new_value_rows"
+      ]
     }
   }
 }

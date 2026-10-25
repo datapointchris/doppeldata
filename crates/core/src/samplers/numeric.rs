@@ -2,9 +2,10 @@
 //! inverse CDF whose knots come from the profile.
 //!
 //! The knots are the stored quantiles, with the extremes at levels 0 and 1. A histogram's edges at
-//! their cumulative shares fill the body between the outermost quantiles, and `zero_rate` adds a
-//! flat run at zero. Beyond the outermost quantile, a fitted family's conditional tail, truncated at
-//! the extremes, is tabulated into dense knots; without a usable fit the tail is linear.
+//! their cumulative shares of every row, its overflow included, fill the body between the
+//! outermost quantiles, and `zero_rate` adds a flat run at zero. Beyond the outermost quantile, a
+//! fitted family's conditional tail, truncated at the extremes, is tabulated into dense knots;
+//! without a usable fit the tail is linear.
 
 use std::sync::Arc;
 
@@ -66,12 +67,16 @@ fn histogram_knots(histogram: Option<&Histogram>) -> Vec<(f64, f64)> {
     let Some(histogram) = histogram else {
         return Vec::new();
     };
-    let total: u64 = histogram.counts.iter().sum();
+    let (outside_below, outside_above) = histogram
+        .overflow
+        .as_ref()
+        .map_or((0, 0), |overflow| (overflow.below, overflow.above));
+    let total = outside_below + histogram.counts.iter().sum::<u64>() + outside_above;
     if total == 0 || histogram.edges.len() != histogram.counts.len() + 1 {
         return Vec::new();
     }
-    let mut below = 0;
-    let mut knots = vec![(0.0, histogram.edges[0])];
+    let mut below = outside_below;
+    let mut knots = vec![(below as f64 / total as f64, histogram.edges[0])];
     for (&count, &edge) in histogram.counts.iter().zip(&histogram.edges[1..]) {
         below += count;
         knots.push((below as f64 / total as f64, edge));
