@@ -58,17 +58,18 @@ class EnginePackage:
 
 @dc.dataclass(frozen=True)
 class Engine:
-    """An engine's backend class, as its module and name, and the packages that module imports.
+    """An engine's backend class, as its module and name, the packages that module imports, and the formats it reads
+    from local files and from S3. `listed_source` refuses any other before a file is read or a session starts.
 
     A `sessioned` engine's backend is built on a session the module's `session_for` resolves, as Spark's is.
-    `reads_remote_text` says whether it reads a text source on S3.
     """
 
     module: str
     backend: str
     packages: tuple[EnginePackage, ...]
+    reads: frozenset[SourceFormat]
+    reads_remote: frozenset[SourceFormat]
     sessioned: bool = False
-    reads_remote_text: bool = False
 
 
 DELIMITED = frozenset({SourceFormat.CSV, SourceFormat.TSV})
@@ -83,6 +84,9 @@ ENGINES = {
             EnginePackage('clevercsv', 'clevercsv', DELIMITED, everywhere=False),
             EnginePackage('charset-normalizer', 'charset_normalizer', DELIMITED, everywhere=False),
         ),
+        reads=frozenset(SourceFormat),
+        # DuckDB reads text from local files only.
+        reads_remote=frozenset({SourceFormat.PARQUET, SourceFormat.ARROW}),
     ),
     # Spark reads every file. DuckDB, CleverCSV and charset-normalizer sniff a delimited source's dialect on the driver.
     # pyspark comes with the Spark it runs in, whose version is the cluster's, so the CLI declares none.
@@ -96,8 +100,9 @@ ENGINES = {
             EnginePackage('clevercsv', 'clevercsv', DELIMITED, everywhere=False),
             EnginePackage('charset-normalizer', 'charset_normalizer', DELIMITED, everywhere=False),
         ),
+        reads=DELIMITED | {SourceFormat.PARQUET},
+        reads_remote=DELIMITED | {SourceFormat.PARQUET},
         sessioned=True,
-        reads_remote_text=True,
     ),
 }
 # The module that lists what was named, and the packages it imports to list S3, which profiling needs whatever the engine.
@@ -309,8 +314,7 @@ def listed_source(data: Any, engine: str = 'polars') -> tuple[Source, list[Engin
     source: Source = sources.resolve(data)
     if source.table is not None and sources.is_spark_frame(source.table) and not chosen.sessioned:
         raise SourceError(f"a Spark DataFrame is profiled with engine='spark', and this run chose {engine}")
-    if not chosen.reads_remote_text:
-        sources.refuse_remote_text(source)
+    refuse_unread_format(engine, source)
     reading = [package for package in chosen.packages if source.format in package.reads]
     refuse_uninstalled(engine, reading)
     return source, reading
@@ -345,6 +349,22 @@ def sampled_table(data: Any, rows: int, *, engine: str = 'polars', seed: int = t
         sampled = SampledTable(backend.sample(table, rows, seed), held, source.fingerprint)
     importlib.import_module(SOURCES_MODULE).check_unchanged(source)
     return sampled
+
+
+def refuse_unread_format(engine: str, source: Source) -> None:
+    """Refuse a source of a format the engine does not read from where it lies, naming the engines that do."""
+    if source.format is None:
+        return
+    remote = any(file.path.startswith('s3://') for file in source.files)
+    if source.format in (ENGINES[engine].reads_remote if remote else ENGINES[engine].reads):
+        return
+    where = ' on S3' if remote else ''
+    readers = [name for name, other in ENGINES.items() if source.format in (other.reads_remote if remote else other.reads)]
+    if readers:
+        raise SourceError(f'engine {engine} does not read {source.format.value}{where}; profile it with engine {" or ".join(readers)}')
+    local = ' or '.join(name for name, other in ENGINES.items() if source.format in other.reads)
+    copy = f'`aws s3 cp --recursive {source.roots[0]} <dir>`'
+    raise SourceError(f'no engine reads {source.format.value} on S3; copy it down with {copy}, and profile the copy with engine {local}')
 
 
 def refuse_uninstalled(engine: str, packages: Sequence[EnginePackage]) -> None:

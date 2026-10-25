@@ -15,7 +15,6 @@ from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import Manifest
 from doppeldata.profiling.backend import FORMAT_TRAITS
 from doppeldata.profiling.backend import TEXT_CODEC_SUFFIXES
-from doppeldata.profiling.backend import TEXT_FORMATS
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFile
 from doppeldata.profiling.backend import SourceFormat
@@ -53,16 +52,6 @@ def resolve(data: Any) -> Source:
 def is_spark_frame(data: Any) -> bool:
     """Whether `data` is a Spark DataFrame, classic or over Connect, told apart without importing pyspark."""
     return type(data).__module__.startswith('pyspark.sql') and hasattr(data, 'sparkSession')
-
-
-def refuse_remote_text(source: Source) -> None:
-    """Refuse a text source on S3, which an engine reading text through DuckDB cannot reach."""
-    if source.format in TEXT_FORMATS and any(file.path.startswith('s3://') for file in source.files):
-        message = (
-            f'{source.format.value} on S3 is read by engine spark, and engine polars reads it from local files only; '
-            f'copy it down first with `aws s3 cp --recursive {source.roots[0]} <dir>`'
-        )
-        raise SourceError(message)
 
 
 def format_of(path: str) -> SourceFormat | None:
