@@ -61,6 +61,10 @@ driver   commit ─── _manifest.json, claim removed
   unless the session is classic with a `local` master. That refuses a cluster whose executors share
   a POSIX mount too, and a Spark Connect client, whose disk is never the cluster's. Write to
   `s3://` there.
+- **A path naming one file, such as `people.csv`, is refused with `one-file-from-executors`.** A
+  local write stages that file and moves it into place, and no task can move what another wrote.
+- **The profile may be a list of column names, a dict of fakes and ranges, or a short YAML**, as
+  for `sd.write`. The driver expands it before it plans.
 - **A retried or speculative task writes the same names with the same bytes.** An object is
   either whole or absent, because an unfinished upload is aborted.
 - **A failed Spark job stores a partial manifest recording no object.** The driver learns of a

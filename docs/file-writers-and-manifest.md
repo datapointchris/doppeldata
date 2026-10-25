@@ -105,6 +105,9 @@ thread only waits for them.
   [generating-inside-spark.md](generating-inside-spark.md) says how `doppeldata.spark` splits one.
 - **A failed write says whether its record was stored.** `WriteFailure` carries the manifest,
   `manifest_stored`, and the error from storing it.
+- **A write to one local file claims a directory the library makes beside the file.** It moves the
+  one object into place and removes the directory, claim and all. So no claim guards the file
+  itself: two runs at once each move a whole file there, and the later one stays.
 - **A run that stored `_manifest.json` and then could not delete its claim fails with
   `ClaimNotRemoved`.** Its manifest is whole, so a caller tells it from a partial run without
   reading the store. An S3 policy that grants puts but not deletes reaches it.

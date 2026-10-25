@@ -11,6 +11,23 @@ to S3, or inside Spark executors.
 A scenario file layered on a profile bends the data on purpose: a hot join key, late rows, a flood
 of small files. The same profile, scenario and seed always produce the same data.
 
+Rows need no profile to start. Each column takes the fake its name hints:
+
+```python
+import doppeldata as sd
+
+sd.generate(['name', 'email', 'city', 'zip'], rows=1000)   # an Arrow table of 1,000 people
+```
+
+```bash
+doppeldata data generate --columns name,email,city,zip --rows 1000 --out people.csv
+```
+
+A dict sets ranges and categories, such as `{'age': sd.integers(18, 90), 'plan': sd.choice(['free', 'pro'])}`,
+and a short YAML holds the same. `doppeldata profile expand` writes the full profile any of them
+stands for. [Generating from Python and the command line](docs/generating-from-python-and-the-cli.md)
+climbs from there to a profile of real data.
+
 doppeldata is experimental. So far it profiles a table's columns and its files, generates a table from a profile
 under any scenarios, and ships the profile and scenario formats with hand-written examples of each:
 
@@ -22,6 +39,7 @@ doppeldata profile create data/claims/ --policy healthcare --out claims.profile.
 doppeldata profile check orders.profile.yaml   # the file against its schema and privacy policy, from the file alone
 doppeldata profile list                # the example profiles
 doppeldata profile show orders         # one of them, as YAML to start a profile from
+doppeldata profile expand people.yaml  # the full profile a short YAML of rows and columns stands for
 doppeldata profile diff march.profile.yaml april.profile.yaml  # how far April drifted from March
 doppeldata data check orders.profile.yaml out/orders/        # generated data against its profile
 doppeldata data check orders.profile.yaml out/orders/ --against data/orders/ --html side-by-side.html  # and the real data
@@ -37,9 +55,10 @@ doppeldata data generate orders --scenario hot-key --out orders/    # five custo
 doppeldata data check orders orders/ --scenario hot-key             # and the check verifies that share
 ```
 
-`data generate` writes every format `doppeldata schemas show manifest` lists, to a local directory or to S3.
-`_manifest.json` records the profile's digest, the scenario's, the seed, the row count and the
-engine's stream version. Those regenerate the same values in any format. From Python, a table arrives through the Arrow PyCapsule interface, so
+`data generate` writes every format `doppeldata schemas show manifest` lists, to a local directory, a
+local file or S3. A directory or S3 write records `_manifest.json` beside its files, and a one-file
+write does so under `--manifest`. It holds the profile's digest, the scenario's, the seed, the row
+count and the engine's stream version. Those regenerate the same values in any format. From Python, a table arrives through the Arrow PyCapsule interface, so
 Polars, DuckDB and pyarrow 14 or later read it with no copy:
 
 ```python
