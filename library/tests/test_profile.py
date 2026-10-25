@@ -8,7 +8,7 @@ import pytest
 from doppeldata import Bundle
 from doppeldata import InvalidProfile
 from doppeldata import Profile
-from doppeldata.profile import example_names
+from doppeldata.example_profiles import example_names
 
 EXAMPLE = Path(__file__).parent / 'fixtures' / 'orders.profile.yaml'
 

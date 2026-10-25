@@ -4,12 +4,12 @@ import json
 from typing import Annotated
 
 import typer
-from doppeldata.profile import Profile
-from doppeldata.profile import example_names
-from doppeldata.profile import example_text
-from doppeldata.profile import schema_names
-from doppeldata.profile import schema_summaries
-from doppeldata.profile import schema_text
+from doppeldata import Profile
+from doppeldata.example_profiles import example_names
+from doppeldata.example_profiles import example_text
+from doppeldata.published_schemas import schema_names
+from doppeldata.published_schemas import schema_summaries
+from doppeldata.published_schemas import schema_text
 
 app = typer.Typer(no_args_is_help=True)
 profile_app = typer.Typer(no_args_is_help=True, help='Profiles: reviewable files that describe a dataset without holding its rows.')
