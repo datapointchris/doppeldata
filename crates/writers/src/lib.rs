@@ -2,7 +2,8 @@
 //! any object store, with a manifest that regenerates every file.
 //!
 //! [`layout`] says which rows each file holds before anything is generated. [`write`] generates and
-//! writes them on worker threads, and [`regenerate`] writes a manifest's files again.
+//! writes them on worker threads, and [`regenerate`] writes a manifest's files again. [`claim`],
+//! [`write_ranges`] and [`commit`] split one write across processes, such as Spark executors.
 
 mod byte_sink;
 mod destination;
@@ -33,9 +34,13 @@ pub use planned_ranges::PlannedRange;
 pub use planned_ranges::planned_ranges;
 pub use size_estimate::estimate_bytes;
 pub use write::RunOptions;
+pub use write::SplitRun;
 pub use write::WriteFailure;
+pub use write::claim;
+pub use write::commit;
 pub use write::regenerate;
 pub use write::write;
+pub use write::write_ranges;
 pub use write_options::WriteChoices;
 pub use write_options::WriteOptions;
 
@@ -77,6 +82,10 @@ pub enum WriteError {
     RegeneratedFilesDiffer { files: Vec<String> },
     #[error("the write was cancelled")]
     Cancelled,
+    #[error("range {range} is past the layout's {ranges} ranges")]
+    RangeOutOfLayout { range: u32, ranges: usize },
+    #[error("{missing} of the layout's {ranges} ranges have no object recorded, the first being range {first}")]
+    RangesUnrecorded { missing: usize, ranges: usize, first: u32 },
     #[error("a value in column {column:?} would not format as text")]
     Format { column: String },
     #[error(transparent)]
@@ -122,6 +131,8 @@ impl WriteError {
             Self::PartialManifest => ("partial-manifest", Failed),
             Self::RegeneratedFilesDiffer { .. } => ("regenerated-files-differ", Failed),
             Self::Cancelled => ("cancelled", Failed),
+            Self::RangeOutOfLayout { .. } => ("range-out-of-layout", Refused),
+            Self::RangesUnrecorded { .. } => ("ranges-unrecorded", Failed),
             Self::Format { .. } => ("unformattable-value", Failed),
             Self::Block(_) => ("block-out-of-range", Failed),
             Self::Store(object_store::Error::Unauthenticated { .. }) => ("no-credentials", Failed),
