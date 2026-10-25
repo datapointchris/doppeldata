@@ -742,7 +742,7 @@
       ]
     },
     "Generated": {
-      "description": "How and when the profile was made. `at` and `tool` are left out of the profile's digest.",
+      "description": "How and when the profile was made. `at`, `tool` and `source_fingerprint` are left out of the\nprofile's digest.",
       "type": "object",
       "properties": {
         "at": {
@@ -773,7 +773,7 @@
           ]
         },
         "source_fingerprint": {
-          "description": "A hash of the source's paths, sizes and modification times, never its content.",
+          "description": "A hash of each source file's path, size and revision as listed: its modification time on\ndisk, or its S3 ETag. It tells two listings apart, and never hashes the content.",
           "type": [
             "string",
             "null"

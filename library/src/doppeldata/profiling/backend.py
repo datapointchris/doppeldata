@@ -9,11 +9,12 @@ from typing import Protocol
 
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
+from doppeldata.published_schemas import published_enum
 
 if TYPE_CHECKING:
     import pyarrow as pa
 
-# A table as the backend holds it: a Polars LazyFrame, or a Spark DataFrame.
+# A table as the backend holds it; Polars' is a LazyFrame.
 Table = Any
 
 
@@ -28,11 +29,27 @@ class SourceFormat(enum.Enum):
     NDJSON = 'ndjson'
 
 
-TEXT_FORMATS = frozenset({SourceFormat.CSV, SourceFormat.TSV, SourceFormat.JSON, SourceFormat.NDJSON})
+@dc.dataclass(frozen=True)
+class FormatTraits:
+    """The file suffixes a format is recognized by, and whether its values arrive as text to be typed."""
+
+    suffixes: tuple[str, ...]
+    text: bool
 
 
-class SourceError(ValueError):
-    """The data named cannot be read as one table."""
+FORMAT_TRAITS = {
+    SourceFormat.PARQUET: FormatTraits(('.parquet', '.pq'), text=False),
+    SourceFormat.ARROW: FormatTraits(('.arrow', '.feather', '.ipc'), text=False),
+    SourceFormat.CSV: FormatTraits(('.csv',), text=True),
+    SourceFormat.TSV: FormatTraits(('.tsv', '.tab'), text=True),
+    SourceFormat.JSON: FormatTraits(('.json',), text=True),
+    SourceFormat.NDJSON: FormatTraits(('.ndjson', '.jsonl'), text=True),
+}
+TEXT_FORMATS = frozenset(source_format for source_format, traits in FORMAT_TRAITS.items() if traits.text)
+
+unspelled = sorted({source_format.value for source_format in SourceFormat} - set(published_enum('SourceFormat')))
+if unspelled:
+    raise RuntimeError(f'the profile format has no source.format {", ".join(unspelled)}')
 
 
 @dc.dataclass(frozen=True)
@@ -47,11 +64,14 @@ class CsvDialect:
 
 @dc.dataclass(frozen=True)
 class SourceFile:
-    """One file of a source: a local path or an `s3://` URL, its size and its modification time."""
+    """One file of a source: a local path or an `s3://` URL, its size, and what changes when its content does."""
 
     path: str
     size: int
-    modified: str
+    # The local modification time in nanoseconds, or the S3 ETag.
+    revision: str
+    # The `key=value` directories between the root that was named and the file, as Hive partition keys.
+    partition_keys: tuple[str, ...] = ()
 
 
 @dc.dataclass(frozen=True)
@@ -65,13 +85,23 @@ class Source:
     dialect: CsvDialect = CsvDialect()
     # The name the profile takes when none is given: the file's stem or the directory's name.
     name: str = 'table'
+    # The paths and URLs as they were named, which an error about the source quotes.
+    roots: tuple[str, ...] = ()
+
+    @property
+    def partition_keys(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(key for file in self.files for key in file.partition_keys))
 
     @property
     def fingerprint(self) -> str | None:
-        """`sha256:<hex>` over each file's path, size and modification time, never its content."""
+        """`sha256:<hex>` over each file's path, size and revision as listed, never its content.
+
+        It tells two listings apart, and nothing more: a file rewritten between the listing and the read
+        is profiled new and fingerprinted old.
+        """
         if not self.files:
             return None
-        lines = sorted(f'{file.path}\t{file.size}\t{file.modified}' for file in self.files)
+        lines = sorted(f'{file.path}\t{file.size}\t{file.revision}' for file in self.files)
         return 'sha256:' + hashlib.sha256('\n'.join(lines).encode()).hexdigest()
 
 
@@ -105,7 +135,7 @@ class ParsedType:
 
 
 class Backend(Protocol):
-    """A profiling engine. Each method is one pass over the table, and `aggregate` answers every request in it."""
+    """A profiling engine. `aggregate` answers every request it is given in one query."""
 
     name: str
 

@@ -22,7 +22,8 @@ pub struct TableProfile {
     pub columns: Option<Vec<Column>>,
 }
 
-/// How and when the profile was made. `at` and `tool` are left out of the profile's digest.
+/// How and when the profile was made. `at`, `tool` and `source_fingerprint` are left out of the
+/// profile's digest.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Generated {
     /// The tool and its version, as `doppeldata <version>`.
@@ -30,7 +31,8 @@ pub struct Generated {
     /// When profiling finished, in RFC 3339.
     pub at: Option<String>,
     pub engine: Option<Engine>,
-    /// A hash of the source's paths, sizes and modification times, never its content.
+    /// A hash of each source file's path, size and revision as listed: its modification time on
+    /// disk, or its S3 ETag. It tells two listings apart, and never hashes the content.
     pub source_fingerprint: Option<String>,
     pub sample: Option<Sample>,
 }

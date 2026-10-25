@@ -1,12 +1,15 @@
 """The statistics a profile records, as data: each one's name and the column kinds it applies to.
 
-Every backend translates each name once, so the Polars and Spark backends compute one field set.
-Nothing here imports an engine.
+Every backend translates each name once, so two backends compute one field set. Nothing here
+imports an engine.
 """
 
 import dataclasses as dc
 import enum
 import string
+
+from doppeldata import _core
+from doppeldata.profile_format import quantile_level
 
 
 class ColumnKind(enum.Enum):
@@ -32,19 +35,21 @@ class Statistic:
     kinds: frozenset[ColumnKind]
 
 
-# The profile's quantile names and the levels they stand for. A name's digits after `p` are the
-# level's decimal digits. The outermost pair are knots the generator's inverse CDF needs for its tails.
-QUANTILES = {
-    'p001': 0.001,
-    'p01': 0.01,
-    'p05': 0.05,
-    'p25': 0.25,
-    'p50': 0.5,
-    'p75': 0.75,
-    'p95': 0.95,
-    'p99': 0.99,
-    'p999': 0.999,
-}
+# Each unit a timestamp column's values may all be whole numbers of, coarsest first: its name, its
+# length in nanoseconds, and the `granularity` it gives.
+TIME_UNITS = (
+    ('days', 86_400 * 10**9, 'day'),
+    ('hours', 3_600 * 10**9, 'hour'),
+    ('minutes', 60 * 10**9, 'minute'),
+    ('seconds', 10**9, 'second'),
+    ('milliseconds', 10**6, 'millisecond'),
+    ('microseconds', 10**3, 'microsecond'),
+)
+
+
+# The quantiles a profile records, by name, and the levels the format reads those names as. The
+# outermost pair are knots the generator's inverse CDF needs for its tails.
+QUANTILES = {name: quantile_level(name) for name in ('p001', 'p01', 'p05', 'p25', 'p50', 'p75', 'p95', 'p99', 'p999')}
 
 # A request for `trimmed_low` or `trimmed_high` carries k_min as its argument: the value at rank
 # k_min from that end. An exact minimum or maximum is one row's value, so only these are stored.
@@ -78,33 +83,40 @@ COLUMN_STATISTICS = (
     Statistic('hour_counts', frozenset({ColumnKind.DATETIME})),
     Statistic('distinct_days', TEMPORAL),
     # Whether every value is a whole number of the unit in local time, which sets the granularity.
-    *(
-        Statistic(f'whole_{unit}', frozenset({ColumnKind.DATETIME}))
-        for unit in ('microseconds', 'milliseconds', 'seconds', 'minutes', 'hours', 'days')
-    ),
+    *(Statistic(f'whole_{unit}', frozenset({ColumnKind.DATETIME})) for unit, _, _ in TIME_UNITS),
 )
 
 TABLE_STATISTICS = (Statistic('rows', frozenset()),)
 
-# Counts of a text source's raw values by the type they parse as, each excluding the types before
-# it, so the counts are disjoint. `raw_date` and `raw_timestamp` take a strftime format argument.
+# The types a text source's raw value may parse as, in the order a value is tried and a tie between
+# two types' shares is broken. A value parsing as none of them is a string.
+RAW_TYPES = ('integer', 'decimal', 'boolean', 'date', 'timestamp')
+READ_AS = (*RAW_TYPES, 'string')
+# A column read as the key reads the listed types' values too, so they count as the key's.
+RAW_TYPE_FOLDS = {'decimal': ('integer',)}
+
+# A text column's non-null values counted by the first raw type each parses as, in `READ_AS` order,
+# so the counts are disjoint. The argument pairs each raw type in `RAW_TYPE_LAYOUTS` with the
+# strftime layout it is read through, and a type it leaves out is not tried.
 TEXT_TYPE_STATISTICS = (
-    Statistic('raw_integer', frozenset({ColumnKind.STRING})),
-    Statistic('raw_decimal', frozenset({ColumnKind.STRING})),
-    Statistic('raw_boolean', frozenset({ColumnKind.STRING})),
-    Statistic('raw_date', frozenset({ColumnKind.STRING})),
-    Statistic('raw_timestamp', frozenset({ColumnKind.STRING})),
+    Statistic('raw_type_counts', frozenset({ColumnKind.STRING})),
+    # Digit runs with a leading zero, such as ZIP codes. Padding means the digits are a code, so a
+    # column holding one is read as text whatever its other values parse as.
+    Statistic('padded_digits', frozenset({ColumnKind.STRING})),
 )
 
 ALL_STATISTICS = (*COLUMN_STATISTICS, *TABLE_STATISTICS, *TEXT_TYPE_STATISTICS)
 
-# The raw-value patterns behind the `raw_*` counts, in syntax both Rust's regex and Java's accept.
-INTEGER_TEXT = r'^[+-]?[0-9]+$'
-DECIMAL_TEXT = r'^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$'
+# The raw-value patterns behind the raw type counts, in syntax both Rust's regex and Java's accept.
+# A number with a leading zero, such as a ZIP code, matches neither, so it stays a string.
+DIGITS_TEXT = r'^[+-]?[0-9]+$'
+PADDED_DIGITS_TEXT = r'^[+-]?0[0-9]+$'
+INTEGER_TEXT = r'^[+-]?(0|[1-9][0-9]*)$'
+DECIMAL_TEXT = r'^[+-]?((0|[1-9][0-9]*)(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$'
 BOOLEAN_TEXT = r'(?i)^(true|false)$'
 
-# The date and timestamp layouts a text column is tried against, as strftime patterns. They are the
-# layouts qsv's date parser recognizes, month-first before day-first where both read a value.
+# The date and timestamp layouts a text column is tried against, as strftime patterns, drawn from
+# qsv's date parser. Month-first comes before day-first, so it wins where both read every value.
 DATE_FORMATS = (
     '%Y-%m-%d',
     '%Y/%m/%d',
@@ -134,6 +146,7 @@ TIMESTAMP_FORMATS = (
     '%a, %d %b %Y %H:%M:%S %z',
     '%b %d, %Y %H:%M:%S',
 )
+RAW_TYPE_LAYOUTS = {'date': DATE_FORMATS, 'timestamp': TIMESTAMP_FORMATS}
 
 
 class FrequencyKey(enum.Enum):
@@ -143,11 +156,8 @@ class FrequencyKey(enum.Enum):
     SHAPE = 'shape'
 
 
-# A value's shape maps each ASCII letter to `A` or `a` and each digit to `9`, and keeps the rest.
+# The characters a shape classes, and the class the engine's `shape_of` gives each; every other
+# character is kept. The table lets a backend shape a whole column in one replace.
 SHAPE_FROM = string.ascii_uppercase + string.ascii_lowercase + string.digits
-SHAPE_TO = 'A' * 26 + 'a' * 26 + '9' * 10
-SHAPE_TRANSLATION = str.maketrans(SHAPE_FROM, SHAPE_TO)
-
-
-def shape_of(value: str) -> str:
-    return value.translate(SHAPE_TRANSLATION)
+SHAPE_TO = _core.shape_of(SHAPE_FROM)
+shape_of = _core.shape_of

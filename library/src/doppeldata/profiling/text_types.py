@@ -8,13 +8,14 @@ from doppeldata.profiling.backend import ParsedType
 from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import Table
-from doppeldata.profiling.statistic_catalog import DATE_FORMATS
-from doppeldata.profiling.statistic_catalog import TIMESTAMP_FORMATS
+from doppeldata.profiling.statistic_catalog import RAW_TYPE_FOLDS
+from doppeldata.profiling.statistic_catalog import RAW_TYPE_LAYOUTS
+from doppeldata.profiling.statistic_catalog import READ_AS
 
 # The rows each date and timestamp layout is tried on, before the best one counts every row.
 LAYOUT_TRIAL_ROWS = 10_000
-# The order a tie between two types' shares goes in.
-RAW_TYPES = ('integer', 'decimal', 'boolean', 'date', 'timestamp', 'string')
+
+Layouts = dict[tuple[str, str], str | None]
 
 
 @dc.dataclass(frozen=True)
@@ -34,34 +35,49 @@ def type_text_columns(backend: Backend, table: Table, specs: list[ColumnSpec], s
     layouts = best_layouts(backend, table, specs, seed)
     requests = [Request(None, 'rows')]
     for spec in specs:
-        requests += [Request(spec.name, name) for name in ('null_count', 'raw_integer', 'raw_decimal', 'raw_boolean')]
-        requests += [Request(spec.name, f'raw_{raw}', layout) for raw in ('date', 'timestamp') if (layout := layouts[spec.name, raw])]
+        requests += [
+            Request(spec.name, 'null_count'),
+            Request(spec.name, 'raw_type_counts', column_layouts(layouts, spec.name)),
+            Request(spec.name, 'padded_digits'),
+        ]
     counted = backend.aggregate(table, requests)
-    rows = counted[Request(None, 'rows')]
     columns = {}
     for spec in specs:
         nulls = counted[Request(spec.name, 'null_count')]
-        counts = {raw: counted.get(Request(spec.name, f'raw_{raw}', layouts.get((spec.name, raw))), 0) or 0 for raw in RAW_TYPES[:-1]}
-        counts['string'] = rows - nulls - sum(counts.values())
-        dominant = max(RAW_TYPES, key=lambda raw: (counts[raw], -RAW_TYPES.index(raw))) if rows > nulls else 'string'
-        if dominant == 'decimal':
-            # An integer is a decimal too, so in a decimal column it is no foreign value.
-            counts['decimal'] += counts['integer']
-            counts['integer'] = 0
+        counts = dict(zip(READ_AS, counted[Request(spec.name, 'raw_type_counts', column_layouts(layouts, spec.name))], strict=True))
+        dominant = max(READ_AS, key=lambda raw: (counts[raw], -READ_AS.index(raw))) if any(counts.values()) else 'string'
+        if counted[Request(spec.name, 'padded_digits')]:
+            dominant = 'string'
+        for folded in RAW_TYPE_FOLDS.get(dominant, ()):
+            counts[dominant] += counts[folded]
+            counts[folded] = 0
         columns[spec.name] = TextColumn(nulls, counts, ParsedType(dominant, layouts.get((spec.name, dominant))))
     return columns
 
 
-def best_layouts(backend: Backend, table: Table, specs: list[ColumnSpec], seed: int) -> dict[tuple[str, str], str | None]:
+def column_layouts(layouts: Layouts, name: str) -> tuple[tuple[str, str], ...]:
+    """The column's best layout for each raw type read through one, leaving out a type no layout read."""
+    return tuple((raw, layout) for raw in RAW_TYPE_LAYOUTS if (layout := layouts[name, raw]))
+
+
+def best_layouts(backend: Backend, table: Table, specs: list[ColumnSpec], seed: int) -> Layouts:
     """For each column, the date and the timestamp layout that read the most sampled values, or None where none reads one."""
     trial_table = backend.scan(Source(format=None, table=backend.sample(table, LAYOUT_TRIAL_ROWS, seed)))
-    candidates = {'date': DATE_FORMATS, 'timestamp': TIMESTAMP_FORMATS}
-    trials = [Request(spec.name, f'raw_{raw}', layout) for spec in specs for raw, layouts in candidates.items() for layout in layouts]
+    trials = [
+        Request(spec.name, 'raw_type_counts', ((raw, layout),))
+        for spec in specs
+        for raw, layouts in RAW_TYPE_LAYOUTS.items()
+        for layout in layouts
+    ]
     tried = backend.aggregate(trial_table, trials)
-    best: dict[tuple[str, str], str | None] = {}
+    best: Layouts = {}
     for spec in specs:
-        for raw, layouts in candidates.items():
-            scores = [(tried[Request(spec.name, f'raw_{raw}', layout)] or 0, -index, layout) for index, layout in enumerate(layouts)]
+        for raw, layouts in RAW_TYPE_LAYOUTS.items():
+            read = READ_AS.index(raw)
+            scores = [
+                (tried[Request(spec.name, 'raw_type_counts', ((raw, layout),))][read], -index, layout)
+                for index, layout in enumerate(layouts)
+            ]
             count, _, layout = max(scores)
             best[spec.name, raw] = layout if count > 0 else None
     return best

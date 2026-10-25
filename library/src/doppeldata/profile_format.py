@@ -27,13 +27,14 @@ from ruamel.yaml.nodes import ScalarNode
 from ruamel.yaml.representer import RoundTripRepresenter
 
 from doppeldata import _core
+from doppeldata.errors import DoppeldataError
 from doppeldata.example_profiles import example_resource
 from doppeldata.published_schemas import schema_text
 
 FORMAT_VERSION = _core.FORMAT_VERSION
 BUNDLE_INDEX = 'bundle.yaml'
 # Left out of the digest, so profiling unchanged data again keeps the profile's identity.
-UNHASHED_GENERATED_FIELDS = ('at', 'tool')
+UNHASHED_GENERATED_FIELDS = ('at', 'tool', 'source_fingerprint')
 # Stored rates are rounded, so a set meant to sum to 1 is allowed this far off.
 RATE_SUM_TOLERANCE = 0.01
 # RFC 8785 writes numbers as IEEE 754 doubles, which hold every integer only up to this magnitude.
@@ -58,7 +59,7 @@ class Issue:
     message: str
 
 
-class InvalidProfile(ValueError):
+class InvalidProfile(DoppeldataError, ValueError):
     def __init__(self, source: str, issues: list[Issue]) -> None:
         self.source = source
         self.issues = issues

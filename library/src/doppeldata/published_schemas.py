@@ -26,6 +26,11 @@ def schema_text(name: str) -> str:
     return importlib.resources.files('doppeldata').joinpath('schemas', _core.schema_file_names()[name]).read_text()
 
 
+def published_enum(definition: str) -> list[str]:
+    """The values the profile schema allows for one of its string enums, such as `SourceFormat`."""
+    return list(json.loads(schema_text('profile'))['$defs'][definition]['enum'])
+
+
 def schema_summaries() -> list[SchemaSummary]:
     """Every JSON Schema the library ships, by name, with the title and description each document carries."""
     documents = {name: json.loads(schema_text(name)) for name in schema_names()}

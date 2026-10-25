@@ -11,8 +11,7 @@ import polars.selectors as cs
 import pyarrow as pa
 from polars.datatypes import DataTypeClass
 
-from doppeldata.profiling import sources
-from doppeldata.profiling import table_profile
+from doppeldata.errors import SourceError
 from doppeldata.profiling.backend import ColumnSpec
 from doppeldata.profiling.backend import ParsedType
 from doppeldata.profiling.backend import Request
@@ -21,19 +20,25 @@ from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
 from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT
+from doppeldata.profiling.statistic_catalog import DIGITS_TEXT
 from doppeldata.profiling.statistic_catalog import INTEGER_TEXT
+from doppeldata.profiling.statistic_catalog import PADDED_DIGITS_TEXT
 from doppeldata.profiling.statistic_catalog import QUANTILES
+from doppeldata.profiling.statistic_catalog import RAW_TYPE_FOLDS
+from doppeldata.profiling.statistic_catalog import RAW_TYPE_LAYOUTS
+from doppeldata.profiling.statistic_catalog import RAW_TYPES
+from doppeldata.profiling.statistic_catalog import READ_AS
 from doppeldata.profiling.statistic_catalog import SHAPE_FROM
 from doppeldata.profiling.statistic_catalog import SHAPE_TO
+from doppeldata.profiling.statistic_catalog import TIME_UNITS
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
 
-# Each translation takes the column and the request's argument.
+# Each translation takes the column, or its value from `ROW_STAGES` where one is named, and the request's argument.
 Translation = Callable[[pl.Expr, Any], pl.Expr]
 
-NANOSECONDS = {'microseconds': 10**3, 'milliseconds': 10**6, 'seconds': 10**9, 'minutes': 60 * 10**9, 'hours': 3600 * 10**9}
-NANOSECONDS['days'] = 24 * NANOSECONDS['hours']
 ROW_INDEX = '__doppeldata_row'
+ROW_STAGE = '__doppeldata_stage_{}'
 # Nothing downloads at run time, so DuckDB may use only the extensions its wheel links in.
 DUCKDB_CONFIG: dict[str, str | bool | int | float | list[str]] = {'autoinstall_known_extensions': False, 'autoload_known_extensions': False}
 
@@ -50,18 +55,56 @@ def counts_by(part: pl.Expr, values: Iterable[int]) -> pl.Expr:
     return pl.concat_list([(part == value).sum() for value in values])
 
 
-def whole(unit: str) -> Translation:
-    return lambda c, _: (c.dt.replace_time_zone(None).dt.epoch('ns') % NANOSECONDS[unit] == 0).all()
+def whole(nanoseconds: int) -> Translation:
+    return lambda c, _: (c.dt.replace_time_zone(None).dt.epoch('ns') % nanoseconds == 0).all()
 
 
-def is_number_or_boolean(c: pl.Expr) -> pl.Expr:
-    return c.str.contains(DECIMAL_TEXT) | c.str.contains(BOOLEAN_TEXT)
+def is_digits(c: pl.Expr) -> pl.Expr:
+    return c.str.contains(DIGITS_TEXT)
+
+
+# Whether each raw value reads as the raw type, given the type's layout. Each is tried only on a value
+# no earlier type in `RAW_TYPES` read.
+TEXT_MATCHERS: dict[str, Callable[[pl.Expr, str | None], pl.Expr]] = {
+    'integer': lambda c, _: c.str.contains(INTEGER_TEXT) & c.str.to_integer(strict=False).is_not_null(),
+    # A run of digits too long for an integer is an identifier, never a decimal.
+    'decimal': lambda c, _: c.str.contains(DECIMAL_TEXT) & ~is_digits(c),
+    'boolean': lambda c, _: c.str.contains(BOOLEAN_TEXT),
+    'date': lambda c, layout: c.str.to_date(layout, strict=False).is_not_null() & ~is_digits(c),
+    'timestamp': lambda c, layout: c.str.to_datetime(layout, strict=False, time_unit='us').is_not_null() & ~is_digits(c),
+}
+TEXT_CONVERTERS: dict[str, Callable[[pl.Expr, str | None], pl.Expr]] = {
+    'integer': lambda c, _: c.str.to_integer(strict=False),
+    'decimal': lambda c, _: c.cast(pl.Float64, strict=False),
+    'boolean': lambda c, _: c.str.to_lowercase() == 'true',
+    'date': lambda c, layout: c.str.to_date(layout, strict=False),
+    'timestamp': lambda c, layout: c.str.to_datetime(layout, strict=False, time_unit='us'),
+}
+
+
+def raw_type_code(c: pl.Expr, layouts: tuple[tuple[str, str], ...]) -> pl.Expr:
+    """Each non-null value's index in `READ_AS` of the first raw type it reads as."""
+    chosen = dict(layouts)
+    tried = [raw for raw in RAW_TYPES if raw not in RAW_TYPE_LAYOUTS or raw in chosen]
+    code: pl.Expr = pl.lit(READ_AS.index('string'), pl.UInt8)
+    for raw in reversed(tried):
+        code = pl.when(TEXT_MATCHERS[raw](c, chosen.get(raw))).then(pl.lit(READ_AS.index(raw), pl.UInt8)).otherwise(code)
+    return pl.when(c.is_not_null()).then(code)
+
+
+# The streaming engine evaluates an expression again at each reference, so a value counted several times is computed first.
+ROW_STAGES: dict[str, Translation] = {
+    'raw_type_counts': raw_type_code,
+    'month_counts': lambda c, _: c.dt.month(),
+    'weekday_counts': lambda c, _: c.dt.weekday(),
+    'hour_counts': lambda c, _: c.dt.hour(),
+}
 
 
 POLARS_STATISTICS: dict[str, Translation] = {
     'rows': lambda _, __: pl.len(),
     'null_count': lambda c, _: c.null_count(),
-    # Counted exactly: approx_n_unique strays by several percent on the streaming engine.
+    # Counted exactly, so `distinct.ratio` does not move with the engine or its version.
     'distinct_count': lambda c, _: c.drop_nulls().n_unique(),
     'min': lambda c, _: c.min(),
     'max': lambda c, _: c.max(),
@@ -82,21 +125,17 @@ POLARS_STATISTICS: dict[str, Translation] = {
     **{f'length_{name}': length_quantile(level) for name, level in QUANTILES.items()},
     'whitespace_edge_rate': lambda c, _: (c.str.len_chars() != c.str.strip_chars().str.len_chars()).mean(),
     'true_rate': lambda c, _: c.mean(),
-    'month_counts': lambda c, _: counts_by(c.dt.month(), range(1, 13)),
-    'weekday_counts': lambda c, _: counts_by(c.dt.weekday(), range(1, 8)),
-    'hour_counts': lambda c, _: counts_by(c.dt.hour(), range(24)),
+    'month_counts': lambda months, _: counts_by(months, range(1, 13)),
+    'weekday_counts': lambda weekdays, _: counts_by(weekdays, range(1, 8)),
+    'hour_counts': lambda hours, _: counts_by(hours, range(24)),
     'distinct_days': lambda c, _: c.dt.date().drop_nulls().n_unique(),
-    **{f'whole_{unit}': whole(unit) for unit in NANOSECONDS},
-    'raw_integer': lambda c, _: c.str.contains(INTEGER_TEXT).sum(),
-    'raw_decimal': lambda c, _: (c.str.contains(DECIMAL_TEXT) & ~c.str.contains(INTEGER_TEXT)).sum(),
-    'raw_boolean': lambda c, _: c.str.contains(BOOLEAN_TEXT).sum(),
-    'raw_date': lambda c, layout: (c.str.to_date(layout, strict=False).is_not_null() & ~is_number_or_boolean(c)).sum(),
-    'raw_timestamp': lambda c, layout: (
-        c.str.to_datetime(layout, strict=False, time_unit='us').is_not_null() & ~is_number_or_boolean(c)
-    ).sum(),
+    **{f'whole_{unit}': whole(nanoseconds) for unit, nanoseconds, _ in TIME_UNITS},
+    'raw_type_counts': lambda codes, _: counts_by(codes, range(len(READ_AS))),
+    'padded_digits': lambda c, _: c.str.contains(PADDED_DIGITS_TEXT).sum(),
 }
 
 untranslated = sorted({statistic.name for statistic in ALL_STATISTICS} - POLARS_STATISTICS.keys())
+untranslated += sorted(f'the raw type {raw}' for raw in set(RAW_TYPES) - (TEXT_MATCHERS.keys() & TEXT_CONVERTERS.keys()))
 if untranslated:
     raise RuntimeError(f'the Polars backend has no translation for {", ".join(untranslated)}')
 
@@ -156,23 +195,20 @@ def kind_of(dtype: pl.DataType) -> ColumnKind:
 
 
 def parsed(c: pl.Expr, parsed_type: ParsedType) -> pl.Expr:
-    match parsed_type.raw_type:
-        case 'integer':
-            return pl.when(c.str.contains(INTEGER_TEXT)).then(c.str.to_integer(strict=False))
-        case 'decimal':
-            return pl.when(c.str.contains(DECIMAL_TEXT)).then(c.cast(pl.Float64, strict=False))
-        case 'boolean':
-            return pl.when(c.str.contains(BOOLEAN_TEXT)).then(c.str.to_lowercase() == 'true')
-        case 'date':
-            return c.str.to_date(parsed_type.format, strict=False)
-        case 'timestamp':
-            return c.str.to_datetime(parsed_type.format, strict=False, time_unit='us')
-    return c
+    """The column read as its type, with a value its counts gave another type as null."""
+    raw, layout = parsed_type.raw_type, parsed_type.format
+    if raw == 'string':
+        return c
+    read = TEXT_MATCHERS[raw](c, layout)
+    for folded in RAW_TYPE_FOLDS.get(raw, ()):
+        read = read | TEXT_MATCHERS[folded](c, layout)
+    return pl.when(read).then(TEXT_CONVERTERS[raw](c, layout))
 
 
-def is_hive_partitioned(paths: list[str]) -> bool:
-    """Whether any file sits under a `key=value` directory, whose keys Polars then reads as columns."""
-    return any('=' in part for path in paths for part in PurePosixPath(path).parent.parts)
+def ancestor_partition_keys(source: Source) -> list[str]:
+    """Hive keys Polars reads from `key=value` directories above the root that was named, which the table does not hold."""
+    every = {part.split('=', 1)[0] for file in source.files for part in PurePosixPath(file.path).parent.parts if '=' in part}
+    return sorted(every - set(source.partition_keys))
 
 
 class PolarsBackend:
@@ -182,15 +218,7 @@ class PolarsBackend:
         if source.table is not None:
             table = pl.DataFrame(source.table).lazy()
         else:
-            paths = [file.path for file in source.files]
-            hive = is_hive_partitioned(paths)
-            match source.format:
-                case SourceFormat.PARQUET:
-                    table = pl.scan_parquet(paths, hive_partitioning=hive)
-                case SourceFormat.ARROW:
-                    table = pl.scan_ipc(paths, hive_partitioning=hive)
-                case _:
-                    table = read_text(source)
+            table = scan_files(source)
         return table.with_columns(cs.categorical().cast(pl.String), cs.enum().cast(pl.String))
 
     def schema(self, table: pl.LazyFrame) -> list[ColumnSpec]:
@@ -208,18 +236,39 @@ class PolarsBackend:
         if not requests:
             return {}
         kinds = {spec.name: spec.kind for spec in self.schema(table)}
+        dtypes = dict(table.collect_schema())
 
         def column(name: str | None) -> pl.Expr:
             if name is None:
                 return pl.lit(None)
-            # Decimal moments and quantiles are taken as doubles, which every statistic accepts.
-            return pl.col(name).cast(pl.Float64) if kinds[name] is ColumnKind.DECIMAL else pl.col(name)
+            c = pl.col(name)
+            match kinds[name], dtypes[name]:
+                # Decimal moments and quantiles are taken as doubles, which every statistic accepts.
+                case ColumnKind.DECIMAL, _:
+                    return c.cast(pl.Float64)
+                # A profile cannot hold NaN or an infinity, so a float column counts them as nulls.
+                case ColumnKind.FLOAT, _:
+                    return pl.when(c.is_finite()).then(c)
+                # Steps and comparisons with zero go through a signed type, which a uint64 overflows.
+                case ColumnKind.INTEGER, pl.UInt64:
+                    return c.cast(pl.Int128)
+            return c
+
+        staged = {
+            ROW_STAGE.format(index): ROW_STAGES[request.statistic](column(request.column), request.argument)
+            for index, request in enumerate(requests)
+            if request.statistic in ROW_STAGES
+        }
+
+        def operand(index: int, request: Request) -> pl.Expr:
+            name = ROW_STAGE.format(index)
+            return pl.col(name) if name in staged else column(request.column)
 
         expressions = [
-            POLARS_STATISTICS[request.statistic](column(request.column), request.argument).alias(f'r{index}')
+            POLARS_STATISTICS[request.statistic](operand(index, request), request.argument).alias(f'r{index}')
             for index, request in enumerate(requests)
         ]
-        row = table.select(expressions).collect(engine='streaming').row(0)
+        row = table.with_columns(**staged).select(expressions).collect(engine='streaming').row(0)
         return dict(zip(requests, row, strict=True))
 
     def top_k(self, table: pl.LazyFrame, column: str, k: int, of: FrequencyKey = FrequencyKey.VALUE) -> list[tuple[Any, int]]:
@@ -246,6 +295,31 @@ class PolarsBackend:
 
     def parse(self, table: pl.LazyFrame, types: dict[str, ParsedType]) -> pl.LazyFrame:
         return table.with_columns(parsed(pl.col(name), parsed_type).alias(name) for name, parsed_type in types.items())
+
+
+def scan_files(source: Source) -> pl.LazyFrame:
+    """The source's files as one table, read far enough to find a file that is not of its format."""
+    format_name = source.format.value if source.format else 'a table'
+    paths = [file.path for file in source.files]
+    hive = bool(source.partition_keys)
+    try:
+        match source.format:
+            case SourceFormat.PARQUET:
+                table = pl.scan_parquet(paths, hive_partitioning=hive)
+            case SourceFormat.ARROW:
+                table = pl.scan_ipc(paths, hive_partitioning=hive)
+            case _:
+                table = read_text(source)
+        table = table.drop(ancestor_partition_keys(source), strict=False)
+        # Counting rows reads every file's footer, so a corrupt file fails here rather than mid-profile.
+        table.select(pl.len()).collect(engine='streaming')
+    except (pl.exceptions.PolarsError, duckdb.Error, OSError) as error:
+        raise SourceError(f'{", ".join(source.roots)} could not be read as {format_name}: {first_line(error)}') from error
+    return table
+
+
+def first_line(error: Exception) -> str:
+    return str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
 
 
 def read_text(source: Source) -> pl.LazyFrame:
@@ -280,7 +354,3 @@ def selected(connection: duckdb.DuckDBPyConnection, query: str, parameters: dict
     if relation is None:
         raise RuntimeError(f'DuckDB returned no relation for {query!r}')
     return relation
-
-
-def profile_data(data: Any, *, sample: int | None, k_min: int) -> dict[str, Any]:
-    return table_profile.profile_table(PolarsBackend(), sources.resolve(data), sample=sample, k_min=k_min)

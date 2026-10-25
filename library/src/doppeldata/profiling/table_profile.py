@@ -1,7 +1,8 @@
-"""One table's profile, computed through a backend in two passes. No literal it stores rests on fewer than k_min rows."""
+"""One table's profile, computed through a backend's calls. No literal it stores rests on fewer than k_min rows."""
 
 import datetime as dt
 import math
+import random
 from collections.abc import Callable
 from typing import Any
 
@@ -9,6 +10,7 @@ from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.comments import CommentedSeq
 
 from doppeldata import _core
+from doppeldata.profile_format import LARGEST_EXACT_INTEGER
 from doppeldata.profiling import text_types
 from doppeldata.profiling.backend import TEXT_FORMATS
 from doppeldata.profiling.backend import Backend
@@ -17,7 +19,9 @@ from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import Table
 from doppeldata.profiling.statistic_catalog import COLUMN_STATISTICS
+from doppeldata.profiling.statistic_catalog import PROFILED
 from doppeldata.profiling.statistic_catalog import QUANTILES
+from doppeldata.profiling.statistic_catalog import TIME_UNITS
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
 from doppeldata.profiling.statistic_catalog import shape_of
@@ -46,15 +50,6 @@ LOGICAL_TYPES = {
     ColumnKind.DATETIME: 'timestamp',
 }
 CONTAINER_LOGICAL_TYPES = {'list': 'array', 'fixed_size_list': 'array', 'struct': 'object'}
-# Each unit the values may all be whole numbers of, coarsest first, with the granularity it gives.
-GRANULARITIES = (
-    ('whole_days', 'day'),
-    ('whole_hours', 'hour'),
-    ('whole_minutes', 'minute'),
-    ('whole_seconds', 'second'),
-    ('whole_milliseconds', 'millisecond'),
-    ('whole_microseconds', 'microsecond'),
-)
 
 Stat = Callable[[str], Any]
 
@@ -62,7 +57,13 @@ Stat = Callable[[str], Any]
 def profile_table(backend: Backend, source: Source, *, sample: int | None, k_min: int) -> dict[str, Any]:
     """The profile document of `source`, from every row or from a seeded sample of `sample` rows."""
     table = backend.scan(source)
-    rows = backend.aggregate(table, [Request(None, 'rows')])[Request(None, 'rows')]
+    first = [Request(None, 'rows')]
+    if sample is not None:
+        # A distinct ratio does not scale from a sample to the whole table, so a sampled profile counts distinct values in every row.
+        first += [Request(spec.name, 'distinct_count') for spec in backend.schema(table) if spec.kind in PROFILED]
+    counted = backend.aggregate(table, first)
+    rows = counted.pop(Request(None, 'rows'))
+    whole_distinct = {request.column: count for request, count in counted.items() if request.column}
     if sample is not None and rows > sample:
         table = backend.scan(Source(format=None, table=backend.sample(table, sample, SAMPLE_SEED)))
     text: dict[str, TextColumn] = {}
@@ -78,7 +79,14 @@ def profile_table(backend: Backend, source: Source, *, sample: int | None, k_min
         if spec.kind is ColumnKind.STRING
     }
     patterns = generalized_patterns(backend, table, shapes, stats, described, k_min)
-    columns = [column_entry(backend, table, spec, stats, described, text.get(spec.name), shapes, patterns, k_min) for spec in specs]
+    distinct = {
+        spec.name: (whole_distinct.get(spec.name, stats[Request(spec.name, 'distinct_count')]), rows)
+        for spec in specs
+        if spec.kind in PROFILED
+    }
+    columns = [
+        column_entry(backend, table, spec, stats, described, distinct, text.get(spec.name), shapes, patterns, k_min) for spec in specs
+    ]
     generated: dict[str, Any] = {
         'tool': f'doppeldata {_core.VERSION}',
         'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
@@ -117,11 +125,14 @@ def column_entry(
     spec: ColumnSpec,
     stats: dict[Request, Any],
     described: int,
+    distinct: dict[str, tuple[int, int]],
     text: TextColumn | None,
     shapes: dict[str, list[tuple[str, int]]],
     patterns: dict[str, str],
     k_min: int,
 ) -> dict[str, Any]:
+    """One column's entry. `distinct` holds each column's distinct count and the rows it was counted over."""
+
     def stat(name: str) -> Any:
         return stats[Request(spec.name, name, k_min if name in TRIMMED_STATISTICS else None)]
 
@@ -138,9 +149,9 @@ def column_entry(
     if spec.kind is ColumnKind.OTHER:
         return entry
     values = described - stat('null_count')
-    if described:
-        approx = stat('distinct_count')
-        entry['distinct'] = {'approx': approx, 'ratio': significant(min(1.0, approx / described), RATE_DIGITS)}
+    count, counted_over = distinct[spec.name]
+    if counted_over:
+        entry['distinct'] = {'approx': count, 'ratio': significant(min(1.0, count / counted_over), RATE_DIGITS)}
     # A statistic of fewer than k_min values can give one of them away, as the mean of one value does.
     if values < k_min:
         return entry
@@ -159,7 +170,8 @@ def numeric_section(spec: ColumnSpec, stat: Stat, values: int, k_min: int) -> di
     integral = spec.kind is ColumnKind.INTEGER
 
     def number(value: Any) -> int | float:
-        return int(value) if integral else float(value)
+        # Extremes and quantiles are doubles, so an integer canonical JSON cannot write exactly is written as the nearest one.
+        return int(value) if integral and abs(value) <= LARGEST_EXACT_INTEGER else float(value)
 
     section: dict[str, Any] = {'integral': integral}
     if spec.kind is ColumnKind.DECIMAL:
@@ -180,8 +192,11 @@ def numeric_section(spec: ColumnSpec, stat: Stat, values: int, k_min: int) -> di
     if integral and stat('step_min') is not None:
         step_min, step_max = stat('step_min'), stat('step_max')
         section['monotonic'] = 'increasing' if step_min > 0 else 'decreasing' if step_max < 0 else 'none'
-        if step_min == step_max != 0 and stat('null_count') == 0:
-            section['sequence'] = {'start': int(stat('min')), 'step': int(step_min)}
+        # The start is the first row's value, the minimum or the maximum by the step's sign. It follows from
+        # the trimmed extreme at that end and the step, so storing it gives away no more than they do.
+        start = int(stat('max') if step_min < 0 else stat('min'))
+        if step_min == step_max != 0 and stat('null_count') == 0 and max(abs(start), abs(step_min)) <= LARGEST_EXACT_INTEGER:
+            section['sequence'] = {'start': start, 'step': int(step_min)}
     return section
 
 
@@ -243,7 +258,10 @@ def generalized_patterns(
         matching = [value for value in sample.column(name).to_pylist() if value is not None and shape_of(value) == shape]
         # Every literal grex keeps is shared by all the values it is given, so k_min of them must back it.
         if len(matching) >= k_min:
-            pattern = _core.generalize_pattern(sorted(set(matching))[:PATTERN_VALUES])
+            distinct = sorted(set(matching))
+            # A seeded draw rather than the first values in order, which would share the smallest prefix.
+            drawn = random.Random(SAMPLE_SEED).sample(distinct, min(PATTERN_VALUES, len(distinct)))
+            pattern = _core.generalize_pattern(sorted(drawn))
             if pattern:
                 patterns[name] = pattern
     return patterns
@@ -274,7 +292,7 @@ def temporal_section(spec: ColumnSpec, stat: Stat, values: int, text: TextColumn
 def granularity(spec: ColumnSpec, stat: Stat) -> str:
     if spec.kind is ColumnKind.DATE:
         return 'day'
-    return next((unit for whole, unit in GRANULARITIES if stat(whole)), 'nanosecond')
+    return next((name for unit, _, name in TIME_UNITS if stat(f'whole_{unit}')), 'nanosecond')
 
 
 def day_of(value: dt.date) -> dt.date:

@@ -4,25 +4,17 @@ import importlib
 import importlib.util
 from typing import Any
 
+from doppeldata.errors import ProfilingEnginesMissing
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
-from doppeldata.profiling.backend import SourceError
+from doppeldata.profiling import table_profile
 
 DEFAULT_K_MIN = 11
-# Each engine's module, and the packages it imports, which install under the same names.
-ENGINES = {'polars': ('doppeldata.profiling.polars_backend', ('polars', 'duckdb', 'pyarrow', 'boto3'))}
-
-
-class ProfilingEnginesMissing(ImportError):
-    """Profiling was asked of an engine whose packages are not installed."""
-
-    def __init__(self, engine: str, missing: list[str]) -> None:
-        self.engine = engine
-        self.missing = missing
-        super().__init__(
-            f'profiling with {engine} needs {", ".join(missing)}, which doppeldata does not install; '
-            f'run `pip install {" ".join(missing)}`, or install doppeldata-cli, which declares them'
-        )
+# Each engine's backend class, as its module and name, and the packages that module imports, which install under the same names.
+ENGINES = {'polars': ('doppeldata.profiling.polars_backend', 'PolarsBackend', ('polars', 'duckdb', 'pyarrow'))}
+# The module that lists what was named, and what it imports to list S3, which profiling needs whatever the engine.
+SOURCES_MODULE = 'doppeldata.profiling.sources'
+LISTING_PACKAGES = ('boto3',)
 
 
 def profile(data: Any, *, engine: str = 'polars', sample: int | None = None, k_min: int = DEFAULT_K_MIN) -> Profile:
@@ -37,13 +29,16 @@ def profile(data: Any, *, engine: str = 'polars', sample: int | None = None, k_m
         raise ValueError(f'sample must be a positive number of rows, not {sample}')
     if k_min < 1:
         raise ValueError(f'k_min must be at least 1, not {k_min}')
-    module_name, packages = ENGINES[engine]
-    missing = [package for package in packages if importlib.util.find_spec(package) is None]
+    module_name, class_name, packages = ENGINES[engine]
+    missing = [package for package in (*packages, *LISTING_PACKAGES) if importlib.util.find_spec(package) is None]
     if missing:
         raise ProfilingEnginesMissing(engine, missing)
-    # Imported by name, because importing it imports the engine, which a library-only install lacks.
-    module = importlib.import_module(module_name)
-    profiled = Profile(module.profile_data(data, sample=sample, k_min=k_min))
+    # Imported by name, because each imports packages a library-only install lacks.
+    backend = getattr(importlib.import_module(module_name), class_name)()
+    sources = importlib.import_module(SOURCES_MODULE)
+    source = sources.resolve(data)
+    profiled = Profile(table_profile.profile_table(backend, source, sample=sample, k_min=k_min))
+    sources.check_unchanged(source)
     issues = profiled.validate()
     if issues:
         raise InvalidProfile(f'the profile of {data!r}', issues)
