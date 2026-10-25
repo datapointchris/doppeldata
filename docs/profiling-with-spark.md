@@ -289,14 +289,22 @@ Every frame the backend persisted is released when the profile ends.
 
 ## A sample is the rows with the least seeded hash, so it does not move with the cluster
 
-`picked` places each row by `xxhash64` of the seed and the row's values. It keeps the n rows whose
-place is least, after dropping those outside the least `OVERSAMPLE` times n's share of the hash
-range. Spark's own `sample` seeds each partition apart, so its rows change with how Spark splits
-the files. The value sample, the fit sample and the layout trial are all drawn this way, so a
-profile's fits and patterns do not depend on the cluster's size.
+`picked` places each row by `xxhash64` of the seed, its file's index in the listing, and its own
+index in that file. It keeps the n rows whose place is least, after dropping those outside the
+least `OVERSAMPLE` times n's share of the hash range. Spark's own `sample` seeds each partition
+apart, so its rows change with how Spark splits the files. The value sample, the fit sample and the
+layout trial are all drawn this way, so a profile's fits and patterns do not depend on the
+cluster's size.
 
-A row's file and split are left out of its place, so the same rows read from a local path and from
-S3 are placed alike. Two identical rows share a place, and are both kept or both dropped.
+A row's index in its file is the rows of the file's earlier splits plus its place in its own split.
+One `groupBy` over the split columns counts each split, and the driver adds them up in block order.
+So the place does not move with the split size, and each copy of a repeated row is drawn on its own.
+A row's values would place copies together, and a table of a few distinct rows would then sample
+some of them whole and miss the rest.
+
+The file's path is left out of its place, so the same files read from a local path and from S3 are
+placed alike. A Spark DataFrame has no files, so its rows are placed by their values, and its
+identical rows are kept or dropped together.
 
 ## The backend runs under four session settings, and restores each one
 

@@ -61,7 +61,8 @@ QUANTILE_ACCURACY = 10_000
 # The columns one compiled aggregate covers. Twice as many make its generated code pass the JVM's 64 KB method limit on a
 # table of numeric columns, and Spark then runs the query interpreted, several times slower.
 COLUMNS_PER_QUERY = 16
-# The share of the hash range a sample keeps is this many times the rows asked for, which holds them all but never.
+# The share of the hash range a sample keeps, as a multiple of the rows asked for. Rows each placed apart fall short of
+# them with odds too small to meet, and a DataFrame's repeated rows, placed together, can.
 OVERSAMPLE = 1.2
 # Each setting the backend's queries run under, restored afterward. In UTC a timestamp's month, hour and whole units read
 # as Polars reads a UTC column. CORRECTED reads a date the newer parser cannot read as null, where EXCEPTION raises.
@@ -78,6 +79,10 @@ FILE_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_file'
 BLOCK_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_block'
 MALFORMED_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_malformed'
 PLACE_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_place'
+SPLIT_ROW_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_split_row'
+OFFSET_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_offset'
+FILE_ROW_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_file_row'
+LISTED_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_listed'
 # A string column's value has white space at an edge where its first or last character is any Unicode white space.
 WHITESPACE_EDGE = r'(?U)^\s|\s$'
 EPOCH = dt.datetime(1970, 1, 1)
@@ -890,18 +895,43 @@ class SparkBackend:
         return rows
 
     def picked(self, table: DataFrame, n: int, seed: int) -> DataFrame:
-        """The n rows whose seeded hash of their values is least, which are the same rows however Spark splits the files.
+        """The n rows whose seeded hash of their place is least, or the table where it holds no more than n.
 
-        Rows outside the least `OVERSAMPLE` times n's share of the hash range are dropped before the sort.
+        A row read from files is placed by its file's index in the listing and its own index in the file, so the rows are
+        the same however Spark splits the files, and each copy of a repeated row is drawn on its own. A DataFrame's row is
+        placed by its values, so its copies are kept or dropped together. Rows outside the least `OVERSAMPLE` times n's
+        share of the hash range are dropped before the sort.
         """
         rows = self.row_count(table)
         if rows <= n:
             return table
-        values = [column(name) for name in table.columns if not name.startswith(HIDDEN_COLUMN_PREFIX)]
-        place = sf.xxhash64(sf.lit(seed), *values)
+        if FILE_COLUMN in table.columns and BLOCK_COLUMN in table.columns:
+            # A sample keeps each row's place, because its rows of one split are no longer read together.
+            table = table if FILE_ROW_COLUMN in table.columns else self.with_file_rows(table)
+            place = sf.xxhash64(sf.lit(seed), column(LISTED_COLUMN), column(FILE_ROW_COLUMN))
+        else:
+            place = sf.xxhash64(sf.lit(seed), *(column(name) for name in table.columns if not name.startswith(HIDDEN_COLUMN_PREFIX)))
         cutoff = min(2**63 - 1, -(2**63) + int(min(1.0, OVERSAMPLE * n / rows) * 2**64))
         placed = table.withColumn(PLACE_COLUMN, place).where(sf.col(PLACE_COLUMN) <= cutoff)
         return placed.orderBy(PLACE_COLUMN).limit(n).drop(PLACE_COLUMN)
+
+    def with_file_rows(self, table: DataFrame) -> DataFrame:
+        """The table with each row's file's index in the listing, and the row's index in its file: the rows of the file's
+        earlier splits, counted on the driver, and then the row's place in its own split."""
+        numbered = table.withColumn(SPLIT_ROW_COLUMN, sf.monotonically_increasing_id())
+        counted = numbered.groupBy(FILE_COLUMN, BLOCK_COLUMN).agg(
+            sf.count(sf.lit(1)).alias('rows'), sf.min(SPLIT_ROW_COLUMN).alias('first')
+        )
+        offsets, held = [], dict[str, int]()
+        for split in sorted(counted.collect(), key=lambda split: (split[FILE_COLUMN], split[BLOCK_COLUMN])):
+            file = split[FILE_COLUMN]
+            before = held.get(file, 0)
+            offsets.append((file, split[BLOCK_COLUMN], self.listing.get(listed_path(file), -1), before - split['first']))
+            held[file] = before + split['rows']
+        schema = f'{FILE_COLUMN} string, {BLOCK_COLUMN} long, {LISTED_COLUMN} long, {OFFSET_COLUMN} long'
+        joined = numbered.join(sf.broadcast(self.spark.createDataFrame(offsets, schema)), [FILE_COLUMN, BLOCK_COLUMN])
+        file_row = (column(SPLIT_ROW_COLUMN) + column(OFFSET_COLUMN)).alias(FILE_ROW_COLUMN)
+        return joined.select(*(column(name) for name in table.columns), column(LISTED_COLUMN), file_row)
 
     def top_k(self, table: DataFrame, column_name: str, k: int, of: FrequencyKey = FrequencyKey.VALUE) -> list[tuple[Any, int]]:
         key = column(column_name)
