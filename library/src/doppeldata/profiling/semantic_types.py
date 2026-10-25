@@ -11,12 +11,13 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from doppeldata import _core
+from doppeldata.column_name_words import hint_runs_in
+from doppeldata.column_name_words import name_words
 from doppeldata.errors import DetectorPackError
 from doppeldata.profiling.backend import ColumnSpec
 from doppeldata.profiling.detector_packs import Detector
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import Validator
-from doppeldata.profiling.detector_packs import name_words
 from doppeldata.profiling.statistic_catalog import ColumnKind
 
 # A column takes a type whose validator passes this share of its sampled values.
@@ -194,9 +195,4 @@ def describe(value: object) -> str:
 
 def hinted(words: tuple[str, ...], detector: Detector, *, at_end: bool = False) -> bool:
     """Whether the words of one of the detector's name hints run in order in the column name's words, ending them where `at_end`."""
-    for hint in detector.name_hints:
-        parts = name_words(hint)
-        starts = [len(words) - len(parts)] if at_end else range(len(words) - len(parts) + 1)
-        if any(start >= 0 and words[start : start + len(parts)] == parts for start in starts):
-            return True
-    return False
+    return any(hint_runs_in(words, hint, at_end=at_end) for hint in detector.name_hints)

@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from doppeldata import _core
+from doppeldata.column_name_words import name_words
 from doppeldata.errors import DetectorPackError
 from doppeldata.published_schemas import published_enum
 from doppeldata.published_schemas import published_fields
@@ -31,12 +32,15 @@ if TYPE_CHECKING:
 ENTRY_POINT_GROUP = 'doppeldata.detector_packs'
 # The pack every run enables.
 GENERAL = 'general'
+# The pack `policy: healthcare` enables.
+HEALTHCARE = 'healthcare'
 # Each pack the library ships, as an entry point's `module:attribute`, so an install without package metadata still finds them.
-BUILT_IN = {GENERAL: 'doppeldata.profiling.detector_packs.general:PACK'}
+BUILT_IN = {
+    GENERAL: 'doppeldata.profiling.detector_packs.general:PACK',
+    HEALTHCARE: 'doppeldata.profiling.detector_packs.healthcare:PACK',
+}
 # A pack's name and a semantic type are lowercase snake identifiers, which stay stable when Glue renames a type.
 IDENTIFIER = re.compile(r'[a-z][a-z0-9_]*')
-# An upper-case run before a capitalized word, a capitalized or lower-case word, or a run of digits.
-NAME_WORD = re.compile(r'[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+')
 
 Validator = Callable[['pa.Array'], 'pa.BooleanArray']
 
@@ -84,11 +88,6 @@ class EnabledPack:
 
     pack: DetectorPack
     provided_by: str
-
-
-def name_words(name: str) -> tuple[str, ...]:
-    """A column name's or a name hint's words, lower-cased: `customerEMail` and `customer_e_mail` are each customer, e, mail."""
-    return tuple(word.lower() for word in NAME_WORD.findall(name))
 
 
 def enabled_packs(names: Iterable[str]) -> list[EnabledPack]:
