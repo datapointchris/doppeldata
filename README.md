@@ -107,7 +107,7 @@ Upload the zip, pass its `s3://` path to `--additional-python-modules`, and pass
 
 | Directory | Holds |
 | --- | --- |
-| `crates/` | the Rust workspace: `core`, the generation engine, and `python`, the extension module over it |
+| `crates/` | the Rust workspace: `core`, the generation engine; `writers`, which writes its blocks as files to any object store; and `python`, the extension module over the engine |
 | `library/` | the `doppeldata` distribution: the compiled extension and the Python code over it |
 | `cli/` | the `doppeldata-cli` distribution: the `doppeldata` command over the library |
 | `docs/` | why the design is what it is |

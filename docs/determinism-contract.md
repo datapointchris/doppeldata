@@ -67,17 +67,19 @@ Rejection-sampling distributions (Gamma, Poisson, ziggurat normals) consume a va
 words per value. That rules out skipping ahead to an arbitrary row. A block starts its stream fresh,
 so any thread can produce any block.
 
-## Values match across every writer, and Parquet bytes only within one engine version
+## The stream version names the values, and the tool version names the file bytes
 
 The guarantees, strongest first:
 
-1. Arrow values are identical.
-2. CSV and JSON bytes are identical.
-3. Parquet bytes are identical for one engine version and one set of writer settings.
+1. Arrow values are identical for one stream version, under any split, thread count or format.
+2. File bytes, and the split drawn from `rows_per_file`, are identical for one tool version and one
+   set of writer settings.
 
-An upgrade to the Arrow or Parquet writer that changes encoder output, or any change to a sampler's
-draw order, raises the stream version. The stream version is part of a dataset's identity, so a
-dataset generated before the change is still named exactly.
+Any change to a sampler's draw order raises the stream version. The stream version is part of a
+dataset's identity, so a dataset generated before the change is still named exactly. An encoder
+upgrade or a change to the file-size draw moves bytes and leaves every value alone. The manifest's
+`tool` names the version that wrote the bytes. `regenerate()` compares every file it writes with the
+manifest, and names any whose bytes moved.
 
 A test pins a SHA-256 beside the stream version, as one pair. The hash covers the values and text
 cells of a fixture holding one column of every kind, fitted family and provider. A change that moves

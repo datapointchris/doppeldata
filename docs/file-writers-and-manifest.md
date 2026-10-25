@@ -3,9 +3,18 @@
 ## The writers are their own crate, so the engine carries no I/O
 
 `crates/writers` (`doppeldata-writers`) turns a `Plan`'s blocks into files. Parquet, object_store,
-tokio, csv and encoding_rs are its dependencies, never the engine's. The manifest's model is the
-engine's, in `doppeldata_core::manifest`, because the engine owns the list of published JSON
-Schemas. It is serde and schemars types with no I/O.
+tokio, csv-core and encoding_rs are its dependencies, never the engine's. The manifest's model and
+the format settings are the engine's, in `doppeldata_core::manifest` and
+`doppeldata_core::format_settings`, because the engine owns the list of published JSON Schemas. Both
+are serde and schemars types with no I/O.
+
+- **A profile's `source.csv`, `source.parquet` and `source.json` take the keys a manifest's `writer`
+  takes.** One settings type serves both, and an unknown key is refused. So `profile.v1.json`
+  publishes exactly the keys the writers read.
+- **`WriteOptions::from_profile` turns a profile into write settings.** The format is the caller's,
+  then the profile's recorded one, then Parquet. A recorded codec applies only when the format is the
+  recorded one. `override_writer` lays a caller's keys over the result, and `partition_by` sets the
+  keys.
 
 ## A layout fixes every file's rows before anything is generated
 
@@ -13,27 +22,28 @@ Schemas. It is serde and schemars types with no I/O.
 print the files a run will write before a byte is written.
 
 - **A range's size is `file_rows`, or drawn from the profile's `source.layout.rows_per_file`
-  quantiles.** The draw uses a stream keyed by the seed alone, so the split is the same on every
-  run.
-- **The split never moves a value.** Blocks are fixed at 65,536 rows, so a range cut mid-block
-  takes a slice of the block. Two neighboring ranges each generate the block they share.
-- **A name is `part-{index:05}-{identity8}.{ext}`.** `identity8` is the first eight hex digits of the
+  quantiles.** The engine's `file_rows_draws` makes the draw, through the quantile interpolation the
+  samplers use. Its stream is keyed by the seed alone, so the split is the same on every run.
+- **The split never moves a value.** Blocks are a fixed `BLOCK_ROWS`, so a range cut mid-block takes
+  a slice of the block. Two neighboring ranges each generate the block they share.
+- **A name is `part-{range:05}-{identity8}.{ext}`.** `identity8` is the first eight hex digits of the
   dataset identity, so a run with a changed input never mixes its files with an earlier run's.
 
 ## Every format writes through one byte sink
 
 Each format's encoder writes into a `ByteSink`. At the bottom, `ObjectSink` hashes and counts the
-bytes, then hands them in chunks to object_store's `BufWriter`. That writer makes one put for a small
-object and a multipart upload for a large one. Text compression and Latin-1 are sinks over it. A
-deliberate malformation wraps the same type.
+bytes. A small object goes up as one put, and a large one as a multipart upload with a few parts in
+flight. Text compression and Latin-1 are sinks over it, so a layer that rewrites bytes wraps the
+same type.
 
 - **Parquet goes through parquet's sync `ArrowWriter`, not `AsyncArrowWriter`.** `AsyncArrowWriter`
   is a sync `ArrowWriter` into a buffer that it flushes to an async writer. The shared sink does the
   same, so one sink serves every format.
-- **parquet's `object_store` feature stays off.** parquet 59 takes object_store 0.13, pyo3-object_store
-  needs 0.14, and arrow stays on 59 for pyo3-arrow.
-- **Dropping an unfinished sink aborts its upload.** An error or a cancel leaves no half-written
-  object and no open multipart upload.
+- **parquet's own `object_store` feature stays off.** The writers upload through their own sink, so
+  the feature would buy nothing. It would also pin the object_store parquet was built against, which
+  need not be the one this crate takes.
+- **No upload is left open.** Dropping an unfinished sink aborts its upload, and so does a failed
+  completion. An error or a cancel leaves no half-written object and no open multipart upload.
 - **The writers build no store.** The caller passes an `Arc<dyn ObjectStore>`, so credentials
   follow the caller's AWS setup. `Destination::local` is a `LocalFileSystem`, which writes each
   object to a temporary name and renames it into place.
@@ -44,31 +54,66 @@ The sink waits on a tokio runtime with `block_on`. That panics on a runtime's ow
 caller may already be async. So the whole write runs on threads `write()` spawns, and the caller's
 thread only waits for them.
 
-- **The writers build a two-thread runtime per write, or take the caller's `Handle`.** A supplied
-  runtime must be multi-thread, so its workers drive the I/O while the writers' threads wait.
+- **The writers build a small upload runtime per write, or take the caller's `Handle`.** A supplied
+  runtime must be multi-thread, so its workers drive the I/O while the writers' threads wait. A
+  current-thread one is refused with `CurrentThreadRuntime`. The calling thread must not be one of
+  its workers.
 - **Worker threads take ranges in index order.** Each one generates its range's blocks and encodes
-  them. So memory stays near one block and one open file per worker.
-- **A cancel flag stops the workers between blocks.** The write then fails with a manifest marked
-  `"partial": true`, listing every object that completed, and stores it as `_manifest.json`.
+  them. So memory stays near one block per worker, plus one open object for each partition value
+  the worker's range holds.
+- **A cancel flag stops the workers between blocks.** Unless every range was already written, the
+  write then fails with `Cancelled`.
 
-## Text formats go through the csv crate, and print the cells Arrow holds as null
+## A run claims its destination, and `_manifest.json` appears only when every object is whole
 
-`arrow-csv` cannot set the line terminator or the quoting style per file, and the `csv` crate can. A
-thin adapter formats each Arrow value with `arrow-cast`. Where `Plan::text_cells` holds a cell, CSV
-prints its text in place of the null. JSON prints a cell that parses as a number, `true`, `false`
-or `null` as itself, and any other cell as a string.
+- **`_manifest.partial.json` is the claim.** The write creates it with a conditional put before
+  the first part. A second run on the same prefix fails to create it, and is refused with
+  `DestinationClaimed`. A store that cannot put conditionally is refused with `Unclaimable`. S3
+  sends `If-None-Match: *`, and `LocalFileSystem` and `InMemory` both create conditionally.
+- **A failed or cancelled run leaves its record under the claim's name.** It carries
+  `"partial": true` and lists every object that completed. A reader waiting for `_manifest.json`, as
+  a Hadoop job waits for `_SUCCESS`, never takes a partial run for a whole one.
+- **A failed write says whether its record was stored.** `WriteFailure` carries the manifest,
+  `manifest_stored`, and the error from storing it.
+- **A destination holding anything is refused unless `replace` is set.** With `replace`, every
+  object must be a manifest at the prefix, or a part whose name ends with the `identity8` and
+  extension one of those manifests records. Anything else, such as Spark's `_SUCCESS` or pyarrow's
+  `part-0.parquet`, refuses the write with nothing deleted.
+- **`replace` deletes before it writes.** An interrupted replace leaves the old dataset gone and at
+  most its own claim behind. The claim records the profile, seed and row count that regenerate it.
+- *Rejected:* writing the new objects first and deleting the old ones after. A reader globbing the
+  prefix meanwhile reads both datasets, and a rerun of the same identity writes the same names.
+  Spark's overwrite mode also deletes first.
 
+## Text formats go through csv-core, and print the cells Arrow holds as null
+
+`arrow-csv` cannot set the line terminator or the quoting style per file. csv-core, the csv crate's
+own writer, takes both, and the writers drive it field by field. A thin adapter formats each Arrow
+value with `arrow-cast`. Where `Plan::text_cells` holds a cell, CSV prints its text in place of the
+null. JSON prints a cell that parses as a number, `true`, `false` or `null` as itself, and any other
+cell as a string.
+
+- **An empty string is quoted where a null is bare.** The default null token is empty, and DuckDB
+  and Spark read a bare empty field as null. So an empty string prints as `""`. DuckDB reads the two
+  apart with `allow_quoted_nulls=false`. Spark reads both as null unless `nullValue` names another
+  token, such as `\N`.
 - **A Latin-1 file is windows-1252**, the encoding every decoder applies to a `latin1` label. A
   character it cannot hold is written as `?`.
-- **The dialect reads back.** Each of these reads `|`-delimited CSV with CRLF line ends, a byte order
-  mark and `NULL` for null as rows equal to the Parquet of the same dataset, with nothing left over
-  either way:
-  - DuckDB's `read_csv`;
-  - Spark 3.5.9 and 4.2.0;
-  - AWS Glue 5's Spark 3.5.4.
+- **The dialect reads back.** A `|`-delimited CSV with CRLF line ends, a byte order mark and `NULL`
+  for null reads in DuckDB and Spark as rows equal to the Parquet of the same dataset, with nothing
+  left over either way. The write, then each read:
 
-  Each read named the delimiter, the header and the null token. The test set was 1M rows of
-  `eight-columns`.
+```bash
+cargo run --release -p doppeldata-writers --example write_dataset -- eight-columns --rows 1000000 --file-rows 250000 --format csv --writer '{"delimiter":"|","line_terminator":"crlf","bom":true,"null":"NULL"}' --out csv
+```
+
+```sql
+select * from read_csv('csv/*.csv', delim='|', header=true, nullstr='NULL', new_line='\r\n')
+```
+
+```python
+spark.read.csv("csv", sep="|", header=True, nullValue="NULL", schema=parquet.schema)
+```
 
 ## A Parquet file carries its provenance twice
 
@@ -77,10 +122,10 @@ never decodes that key, such as DuckDB's `parquet_kv_metadata` or Polars, would 
 `doppeldata.*` key. So the writers also write each metadata key as a plain key-value pair, in key
 order, as pyarrow does. `created_by` is `doppeldata <version>`.
 
-## parquet 59 cannot write INT96, and no sort order is declared
+## parquet's writer cannot write INT96, and no sort order is declared
 
-- **`timestamp_unit` casts timestamp columns to s, ms, us or ns.** parquet 59's writer has no INT96
-  path, so a legacy Hive or Impala INT96 column cannot be reproduced.
+- **`timestamp_unit` casts timestamp columns to s, ms, us or ns.** parquet's Arrow writer has no
+  INT96 path, so a legacy Hive or Impala INT96 column cannot be reproduced.
 - *Rejected:* `sorting_columns`. Generated rows are not sorted, and a reader that trusts a declared
   sort, such as DataFusion, would prune rows it needs. Sorting the rows within a file would break the
   identical values under any split. The profile's `layout.sort_order` is likewise not honored.
@@ -91,43 +136,53 @@ order, as pyarrow does. `created_by` is `doppeldata <version>`.
 and writes one object per value under `key=value/` for the `hive` style, or `value/` for
 `directory`. The value is in the path, so the column leaves the file.
 
+- **A partitioned range holds `file_rows` times `partition_values` rows.** `partition_by` sets
+  `partition_values` to the product of each key's recorded value count, or else its column's
+  distinct count. So each object lands near the size asked for. A skewed key still gives uneven
+  objects, and fewer, larger ranges feed fewer workers.
+- **A recorded partition key that names no column is dropped.** A Hive key lives in the source's
+  paths, and the engine generates only columns.
 - **A key and a value are escaped as Hive and Spark escape a path name.** A null or empty value is
   `__HIVE_DEFAULT_PARTITION__`.
 - **The object list is known only once the run writes.** The layout still fixes every range, and
-  each object records its range's first row and its partition values.
+  each object records its range and its partition values.
 
 ## The manifest is the regeneration record
 
 `_manifest.json` sits beside the data. Spark, Hive and Glue skip a file whose name starts with `_`,
 so it never reads as data. Its schema is `doppeldata schemas show manifest`.
 
-- **The identity, stream version, seed and row count come from `DatasetIdentity`.** The seed and the
-  row count are decimal strings, because JSON numbers are exact only to 2^53.
+- **`identity` holds the dataset identity's five values, keyed as its canonical JSON.**
+  `dataset_digest` is their SHA-256. The seed and the row count are decimal strings, because JSON
+  numbers are exact only to 2^53. A file's row and byte counts are JSON numbers, which no single
+  object nears that bound.
 - **`format` and `writer` record every setting**, defaults included, so nothing depends on a later
   default.
-- **Each file records its path, its range's first row, its rows, its bytes and its SHA-256.**
-  `regenerate()` rebuilds the ranges from the distinct first rows. It refuses a plan whose identity
-  differs, and writes every file again to the same SHA-256 under the same tool version.
-- **A destination holding anything is refused unless `replace` is set.** `replace` deletes only
-  `part-` objects and `_manifest.json`. It refuses outright when any other object is there, so a
-  reader never finds this run's files mixed with foreign ones.
+- **Each file records its path, its range, the range's first row and row count, its own rows, its
+  bytes and its SHA-256.** `regenerate()` rebuilds the ranges from them. It refuses a partial
+  manifest, a plan whose identity differs, and ranges that leave a gap.
+- **`regenerate()` compares every file it writes with the record.** A file whose rows, bytes or
+  SHA-256 differ fails the call with `RegeneratedFilesDiffer`, which names it. One tool version and
+  one set of writer settings write the same bytes.
 
-## ZSTD Parquet writes at about 19M rows/s on 16 threads and 3.4M on one
+## Parquet write throughput scales with the ranges a run splits into
 
 The population is 10M rows of the `eight-columns` example in 1M-row files, seed 42. The instrument
 is the manifest's `elapsed_ms`, which covers preparing the destination, every file and the manifest.
-The machine is a 16-thread Ryzen 9 6900HX with other work running at a load average of 2.5 to 5:
+Peak memory is GNU time's maximum resident set. The machine is a 16-thread Ryzen 9 6900HX with other
+work running. Each row is five runs into memory of this command, with the row's flags added:
 
 ```bash
-cargo run --release -p doppeldata-writers --example write_dataset -- eight-columns --rows 10000000 --file-rows 1000000 --threads 16 --out memory://
+cargo run --release -p doppeldata-writers --example write_dataset -- eight-columns --rows 10000000 --file-rows 1000000 --out memory://
 ```
 
-| Codec | Threads | Rows/s, five runs into memory |
+| Flags | Rows/s | Peak memory |
 | --- | --- | --- |
-| ZSTD level 1 | 16 | 18.7M to 19.5M |
-| ZSTD level 1 | 1 | 3.37M to 3.41M |
-| Snappy | 16 | 20.8M to 21.2M |
+| `--threads 16` | 15.4M to 19.7M | 670 to 740 MB |
+| `--threads 1` | 3.35M to 3.38M | 424 to 435 MB |
+| `--threads 16 --writer '{"compression":"snappy"}'` | 20.9M to 21.5M | 822 to 924 MB |
+| `--threads 16 --partition-by category` | 1.76M to 1.78M | 1.15 GB |
 
-Ten files feed ten workers, so six of the sixteen threads sit idle. Written to a local disk instead,
-ZSTD on 16 threads ran from 9.8M to 19.7M rows/s over ten runs. The disk's writeback and the
-machine's other load decide that spread, and a `sync` before each run kept it above 14.6M.
+The codec is ZSTD at its default level unless the row says otherwise. Ten ranges feed ten workers,
+so six of the sixteen threads sit idle. `category` has 50 values, so partitioning by it makes the
+whole run one range on one worker.
