@@ -4,6 +4,9 @@ from typing import Any
 
 # Deequ's DEFAULT_CARDINALITY_THRESHOLD: a column with no more distinct values than this has its values counted.
 TOP_VALUES_THRESHOLD = 120
+# A numeric code, such as a location id, holds a few hundred values, and a money or distance column
+# thousands. A code drawn from its quantiles lands on the wrong codes, so its values are counted.
+NUMERIC_TOP_VALUES_THRESHOLD = 1_000
 RATE_DIGITS = 4
 
 

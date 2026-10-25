@@ -156,11 +156,12 @@ def kolmogorov_smirnov(source: Column, observed: Column) -> Compared | Unmeasure
     return Compared(max(gaps))
 
 
-def category_shares(column: Column) -> dict[str, float] | None:
-    """A categorical column's share of values in each listed category: a string column's top values, or a boolean's two."""
-    string, boolean = column.get('string') or {}, column.get('boolean') or {}
-    if string.get('top_values'):
-        return {entry['value']: entry['rate'] for entry in string['top_values']}
+def category_shares(column: Column) -> dict[Any, float] | None:
+    """A column's share of values in each listed category: a string or numeric column's top values, or a boolean's two."""
+    string, numeric, boolean = (column.get(kind) or {} for kind in ('string', 'numeric', 'boolean'))
+    listed = string.get('top_values') or numeric.get('top_values')
+    if listed:
+        return {entry['value']: entry['rate'] for entry in listed}
     if boolean.get('true_rate') is not None:
         return {'true': boolean['true_rate'], 'false': 1 - boolean['true_rate']}
     return None

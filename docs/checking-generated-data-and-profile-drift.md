@@ -57,7 +57,9 @@ matching what it built, so a check through it passes data the profile never desc
 
 ## `tvd` measures over the source's categories, or a date's months, weekdays and hours
 
-A string column's categories are its `top_values`, and a boolean's are `true` and `false`. Every
+A string or numeric column's categories are its `top_values`, and a boolean's are `true` and
+`false`. A numeric column with a list is measured by `ks` too, because its quantiles still stand.
+Every
 value the source does not list counts as one more category, so a value the other profile lists
 and the source does not adds to that category's share. A source value missing from the other's
 list counts as 0 there. A value under `k_min` rows drops off a list, so the error is under

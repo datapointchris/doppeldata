@@ -16,8 +16,31 @@ so a backend holds no profiling logic.
 
 A profile is one aggregate over every column, then a second that counts rows against the histogram
 edges and value lists the first one chose, then the frequency counts, then samples. Values are
-counted only in string columns holding at most `TOP_VALUES_THRESHOLD` distinct values, the
+counted in string columns holding at most `TOP_VALUES_THRESHOLD` distinct values, the
 `DEFAULT_CARDINALITY_THRESHOLD` of Deequ's column profiler. Every string column's shapes are counted.
+
+A numeric column's values are counted where it holds at most `NUMERIC_TOP_VALUES_THRESHOLD`
+distinct values, and is neither a `sequence` nor typed `identifier`. The cut sits between a code
+and a measurement. Location ids, rate codes and payment types hold a few hundred values at most,
+and drawn from quantiles they land on the wrong codes. A fare, tip or toll in cents holds
+thousands, and its quantiles carry it. On the NYC yellow taxi trips for February to April 2024,
+generated at 10M rows:
+
+| Cut | Profile lines | Failed `data check` metrics | Location ids' value distance |
+| --- | --- | --- | --- |
+| no numeric column listed | 453 | 3 of 89 | 0.43 and 0.39 |
+| 120, the string cut | 545 | 0 of 98 | 0.43 and 0.39 |
+| 1,000 | 1,056 | 0 of 100 | 0.001 and 0.001 |
+
+The value distance is the total variation distance between the source's and the generated values.
+`PULocationID` and `DOLocationID` hold 262 and 261 values. The next column up, `tolls_amount`,
+holds 1,938.
+
+A float column's `scale` is the fewest decimal places every value equals itself rounded to, up to
+`DECIMAL_PLACES_TRIED`. A column needing more is left without one and generates unrounded.
+Polars' `round(places)` compares exactly. *Rejected:* `(value · 10^places).round() / 10^places`.
+Polars rewrites a division by a literal as a multiplication by its reciprocal, which turns
+164 / 100 into 1.6400000000000001.
 One sample of the parsed table feeds grex and the semantic detectors, and another the distribution
 fits. The date-layout trial samples the raw text before it is parsed.
 
@@ -124,6 +147,8 @@ parameters write two profiles, and those generate different tails.
   growth with the rest. Counting only the rows outside the list would give that value's count away,
   as `other_rate` less the count. The earlier profile holds no value outside its list, so a value
   never seen before cannot be told from a rare one that grew.
+- **A numeric column's frozen list writes no `new_value_rows`.** A new value lands in a histogram
+  bin, or beyond the edges in `overflow`, which already measure it.
 - **Two profiles of one table then compare bin for bin**, which the round-trip check and drift
   detection read. Rebinning stays explicit, by profiling again without `edges_from`.
 
@@ -359,7 +384,8 @@ and the policy's pass then removes what each column's rule withholds:
 - **A quantile** closer than `k_min` rows to either end is dropped, because it is an extreme under
   another name. The samplers then use the trimmed extremes as the inverse CDF's end knots.
 - **A top value** is kept only when `k_min` rows hold it. While the remainder holds 1 to `k_min - 1`
-  rows, the smallest kept value folds into it, so `other_rate` never reveals a small cell.
+  rows, the smallest kept value folds into it, so `other_rate` never reveals a small cell. That
+  holds for a numeric column's list as for a string's.
 - **A histogram bin** of 1 to `k_min - 1` rows merges into its smaller non-empty neighbor. An empty
   bin discloses no row, so it stays, and frozen edges are kept wherever the floor allows. So a
   re-profile's edges are a subset of the frozen ones, and a diff sums the earlier bins over a merged

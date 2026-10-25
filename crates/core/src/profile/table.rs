@@ -519,6 +519,7 @@ pub struct Distinct {
 pub struct NumericStats {
     pub integral: Option<bool>,
     pub precision: Option<u32>,
+    /// Decimal places: a decimal type's scale, or the most places any value of a float column holds.
     pub scale: Option<i32>,
     pub extremes: Option<NumericExtremes>,
     pub mean: Option<f64>,
@@ -532,6 +533,17 @@ pub struct NumericStats {
     pub fit: Option<Fit>,
     pub monotonic: Option<Monotonic>,
     pub sequence: Option<Sequence>,
+    /// Values at least `k_min` rows hold, in a column with few distinct values that is not an
+    /// identifier.
+    pub top_values: Option<Vec<NumericTopValue>>,
+    /// The share of values outside `top_values`.
+    pub other_rate: Option<Rate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct NumericTopValue {
+    pub value: f64,
+    pub rate: Rate,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]

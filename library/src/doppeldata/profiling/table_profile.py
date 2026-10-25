@@ -46,6 +46,7 @@ from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import SuppliedCodeList
 from doppeldata.profiling.profiled_columns import Answers
 from doppeldata.profiling.profiled_columns import ProfiledColumns
+from doppeldata.profiling.recorded_counts import NUMERIC_TOP_VALUES_THRESHOLD
 from doppeldata.profiling.recorded_counts import RATE_DIGITS
 from doppeldata.profiling.recorded_counts import TOP_VALUES_THRESHOLD
 from doppeldata.profiling.recorded_counts import kept_values
@@ -85,6 +86,8 @@ EQUAL_DEPTH_LEVELS = tuple(index / HISTOGRAM_BINS for index in range(1, HISTOGRA
 # A numeric column's named quantiles and its interior bin edges come from one sort.
 NUMERIC_LEVELS = tuple(sorted({*QUANTILES.values(), *EQUAL_DEPTH_LEVELS}))
 LENGTH_LEVELS = tuple(QUANTILES.values())
+# Each place tried is one more comparison of every float value. A column holding more places is drawn continuous.
+DECIMAL_PLACES_TRIED = 9
 # A scipy fit's time grows with its values, so a fit is made on a seeded sample this size.
 FIT_SAMPLE_ROWS = 20_000
 # A column with fewer distinct values is better described by its frequencies than by a family.
@@ -153,6 +156,10 @@ class FrozenLayout:
             histogram = (column.get('numeric') or {}).get('histogram')
             if histogram and len(histogram['edges']) > 1:
                 histograms[column['name']] = (histogram['kind'], tuple(histogram['edges']))
+            numeric = column.get('numeric') or {}
+            if numeric.get('top_values'):
+                # A numeric column's drift shows in its histogram's overflow, so its list carries no baseline.
+                values[column['name']] = FrozenValues(tuple(entry['value'] for entry in numeric['top_values']), 0.0)
             string = column.get('string') or {}
             if string.get('top_values'):
                 listed = tuple(entry['value'] for entry in string['top_values'])
@@ -166,9 +173,9 @@ class FrozenLayout:
 
 @dc.dataclass(frozen=True)
 class FrozenValues:
-    """A string column's top values, in the order an earlier profile lists them, and the share of values outside them it started from."""
+    """A column's top values, in the order an earlier profile lists them, and the share of values outside them it started from."""
 
-    values: tuple[str, ...]
+    values: tuple[Any, ...]
     baseline_other_rate: float
 
 
@@ -318,7 +325,9 @@ def profile_columns(
     listed = {
         spec.name: layout.values[spec.name]
         for spec in specs
-        if spec.kind is ColumnKind.STRING and spec.name in layout.values and treatments[spec.name] is not Treatment.ZIP_PREFIX
+        if (spec.kind is ColumnKind.STRING or spec.kind in NUMERIC)
+        and spec.name in layout.values
+        and treatments[spec.name] is not Treatment.ZIP_PREFIX
     }
     counting = [Request(name, 'histogram_counts', binning.edges) for name, binning in binnings.items()]
     counting += [Request(name, 'listed_value_counts', frozen_values.values) for name, frozen_values in listed.items()]
@@ -465,7 +474,11 @@ class ColumnLayout:
 
 def pass_one_requests(specs: list[ColumnSpec], k_min: int) -> list[Request]:
     """Every catalog statistic of every column it applies to, and the row count, for one aggregate."""
-    arguments = {name: k_min for name in TRIMMED_STATISTICS} | {'quantiles': NUMERIC_LEVELS, 'length_quantiles': LENGTH_LEVELS}
+    arguments = {name: k_min for name in TRIMMED_STATISTICS} | {
+        'quantiles': NUMERIC_LEVELS,
+        'length_quantiles': LENGTH_LEVELS,
+        'decimal_places': DECIMAL_PLACES_TRIED,
+    }
     requests = [Request(None, 'rows')]
     for spec in specs:
         for statistic in COLUMN_STATISTICS:
@@ -526,7 +539,8 @@ def column_entry(
     if values < k_min:
         return entry
     if spec.kind in NUMERIC:
-        entry['numeric'] = numeric_section(spec, stat, values, layout, k_min)
+        identifier = typing is not None and typing.candidate.detector.type == 'identifier'
+        entry['numeric'] = numeric_section(backend, table, spec, stat, values, layout, k_min, identifier=identifier)
     elif spec.kind is ColumnKind.STRING:
         entry['string'] = string_section(
             backend, table, spec, stat, values, shapes[spec.name], patterns.get(spec.name), layout.listed, k_min, prefixes=prefixes
@@ -558,7 +572,18 @@ def sequence_of(stat: Stat) -> dict[str, int] | None:
     return None
 
 
-def numeric_section(spec: ColumnSpec, stat: Stat, values: int, layout: ColumnLayout, k_min: int) -> dict[str, Any]:
+def numeric_section(
+    backend: Backend,
+    table: Table,
+    spec: ColumnSpec,
+    stat: Stat,
+    values: int,
+    layout: ColumnLayout,
+    k_min: int,
+    *,
+    identifier: bool,
+) -> dict[str, Any]:
+    """A numeric column's section. An identifier lists no values, and neither does a counting sequence, which draws none."""
     integral = spec.kind is ColumnKind.INTEGER
 
     def number(value: Any) -> int | float:
@@ -567,6 +592,9 @@ def numeric_section(spec: ColumnSpec, stat: Stat, values: int, layout: ColumnLay
     section: dict[str, Any] = {'integral': integral}
     if spec.kind is ColumnKind.DECIMAL:
         section |= {'precision': spec.precision, 'scale': spec.scale}
+    # The generator rounds a float column to its scale, so cents generate as cents.
+    if spec.kind is ColumnKind.FLOAT and stat('decimal_places') is not None:
+        section['scale'] = stat('decimal_places')
     if has_trimmed_extremes(values, k_min):
         section['extremes'] = {'low': number(stat('trimmed_low')), 'high': number(stat('trimmed_high')), 'method': 'trimmed_k'}
     # A moment the engine returns as NaN, such as a constant column's skew, is written as null.
@@ -593,7 +621,38 @@ def numeric_section(spec: ColumnSpec, stat: Stat, values: int, layout: ColumnLay
         sequence = sequence_of(stat)
         if sequence:
             section['sequence'] = sequence
+    if not identifier and 'sequence' not in section:
+        section |= numeric_top_values(backend, table, spec, stat, values, layout.listed, k_min, number)
     return section
+
+
+def numeric_top_values(
+    backend: Backend,
+    table: Table,
+    spec: ColumnSpec,
+    stat: Stat,
+    values: int,
+    listed: FrozenValues | None,
+    k_min: int,
+    number: Callable[[Any], int | float],
+) -> dict[str, Any]:
+    """The values of a column with few distinct ones, as `top_values` and `other_rate`, or counted against `listed`.
+
+    A float column's NaN and infinities are nulls, so a count of one is left out.
+    """
+    if listed is not None:
+        counted = list(zip(listed.values, stat('listed_value_counts'), strict=True))
+    elif stat('distinct_count') <= NUMERIC_TOP_VALUES_THRESHOLD:
+        counted = [(value, count) for value, count in backend.top_k(table, spec.name, NUMERIC_TOP_VALUES_THRESHOLD) if is_finite(value)]
+    else:
+        return {}
+    kept, other = kept_values(counted, values, k_min)
+    if not kept:
+        return {}
+    return {
+        'top_values': [{'value': number(value), 'rate': rate(count, values)} for value, count in kept],
+        'other_rate': rate(other, values),
+    }
 
 
 def histogram_binning(

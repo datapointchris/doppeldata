@@ -73,6 +73,8 @@ COLUMN_STATISTICS = (
     Statistic('zero_rate', NUMERIC),
     Statistic('negative_rate', NUMERIC),
     Statistic('quantiles', NUMERIC),
+    # The fewest decimal places every value is written at, up to the argument, or None.
+    Statistic('decimal_places', frozenset({ColumnKind.FLOAT})),
     # The least and greatest difference between neighboring rows, which find a counting sequence.
     Statistic('step_min', frozenset({ColumnKind.INTEGER})),
     Statistic('step_max', frozenset({ColumnKind.INTEGER})),
@@ -94,7 +96,7 @@ COLUMN_STATISTICS = (
 # Counted against the edges and values the first aggregate's answers, or an earlier profile, choose.
 COUNTING_STATISTICS = (
     Statistic('histogram_counts', NUMERIC),
-    Statistic('listed_value_counts', frozenset({ColumnKind.STRING})),
+    Statistic('listed_value_counts', NUMERIC | {ColumnKind.STRING}),
 )
 
 # `unparsed_rows` carries each column's name and `ParsedType`, and answers with the rows holding a

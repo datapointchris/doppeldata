@@ -78,6 +78,18 @@ def histogram_counts(c: pl.Expr, edges: tuple[float, ...]) -> pl.Expr:
     return cumulative.list.diff().list.slice(1)
 
 
+def decimal_places(c: pl.Expr, most: int) -> pl.Expr:
+    """The fewest places, up to `most`, that every value equals itself rounded to, or None.
+
+    `round(places)` is exact where `(c * 10**places).round() / 10**places` is not: Polars rewrites that division as a
+    multiplication by the reciprocal, which turns 164 / 100 into 1.6400000000000001.
+    """
+    places: pl.Expr = pl.lit(None, pl.Int32)
+    for tried in reversed(range(most + 1)):
+        places = pl.when((c.round(tried) == c).all()).then(pl.lit(tried, pl.Int32)).otherwise(places)
+    return places
+
+
 def whole(nanoseconds: int) -> Translation:
     return lambda c, _: (c.dt.replace_time_zone(None).dt.epoch('ns') % nanoseconds == 0).all()
 
@@ -152,6 +164,7 @@ POLARS_STATISTICS: dict[str, Translation] = {
     'negative_rate': lambda c, _: (c < 0).mean(),
     # Every level from one sort, where a quantile per level would sort the column once each.
     'quantiles': lambda c, levels: c.quantile(list(levels), 'nearest'),
+    'decimal_places': decimal_places,
     'histogram_counts': histogram_counts,
     'step_min': lambda c, _: c.diff().min(),
     'step_max': lambda c, _: c.diff().max(),
