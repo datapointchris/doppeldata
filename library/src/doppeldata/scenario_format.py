@@ -81,6 +81,11 @@ def expected_metrics() -> list[str]:
     return enum_values(scenario_schema()['$defs']['ExpectedMetric'])
 
 
+def fault_kinds() -> list[str]:
+    """The faults malformed_rows can name."""
+    return enum_values(scenario_schema()['$defs']['FaultKind'])
+
+
 @functools.cache
 def validators() -> dict[str, jsonschema.Draft202012Validator]:
     """The whole document's validator under `scenario`, one per op under its name, and one each for any perturbation and an

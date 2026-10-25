@@ -5,6 +5,7 @@ the source profile's edges frozen, so histograms and value lists compare bin for
 """
 
 import dataclasses as dc
+import os
 import warnings
 from collections.abc import Sequence
 from pathlib import Path
@@ -50,6 +51,7 @@ from doppeldata.profiling.detector_packs import enabled_packs
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
+from doppeldata.scenario_format import fault_kinds
 from doppeldata.scenario_format import refuse_other_scenario
 
 if TYPE_CHECKING:
@@ -93,10 +95,9 @@ def check(
     written = written_manifest(data)
     if written is not None:
         refuse_other_scenario(applied, written, data_named(data))
-    unreadable = unreadable_faults(applied, written)
-    if unreadable:
-        held = f'holds {" and ".join(unreadable)} faults, which a check cannot read back as one table; check data written without them'
-        raise InvalidScenario(data_named(data), [], refusal=held)
+    unreadable = unreadable_refusal(applied, written, data)
+    if unreadable is not None:
+        raise InvalidScenario(data_named(data), [], refusal=unreadable)
     effective = applied.apply(profile) if applied is not None else profile
     source = effective.to_plain()
     refusal = refused(source, against, against_sample, html)
@@ -160,17 +161,24 @@ def check(
 
 # Each breaks the one dialect and header a check reads every file in.
 UNREADABLE_FAULTS = frozenset({'header_drift', 'mixed_line_endings', 'wrong_delimiter'})
+# A kind renamed in the engine would leave its files read as one table, so a name the schema lacks fails on import instead.
+if unknown := sorted(UNREADABLE_FAULTS - set(fault_kinds())):
+    raise ImportError(f'UNREADABLE_FAULTS names {", ".join(unknown)}, which the scenario schema does not; name kinds malformed_rows writes')
 
 
-def unreadable_faults(scenario: Scenario | None, written: Manifest | None) -> list[str]:
-    """The fault kinds in the data that a check cannot read past: as the manifest counts them where there is one, else as the
-    scenario's malformed_rows names them."""
+def unreadable_refusal(scenario: Scenario | None, written: Manifest | None, data: Any) -> str | None:
+    """Why a check cannot read `data` back as one table, or None: the faults in `UNREADABLE_FAULTS` the manifest counts where
+    there is one, else those the scenario's malformed_rows writes. A local path that does not exist is left to the profiler,
+    which says so."""
+    cannot = 'which a check cannot read back as one table; check data written without them'
     if written is not None:
-        held = set(written.faults or {})
-    else:
-        entries = (scenario.to_plain().get('perturbations') or []) if scenario is not None else []
-        held = {kind for entry in entries if entry['op'] == 'malformed_rows' for kind in entry.get('kinds') or []}
-    return sorted(held & UNREADABLE_FAULTS)
+        held = sorted(set(written.faults or {}) & UNREADABLE_FAULTS)
+        return f'holds {" and ".join(held)} faults, {cannot}' if held else None
+    if isinstance(data, str | os.PathLike) and not os.fspath(data).startswith('s3://') and not Path(data).exists():
+        return None
+    entries = (scenario.to_plain().get('perturbations') or []) if scenario is not None else []
+    named = sorted({kind for entry in entries if entry['op'] == 'malformed_rows' for kind in entry.get('kinds') or []} & UNREADABLE_FAULTS)
+    return f'is checked under a scenario writing {" and ".join(named)} faults, {cannot}' if named else None
 
 
 def refused(source: Document, against: Any, against_sample: int | None, html: str | Path | None) -> str | None:
