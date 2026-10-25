@@ -1,5 +1,7 @@
 """The errors doppeldata raises for a caller to report, each with the exit status a command ends on, and the warnings it issues."""
 
+from doppeldata.manifest import Manifest
+
 
 class DoppeldataError(Exception):
     """A failure the caller can act on. `exit_code` is 1 for a failure, 2 for a usage error, and 4 when no answer came."""
@@ -13,6 +15,32 @@ class SourceError(DoppeldataError, ValueError):
     def __init__(self, message: str, *, exit_code: int = 2) -> None:
         super().__init__(message)
         self.exit_code = exit_code
+
+
+class StoppedWrite(BaseException):
+    """A write that did not finish. `code` names why, such as `destination-not-empty` or `cancelled`.
+
+    `manifest` is the record of what a run that claimed its destination wrote, marked partial when it
+    stopped early, and None for a refusal before the claim. `manifest_stored` says whether that record
+    is in the store, as `_manifest.partial.json` when partial.
+    """
+
+    def __init__(
+        self, code: str, message: str, *, exit_code: int = 1, manifest_json: str | None = None, manifest_stored: bool = False
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.exit_code = exit_code
+        self.manifest = Manifest.from_json(manifest_json) if manifest_json is not None else None
+        self.manifest_stored = manifest_stored
+
+
+class WriteFailed(StoppedWrite, DoppeldataError):
+    """A write that was refused or failed."""
+
+
+class WriteInterrupted(StoppedWrite, KeyboardInterrupt):
+    """A write a signal stopped, such as Ctrl-C. It is a KeyboardInterrupt, so `except Exception` never swallows it."""
 
 
 class ProfilingEnginesMissing(DoppeldataError, ImportError):

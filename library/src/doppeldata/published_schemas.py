@@ -31,6 +31,11 @@ def published_enum(definition: str) -> list[str]:
     return list(json.loads(schema_text('profile'))['$defs'][definition]['enum'])
 
 
+def output_formats() -> list[str]:
+    """The formats a write takes, as the manifest schema's `format` names them."""
+    return [branch['properties']['format']['const'] for branch in json.loads(schema_text('manifest'))['oneOf']]
+
+
 def schema_summaries() -> list[SchemaSummary]:
     """Every JSON Schema the library ships, by name, with the title and description each document carries."""
     documents = {name: json.loads(schema_text(name)) for name in schema_names()}

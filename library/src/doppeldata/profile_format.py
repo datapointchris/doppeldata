@@ -67,6 +67,15 @@ class InvalidProfile(DoppeldataError, ValueError):
         super().__init__(f'{source} is not a valid profile:\n{listed}')
 
 
+class UngenerableProfile(InvalidProfile):
+    """A valid profile the engine cannot generate, such as one holding a statistic it does not draw from yet."""
+
+    def __init__(self, source: str, issues: list[Issue]) -> None:
+        super().__init__(source, issues)
+        listed = '\n'.join(f'  {issue.field or "/"}: {issue.message} [{issue.code}]' for issue in issues)
+        self.args = (f'{source} cannot be generated:\n{listed}',)
+
+
 def integer_format_checker() -> jsonschema.FormatChecker:
     """Checks the integer widths the Rust model declares, which jsonschema leaves unchecked by default."""
     checker = jsonschema.FormatChecker()
