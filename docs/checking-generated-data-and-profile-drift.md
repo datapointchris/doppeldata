@@ -146,6 +146,9 @@ an empty file leaves nearly every metric unmeasured.
 - **A diff lists the row and passes it.** A diff reports what changed between two profiles. A B
   binned afresh carries no overflow, so its `boundary_adherence` is unmeasured, and `profile diff`
   prints one notice naming `--edges-from A`.
+- **A check under a scenario passes a metric a perturbation moves.** Its row has a null `value`
+  and `skipped_by` naming the perturbation's id. [scenario-overlays.md](scenario-overlays.md) lists
+  which metrics each op moves.
 
 *Rejected:* a separate list of skipped metrics. A reader would join two lists to see one column.
 
@@ -166,6 +169,9 @@ Arrow decimal type telling a decimal from a float.
 - **A check passes a type change on a type a code list decides**, where the two profiles record
   different contents for that list. A check profiles generated data without the list, and
   generated codes are drawn from the type's hint rather than the list.
+- **A check under a scenario passes a change on a column a perturbation writes.** Its message
+  names the perturbation. That covers a column a schema drift adds or renames, and the `ingest`
+  column a late arrival adds.
 - **A diff fails on every other changed field.** That covers a changed Arrow type or kind, which
   there means the source itself changed. It also covers a column with more than `OVERFLOW_SHARE`
   of its values outside the edges or value list frozen from A, a CSV dialect setting a writer takes
@@ -179,10 +185,12 @@ Arrow decimal type telling a decimal from a float.
 Nothing in doppeldata changes the data it checked, so a failed check needs a person, and exits 3.
 Drift between two months of one dataset is expected, so `profile diff` exits 1, as `diff` does.
 
+- **A check whose scenario's expectation misses its bounds exits 3**, as a failed metric does.
 - **A check or a diff that could not finish exits 3**, from a refused S3 listing to a crash. It
   needs a person too, and 1 then means drift and nothing else.
 - **No answer from S3 exits 4**, because the next run can succeed with nobody acting.
-- **A missing file, an unreadable profile or a bad thresholds file exits 2.** So does DATA holding
+- **A missing file, an unreadable profile, an invalid scenario or a bad thresholds file exits
+  2.** So does DATA holding
   `_manifest.partial.json`, because the write there stopped or is still running.
 
 ## The report's shape does not change when a scenario applies
@@ -190,7 +198,15 @@ Drift between two months of one dataset is expected, so `profile diff` exits 1, 
 The check report holds `scenario`, null without one, and `expectations`, empty without one.
 `verified` covers the expectations and is true when none are declared, while `passed` covers every
 metric and column change. A scenario fills those fields, so a script reading the report reads the
-same shape either way. The JSON Schemas are derived from the core crate's `profile_comparison`
+same shape either way.
+
+- **`scenario` holds the scenario's name and digest.** Several composed are named together, joined
+  by `+`.
+- **`profile` still names the profile as given.** The data is measured against it patched, so a
+  null rate the scenario's patch sets is the one expected.
+- **Each expectation is a row of its metric, column, bounds, measured value and `passed`.**
+
+The JSON Schemas are derived from the core crate's `profile_comparison`
 model, and `doppeldata schemas show check` and `schemas show diff` print them.
 
 *Rejected:* one report model for both verbs. A diff has two profiles and no data, so `profile` and

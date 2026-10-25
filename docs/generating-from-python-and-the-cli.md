@@ -115,6 +115,26 @@ commands and requires the manifest's identity and ranges to equal the plan's.
 - *Rejected:* `data generate --dry-run`. A flag that turns a write into a read makes one command do
   two things. A rehearsal is its own verb, which cannot write.
 
+## A scenario is one more input to every verb that generates or checks
+
+```bash
+doppeldata scenario check hot-key orders
+doppeldata data generate orders --scenario hot-key --scenario late-data --out orders/
+doppeldata data check orders orders/ --scenario hot-key --scenario late-data
+```
+
+`--scenario` takes a scenario file or a bundled example's name, and repeats to compose several in
+order. The SDK's `scenario=` takes a `Scenario` or a list of them, on `generate`, `stream`, `plan`
+and `write`. [scenario-overlays.md](scenario-overlays.md) holds the format and what it changes.
+
+- **`data plan` prints the scenario's name and digest under the identity.**
+- **`data generate` counts the rows its files hold.** A `duplicates` op writes copies beside the
+  generated rows, so the line then also names how many were generated.
+- **`scenario list` prints every op and bundled example, and `scenario show` one of either.** An op
+  shows each parameter with its type and meaning, and an example its YAML.
+- **`scenario check SCENARIO PROFILE` plans a write without generating a row.** A refusal exits 3,
+  and `--json` prints each issue's `code`, `field` and message.
+
 ## A stopped write's kind decides its exit status
 
 The engine names each failure with a code, such as `destination-not-empty`, and a kind.

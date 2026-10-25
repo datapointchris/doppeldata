@@ -31,6 +31,8 @@ print the files a run will write before a byte is written.
 - **A range's size is `file_rows`, or drawn from the profile's `source.layout.rows_per_file`
   quantiles.** The engine's `file_rows_draws` makes the draw, through the quantile interpolation the
   samplers use. Its stream is keyed by the seed alone, so the split is the same on every run.
+- **A scenario's `small_files` replaces the profile's quantiles with its own lognormal's.** A
+  `file_rows` given to the write still outranks both.
 - **A drawn split's last range folds in a remainder under half the range before it.** Otherwise a
   draw just short of the rows leaves a sliver range, and a partitioned one writes a tiny second file
   into every partition.
@@ -41,6 +43,12 @@ print the files a run will write before a byte is written.
   `objects_at_most` bounds its objects. The size estimate counts objects from the same list.
 - **A name is `part-{range:05}-{identity8}.{ext}`.** `identity8` is the first eight hex digits of the
   dataset identity, so a run with a changed input never mixes its files with an earlier run's.
+- **A scenario's `schema_drift` reshapes each file whose first row lies at or past its cut.** The
+  writers drift the whole block before a range takes its rows. A layout where no file reaches the
+  cut is refused before anything is written, because the drift would be silently lost.
+- **A row a scenario's `duplicates` copies is filed with a home row.** A range takes the rows homed
+  in it, so a copy never leaves the file its home is in.
+  [scenario-overlays.md](scenario-overlays.md) says where each scope homes its copies.
 
 ## Every format writes through one byte sink
 
@@ -186,6 +194,9 @@ so it never reads as data. Its schema is `doppeldata schemas show manifest`.
   object nears that bound.
 - **`format` and `writer` record every setting**, defaults included, so nothing depends on a later
   default.
+- **`scenario` records the scenario's name and the path it was loaded from.** A composition is
+  named with its members' names joined by `+`, lists them in `composed_of`, and has no path. The
+  identity's `scenario_digest` is what names the scenario exactly.
 - **Each file records its path, its range, the range's first row and row count, its own rows, its
   bytes and its SHA-256.** `regenerate()` rebuilds the ranges from them. It refuses a partial
   manifest, a plan whose identity differs, and ranges that leave a gap.

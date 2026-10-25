@@ -34,6 +34,9 @@ The SHA-256 is taken over the RFC 8785 canonical JSON of one object with five ke
   takes. The identity's own digest is written the same way.
 - **An absent scenario is `null` in the identity and a missing key in the metadata.** No scenario is
   the absence of one, so it hashes as an absence rather than as the digest of an empty file.
+- **The profile's digest is the profile's as given, before a scenario patches it.** The scenario's
+  digest covers the patch. A scenario's digest resolves every perturbation's id and leaves out its
+  `description`, so rewording it keeps the dataset's identity.
 
 A test pins the digest of one fixed identity, which the library's `rfc8785` package reproduces.
 
@@ -55,6 +58,11 @@ offset inside the index's band. So the value at an index is the same in every bl
 A copula group, the set of numeric columns correlated through one matrix, draws from one stream keyed
 by its sorted column names. Adding an unrelated column changes nothing. Adding a column to the group
 changes that group's values.
+
+A scenario's perturbation draws from streams keyed by its id, never its place in the list. A value it
+takes from a column's sampler comes from that sampler under a table name holding the id. So
+inserting, removing or reordering a perturbation leaves every other one's rows unchanged. A
+scenario changes no stream a profile alone draws from, so a dataset without one keeps its values.
 
 ## A fixed block of 65,536 rows picks the stream position
 
@@ -86,9 +94,9 @@ manifest, and names any whose bytes moved.
 
 A test pins a SHA-256 beside the stream version, as one pair. The hash covers the values and text
 cells of a fixture holding one column of every kind, fitted family and provider, and of every
-profile field the engine reads. A change that moves a value fails it until both are updated
-together. The fixture is the test's own, so editing a
-bundled example moves no pin.
+profile field the engine reads. A second hash covers the same fixture under a scenario fixture
+holding every op that writes rows. A change that moves a value fails it until both are updated
+together. The fixtures are the test's own, so editing a bundled example moves no pin.
 
 ## Every exp, log and pow that feeds a value is libm's, so values match on every platform
 
@@ -111,5 +119,6 @@ CI runs the pinned-value test on every platform with a wheel, in the library's w
 the platforms `determinism-contract.yml` adds. The wheel build then installs the wheel it built into
 Python 3.11 and generates the fixture through it. `crates/check-pinned-values-through-wheel.py`
 reads the pinned hash and the test's inputs from the test's source, so the pin has one home. A
-failure on one runner is a platform difference, and never a reason to loosen the pin. The same workflow refuses a pinned hash that changed since the last
-release while the pinned stream version stayed level.
+failure on one runner is a platform difference, and never a reason to loosen the pin. The same
+workflow refuses a pinned hash that changed since the last release while the pinned stream version
+stayed level. It compares only the pins that release held, so a new pin starts at the next one.
