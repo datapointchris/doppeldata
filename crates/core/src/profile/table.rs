@@ -565,6 +565,17 @@ pub enum ExtremesMethod {
     DigitBounds,
 }
 
+impl ExtremesMethod {
+    /// The most rows that lie beyond each extreme of a profile whose floor is `k_min`. Digit bounds
+    /// widen the trimmed extremes they are written from, so no more lie beyond them.
+    pub fn rows_beyond_each(self, k_min: u64) -> u64 {
+        match self {
+            Self::Exact => 0,
+            Self::TrimmedK | Self::DigitBounds => k_min.saturating_sub(1),
+        }
+    }
+}
+
 /// Bin edges and the rows in each bin. `counts` has one entry fewer than `edges`. Each bin holds
 /// the rows from its lower edge up to its upper one, and the last bin holds its upper edge too.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]

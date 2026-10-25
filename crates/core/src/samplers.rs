@@ -6,8 +6,10 @@ mod distinct_values;
 mod file_rows;
 mod fitted_family;
 mod inverse_cdf;
+mod listed_values;
 mod nested;
 mod numeric;
+mod numeric_top_values;
 mod temporal;
 mod text;
 mod text_cells;
@@ -30,13 +32,14 @@ pub use self::file_rows::file_rows_draws;
 pub use self::fitted_family::FITTED_FAMILIES;
 use self::fitted_family::FittedFamily;
 pub use self::fitted_family::FittedFamilyKind;
+use self::listed_values::ListedValues;
 use self::nested::ListSampler;
 use self::nested::StructSampler;
 use self::numeric::DistinctTarget;
 use self::numeric::NumericOutput;
 use self::numeric::NumericSampler;
 use self::numeric::SequenceSampler;
-use self::numeric::SourceCounts;
+use self::numeric_top_values::SourceCounts;
 use self::temporal::TemporalOutput;
 use self::temporal::TemporalSampler;
 use self::text::CheckDigitDraw;
@@ -349,7 +352,16 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
         ValueSampler::Sequence(sequence) => format!("sequence from {} by {}", sequence.start, sequence.step),
         ValueSampler::Numeric(numeric) => {
             let mut description = match &numeric.listed {
-                Some(listed) => format!("{} top values, the rest from {}", listed.values.len(), describe_curve(column)),
+                Some(listed) => {
+                    let mut listed_part = format!("{} top values", listed.len() - numeric.beyond_extremes);
+                    if numeric.beyond_extremes > 0 {
+                        listed_part.push_str(&format!(" and {} beyond the extremes", numeric.beyond_extremes));
+                    }
+                    if listed.other_share() > 0.0 {
+                        listed_part.push_str(&format!(", the rest from {}", describe_curve(column)));
+                    }
+                    listed_part
+                }
                 None => describe_curve(column),
             };
             if numeric.index.is_some() {
@@ -361,11 +373,11 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
             let string = column.string.as_ref();
             let (top, other_rate) = match (listed_values(string), listed_prefixes(string)) {
                 (None, Some(prefixes)) => (
-                    format!("{} top prefixes, each followed by {}", categorical.values.len(), prefixes.suffix),
+                    format!("{} top prefixes, each followed by {}", categorical.listed.len(), prefixes.suffix),
                     prefixes.other_rate,
                 ),
                 _ => (
-                    format!("{} top values", categorical.values.len()),
+                    format!("{} top values", categorical.listed.len()),
                     string.and_then(|s| s.other_rate),
                 ),
             };
@@ -584,13 +596,21 @@ fn value_sampler(
     if let Some((listed, other_rate, suffix, field, other_variety)) = categories {
         let values: Vec<_> = listed.iter().map(|top| (top.value.clone(), top.rate.0)).collect();
         let other_rate = other_rate.map_or(0.0, |r| r.0);
-        let other_share = other_rate / (values.iter().map(|(_, rate)| rate).sum::<f64>() + other_rate);
-        let listed_distinct = values.len() as f64;
-        let other_index =
-            distinct.and_then(|distinct| ValueIndex::for_distinct(distinct - listed_distinct, filled_rows * other_share, &other_variety));
-        let sampler = CategoricalSampler::new(values, other_rate, suffix, source, other_index, output)
-            .map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
-        return Ok(ValueSampler::Categorical(sampler));
+        let listed = ListedValues::new(values, other_rate).map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
+        let other_index = distinct.and_then(|distinct| {
+            ValueIndex::for_distinct(
+                distinct - listed.len() as f64,
+                filled_rows * listed.other_share(),
+                &other_variety,
+            )
+        });
+        return Ok(ValueSampler::Categorical(CategoricalSampler {
+            listed,
+            suffix: suffix.map(Box::new),
+            other: source,
+            other_index,
+            output,
+        }));
     }
     let check_digit = hint.and_then(|hint| hint.check_digit).map(|kind| {
         let invalid_rate = column.quality.as_ref().and_then(|q| q.invalid_rate).map_or(0.0, |r| r.0);
