@@ -3,10 +3,9 @@
 //!
 //! The knots are the stored quantiles, with the extremes at levels 0 and 1. A histogram's edges at
 //! their cumulative shares of every row, its overflow included, fill the body between the
-//! outermost quantiles, and `zero_rate` adds a flat run at zero, narrowed to fit between the knots
-//! beside it rather than dropped. Beyond the outermost quantile, a
-//! fitted family's conditional tail, truncated at the extremes, is tabulated into dense knots;
-//! without a usable fit the tail is linear.
+//! outermost quantiles, and `zero_rate` adds a flat run at zero, clamped between the knots beside
+//! it. Beyond the outermost quantile, a fitted family's conditional tail, truncated at the
+//! extremes, is tabulated into dense knots; without a usable fit the tail is linear.
 
 use std::sync::Arc;
 

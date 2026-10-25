@@ -76,8 +76,8 @@ other family, such as `gamma`, leaves the column a linear tail, so it is not a c
   the KS statistic compares the step functions at each integer.
 - **A zero-inflated column is fitted on the rest.** Where `zero_rate` is at least
   `ZERO_INFLATION_RATE`, the zeros are left out of the fit. `zero_inflation` records their share of
-  the values the fit saw, which is the mixture's weight. `zero_rate` stays the share over every row,
-  and the generator's run at zero comes from it.
+  the values the fit saw, which is the mixture's weight. `zero_rate` stays the share of every
+  non-null value, and the generator's run at zero comes from it.
 - **loguniform's `loc` is searched alone, with `scale` fixed at 1.** `scale` only rescales `a` and
   `b`. For a given `loc`, the likeliest `a` and `b` are the least and greatest values less `loc`.
   scipy's generic fit searches all three at once. On 20k draws of `exp(uniform(0, 5))` it stopped at

@@ -39,7 +39,7 @@ columns:
       quantiles: {p25: 0.0, p50: 2.0, p75: 5.0}
       extremes: {low: 0.0, high: 10.0}
   # The rounded rates end the zero run at 0.4611, past edge 1.0's share of 0.461, and start it
-  # before p01, so the run is narrowed at both ends.
+  # before p01, so the run is clamped at both ends.
   - name: zero_run_past_its_edge
     physical_type: double
     numeric:

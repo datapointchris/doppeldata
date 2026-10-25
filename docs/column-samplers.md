@@ -8,10 +8,9 @@ the outermost quantiles. A knot that would put a value out of order is dropped, 
 win where sources disagree.
 
 `zero_rate` adds a flat run at zero, from `negative_rate` to `negative_rate + zero_rate`. The run
-is never dropped. It is narrowed instead, to lie between the last knot below zero and the first
-above it. The rates are stored at four significant figures, so their sum can land just past the
-share at the next edge. Dropping the run there would lose every zero: a column whose rows are 45%
-zero would draw them only where two quantiles happen to sit at zero.
+is clamped between the last knot below zero and the first above it, so it stays in order and is
+always kept. The rates are stored rounded, so their sum can land just past the share at the next
+edge. Clamping there keeps the zeros a column holds, short of the rounding.
 
 An edge's share counts every row, the histogram's `overflow` included. Edge `i` sits at level
 `(below + counts[0] + … + counts[i - 1]) / (below + sum(counts) + above)`, so edge 0 sits at

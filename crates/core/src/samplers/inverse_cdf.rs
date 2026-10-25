@@ -50,9 +50,9 @@ impl Knots {
         knots.into_iter().filter(|&(level, value)| !self.insert(level, value)).count()
     }
 
-    /// Adds a flat run at `value` from level `start` to `end`, narrowed to lie between the last knot
-    /// below `value` and the first above it. Stored rates are rounded, so a run they place can reach
-    /// past a neighboring knot by the rounding, and narrowing keeps it rather than refusing it.
+    /// Adds a flat run at `value` from level `start` to `end`, clamped between the last knot below
+    /// `value` and the first above it. Stored rates are rounded, so a run they place can reach past
+    /// a neighboring knot by the rounding.
     pub(crate) fn insert_run(&mut self, start: f64, end: f64, value: f64) {
         let floor = self.0.iter().filter(|&&(_, v)| v < value).map(|&(l, _)| l).fold(0.0, f64::max);
         let ceiling = self.0.iter().filter(|&&(_, v)| v > value).map(|&(l, _)| l).fold(1.0, f64::min);
