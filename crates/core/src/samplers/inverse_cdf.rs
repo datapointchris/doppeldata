@@ -43,7 +43,7 @@ impl Knots {
         after_previous && before_next
     }
 
-    /// Adds knots that all lie beyond the current last one.
+    /// Inserts each knot as [`Knots::insert`] does, dropping any that would put a value out of order.
     pub(crate) fn extend(&mut self, knots: impl IntoIterator<Item = (f64, f64)>) {
         for (level, value) in knots {
             self.insert(level, value);

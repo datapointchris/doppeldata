@@ -9,9 +9,8 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-# arrow stays on 59 while pyo3-arrow 0.20, the extension's PyCapsule export, builds on it: the
-# RecordBatch built here must be the type the extension exports. It moves when pyo3-arrow moves,
-# and `cargo info pyo3-arrow` names that arrow.
+# arrow's major must be the one pyo3-arrow builds on, so a RecordBatch built here is the type a
+# PyCapsule export through pyo3-arrow accepts. `cargo info pyo3-arrow` names that major.
 arrow-array = "59"
 arrow-buffer = "59"
 arrow-schema = "59"

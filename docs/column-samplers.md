@@ -26,7 +26,14 @@ mean of 33.12:
 | the true lognormal's share above p99 | 3.06 |
 | generated, with the fitted tail, from 1M rows | 36.35 |
 
-The generated standard deviation is 46.51, against a stored 43.41.
+The generated standard deviation is 46.51, against a stored 43.41. The linear rows integrate the
+piecewise-linear inverse CDF over `amount`'s stored quantiles and extremes, and the lognormal row
+integrates its fit. The generated rows were measured at stream version 1, as the mean and standard
+deviation of `amount` in the file this writes:
+
+```bash
+cargo run --release -p doppeldata-core --example throughput -- eight-columns --rows 1000000 --repeat 0 --ipc amount.arrow
+```
 
 - **Where `fit` names a family with a closed form, the tail is that family's conditional tail.** It
   is conditioned on the range from the outermost quantile to the extreme, and truncated there. The
@@ -35,7 +42,7 @@ The generated standard deviation is 46.51, against a stored 43.41.
   of the tail beyond it. A draw then costs one uniform and one lookup, whatever the family.
 - **A discrete family's tail includes the stored quantile's own mass**, so an integral column's
   generated quantile still lands on the stored value.
-- **The remaining lift is the body.** Below p99, linear interpolation across seven knots gives 33.31
+- **The remaining lift is the body.** Below p99, linear interpolation across the stored quantiles gives 33.31
   against 30.06 for the true lognormal. A histogram's many knots shrink it.
 
 ## A string column takes the most specific source its profile holds
