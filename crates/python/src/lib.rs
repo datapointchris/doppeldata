@@ -89,6 +89,21 @@ mod _core {
         doppeldata_core::generalized_pattern::generalize(&values)
     }
 
+    /// Whether ``pattern`` holds no literal only some values have, as the privacy floor admits a
+    /// stored pattern: every class is ``\d`` or whole ASCII digit and letter ranges. None when it
+    /// does not parse.
+    #[pyfunction]
+    fn pattern_is_generalized(pattern: &str) -> Option<bool> {
+        doppeldata_core::generalized_pattern::is_generalized(pattern)
+    }
+
+    /// The release a shipped code list's first line names, and its codes without their dots. None
+    /// when the engine ships no list of that name.
+    #[pyfunction]
+    fn code_list(name: &str) -> Option<(&'static str, Vec<&'static str>)> {
+        doppeldata_core::code_lists::code_list(name).map(|list| (list.release, list.codes.clone()))
+    }
+
     /// The value's shape, as a profile stores it: each ASCII upper-case letter as A, lower-case
     /// letter as a and digit as 9, and every other character as itself.
     #[pyfunction]

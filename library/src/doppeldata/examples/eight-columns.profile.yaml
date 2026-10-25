@@ -7,7 +7,21 @@ privacy:
   policy: default
   k_min: 11
   audit:
-    - {column: category, values: 50, rule: "count >= k_min"}
+    - {column: id, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: id, field: /numeric/sequence, values: 1, rule: "follows the trimmed extreme"}
+    - {column: amount, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: amount, field: /numeric/quantiles, values: 7, rule: "k_min rows from each end", min_count: 100001}
+    - {column: amount, field: /numeric/fit, values: 3, rule: "fitted within the trimmed extremes"}
+    - {column: qty, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: qty, field: /numeric/quantiles, values: 6, rule: "k_min rows from each end", min_count: 100001}
+    - {column: qty, field: /numeric/fit, values: 1, rule: "fitted within the trimmed extremes"}
+    - {column: category, field: /string/top_values, values: 50, rule: "count >= k_min", min_count: 35000}
+    - {column: ts, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: flag, field: /boolean, values: 2, rule: "cell >= k_min", min_count: 3000000}
+    - {column: score, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: score, field: /numeric/quantiles, values: 7, rule: "k_min rows from each end", min_count: 95001}
+    - {column: score, field: /numeric/fit, values: 2, rule: "fitted within the trimmed extremes"}
+    - {column: code, field: /string/pattern, values: 1, rule: "generalized"}
 source:
   format: parquet
   compression: zstd
@@ -25,7 +39,7 @@ columns:
     distinct: {approx: 10000000, ratio: 1.0}
     numeric:
       integral: true
-      extremes: {low: 0, high: 9999999}
+      extremes: {low: 10, high: 9999989, method: trimmed_k}
       monotonic: increasing
       sequence: {start: 0, step: 1}
   - name: amount
@@ -35,7 +49,7 @@ columns:
     null_rate: 0.0
     numeric:
       integral: false
-      extremes: {low: 0.1, high: 2000.0}
+      extremes: {low: 0.1, high: 2000.0, method: trimmed_k}
       mean: 33.12
       std: 43.41
       quantiles: {p01: 1.96, p05: 3.88, p25: 10.24, p50: 20.09, p75: 39.41, p95: 104.06, p99: 205.61}
@@ -48,7 +62,7 @@ columns:
     null_rate: 0.0
     numeric:
       integral: true
-      extremes: {low: 0, high: 15}
+      extremes: {low: 0, high: 15, method: trimmed_k}
       mean: 4.0
       quantiles: {p05: 1, p25: 3, p50: 4, p75: 5, p95: 8, p99: 9}
       fit: {family: poisson, params: {mu: 4.0}}
@@ -134,7 +148,7 @@ columns:
     null_rate: 0.05
     numeric:
       integral: false
-      extremes: {low: -4.0, high: 4.0}
+      extremes: {low: -4.0, high: 4.0, method: trimmed_k}
       mean: 0.0
       std: 1.0
       quantiles: {p01: -2.326, p05: -1.645, p25: -0.674, p50: 0.0, p75: 0.674, p95: 1.645, p99: 2.326}

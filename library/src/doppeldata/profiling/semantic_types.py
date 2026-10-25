@@ -4,19 +4,24 @@ Imported where profiling runs, because a detector validates a pyarrow array.
 """
 
 import dataclasses as dc
+import functools
 from collections.abc import Iterable
 from collections.abc import Mapping
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
 from doppeldata import _core
+from doppeldata.column_name_words import hint_runs_in
+from doppeldata.column_name_words import name_words
 from doppeldata.errors import DetectorPackError
 from doppeldata.profiling.backend import ColumnSpec
 from doppeldata.profiling.detector_packs import Detector
 from doppeldata.profiling.detector_packs import EnabledPack
+from doppeldata.profiling.detector_packs import ListValidator
+from doppeldata.profiling.detector_packs import SuppliedCodeList
 from doppeldata.profiling.detector_packs import Validator
-from doppeldata.profiling.detector_packs import name_words
 from doppeldata.profiling.statistic_catalog import ColumnKind
 
 # A column takes a type whose validator passes this share of its sampled values.
@@ -25,6 +30,7 @@ ASSIGN_RATE = 0.95
 HINTED_ASSIGN_RATE = 0.80
 # A type its name hint assigns, with no validator or one only confirming the hint, is given this confidence.
 HINT_ASSIGNED_CONFIDENCE = 0.6
+VALIDATOR = 'validator'
 
 
 @dc.dataclass(frozen=True)
@@ -53,6 +59,8 @@ class Typing:
     # The sampled values the validator and any check digit passed, or None where the type has no validator.
     passed: int | None
     generator_hint: dict[str, str]
+    # Whether the validator read a code list the caller supplied, which is a lookup beside its own method.
+    listed: bool = False
 
     @property
     def confidence(self) -> float:
@@ -66,7 +74,9 @@ class Typing:
     def methods(self) -> list[str]:
         """The detection methods, as a profile's `semantic.detectors` names them."""
         detector = self.candidate.detector
-        tested = [] if self.passed is None else [detector.method, *(['check_digit'] if 'check_digit' in detector.generator_hint else [])]
+        looked_up = [VALIDATOR] if self.listed and detector.method != VALIDATOR else []
+        check_digit = ['check_digit'] if 'check_digit' in detector.generator_hint else []
+        tested = [] if self.passed is None else [detector.method, *looked_up, *check_digit]
         return [*tested, *(['name_hint'] if self.candidate.hinted else [])]
 
 
@@ -100,28 +110,37 @@ def fits(kind: ColumnKind, detector: Detector, words: tuple[str, ...]) -> bool:
     return False
 
 
-def column_typings(sample: pa.Table, columns: Mapping[str, DetectedColumn], patterns: Mapping[str, str], k_min: int) -> dict[str, Typing]:
+def column_typings(
+    sample: pa.Table,
+    columns: Mapping[str, DetectedColumn],
+    patterns: Mapping[str, str],
+    k_min: int,
+    code_lists: Mapping[str, SuppliedCodeList],
+) -> dict[str, Typing]:
     """Each typed column's typing, of `columns` as `detected_columns` gives them, beside the patterns grex stores for them.
 
     A column with fewer than k_min sampled values is left untyped, as is one no candidate takes. The type is the one
     whose validator passes the most values, of those passing `ASSIGN_RATE`, or `HINTED_ASSIGN_RATE` where the name hints
     it. A tie goes to the hinted type, then to the pack and detector listed first. Where no validator takes the column,
-    the first type with no validator is assigned.
+    the first type with no validator is assigned. A validator reading a code list is handed the one in `code_lists`.
     """
     typings = {}
     for column, detected in columns.items():
         values = sample.column(column).drop_null().combine_chunks().cast(pa.string())
         if len(values) < k_min:
             continue
-        assigned = assigned_candidate(column, values, detected.candidates)
+        assigned = assigned_candidate(column, values, detected.candidates, code_lists)
         if assigned:
             candidate, passed = assigned
             hint = written_hint(candidate, detected.kind, values, patterns.get(column))
-            typings[column] = Typing(candidate, len(values), passed, hint)
+            listed = passed is not None and candidate.detector.code_list in code_lists
+            typings[column] = Typing(candidate, len(values), passed, hint, listed)
     return typings
 
 
-def assigned_candidate(column: str, values: pa.Array, candidates: list[Candidate]) -> tuple[Candidate, int | None] | None:
+def assigned_candidate(
+    column: str, values: pa.Array, candidates: list[Candidate], code_lists: Mapping[str, SuppliedCodeList]
+) -> tuple[Candidate, int | None] | None:
     """The candidate the column takes, and how many values it passed, or None where it has no validator."""
     best: tuple[tuple[int, bool, int], Candidate, int] | None = None
     hint_assigned = None
@@ -131,7 +150,7 @@ def assigned_candidate(column: str, values: pa.Array, candidates: list[Candidate
             hint_assigned = hint_assigned or candidate
             continue
         where = f'the {detector.type} validator of the detector pack {candidate.pack!r}, on the column {column!r},'
-        passed = passes(detector.validate, detector.generator_hint.get('check_digit'), values, where)
+        passed = passes(bound(detector, code_lists), detector.generator_hint.get('check_digit'), values, where)
         if passed / len(values) < (HINTED_ASSIGN_RATE if candidate.hinted else ASSIGN_RATE):
             continue
         rank = (passed, candidate.hinted, -order)
@@ -140,6 +159,21 @@ def assigned_candidate(column: str, values: pa.Array, candidates: list[Candidate
     if best:
         return best[1], best[2]
     return (hint_assigned, None) if hint_assigned else None
+
+
+def bound(detector: Detector, code_lists: Mapping[str, SuppliedCodeList]) -> Validator:
+    """The detector's validator, handed the codes of the list it reads where it names one, or None where none was supplied."""
+    if detector.code_list is None:
+        return cast(Validator, detector.validate)
+    supplied = code_lists.get(detector.code_list)
+    codes = code_array(supplied) if supplied else None
+    listed = cast(ListValidator, detector.validate)
+    return lambda values: listed(values, codes)
+
+
+@functools.cache
+def code_array(supplied: SuppliedCodeList) -> pa.Array:
+    return pa.array(supplied.codes, pa.string())
 
 
 def written_hint(candidate: Candidate, kind: ColumnKind, values: pa.Array, stored_pattern: str | None) -> dict[str, str]:
@@ -194,9 +228,4 @@ def describe(value: object) -> str:
 
 def hinted(words: tuple[str, ...], detector: Detector, *, at_end: bool = False) -> bool:
     """Whether the words of one of the detector's name hints run in order in the column name's words, ending them where `at_end`."""
-    for hint in detector.name_hints:
-        parts = name_words(hint)
-        starts = [len(words) - len(parts)] if at_end else range(len(words) - len(parts) + 1)
-        if any(start >= 0 and words[start : start + len(parts)] == parts for start in starts):
-            return True
-    return False
+    return any(hint_runs_in(words, hint, at_end=at_end) for hint in detector.name_hints)

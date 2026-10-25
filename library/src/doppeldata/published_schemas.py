@@ -38,8 +38,13 @@ def published_fields(definition: str) -> dict[str, list[str] | None]:
     fields: dict[str, list[str] | None] = {}
     for field, schema in definitions[definition]['properties'].items():
         refs = [branch['$ref'] for branch in (schema, *schema.get('anyOf', ())) if '$ref' in branch]
-        fields[field] = enum_values(definitions[refs[0].rsplit('/', 1)[1]]) if refs else None
+        target = definitions[refs[0].rsplit('/', 1)[1]] if refs else {}
+        fields[field] = enum_values(target) if is_enum(target) else None
     return fields
+
+
+def is_enum(schema: dict[str, Any]) -> bool:
+    return 'enum' in schema or all('const' in branch or 'enum' in branch for branch in schema.get('oneOf', [{}]))
 
 
 def writer_fields(definition: str) -> list[str]:

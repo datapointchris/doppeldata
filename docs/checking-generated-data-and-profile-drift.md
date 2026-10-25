@@ -2,8 +2,9 @@
 
 ## A check compares two profiles, so the real rows are never read again
 
-`data check PROFILE DATA` profiles DATA with `edges_from=PROFILE` and PROFILE's `k_min`, then
-measures the new profile against PROFILE. The histograms and value lists then compare bin for bin.
+`data check PROFILE DATA` profiles DATA with `edges_from=PROFILE` and PROFILE's privacy policy and
+`k_min`, then measures the new profile against PROFILE. Under the same policy, each field the new
+profile writes is one PROFILE could hold, such as a ZIP column's prefixes under `healthcare`. The histograms and value lists then compare bin for bin.
 Generated data has its own `source_fingerprint`, so the stats cache never hands PROFILE back
 unchanged. DATA is typed with the detector packs PROFILE records, so a type one of them declares can
 be confirmed.
@@ -81,7 +82,9 @@ other profile's histogram.
 
 ## `distinct_ratio_delta` measures a column against the range both readings of its profile allow
 
-The ratio is a column's distinct count over the rows it was counted over. One profile cannot show
+The ratio is a column's distinct count over the rows it was counted over. A ZIP column written as
+`string.prefixes` counts its distinct prefixes, and the generated data is profiled under the
+source's policy, so both readings count prefixes. One profile cannot show
 whether a column keeps that ratio at another size or keeps its count. So the generator holds the
 ratio, and the check accepts either. With N source rows holding D distinct values, and n rows
 checked:
@@ -150,6 +153,9 @@ Arrow decimal type telling a decimal from a float.
   hand-written profile may carry any type, and one no pack declares is found in no data. A
   column's `semantic.pack` names the pack, and in a check the packs it ran name it for a column
   that does not.
+- **A check passes a type change on a type a code list decides**, where the two profiles record
+  different contents for that list. A check profiles generated data without the list, and
+  generated codes are drawn from the type's hint rather than the list.
 - **A diff fails on every other changed field.** That covers a changed Arrow type or kind, which
   there means the source itself changed. It also covers a column with more than `OVERFLOW_SHARE`
   of its values outside the edges or value list frozen from A, a CSV dialect setting a writer takes

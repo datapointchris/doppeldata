@@ -53,6 +53,7 @@ GENERATED_FIELDS = {
     'engine': GeneratedField(hashed=True, derived_from=True),
     'fitter': GeneratedField(hashed=False, derived_from=True),
     'detector_packs': GeneratedField(hashed=False, derived_from=True),
+    'code_lists': GeneratedField(hashed=False, derived_from=True),
     'readers': GeneratedField(hashed=False, derived_from=True),
     'source_fingerprint': GeneratedField(hashed=False, derived_from=True),
     'at': GeneratedField(hashed=False, derived_from=False),

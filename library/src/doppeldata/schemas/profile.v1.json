@@ -32,16 +32,33 @@
   ],
   "$defs": {
     "AuditEntry": {
+      "description": "One field holding literals, and the rule that admitted them.",
       "type": "object",
       "properties": {
         "column": {
           "type": "string"
         },
+        "field": {
+          "description": "The RFC 6901 pointer to the field, such as `/columns/4/string/top_values`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "min_count": {
+          "description": "The fewest rows any literal or cell of the field rests on.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "rule": {
-          "type": "string"
+          "$ref": "#/$defs/AuditRule"
         },
         "values": {
-          "description": "How many literals of the column the profile keeps, where the rule admits a count of them.",
+          "description": "How many literals or cells the field holds.",
           "type": [
             "integer",
             "null"
@@ -53,6 +70,46 @@
       "required": [
         "column",
         "rule"
+      ]
+    },
+    "AuditRule": {
+      "description": "The floor a field's literals met to be kept.",
+      "oneOf": [
+        {
+          "description": "Each listed value or shape is held by at least `k_min` rows, and the remainder by none or `k_min`.",
+          "type": "string",
+          "const": "count >= k_min"
+        },
+        {
+          "description": "Each histogram bin, overflow count or calendar share holds no rows or at least `k_min`.",
+          "type": "string",
+          "const": "cell >= k_min"
+        },
+        {
+          "description": "The extremes are the values at rank `k_min` from each end.",
+          "type": "string",
+          "const": "trimmed_k"
+        },
+        {
+          "description": "Each quantile sits at least `k_min` rows from both ends.",
+          "type": "string",
+          "const": "k_min rows from each end"
+        },
+        {
+          "description": "The pattern's every literal is shared by all the values it was generalized from.",
+          "type": "string",
+          "const": "generalized"
+        },
+        {
+          "description": "The family was fitted to the values between the trimmed extremes.",
+          "type": "string",
+          "const": "fitted within the trimmed extremes"
+        },
+        {
+          "description": "The sequence's start follows from the trimmed extreme at its end and its step.",
+          "type": "string",
+          "const": "follows the trimmed extreme"
+        }
       ]
     },
     "BooleanStats": {
@@ -169,6 +226,16 @@
           "description": "The mod-10 digit of payment card numbers.",
           "type": "string",
           "const": "luhn"
+        },
+        {
+          "description": "A National Provider Identifier's: the Luhn digit over `80840` and the digits before it.",
+          "type": "string",
+          "const": "npi"
+        },
+        {
+          "description": "A DEA registration number's: the last digit of the first, third and fifth digits plus twice\nthe second, fourth and sixth.",
+          "type": "string",
+          "const": "dea"
         }
       ]
     },
@@ -851,6 +918,11 @@
           "description": "The values at rank `k_min` from each end.",
           "type": "string",
           "const": "trimmed_k"
+        },
+        {
+          "description": "The least and greatest integers with as many digits as the trimmed extremes, so an\nidentifier's range shows its length and none of its values.",
+          "type": "string",
+          "const": "digit_bounds"
         }
       ]
     },
@@ -1016,6 +1088,16 @@
             "string",
             "null"
           ]
+        },
+        "code_lists": {
+          "description": "Each code list the caller supplied a detector, by the name the detector reads it by, with\nthe sha256 of the file's content, as `sha256:<hex>`. The file's path is not recorded.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "detector_packs": {
           "description": "Each detector pack the profiler typed columns with, by name, with the distribution that\nprovides it and its version, as `doppeldata <version>`.",
@@ -1896,6 +1978,38 @@
         }
       }
     },
+    "Prefixes": {
+      "description": "A column's values counted by their leading characters, each generated value a prefix followed\nby a value of `suffix`. An engine that ignores this field draws whole values from the column's\nother statistics, so it generates no value of the wrong length.",
+      "type": "object",
+      "properties": {
+        "other_rate": {
+          "description": "The share of values beginning with a prefix `values` does not list.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suffix": {
+          "description": "A regular expression drawn after each prefix, such as `\\d{2}` after a ZIP code's first three\ndigits.",
+          "type": "string"
+        },
+        "values": {
+          "description": "Each prefix at least `k_min` rows begin with, and its share of the column's values.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TopValue"
+          }
+        }
+      },
+      "required": [
+        "values",
+        "suffix"
+      ]
+    },
     "Privacy": {
       "description": "The privacy policy the profile was written under, and every literal it kept or withheld.",
       "type": "object",
@@ -1967,34 +2081,48 @@
     },
     "Provider": {
       "description": "A source of realistic values. The names are doppeldata's, so a change of faker breaks no profile.",
-      "type": "string",
-      "enum": [
-        "email",
-        "free_email",
-        "username",
-        "ipv4",
-        "ipv6",
-        "mac_address",
-        "user_agent",
-        "name",
-        "first_name",
-        "last_name",
-        "phone_number",
-        "cell_number",
-        "company",
-        "job_title",
-        "street_address",
-        "street_name",
-        "building_number",
-        "city",
-        "state",
-        "state_abbr",
-        "zip_code",
-        "post_code",
-        "country",
-        "country_code",
-        "credit_card",
-        "uuid"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "email",
+            "free_email",
+            "username",
+            "ipv4",
+            "ipv6",
+            "mac_address",
+            "user_agent",
+            "name",
+            "first_name",
+            "last_name",
+            "phone_number",
+            "cell_number",
+            "company",
+            "job_title",
+            "street_address",
+            "street_name",
+            "building_number",
+            "city",
+            "state",
+            "state_abbr",
+            "zip_code",
+            "post_code",
+            "country",
+            "country_code",
+            "credit_card",
+            "uuid"
+          ]
+        },
+        {
+          "description": "A code of the ICD-10-CM list the engine ships, drawn uniformly.",
+          "type": "string",
+          "const": "icd10cm"
+        },
+        {
+          "description": "A code of the HCPCS Level II list the engine ships, drawn uniformly.",
+          "type": "string",
+          "const": "hcpcs_level2"
+        }
       ]
     },
     "Quality": {
@@ -2467,6 +2595,17 @@
             "null"
           ]
         },
+        "prefixes": {
+          "description": "The values' leading characters, counted in place of `top_values`, as a policy keeps a ZIP\ncode's first three digits.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Prefixes"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "shapes": {
           "type": [
             "array",
@@ -2523,15 +2662,17 @@
       }
     },
     "Suppression": {
+      "description": "A column some of whose literals the policy withheld.",
       "type": "object",
       "properties": {
         "column": {
           "type": "string"
         },
         "reason": {
-          "type": "string"
+          "$ref": "#/$defs/SuppressionReason"
         },
         "semantic": {
+          "description": "The column's `semantic.type`, where it has one.",
           "type": [
             "string",
             "null"
@@ -2541,6 +2682,40 @@
       "required": [
         "column",
         "reason"
+      ]
+    },
+    "SuppressionReason": {
+      "oneOf": [
+        {
+          "description": "Typed `identifier`, so the column keeps no literal, extreme or top value.",
+          "type": "string",
+          "const": "identifier"
+        },
+        {
+          "description": "Typed `quasi_identifier` under `strict`, which treats it as an identifier.",
+          "type": "string",
+          "const": "quasi_identifier"
+        },
+        {
+          "description": "Typed `free_text`, so the column keeps its length statistics only.",
+          "type": "string",
+          "const": "free_text"
+        },
+        {
+          "description": "A ZIP code under `healthcare`, which keeps three-digit prefixes and writes a restricted one as `000`.",
+          "type": "string",
+          "const": "zip_prefix"
+        },
+        {
+          "description": "An age under `healthcare`, which collapses every age over 89 into one bin at 90.",
+          "type": "string",
+          "const": "age_over_89"
+        },
+        {
+          "description": "A date or timestamp under `healthcare`, whose extremes keep only their years.",
+          "type": "string",
+          "const": "date_to_year"
+        }
       ]
     },
     "TableKind": {

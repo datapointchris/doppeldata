@@ -335,6 +335,9 @@ table of their own, profiled as a table is.
   or a list.
 - **`source.json` records `max_depth` and `explicit_nulls`**, which is true where any path holds a
   JSON null.
+- **An array's element keeps no literal under a checked policy.** Its values are counted by element,
+  so one record's eleven tags would pass a floor of rows. Its length and distinct count stay. A
+  struct field's literals are held to the rows of its parent's objects holding its key.
 
 ## A value a profile cannot hold is written as the nearest one it can
 
@@ -345,7 +348,8 @@ step lies beyond it is not written.
 ## No literal rests on fewer than k_min rows
 
 The default `k_min` is `DEFAULT_K_MIN`, from the privacy floor in
-`profile-format-and-privacy-floor.md`. The profiler applies it to every literal it writes:
+`profile-format-and-privacy-floor.md`. The statistics pass applies it to every literal it computes,
+and the policy's pass then removes what each column's rule withholds:
 
 - **A column with fewer than `k_min` values** keeps its type, null rate and distinct count, and
   nothing else. The mean of one value is that value.

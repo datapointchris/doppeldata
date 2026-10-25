@@ -28,8 +28,8 @@ const _: () = assert!(
 /// The stream version the fixture's values were generated under, and a SHA-256 over them. A release
 /// freezes the pair: once released, a change to any value raises STREAM_VERSION.
 /// `crates/check-stream-version-raised.sh` reads both lines and refuses a new hash at a released version.
-const PINNED_STREAM_VERSION: u32 = 4;
-const PINNED_VALUES: &str = "83e477c4bd6d45bc03e24249f308973f6f28b7b501760dee89d74f6ec3f5245d";
+const PINNED_STREAM_VERSION: u32 = 5;
+const PINNED_VALUES: &str = "64be54a8780e819650b59f3cd6b371cb3d567d4963159c068ad68537af0c254a";
 
 fn document(path: &Path) -> serde_json::Value {
     let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -106,11 +106,11 @@ fn a_dataset_identity_digests_to_its_pinned_value() {
         concat!(
             r#"{"dataset_rows":"10000000","#,
             r#""profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
-            r#""scenario_digest":null,"seed":"18446744073709551615","stream_version":4}"#
+            r#""scenario_digest":null,"seed":"18446744073709551615","stream_version":5}"#
         )
     );
     assert_eq!(
         identity.digest(),
-        "sha256:bd059bf7f6c6ead68d59dae9df536676b95cad0e627de6dfe040c81fad7d2cf3"
+        "sha256:5a1f7635575106e4580f9b731752340b12915bd699487276d74fdcc2787e599a"
     );
 }

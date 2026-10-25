@@ -34,6 +34,8 @@ use super::distinct_values::Stratum;
 use super::distinct_values::ValueIndex;
 use super::distinct_values::Variety;
 use super::inverse_cdf::InverseCdf;
+use crate::code_lists::CodeList;
+use crate::code_lists::provider_list;
 use crate::profile::CharClass;
 use crate::profile::CheckDigit;
 use crate::profile::Provider;
@@ -129,8 +131,28 @@ fn push_provided(provider: Provider, rng: &mut ChaCha8Rng, out: &mut String) {
             push_uuid(rng, out);
             return;
         }
+        Provider::Icd10cm | Provider::HcpcsLevel2 => {
+            if let Some(list) = provider_list(provider) {
+                push_code(list, None, rng, out);
+            }
+            return;
+        }
     };
     out.push_str(&value);
+}
+
+/// A list's code at a uniform index, with a dot after its first `dot_after` characters where it is
+/// longer, as ICD-10-CM codes are written.
+fn push_code(list: &CodeList, dot_after: Option<usize>, rng: &mut ChaCha8Rng, out: &mut String) {
+    let code = list.codes[below(rng, list.codes.len() as u32) as usize];
+    match dot_after {
+        Some(at) if code.len() > at => {
+            out.push_str(&code[..at]);
+            out.push('.');
+            out.push_str(&code[at..]);
+        }
+        _ => out.push_str(code),
+    }
 }
 
 /// The reserved domains an `email` address is at, so no generated address reaches anyone.
@@ -165,6 +187,7 @@ fn provider_variety(provider: Provider) -> Variety {
         Provider::StateAbbr => entries(EN::ADDRESS_STATE_ABBR),
         Provider::Country => entries(EN::ADDRESS_COUNTRY),
         Provider::CountryCode => entries(EN::ADDRESS_COUNTRY_CODE),
+        Provider::Icd10cm | Provider::HcpcsLevel2 => provider_list(provider).map_or(0.0, |list| list.codes.len() as f64),
         Provider::City => {
             let suffixed = |names: f64| names * entries(EN::ADDRESS_CITY_SUFFIX);
             let stratum = |strings, share| Stratum { strings, share };
@@ -215,7 +238,14 @@ fn push_uuid(rng: &mut ChaCha8Rng, out: &mut String) {
 #[derive(Debug, Clone)]
 pub(crate) struct Pattern {
     regex: rand_regex::Regex,
-    strings: f64,
+    pub(crate) strings: f64,
+}
+
+impl Pattern {
+    pub(crate) fn push(&self, rng: &mut ChaCha8Rng, out: &mut String) {
+        let value: String = self.regex.sample(rng);
+        out.push_str(&value);
+    }
 }
 
 /// A stored pattern compiled for generation. A line anchor is dropped, because a generated value is
@@ -326,8 +356,14 @@ impl Shape {
     }
 
     fn strings(&self) -> f64 {
+        self.leading_strings(self.chars.len())
+    }
+
+    /// The distinct strings the shape's first `chars` characters can hold.
+    fn leading_strings(&self, chars: usize) -> f64 {
         self.chars
             .iter()
+            .take(chars)
             .map(|c| match c {
                 ShapeChar::Upper | ShapeChar::Lower => 26.0,
                 ShapeChar::Digit => 10.0,
@@ -369,6 +405,11 @@ pub(crate) fn alphabet(classes: Option<&[CharClass]>) -> Vec<u8> {
 #[derive(Debug, Clone)]
 pub(crate) enum TextSource {
     Provider(Provider),
+    /// A shipped list's codes, drawn uniformly, with a dot after the first `dot_after` characters.
+    CodeList {
+        list: &'static CodeList,
+        dot_after: Option<usize>,
+    },
     Pattern(Box<Pattern>),
     Shapes {
         choice: WeightedAliasIndex<f64>,
@@ -386,6 +427,7 @@ impl TextSource {
     pub(crate) fn variety(&self) -> Variety {
         match self {
             Self::Provider(provider) => provider_variety(*provider),
+            Self::CodeList { list, .. } => Variety::uniform(list.codes.len() as f64),
             Self::Pattern(pattern) => Variety::uniform(pattern.strings),
             Self::Shapes { shapes, .. } => Variety::Strata(
                 shapes
@@ -400,13 +442,28 @@ impl TextSource {
         }
     }
 
+    /// How many distinct strings the source's first `chars` characters take. Only shapes are
+    /// counted by character, so any other source counts its whole strings.
+    pub(crate) fn leading_variety(&self, chars: usize) -> Variety {
+        match self {
+            Self::Shapes { shapes, .. } => Variety::Strata(
+                shapes
+                    .iter()
+                    .map(|shape| Stratum {
+                        strings: shape.leading_strings(chars),
+                        share: shape.share,
+                    })
+                    .collect(),
+            ),
+            _ => self.variety(),
+        }
+    }
+
     pub(crate) fn push(&self, rng: &mut ChaCha8Rng, out: &mut String) {
         match self {
             Self::Provider(provider) => push_provided(*provider, rng, out),
-            Self::Pattern(pattern) => {
-                let value: String = pattern.regex.sample(rng);
-                out.push_str(&value);
-            }
+            Self::CodeList { list, dot_after } => push_code(list, *dot_after, rng, out),
+            Self::Pattern(pattern) => pattern.push(rng, out),
             Self::Shapes { choice, shapes } => {
                 for &c in &shapes[choice.sample(rng)].chars {
                     match c {
@@ -445,6 +502,19 @@ fn luhn_check_digit(payload: impl DoubleEndedIterator<Item = u8>) -> u8 {
     ((10 - sum % 10) % 10) as u8
 }
 
+/// The DEA check digit for `payload`: the last digit of the digits at odd positions from the left
+/// plus twice those at even positions.
+fn dea_check_digit(payload: impl Iterator<Item = u8>) -> u8 {
+    let sum: u32 = payload
+        .enumerate()
+        .map(|(index, digit)| u32::from(digit) * if index % 2 == 0 { 1 } else { 2 })
+        .sum();
+    (sum % 10) as u8
+}
+
+/// Every NPI is read as a card number issued under the health industry prefix 80840.
+const NPI_PREFIX: [u8; 5] = [8, 0, 8, 4, 0];
+
 /// A check digit written over a value's last digit, wrong on a share of values.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CheckDigitDraw {
@@ -471,6 +541,8 @@ fn check_digit_site(kind: CheckDigit, value: &str) -> Option<(usize, u8)> {
     let payload = value.as_bytes()[..last].iter().filter(|b| b.is_ascii_digit()).map(|b| b - b'0');
     let right = match kind {
         CheckDigit::Luhn => luhn_check_digit(payload),
+        CheckDigit::Npi => luhn_check_digit(NPI_PREFIX.into_iter().chain(payload)),
+        CheckDigit::Dea => dea_check_digit(payload),
     };
     Some((last, right))
 }

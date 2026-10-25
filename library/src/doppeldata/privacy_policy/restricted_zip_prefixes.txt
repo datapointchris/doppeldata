@@ -1,0 +1,19 @@
+# The three-digit ZIP prefixes whose geographic unit held 20,000 or fewer people in the 2000 Census,
+# which HIPAA Safe Harbor changes to 000, as the HHS de-identification guidance lists them.
+036
+059
+063
+102
+203
+556
+692
+790
+821
+823
+830
+831
+878
+879
+884
+890
+893

@@ -46,6 +46,7 @@ use self::text::TextSource;
 pub use self::text::shape_of;
 pub use self::text_cells::TextCell;
 use self::text_cells::TextOnlyValues;
+use crate::code_lists::provider_list;
 use crate::physical_type;
 use crate::physical_type::Container;
 use crate::physical_type::PhysicalType;
@@ -54,6 +55,7 @@ use crate::plan::PlanError;
 use crate::profile::Column;
 use crate::profile::GeneratorHint;
 use crate::profile::LogicalType;
+use crate::profile::Provider;
 use crate::profile::StringStats;
 use crate::rng::Bernoulli;
 use crate::rng::rng_for;
@@ -65,6 +67,9 @@ const DEFAULT_STRING_LENGTH: (f64, f64) = (8.0, 16.0);
 const DEFAULT_LIST_LENGTH: (f64, f64) = (0.0, 4.0);
 /// The most extra repeats a pattern's `*`, `+` or `{n,}` generates.
 const PATTERN_MAX_REPEAT: u32 = 16;
+/// An ICD-10-CM code longer than its category is written with a dot after the category's three
+/// characters.
+const ICD10CM_DOT_AFTER: usize = 3;
 
 pub use text::check_digit_holds;
 
@@ -361,14 +366,20 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
             }
         }
         ValueSampler::Categorical(categorical) => {
-            let other = column.string.as_ref().and_then(|s| s.other_rate).is_some_and(|r| r.0 > 0.0);
-            match other {
-                true => format!(
-                    "{} top values, the rest from {}",
-                    categorical.values.len(),
-                    describe_source(&categorical.other)
+            let string = column.string.as_ref();
+            let (top, other_rate) = match (listed_values(string), listed_prefixes(string)) {
+                (None, Some(prefixes)) => (
+                    format!("{} top prefixes, each followed by {}", categorical.values.len(), prefixes.suffix),
+                    prefixes.other_rate,
                 ),
-                false => format!("{} top values", categorical.values.len()),
+                _ => (
+                    format!("{} top values", categorical.values.len()),
+                    string.and_then(|s| s.other_rate),
+                ),
+            };
+            match other_rate.is_some_and(|r| r.0 > 0.0) {
+                true => format!("{top}, the rest from {}", describe_source(&categorical.other)),
+                false => top,
             }
         }
         ValueSampler::Temporal(_) => {
@@ -408,6 +419,10 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
 fn describe_source(source: &TextSource) -> String {
     match source {
         TextSource::Provider(provider) => format!("the {} provider", snake_case(&format!("{provider:?}"))),
+        TextSource::CodeList { list, dot_after } => match dot_after {
+            Some(at) => format!("the {} list, dotted after {at} characters", list.name),
+            None => format!("the {} list", list.name),
+        },
         TextSource::Pattern(_) => "a pattern".to_string(),
         TextSource::Shapes { shapes, .. } => format!("{} shapes", shapes.len()),
         TextSource::Characters { .. } => "characters of the profiled classes".to_string(),
@@ -509,15 +524,44 @@ fn value_sampler(
     let source = text_source(string, hint, site)?;
     // The ratio is of the dataset's rows, so a run longer than the profiled one holds more values.
     let distinct = column.distinct.as_ref().and_then(|d| d.ratio).map(|ratio| ratio.0 * context.rows);
-    let top_values = string.and_then(|s| s.top_values.as_ref()).filter(|values| !values.is_empty());
-    if let Some(top_values) = top_values {
-        let values: Vec<_> = top_values.iter().map(|top| (top.value.clone(), top.rate.0)).collect();
-        let other_rate = string.and_then(|s| s.other_rate).map_or(0.0, |r| r.0);
+    let categories = match (listed_values(string), listed_prefixes(string)) {
+        (Some(top_values), _) => Some((
+            top_values,
+            string.and_then(|s| s.other_rate),
+            None,
+            "/string/top_values",
+            source.variety(),
+        )),
+        (None, Some(prefixes)) => {
+            let suffix = text::compile_pattern(&prefixes.suffix, PATTERN_MAX_REPEAT)
+                .map_err(site.refuse_as(ColumnFault::InvalidPattern, "/string/prefixes/suffix"))?;
+            // A column written as prefixes counts its distinct prefixes, so the rest are drawn to hold as many.
+            let prefix_chars = prefixes
+                .values
+                .iter()
+                .map(|top| top.value.chars().count())
+                .max()
+                .unwrap_or_default();
+            let variety = source.leading_variety(prefix_chars);
+            Some((
+                &prefixes.values,
+                prefixes.other_rate,
+                Some(suffix),
+                "/string/prefixes/values",
+                variety,
+            ))
+        }
+        (None, None) => None,
+    };
+    if let Some((listed, other_rate, suffix, field, other_variety)) = categories {
+        let values: Vec<_> = listed.iter().map(|top| (top.value.clone(), top.rate.0)).collect();
+        let other_rate = other_rate.map_or(0.0, |r| r.0);
         let other_share = other_rate / (values.iter().map(|(_, rate)| rate).sum::<f64>() + other_rate);
-        let other_index = distinct
-            .and_then(|distinct| ValueIndex::for_distinct(distinct - values.len() as f64, filled_rows * other_share, &source.variety()));
-        let sampler = CategoricalSampler::new(values, other_rate, source, other_index, output)
-            .map_err(site.refuse_as(ColumnFault::UnusableRates, "/string/top_values"))?;
+        let listed_distinct = values.len() as f64;
+        let other_index =
+            distinct.and_then(|distinct| ValueIndex::for_distinct(distinct - listed_distinct, filled_rows * other_share, &other_variety));
+        let sampler = CategoricalSampler::new(values, other_rate, suffix, source, other_index, output)
+            .map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
         return Ok(ValueSampler::Categorical(sampler));
     }
     let check_digit = hint.and_then(|hint| hint.check_digit).map(|kind| {
@@ -535,6 +579,17 @@ fn value_sampler(
     }))
 }
 
+/// The whole values a string column lists, which the categorical sampler draws before `prefixes`.
+fn listed_values(string: Option<&StringStats>) -> Option<&Vec<crate::profile::TopValue>> {
+    string.and_then(|s| s.top_values.as_ref()).filter(|values| !values.is_empty())
+}
+
+fn listed_prefixes(string: Option<&StringStats>) -> Option<&crate::profile::Prefixes> {
+    string
+        .and_then(|s| s.prefixes.as_ref())
+        .filter(|prefixes| !prefixes.values.is_empty())
+}
+
 fn empty_numeric_stats() -> crate::profile::NumericStats {
     serde_json::from_value(serde_json::json!({})).expect("every numeric statistic is optional")
 }
@@ -543,6 +598,12 @@ fn empty_numeric_stats() -> crate::profile::NumericStats {
 /// pattern, the shapes, then characters of the profiled classes.
 fn text_source(string: Option<&StringStats>, hint: Option<&GeneratorHint>, site: &ColumnSite) -> Result<TextSource, PlanError> {
     if let Some(provider) = hint.and_then(|hint| hint.provider) {
+        if let Some(list) = provider_list(provider) {
+            return Ok(TextSource::CodeList {
+                list,
+                dot_after: (provider == Provider::Icd10cm && dominant_shape_is_dotted(string)).then_some(ICD10CM_DOT_AFTER),
+            });
+        }
         return Ok(TextSource::Provider(provider));
     }
     let hinted_pattern = hint
@@ -576,6 +637,15 @@ fn text_source(string: Option<&StringStats>, hint: Option<&GeneratorHint>, site:
         length,
         alphabet: text::alphabet(string.and_then(|s| s.charset.as_ref()).and_then(|c| c.classes.as_deref())),
     })
+}
+
+/// Whether the column's most common shape holds a dot, as an ICD-10-CM code written `E11.9` does.
+fn dominant_shape_is_dotted(string: Option<&StringStats>) -> bool {
+    let shapes = string.and_then(|s| s.shapes.as_deref()).unwrap_or_default();
+    shapes
+        .iter()
+        .max_by(|a, b| a.rate.0.total_cmp(&b.rate.0))
+        .is_some_and(|shape| shape.shape.contains('.'))
 }
 
 fn list_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, large: bool) -> Result<ValueSampler, PlanError> {

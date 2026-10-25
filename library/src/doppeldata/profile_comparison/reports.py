@@ -98,6 +98,10 @@ class CheckReport:
     def failures(self) -> Failures:
         return Failures.of(self.metrics, self.changes)
 
+    def failure_message(self) -> str:
+        """What `CheckFailed` says of a check the data did not pass."""
+        return f'the data missed its profile on {self.failures().summary()}'
+
     @property
     def passed(self) -> bool:
         return not self.failures()

@@ -60,11 +60,15 @@ cargo run --release -p doppeldata-core --example throughput -- eight-columns --r
 
 ## A string column takes the most specific source its profile holds
 
-1. **`top_values`**: an alias table over the rates. A draw of `other_rate` generates a value from
-   the next source down.
+1. **`top_values`**, or else **`prefixes`**: an alias table over the rates. A draw of `other_rate`
+   generates a value from the next source down. A drawn prefix is followed by a value of the
+   `suffix` pattern. A ZIP column under `healthcare` keeps three-digit prefixes, so `\d{2}` makes
+   each a ZIP code again.
 2. **`semantic.generator_hint.provider`**: a named generator, such as `email` or `city`. The names
    are doppeldata's own, an enum in the profile model, so the published schema lists them and
    replacing the faker library breaks no profile. A profile naming another fails validation.
+   `icd10cm` and `hcpcs_level2` draw a code uniformly from the list the engine ships, which the
+   healthcare pack's validator types the column by.
 3. **A pattern**, from `generator_hint.pattern` or `string.pattern`. A line anchor is dropped,
    because a value is the whole line, and `\d` and the other classes are ASCII.
 4. **`shapes`**: a shape is drawn by rate, then each `A` becomes an upper-case letter, each `a` a
@@ -72,7 +76,9 @@ cargo run --release -p doppeldata-core --example throughput -- eight-columns --r
 5. **Characters** of `charset.classes`, at a length drawn from `length`.
 
 `generator_hint.check_digit: luhn` writes the Luhn digit over a value's last digit, wrong on a
-`quality.invalid_rate` share of values. *Rejected:* the `luhn` crate. Its `checksum` allocates on
+`quality.invalid_rate` share of values. `npi` is the Luhn digit over `80840` and the first nine
+digits, as the NPI standard prefixes them. `dea` is the last digit of the sum of the first, third
+and fifth digits plus twice the sum of the second, fourth and sixth. *Rejected:* the `luhn` crate. Its `checksum` allocates on
 every call, and it panics on lower-case input and on a `u8` overflow past about 28 digits.
 
 `email` is `first.last` at `example.com`, `example.net` or `example.org`, domains reserved so no
@@ -96,13 +102,17 @@ of its index, no pool of values is held, and any block still generates alone.
   drawn into `S` equally likely strings give `S · (1 − e^(−m/S))` distinct strings, so the index
   target is raised to meet the value target. A pattern is counted from its syntax, as if every
   string were equally likely. A shape is counted per character at its rate. `email`, `city`, and
-  the providers drawing one entry of one list are counted from fake's lists. Characters and
-  every other provider are uncounted, and each distinct index is taken as a distinct string.
+  the providers drawing one entry of one list are counted from fake's lists, and the code-list
+  providers from their lists. Characters and every other provider are uncounted, and each
+  distinct index is taken as a distinct string.
 - **Where fresh draws reach no more than the target, the column draws fresh**, with no index. A
   ratio of 1 is always that case. So is a source whose variety sits below the target, which caps
   the column's distinct count.
 - **With `top_values`, the index covers only the `other` share**, and the target subtracts the
   top values' count.
+- **With `prefixes`, the distinct ratio is of prefixes**, so the `other` share's strings are
+  counted by their first characters, as many as a prefix holds. A shape counts them per
+  character; any other source counts its whole strings.
 - **A check digit draws from the value's stream, after the value**, so whether a value's digit is
   wrong is a function of its index too.
 - **A list element's rows are the elements its lists are expected to hold**: the list's rows,

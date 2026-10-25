@@ -131,6 +131,12 @@ def check_digits_hold(kind: str, values: SupportsGetItem[int, str]) -> list[bool
     writes one: its last digit, computed from the digits before it.
     """
 
+def code_list(name: str) -> tuple[str, list[str]] |None:
+    """
+    The release a shipped code list's first line names, and its codes without their dots. None
+    when the engine ships no list of that name.
+    """
+
 def destination_scheme(url: str) -> tuple[str, str |None]:
     """
     What ``url`` names as a write's destination: ``("local", None)``, ``("s3", bucket)`` or
@@ -154,6 +160,13 @@ def generalize_pattern(values: SupportsGetItem[int, str]) -> str |None:
     """
     The anchored regular expression grex generalizes the values to, with each digit as a digit
     class, or None when it would hold a literal or a character class only some values have.
+    """
+
+def pattern_is_generalized(pattern: str) -> bool |None:
+    """
+    Whether ``pattern`` holds no literal only some values have, as the privacy floor admits a
+    stored pattern: every class is ``\d`` or whole ASCII digit and letter ranges. None when it
+    does not parse.
     """
 
 def pattern_problem(pattern: str) -> str |None:

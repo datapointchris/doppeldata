@@ -1,6 +1,7 @@
 import contextlib
 import dataclasses as dc
 import importlib.metadata
+import importlib.resources
 import json
 import math
 import signal
@@ -16,6 +17,7 @@ import typer
 from doppeldata import CheckFailed
 from doppeldata import DetectorPackError
 from doppeldata import DoppeldataError
+from doppeldata import InvalidCodeList
 from doppeldata import InvalidProfile
 from doppeldata import InvalidThresholds
 from doppeldata import Profile
@@ -30,9 +32,15 @@ from doppeldata import diff
 from doppeldata import profile
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.example_profiles import example_names
+from doppeldata.example_profiles import example_resource
 from doppeldata.example_profiles import example_text
+from doppeldata.privacy_policy import APPLIED_POLICIES
+from doppeldata.privacy_policy import DEFAULT_K_MIN
+from doppeldata.privacy_policy import ProfileFileCheck
+from doppeldata.privacy_policy import TableCheck
+from doppeldata.privacy_policy import file_checks
 from doppeldata.profile_comparison.metrics import METRICS
-from doppeldata.profiling import DEFAULT_K_MIN
+from doppeldata.profiling import applied_policy
 from doppeldata.published_schemas import output_formats
 from doppeldata.published_schemas import partition_styles
 from doppeldata.published_schemas import schema_names
@@ -176,9 +184,26 @@ def profile_create(
         typer.Option('--out', metavar='FILE', help='Write the profile to FILE, as JSON when it ends in .json, rather than print its YAML.'),
     ] = None,
     sample: Annotated[int | None, typer.Option('--sample', metavar='N', min=1, help='Profile a seeded random sample of N rows.')] = None,
+    policy: Annotated[
+        str,
+        typer.Option(
+            '--policy',
+            metavar='NAME',
+            help=(
+                f'Write the profile under the privacy policy NAME: {", ".join(APPLIED_POLICIES)}. '
+                'healthcare adds HIPAA Safe Harbor and the healthcare detector pack, and none keeps every value.'
+            ),
+        ),
+    ] = 'default',
     k_min: Annotated[
-        int, typer.Option('--k-min', metavar='N', min=1, help='Store no data value that fewer than N rows hold.')
-    ] = DEFAULT_K_MIN,
+        int | None,
+        typer.Option(
+            '--k-min',
+            metavar='N',
+            min=1,
+            help=f'Store no data value that fewer than N rows hold. Defaults to {DEFAULT_K_MIN}; none takes no N.',
+        ),
+    ] = None,
     edges_from: Annotated[
         Path | None,
         typer.Option(
@@ -187,7 +212,7 @@ def profile_create(
             help=(
                 "Count each column against FILE's histogram edges and value list, writing the rows outside them as overflow. "
                 'FILE is returned unchanged when nothing it was made from has changed: the files, the settings, '
-                'and the versions of the tools, readers and detector packs that made it.'
+                'the versions of the tools, readers and detector packs that made it, and the code lists it read.'
             ),
         ),
     ] = None,
@@ -199,6 +224,17 @@ def profile_create(
             help=('Also type columns with the installed detector pack NAME; repeat it for more than one. The general pack is always on.'),
         ),
     ] = None,
+    code_lists: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--code-list',
+            metavar='NAME=FILE',
+            help=(
+                'Hand the detectors that read the code list NAME the codes in FILE, one a line; repeat it for more than one. '
+                'With ndc=FILE, the healthcare pack types an NDC only where FILE holds it. The profile records its sha256, not its path.'
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Profile a dataset into a file holding no rows: doppeldata profile create data/orders/ --out orders.profile.yaml
 
@@ -207,13 +243,22 @@ def profile_create(
     if out is not None and not out.parent.is_dir():
         raise typer.BadParameter(f'{out.parent} is not a directory; create it, or name a FILE in one that exists', param_hint='--out')
     try:
+        applied_policy(policy, k_min)
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint='--policy') from error
+    try:
         earlier = Profile.load(edges_from) if edges_from is not None else None
     except (OSError, InvalidProfile) as error:
         raise typer.BadParameter(str(error), param_hint='--edges-from') from error
+    named_lists = named_files(code_lists or [], '--code-list')
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', ProfilingWarning)
-            profiled = profile(data, sample=sample, k_min=k_min, edges_from=earlier, packs=packs or ())
+            profiled = profile(
+                data, sample=sample, policy=policy, k_min=k_min, edges_from=earlier, packs=packs or (), code_lists=named_lists
+            )
+    except InvalidCodeList as error:
+        raise typer.BadParameter(str(error), param_hint='--code-list') from error
     except SourceError as error:
         if error.exit_code != 2:
             raise
@@ -232,6 +277,19 @@ def profile_create(
         typer.echo(profiled.to_yaml(), nl=False)
         return
     profiled.save(out)
+
+
+def named_files(pairs: list[str], option: str) -> dict[str, Path]:
+    """Each `NAME=FILE` an option was given, by name, refused with exit 2 where one has no `=` or a name repeats."""
+    named: dict[str, Path] = {}
+    for pair in pairs:
+        name, equals, file = pair.partition('=')
+        if not equals or not name or not file:
+            raise typer.BadParameter(f'{pair!r} is not NAME=FILE', param_hint=option)
+        if name in named:
+            raise typer.BadParameter(f'{name} is named twice', param_hint=option)
+        named[name] = Path(file)
+    return named
 
 
 def print_notices(caught: list[warnings.WarningMessage]) -> None:
@@ -348,6 +406,45 @@ def profile_show(name: Annotated[str, typer.Argument(metavar='NAME', help='An ex
             f'{name!r} is not an example profile doppeldata ships; choose from {", ".join(example_names())}', param_hint='NAME'
         )
     typer.echo(example_text(name), nl=False)
+
+
+@profile_app.command('check', no_args_is_help=True)
+def profile_check(profile_name: ProfileArgument, as_json: JsonOption = False) -> None:
+    """Check a profile against its schema and privacy policy, from the file alone: doppeldata profile check orders.profile.yaml
+
+    Each violation prints as the field it is at, what was found and what was expected, and the command exits 3. Every
+    literal must be listed in privacy.audit and meet its rule, counted as a rate of the rows the profile describes.
+    """
+    path = Path(profile_name)
+    try:
+        if path.is_file():
+            report = ProfileFileCheck.of(profile_name, file_checks(path))
+        elif profile_name in example_names():
+            with importlib.resources.as_file(example_resource(profile_name)) as example:
+                report = ProfileFileCheck.of(profile_name, file_checks(example))
+        else:
+            message = f'{profile_name!r} is neither a profile file nor an example; name a file, or one of {", ".join(example_names())}'
+            raise typer.BadParameter(message, param_hint='PROFILE')
+    except OSError as error:
+        raise typer.BadParameter(f'{profile_name} cannot be read: {error.strerror}', param_hint='PROFILE') from error
+    if as_json:
+        typer.echo(json.dumps(dc.asdict(report), indent=2))
+    else:
+        for check in report.tables:
+            typer.echo(checked_table_line(check))
+            for violation in check.violations:
+                typer.echo(f'  {violation.field}: {violation.detail} [{violation.code}]')
+    if report.violations:
+        raise CheckFailed(report)
+
+
+def checked_table_line(check: TableCheck) -> str:
+    """One table's line in profile check: its name, policy and literal fields, and how many violations follow."""
+    if check.policy is None:
+        return f'{check.table}: {counted(len(check.violations), "schema violation")}'
+    floor = f', k_min {check.k_min}' if check.k_min is not None else ''
+    audited = f'{counted(check.literal_fields, "literal field")} under {check.policy}{floor}'
+    return f'{check.table}: {audited}, {counted(len(check.violations), "violation")}'
 
 
 @dc.dataclass(frozen=True)

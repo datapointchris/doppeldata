@@ -138,8 +138,8 @@ The engine names each failure with a code, such as `destination-not-empty`, and 
 `SAMPLE_BLOCKS` as another. The difference is what the added blocks' rows bring. The rest of the
 first object is fixed, such as a header, a footer and a dictionary. Nothing reaches a store.
 
-Estimated over written bytes, for both bundled examples at 5M rows in 1M-row files and at 1M rows
-in 100,000-row files:
+Estimated over written bytes, for the `orders` and `eight-columns` examples at 5M rows in 1M-row
+files and at 1M rows in 100,000-row files:
 
 | Format | Estimate over written |
 | --- | --- |
