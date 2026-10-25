@@ -22,8 +22,8 @@ pub struct TableProfile {
     pub columns: Option<Vec<Column>>,
 }
 
-/// How and when the profile was made. `at`, `tool`, `fitter`, `detector_packs` and
-/// `source_fingerprint` are left out of the profile's digest.
+/// How and when the profile was made. `GENERATED_FIELDS` in the library's
+/// `doppeldata.profile_format` says which fields the profile's digest leaves out.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Generated {
     /// The tool and its version, as `doppeldata <version>`.
@@ -606,10 +606,21 @@ pub enum CheckDigit {
     Luhn,
 }
 
+impl std::str::FromStr for CheckDigit {
+    type Err = String;
+
+    fn from_str(name: &str) -> Result<Self, String> {
+        serde_json::from_value(serde_json::Value::from(name)).map_err(|_| format!("{name:?} is not a check digit a profile names"))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Detector {
+    /// A regular expression matched the column's values.
     Pattern,
+    /// A check of the value other than a regular expression, such as a lookup or a parse.
+    Validator,
     CheckDigit,
     Presidio,
     Glue,

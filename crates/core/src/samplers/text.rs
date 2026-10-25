@@ -456,16 +456,28 @@ impl CheckDigitDraw {
     fn apply(&self, invalid_rng: &mut ChaCha8Rng, value: &mut String) {
         let wrong = self.invalid.draw(invalid_rng);
         let offset = if wrong { 1 + below(invalid_rng, 9) as u8 } else { 0 };
-        let Some(last) = value.bytes().rposition(|b| b.is_ascii_digit()) else {
+        let Some((last, right)) = check_digit_site(self.kind, value) else {
             return;
-        };
-        let payload = value.as_bytes()[..last].iter().filter(|b| b.is_ascii_digit()).map(|b| b - b'0');
-        let right = match self.kind {
-            CheckDigit::Luhn => luhn_check_digit(payload),
         };
         let digit = (right + offset) % 10;
         value.replace_range(last..=last, char::from(b'0' + digit).encode_utf8(&mut [0; 4]));
     }
+}
+
+/// Where `value`'s check digit sits, which is its last ASCII digit, and the digit `kind` computes
+/// there from the ASCII digits before it. None for a value holding no digit.
+fn check_digit_site(kind: CheckDigit, value: &str) -> Option<(usize, u8)> {
+    let last = value.bytes().rposition(|b| b.is_ascii_digit())?;
+    let payload = value.as_bytes()[..last].iter().filter(|b| b.is_ascii_digit()).map(|b| b - b'0');
+    let right = match kind {
+        CheckDigit::Luhn => luhn_check_digit(payload),
+    };
+    Some((last, right))
+}
+
+/// Whether `value` holds the `kind` check digit where generation writes one.
+pub fn check_digit_holds(kind: CheckDigit, value: &str) -> bool {
+    check_digit_site(kind, value).is_some_and(|(last, right)| value.as_bytes()[last] - b'0' == right)
 }
 
 #[derive(Debug, Clone)]

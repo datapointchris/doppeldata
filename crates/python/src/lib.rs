@@ -514,4 +514,19 @@ mod _core {
             Err(error) => error,
         }
     }
+
+    /// Why the engine cannot generate from ``pattern``, as planning a profile that stores it
+    /// refuses it, or None when it can.
+    #[pyfunction]
+    fn pattern_problem(pattern: &str) -> Option<String> {
+        doppeldata_core::pattern_problem(pattern)
+    }
+
+    /// Whether each value holds the check digit ``kind`` names, such as ``luhn``, where generation
+    /// writes one: its last digit, computed from the digits before it.
+    #[pyfunction]
+    fn check_digits_hold(kind: &str, values: Vec<String>) -> PyResult<Vec<bool>> {
+        let kind: doppeldata_core::profile::CheckDigit = kind.parse().map_err(pyo3::exceptions::PyValueError::new_err)?;
+        Ok(values.iter().map(|value| doppeldata_core::check_digit_holds(kind, value)).collect())
+    }
 }
