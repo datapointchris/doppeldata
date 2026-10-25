@@ -162,7 +162,8 @@ answered and refused. A key with a format's suffix that holds no object is liste
 because Spark writes a table as a `name.parquet/` directory.
 
 A file or directory whose name starts with `.` or `_` is skipped, such as Spark's `_SUCCESS`. A
-`key=value` directory below the root that was named is read as a Hive partition, so its key becomes
+directory or prefix holding `_manifest.partial.json` is refused, because a doppeldata write there
+stopped or is still running. A `key=value` directory below the root that was named is read as a Hive partition, so its key becomes
 a column. One above it, such as the `run=7/` holding a file named on its own, is not.
 
 ## A source that changes while it is profiled fails the profile
