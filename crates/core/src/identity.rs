@@ -1,9 +1,13 @@
-//! What names a generated dataset: the five values its rows are a pure function of.
+//! What names a generated dataset: the five values its rows are a pure function of. The engine owns
+//! the identity's encoding and its digest, so the library takes both from here and computes neither.
 
-use serde::Serialize;
+use std::collections::BTreeMap;
+
+use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 
+use crate::profile::provenance;
 use crate::rng::STREAM_VERSION;
 
 /// A dataset's identity. The library computes the profile digest and passes it in, as `sha256:`
@@ -16,15 +20,12 @@ pub struct DatasetIdentity {
     rows: u64,
 }
 
-/// The identity's RFC 8785 form. Fields are declared in key order, and the 64-bit integers are
-/// decimal strings, because RFC 8785 writes a number as an IEEE 754 double.
-#[derive(Serialize)]
-struct Canonical<'a> {
-    profile_digest: &'a str,
-    rows: String,
-    scenario_digest: Option<&'a str>,
-    seed: String,
-    stream_version: u32,
+/// The identity's key for a value: its provenance key without the `doppeldata.` prefix, so a file's
+/// metadata and the identity name each value the same way.
+fn key(provenance_key: &'static str) -> &'static str {
+    provenance_key
+        .strip_prefix("doppeldata.")
+        .expect("every provenance key starts doppeldata.")
 }
 
 impl DatasetIdentity {
@@ -54,16 +55,18 @@ impl DatasetIdentity {
         self.rows
     }
 
-    /// The five values as RFC 8785 canonical JSON, the bytes [`Self::digest`] hashes.
+    /// The five values as RFC 8785 canonical JSON, the bytes [`Self::digest`] hashes. The map sorts
+    /// its keys. The 64-bit integers are decimal strings, because RFC 8785 writes a number as an
+    /// IEEE 754 double.
     pub fn canonical_json(&self) -> String {
-        let canonical = Canonical {
-            profile_digest: &self.profile_digest,
-            rows: self.rows.to_string(),
-            scenario_digest: None,
-            seed: self.seed.to_string(),
-            stream_version: self.stream_version,
-        };
-        serde_json::to_string(&canonical).expect("strings and an integer always serialize")
+        let canonical = BTreeMap::from([
+            (key(provenance::DATASET_ROWS), Value::from(self.rows.to_string())),
+            (key(provenance::PROFILE_DIGEST), Value::from(self.profile_digest.as_str())),
+            (key(provenance::SCENARIO_DIGEST), Value::Null),
+            (key(provenance::SEED), Value::from(self.seed.to_string())),
+            (key(provenance::STREAM_VERSION), Value::from(self.stream_version)),
+        ]);
+        serde_json::to_string(&canonical).expect("strings, null and an integer always serialize")
     }
 
     /// `sha256:` and the hex SHA-256 of [`Self::canonical_json`].

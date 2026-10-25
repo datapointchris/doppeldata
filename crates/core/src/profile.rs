@@ -22,17 +22,26 @@ pub use values::Rate;
 
 /// The schema-level metadata keys the generator writes into every Arrow schema it builds, so every
 /// Parquet and Arrow file names its profile and its whole dataset identity. A scenario key is left
-/// out when no scenario applies.
+/// out when no scenario applies. Without its `doppeldata.` prefix, each identity key is the key the
+/// dataset identity's canonical JSON holds it under, where an absent scenario is null.
 pub mod provenance {
+    /// The profile's `name`.
     pub const PROFILE_NAME: &str = "doppeldata.profile_name";
+    /// The format version the profile was read as.
     pub const PROFILE_VERSION: &str = "doppeldata.profile_version";
+    /// The profile's digest, which the library computes. An identity key.
     pub const PROFILE_DIGEST: &str = "doppeldata.profile_digest";
+    /// The scenario's name.
     pub const SCENARIO_NAME: &str = "doppeldata.scenario_name";
+    /// The scenario's digest. An identity key.
     pub const SCENARIO_DIGEST: &str = "doppeldata.scenario_digest";
+    /// The seed, in decimal. An identity key.
     pub const SEED: &str = "doppeldata.seed";
+    /// The engine's stream version. An identity key.
     pub const STREAM_VERSION: &str = "doppeldata.stream_version";
-    /// The dataset's rows, which no one file of it holds.
+    /// The dataset's row count in decimal, which no one file of it holds. An identity key.
     pub const DATASET_ROWS: &str = "doppeldata.dataset_rows";
+    /// The digest of the dataset's identity, a quick equality check beside the five values.
     pub const DATASET_DIGEST: &str = "doppeldata.dataset_digest";
 }
 

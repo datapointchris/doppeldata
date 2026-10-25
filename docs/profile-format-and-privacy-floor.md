@@ -59,24 +59,13 @@ into synthetic data while no key leaves the source.
 ## Generated files name the profile they came from
 
 Every Parquet and Arrow file the generator writes must carry schema-level key-value metadata, under
-the `doppeldata.*` constants in the core crate's `profile::provenance`. So the next profiler can
-tell synthetic data from real, and any one file names the whole dataset it belongs to.
+the `doppeldata.*` constants in the core crate's `profile::provenance`, where each key says what it
+holds. So the next profiler can tell synthetic data from real, and any one file names the whole
+dataset it belongs to.
 
-| Key | Holds |
-| --- | --- |
-| `doppeldata.profile_name` | the profile's `name` |
-| `doppeldata.profile_version` | the format version the profile was read as |
-| `doppeldata.profile_digest` | the profile's digest |
-| `doppeldata.scenario_name` | the scenario's name, left out when no scenario applies |
-| `doppeldata.scenario_digest` | the scenario's digest, left out when no scenario applies |
-| `doppeldata.seed` | the seed, in decimal |
-| `doppeldata.stream_version` | the engine's stream version |
-| `doppeldata.dataset_rows` | the dataset's row count, in decimal |
-| `doppeldata.dataset_digest` | the digest of the dataset's identity |
-
-The stream version, profile digest, scenario digest, seed and row count are the dataset's whole
-identity, and the dataset digest sits beside them as a quick equality check. The row key names the
-dataset, because every file of it carries the same schema: a file of 65,536 rows reading
+The keys carry the profile's name and format version, and the dataset's whole identity: the five
+values `determinism-contract.md` names, and their digest as a quick equality check. The row key
+names the dataset, because every file of it carries the same schema. One part file reading
 `rows: 10000000` would mislead.
 
 ## Sketches are an optional sidecar, never written for a sensitive column

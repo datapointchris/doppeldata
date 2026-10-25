@@ -13,25 +13,29 @@ A generated dataset is a pure function of:
 The manifest written beside the output must record all five, plus a SHA-256 over them. Three committed
 files — profile, scenario and seed — reproduce a dataset anywhere.
 
-## The identity is RFC 8785 JSON, with the seed and the row count as decimal strings
+## The engine owns the identity: RFC 8785 JSON keyed like the file metadata
 
 The SHA-256 is taken over the RFC 8785 canonical JSON of one object with five keys:
 
 ```json
-{"profile_digest":"sha256:…","rows":"10000000","scenario_digest":null,"seed":"18446744073709551615","stream_version":1}
+{"dataset_rows":"10000000","profile_digest":"sha256:…","scenario_digest":null,"seed":"18446744073709551615","stream_version":1}
 ```
 
+- **The engine builds the canonical JSON and its digest, in `DatasetIdentity`.** The library and its
+  manifest take both from the engine and compute neither. The library owns the profile's canonical
+  form, so it computes the profile and scenario digests and passes them in.
+- **Each key is a file metadata key without its `doppeldata.` prefix.** Both derive from the
+  constants in `profile::provenance`. So a reader holding a file's metadata rebuilds the identity
+  with no mapping, and a sixth value needs no hand ordering, because the map sorts its keys.
 - **The seed and the row count are decimal strings.** Both are 64-bit unsigned integers. RFC 8785
   writes a number as an IEEE 754 double, which holds every integer only up to 2^53, so a seed
   written as a number would lose digits. A string keeps the seed's whole range with no cap.
 - **Each digest is `sha256:` and 64 lowercase hex digits**, the form the library's profile digest
   takes. The identity's own digest is written the same way.
-- **`scenario_digest` is `null` when no scenario applies.** No scenario is the absence of one, so it
-  hashes as an absence rather than as the digest of an empty file.
+- **An absent scenario is `null` in the identity and a missing key in the metadata.** No scenario is
+  the absence of one, so it hashes as an absence rather than as the digest of an empty file.
 
-The engine takes the profile and scenario digests as arguments and never computes them, because the
-library owns the canonical form. A test pins the digest of one fixed identity, which the library's
-own RFC 8785 implementation reproduces.
+A test pins the digest of one fixed identity, which the library's `rfc8785` package reproduces.
 
 ## Each column draws from a stream named for it, never numbered
 

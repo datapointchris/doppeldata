@@ -131,12 +131,13 @@ fn a_dataset_identity_digests_to_its_pinned_value() {
     assert_eq!(
         identity.canonical_json(),
         concat!(
-            r#"{"profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
-            r#""rows":"10000000","scenario_digest":null,"seed":"18446744073709551615","stream_version":1}"#
+            r#"{"dataset_rows":"10000000","#,
+            r#""profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
+            r#""scenario_digest":null,"seed":"18446744073709551615","stream_version":1}"#
         )
     );
     assert_eq!(
         identity.digest(),
-        "sha256:a1c2c24ce89be7b5eefa875b2156a2329bb1319f395d5ba02fc25852809a9465"
+        "sha256:1048dd1c44c17e16770f859d2c5e3ea603858662c4ea8d60318da5b777e18c59"
     );
 }
