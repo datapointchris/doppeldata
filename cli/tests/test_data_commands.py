@@ -37,8 +37,9 @@ def test_data_generate_to_one_file_with_manifest_then_with_replace_alone_leaves_
 
 
 def test_profile_expand_writes_the_profile_a_short_yaml_stands_for_which_generates_the_same_bytes(tmp_path):
+    """A short YAML with `credit_card:` written to CSV passes `data check`, though a CSV reads its 16 digits as integers."""
     short = tmp_path / 'people.yaml'
-    short.write_text('rows: 1000\ncolumns:\n  name:\n  zip: zip_code\n  age: 18..90\n  plan: [free, pro, team]\n')
+    short.write_text('rows: 1000\ncolumns:\n  name:\n  zip: zip_code\n  age: 18..90\n  plan: [free, pro, team]\n  credit_card:\n')
     full = tmp_path / 'people.profile.yaml'
     runner = CliRunner()
     expanded = runner.invoke(app, ['profile', 'expand', str(short), '--out', str(full)])
