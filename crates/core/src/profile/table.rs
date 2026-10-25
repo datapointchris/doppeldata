@@ -427,14 +427,15 @@ pub struct StringStats {
     pub top_values: Option<Vec<TopValue>>,
     /// The share of rows holding a value outside `top_values`.
     pub other_rate: Option<Rate>,
-    /// The rows holding a value outside the value list, written when the list was frozen from an
-    /// earlier profile.
+    /// Written when the value list was frozen from an earlier profile.
     pub overflow: Option<ValueOverflow>,
 }
 
-/// A count of fewer than `k_min` rows is written as 0, and its rows stay in `other_rate`.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct ValueOverflow {
+    /// The rows `other_rate` holds beyond the share it held when the list was first frozen: the
+    /// earlier profile's `other_rate`, less its own `new_values`. So a column whose values did not
+    /// change writes about 0. A count of fewer than `k_min` rows is written as 0.
     pub new_values: u64,
 }
 

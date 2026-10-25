@@ -2102,7 +2102,7 @@
           ]
         },
         "overflow": {
-          "description": "The rows holding a value outside the value list, written when the list was frozen from an\nearlier profile.",
+          "description": "Written when the value list was frozen from an earlier profile.",
           "anyOf": [
             {
               "$ref": "#/$defs/ValueOverflow"
@@ -2429,10 +2429,10 @@
       }
     },
     "ValueOverflow": {
-      "description": "A count of fewer than `k_min` rows is written as 0, and its rows stay in `other_rate`.",
       "type": "object",
       "properties": {
         "new_values": {
+          "description": "The rows `other_rate` holds beyond the share it held when the list was first frozen: the\nearlier profile's `other_rate`, less its own `new_values`. So a column whose values did not\nchange writes about 0. A count of fewer than `k_min` rows is written as 0.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0

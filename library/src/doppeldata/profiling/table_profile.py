@@ -81,20 +81,34 @@ class FrozenLayout:
 
     # Each numeric column's histogram kind and edges.
     histograms: dict[str, tuple[str, tuple[float, ...]]] = dc.field(default_factory=dict)
-    # Each string column's top values, in the order the earlier profile lists them.
-    values: dict[str, tuple[str, ...]] = dc.field(default_factory=dict)
+    values: dict[str, 'FrozenValues'] = dc.field(default_factory=dict)
 
     @classmethod
     def of(cls, document: dict[str, Any]) -> 'FrozenLayout':
         histograms, values = {}, {}
+        sample = (document.get('generated') or {}).get('sample') or {}
+        described = sample.get('rows_read') or (document.get('dataset') or {}).get('row_count')
         for column in document.get('columns') or []:
             histogram = (column.get('numeric') or {}).get('histogram')
             if histogram and len(histogram['edges']) > 1:
                 histograms[column['name']] = (histogram['kind'], tuple(histogram['edges']))
-            listed = (column.get('string') or {}).get('top_values')
-            if listed:
-                values[column['name']] = tuple(entry['value'] for entry in listed)
+            string = column.get('string') or {}
+            if string.get('top_values'):
+                listed = tuple(entry['value'] for entry in string['top_values'])
+                other = string.get('other_rate') or 0.0
+                # A list frozen from a profile before it carries that profile's drift in its new_values, which the baseline leaves out.
+                drifted = (string.get('overflow') or {}).get('new_values') or 0
+                held = described * (1 - (column.get('null_rate') or 0.0)) if described else 0
+                values[column['name']] = FrozenValues(listed, max(0.0, other - drifted / held) if held else other)
         return cls(histograms, values)
+
+
+@dc.dataclass(frozen=True)
+class FrozenValues:
+    """A string column's top values, in the order an earlier profile lists them, and the share of values outside them it started from."""
+
+    values: tuple[str, ...]
+    baseline_other_rate: float
 
 
 @dc.dataclass(frozen=True)
@@ -142,7 +156,7 @@ def profile_table(
             binnings[spec.name] = binning
     listed = {spec.name: layout.values[spec.name] for spec in specs if spec.kind is ColumnKind.STRING and spec.name in layout.values}
     counting = [Request(name, 'histogram_counts', binning.edges) for name, binning in binnings.items()]
-    counting += [Request(name, 'listed_value_counts', values) for name, values in listed.items()]
+    counting += [Request(name, 'listed_value_counts', frozen_values.values) for name, frozen_values in listed.items()]
     stats |= answered(backend, table, counting)
     shapes = {
         spec.name: [(shape, count) for shape, count in backend.top_k(table, spec.name, SHAPES_KEPT, FrequencyKey.SHAPE) if count >= k_min]
@@ -199,7 +213,7 @@ class ColumnLayout:
     """What one column's rows were counted against and fitted to, after its first aggregate."""
 
     binning: Binning | None = None
-    listed: tuple[str, ...] | None = None
+    listed: FrozenValues | None = None
     # Whether fitting applies to the column, and the fit, which is None where it applied and no family fitted.
     fit_applies: bool = False
     fit: dict[str, Any] | None = None
@@ -382,7 +396,7 @@ def string_section(
     values: int,
     shapes: list[tuple[str, int]],
     pattern: str | None,
-    listed: tuple[str, ...] | None,
+    listed: FrozenValues | None,
     k_min: int,
 ) -> dict[str, Any]:
     """A string column's section. `listed` is an earlier profile's value list, which its top values are counted against."""
@@ -400,23 +414,29 @@ def string_section(
     if pattern:
         section['pattern'] = pattern
     if listed is not None:
-        counts = stat('listed_value_counts')
-        section |= top_values(list(zip(listed, counts, strict=True)), values, k_min)
-        outside = values - sum(counts)
-        section['overflow'] = {'new_values': outside if outside >= k_min else 0}
+        kept, other = kept_values(list(zip(listed.values, stat('listed_value_counts'), strict=True)), values, k_min)
+        section |= top_values(kept, other, values)
+        # Counted from `other_rate`'s own rows, so it discloses nothing that rate does not. The rows outside the
+        # list count too, so a listed value that fell under k_min reveals no count of its own.
+        beyond = other - round(listed.baseline_other_rate * values)
+        section['overflow'] = {'new_values': beyond if beyond >= k_min else 0}
     elif stat('distinct_count') <= TOP_VALUES_THRESHOLD:
-        section |= top_values(backend.top_k(table, spec.name, TOP_VALUES_THRESHOLD), values, k_min)
+        section |= top_values(*kept_values(backend.top_k(table, spec.name, TOP_VALUES_THRESHOLD), values, k_min), values)
     return section
 
 
-def top_values(counted: list[tuple[Any, int]], values: int, k_min: int) -> dict[str, Any]:
-    """The values at least k_min rows hold, and the rest as `other_rate`, which is also never 1 to k_min - 1 rows."""
+def kept_values(counted: list[tuple[Any, int]], values: int, k_min: int) -> tuple[list[tuple[Any, int]], int]:
+    """The values at least k_min rows hold, and the rows of the rest, which are also never 1 to k_min - 1."""
     kept = [(value, count) for value, count in counted if count >= k_min]
     other = values - sum(count for _, count in kept)
     while kept and 0 < other < k_min:
         # The least held value folds in, and the last of them where several tie.
         smallest = min(range(len(kept)), key=lambda at: (kept[at][1], -at))
         other += kept.pop(smallest)[1]
+    return kept, other
+
+
+def top_values(kept: list[tuple[Any, int]], other: int, values: int) -> dict[str, Any]:
     if not kept:
         return {}
     return {

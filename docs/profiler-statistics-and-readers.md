@@ -91,9 +91,19 @@ families, and a fit is profile content the determinism contract does not pin.
   reviewer's edits survive a re-run. A profile of every row stands for a sampled run too. No cache
   directory is written, because the library runs inside Glue executors.
 - **Otherwise each column is counted against the earlier histogram edges and value list.** Values
-  outside the edges are written as `histogram.overflow`, `below` and `above`. Rows holding a value
-  outside the list are written as `string.overflow.new_values`. That count includes the rows the
-  earlier `other_rate` held, so a diff weighs one against the other.
+  outside the edges are written as `histogram.overflow`, `below` and `above`.
+- **`string.overflow.new_values` is the growth of `other_rate` since the list was first frozen.** It
+  is the rows `other_rate` holds now, less the share it held then: the earlier profile's
+  `other_rate`, less that profile's own `new_values`. So an unchanged column writes about 0, and
+  drift is reported against the first profile however long the chain of re-profiles. On 200k rows
+  with 5% already outside the list, an unchanged copy wrote 0. Giving 10% of rows a new value wrote
+  9.5% of rows, because the 0.5% that were already outside added nothing, and so did a re-profile
+  chained from that one.
+- **`new_values` is counted from `other_rate`'s own rows**, so it discloses nothing that rate does
+  not. A listed value now held by fewer than `k_min` rows folds into `other_rate`, and counts as
+  growth with the rest. Counting only the rows outside the list would give that value's count away,
+  as `other_rate` less `new_values`. The earlier profile holds no value outside its list, so a value
+  never seen before cannot be told from a rare one that grew.
 - **Two profiles of one table then compare bin for bin**, which the round-trip check and drift
   detection read. Rebinning stays explicit, by profiling again without `edges_from`.
 
