@@ -7,34 +7,35 @@
 #
 # WHEEL is the library's manylinux2014 x86_64 wheel. DATA is a CSV, TSV or Parquet file, or a directory of one table's
 # files. POLICY names the privacy policy, `default` when unset. KEEP names a directory each profile is copied into. With no
-# IMAGE, it checks DEFAULT_IMAGES.
+# IMAGE, it checks each image spark-images.txt lists.
 set -euo pipefail
 
 readonly CONTAINER_MEMORY=8g DRIVER_MEMORY=4g SPARK_MASTER='local[8]'
-readonly DEFAULT_IMAGES=(
-  apache/spark:3.5.9-python3
-  apache/spark:4.1.3-python3
-  public.ecr.aws/glue/aws-glue-libs:5
-)
-# What the profiler reads text and fits families with beside the wheel, at the versions its results were measured with.
-readonly PROFILING_PACKAGES='duckdb==2.0.0 clevercsv==0.8.5 charset-normalizer boto3 scipy'
+# What the profiler reads text with beside the wheel, each at the version the host's Polars profile read with, so both
+# record the same readers. Then what it lists S3 and fits families with, at what the image's Python takes.
+readonly READING_DISTRIBUTIONS=(duckdb clevercsv charset-normalizer)
+readonly OTHER_PACKAGES='boto3 scipy'
 
 main() {
   if (($# < 2)); then
     echo "usage: $(basename "$0") WHEEL DATA [IMAGE...]" >&2
     exit 2
   fi
-  local wheel data name here work cache image policy=${POLICY:-default} status=0
+  local wheel data name here cache image packages images=() policy=${POLICY:-default} status=0
   wheel=$(realpath "$1")
   data=$(realpath "$2")
   name=$(basename "$data")
   shift 2
-  (($# > 0)) || set -- "${DEFAULT_IMAGES[@]}"
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  (($# > 0)) || mapfile -t images <"$here/spark-images.txt"
+  (($# > 0)) || set -- "${images[@]}"
+  # Global, because errexit drops main's locals before the EXIT trap runs.
   work=$(mktemp -d)
   trap 'rm -rf "$work"' EXIT
   cache=${XDG_CACHE_HOME:-$HOME/.cache}/doppeldata-spark-parity
-  mkdir -p "$cache"
+  packages="$(uv run --project "$here/.." python -c \
+    'import importlib.metadata as m, sys; print(" ".join(f"{d}=={m.version(d)}" for d in sys.argv[1:]))' "${READING_DISTRIBUTIONS[@]}") $OTHER_PACKAGES"
+  mkdir -p "$cache" ${KEEP:+"$KEEP"}
   uv run --project "$here/.." doppeldata profile create "$data" --policy "$policy" --out "$work/polars.yaml" >&2
   uv run --project "$here/.." doppeldata profile check "$work/polars.yaml" >&2 || status=1
   [[ -z "${KEEP:-}" ]] || cp "$work/polars.yaml" "$KEEP/${name%.*}.polars.yaml"
@@ -47,7 +48,7 @@ main() {
       echo "parity:x:$(id -u):$(id -g):parity:/tmp:/bin/bash"
     } >"$work/passwd"
     docker run --rm --memory "$CONTAINER_MEMORY" --user "$(id -u):$(id -g)" -e HOME=/tmp \
-      -e UV_CACHE_DIR=/uv/cache -e UV_PYTHON_INSTALL_DIR=/uv/python -e EXTRA_PACKAGES="$PROFILING_PACKAGES" \
+      -e UV_CACHE_DIR=/uv/cache -e UV_PYTHON_INSTALL_DIR=/uv/python -e EXTRA_PACKAGES="$packages" \
       -v "$work/passwd:/etc/passwd:ro" -v "$(command -v uv):/opt/uv:ro" -v "$cache:/uv" -v "$here:/parity:ro" \
       -v "$data:/data/$name:ro" -v "$work:/work" -v "$wheel:/wheel/$(basename "$wheel"):ro" --entrypoint bash "$image" \
       /parity/inside-spark-image.sh "/wheel/$(basename "$wheel")" "$SPARK_MASTER" "$DRIVER_MEMORY" \
