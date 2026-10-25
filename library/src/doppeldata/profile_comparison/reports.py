@@ -136,10 +136,14 @@ def findings(metrics: list[MetricResult], changes: list[FieldChange]) -> list[st
     failed = sum(not result.passed for result in metrics)
     lines = [f'{failed} of {len(metrics)} metrics failed.', '']
     if metrics:
-        lines += ['| Metric | Column | Value | Threshold | Passed |', '| --- | --- | --- | --- | --- |']
+        lines += ['| Metric | Column | Value | Threshold | Source | Observed | Passed |', '| --- | --- | --- | --- | --- | --- | --- |']
         for result in sorted(metrics, key=lambda result: result.passed):
             threshold = f'{BOUND_SIGNS[result.bound]} {result.threshold:g}'
-            lines.append(f'| {result.metric} | {result.column or ""} | {result.value:.6g} | {threshold} | {verdict(result.passed)} |')
+            source, observed = (f'{value:.6g}' if value is not None else '' for value in (result.source, result.observed))
+            lines.append(
+                f'| {result.metric} | {result.column or ""} | {result.value:.6g} | {threshold} | {source} | {observed} '
+                f'| {verdict(result.passed)} |'
+            )
         lines.append('')
     if changes:
         lines += ['| Change | Column | Passed | Detail |', '| --- | --- | --- | --- |']

@@ -20,44 +20,56 @@ there reaches both with no other change.
 
 | Metric | Value | Passes |
 | --- | --- | --- |
-| `ks` | sup of the difference between the two CDFs the generator draws a numeric, date or timestamp column from | at most 0.05 |
-| `tvd` | half the summed difference in share over the source's listed values and one share for every other value | at most 0.05 |
+| `ks` | the largest gap between two numeric columns' CDFs at the points the source states: its quantiles, interior histogram edges and zero | at most 0.05 |
+| `tvd` | half the summed difference in share over the source's listed values and one share for every other value; for a date or timestamp, the largest over month, weekday and hour | at most 0.05 |
 | `null_rate_delta` | the absolute difference in null rate | at most 0.01 |
+| `zero_rate_delta` | the absolute difference in the share of non-null values that are zero | at most 0.01 |
 | `distinct_ratio_delta` | the difference in distinct ratio, relative to the source's | at most 0.10 |
 | `boundary_adherence` | the share of values inside the source's outer histogram edges | at least 0.99 |
 
 The names follow SDMetrics where one exists. Its `KSComplement` is 1 − `ks`, and its `TVComplement`
 is 1 − `tvd`.
 
-## `ks` reads the CDF the generator draws from
+## `ks` is the largest gap at the points the source profile states, a lower bound on the KS distance
 
-The extension's `numeric_cdf_knots` and `temporal_cdf_knots` return the knots the generator's own
-samplers build from a profile. So the check and the generator read one distribution, and a
-statistic the generator ignores cannot pass the check by itself.
+A profile states its CDF at a few points and nothing between them. So `ks` reads each side only
+there, and interpolates nothing.
 
-- **A numeric column's CDF** is the inverse CDF's knots: the quantiles, the extremes, the
-  histogram's edges at their shares, the flat run at `zero_rate`, and the fitted tail.
-- **A date or timestamp column's CDF** weights each day by `by_month` and `by_dow` and each hour by
-  `by_hour`, with the extremes cutting the first and last day. A value is uniform within its hour,
-  so the CDF is linear across one. A whole-day column puts each day's share at its start.
-- **`gap_rate` is left out.** Which days are empty is a seeded draw that no profile records, and
-  emptying a share of days at random leaves the expected CDF where it was.
-- **The supremum is exact.** Both CDFs are linear between knots, so their difference is largest at
-  a knot's value or just below one. Each side is read at every knot value of either, both at the
-  value and just below it, where a jump would hide.
+- **The points are the source's quantiles, interior histogram edges and zero.** An edge pins the
+  share below it, from the counts. Zero pins the share below it at `negative_rate`, and through it
+  at `negative_rate + zero_rate`. A p-quantile q pins less: the share below q is at most p, and the
+  share through q at least p. So a value several quantiles share is one jump they all sit on.
+- **Each side's share at a point is a range.** It is every share a CDF holding all of that side's
+  stated points can have there. The gap at the point is how far apart the two ranges are, and zero
+  where they overlap. `ks` is the largest gap over the source's points, read below each point and
+  through it.
+- **So `ks` is a lower bound on the KS distance between the two datasets.** How the generator
+  fills the span between two stated points is its own choice. Values spread across a span the
+  source left empty pass `ks`. Where the source's values are few, `distinct_ratio_delta` fails them.
+- **The outer edges are left out.** A profile made without overflow folds the rows beyond its
+  trimmed extremes into its outer bins. `boundary_adherence` measures those rows instead.
+- **Every interior edge is exact on both sides.** The other profile is counted against the source's
+  edges, and every rate and count is a share of the non-null values.
 
 A sequence column draws nothing, so it holds its start and step at any row count and has no `ks`.
+A date or timestamp column states no point on its CDF, so `tvd` measures its shares instead.
 
-*Rejected:* building the CDF again in Python. A second reading of the profile could drift from
-the generator's, and the check would then pass data the generator did not draw.
+*Rejected:* reading both profiles through the generator's own inverse CDF. That reference proves
+only that the sampler matches the CDF it built. A builder that drops a column's zero run draws data
+matching what it built, so a check through it passes data the profile never described.
 
-## `tvd` measures over the source's categories
+## `tvd` measures over the source's categories, or a date's months, weekdays and hours
 
 A string column's categories are its `top_values`, and a boolean's are `true` and `false`. Every
 value the source does not list counts as one more category, so a value the other profile lists
 and the source does not adds to that category's share. A source value missing from the other's
 list counts as 0 there. A value under `k_min` rows drops off a list, so the error is under
 `k_min` rows.
+
+A date or timestamp column's shares are `by_month`, `by_dow` and `by_hour`. Its `tvd` is the
+largest of their three distances, over those both profiles hold. It cannot see a shift inside one
+hour or one month. `gap_rate` is not measured, because which days are empty is a seeded draw no
+profile records.
 
 ## `boundary_adherence` is read from the overflow counts
 

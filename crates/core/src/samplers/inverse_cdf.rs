@@ -85,11 +85,6 @@ impl InverseCdf {
         }
     }
 
-    /// The (level, value) knots in level order.
-    pub(crate) fn knots(&self) -> Vec<(f64, f64)> {
-        self.levels.iter().copied().zip(self.values.iter().copied()).collect()
-    }
-
     /// The value at level `u`, for `u` in [0, 1).
     pub(crate) fn value_at(&self, u: f64) -> f64 {
         let bucket = ((u * BUCKETS as f64) as usize).min(BUCKETS - 1);

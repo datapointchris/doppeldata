@@ -144,17 +144,6 @@ pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> R
     Ok(InverseCdf::new(knots))
 }
 
-/// The (level, value) knots of the inverse CDF the generator draws a numeric column through, its
-/// fitted tail included, before any rounding. A check reads a profile through these, so it and the
-/// generator read one distribution.
-pub fn numeric_cdf_knots(stats: &NumericStats) -> Result<Vec<(f64, f64)>, String> {
-    let fit = match stats.fit.as_ref() {
-        Some(fit) => FittedFamily::from_fit(fit)?,
-        None => None,
-    };
-    Ok(numeric_cdf(stats, fit.as_ref())?.knots())
-}
-
 /// An inverse CDF over stored quantiles between a minimum and a maximum, linear between them, or
 /// uniform over `default` when nothing is stored. String and list lengths draw through it.
 pub(crate) fn bounded_cdf(

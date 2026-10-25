@@ -216,216 +216,6 @@ pub(crate) struct TemporalSampler {
     draw: TemporalDraw,
 }
 
-/// What a temporal column is drawn from, before any alias table is built or any day emptied.
-enum Layout {
-    /// `low + k · granule` for `k` uniform in `0..count`.
-    Uniform {
-        low: i64,
-        granule: i64,
-        count: u64,
-    },
-    Weighted(DayLayout),
-}
-
-/// The offsets of a first or last day that lie inside the extremes, as runs of granules, and each
-/// run's weight.
-struct EdgeRuns {
-    day: usize,
-    /// Each run's first offset from the day's start, and its granules.
-    runs: Vec<(i64, u64)>,
-    weights: Vec<f64>,
-}
-
-struct DayLayout {
-    day_starts: Vec<i64>,
-    /// Each day's weight, before `gap_rate` empties any.
-    weights: Vec<f64>,
-    gap_rate: f64,
-    by_hour: Option<Vec<f64>>,
-    /// The first and last day, where the extremes leave part of the day out.
-    edges: Vec<EdgeRuns>,
-    whole_days: bool,
-    granule: i64,
-    granules_per_day: u64,
-    granules_per_hour: u32,
-    ticks_per_hour: i64,
-    low: i64,
-    high: i64,
-}
-
-impl DayLayout {
-    /// The (level, tick) knots of the CDF the days are drawn from, before any is emptied. A whole
-    /// day is one value at its start, and an hour, a run or a day without `by_hour` is spread
-    /// linearly over its granules.
-    fn cdf_knots(&self) -> Vec<(f64, i64)> {
-        let total: f64 = self.weights.iter().sum();
-        let ticks_per_day = self.ticks_per_hour * 24;
-        let mut knots = Vec::new();
-        let mut below = 0.0;
-        for (index, (&start, &weight)) in self.day_starts.iter().zip(&self.weights).enumerate() {
-            if weight <= 0.0 {
-                continue;
-            }
-            let pieces: Vec<(i64, i64, f64)> = if self.whole_days {
-                vec![(0, 0, 1.0)]
-            } else if let Some(edge) = self.edges.iter().find(|edge| edge.day == index) {
-                edge.runs
-                    .iter()
-                    .zip(&edge.weights)
-                    .map(|(&(first, granules), &run_weight)| (first, first + granules as i64 * self.granule, run_weight))
-                    .collect()
-            } else if let Some(by_hour) = &self.by_hour {
-                (0..24)
-                    .map(|hour| {
-                        (
-                            hour * self.ticks_per_hour,
-                            (hour + 1) * self.ticks_per_hour,
-                            by_hour.get(hour as usize).copied().unwrap_or(0.0),
-                        )
-                    })
-                    .collect()
-            } else {
-                vec![(0, ticks_per_day, 1.0)]
-            };
-            let pieces_total: f64 = pieces.iter().map(|&(_, _, piece)| piece).sum();
-            for (from, to, piece) in pieces {
-                knots.push((below, start + from));
-                below += weight / total * piece / pieces_total;
-                knots.push((below, start + to));
-            }
-        }
-        knots
-    }
-}
-
-/// The (level, seconds since the Unix epoch) knots of the CDF a date or timestamp column is drawn
-/// from, before `gap_rate` empties any day. A check reads a profile through these, so it and the
-/// generator read one distribution.
-pub fn temporal_cdf_knots(stats: &TemporalStats) -> Result<Vec<(f64, f64)>, String> {
-    let output = TemporalOutput::Timestamp(TimeUnit::Microsecond, None);
-    let per_second = ticks_per_second(TimeUnit::Microsecond) as f64;
-    let knots = match layout(Some(stats), &output).map_err(|refusal| refusal.message)? {
-        Layout::Uniform { low, granule, count } => vec![(0.0, low), (1.0, low + count as i64 * granule)],
-        Layout::Weighted(days) => days.cdf_knots(),
-    };
-    Ok(knots.into_iter().map(|(level, ticks)| (level, ticks as f64 / per_second)).collect())
-}
-
-/// The range's days and their weights by `by_month` and `by_dow`, the hours' weights, and the
-/// granules of the edge days that lie inside the extremes.
-fn layout(stats: Option<&TemporalStats>, output: &TemporalOutput) -> Result<Layout, Refusal> {
-    let extremes = stats.and_then(|s| s.extremes.as_ref());
-    let ticks_per_day = output.ticks_per_day();
-    let parse = |text: Option<&String>, default: &str| {
-        let text = text.map_or(default, String::as_str);
-        output
-            .ticks(text)
-            .ok_or_else(|| Refusal::new(ColumnFault::InvalidExtreme, format!("extreme {text:?} is not a {output:?} value")))
-    };
-    let (default_low, default_high) = if output.is_time_of_day() {
-        ("00:00:00", "23:59:59.999999999")
-    } else {
-        DEFAULT_RANGE
-    };
-    let low = parse(extremes.and_then(|e| e.low.as_ref()), default_low)?;
-    let high = parse(extremes.and_then(|e| e.high.as_ref()), default_high)?.max(low);
-    let granule = granule(extremes.and_then(|e| e.granularity), output);
-    let whole_days = output.is_date() || granule >= ticks_per_day;
-    let by_month = stats.and_then(|s| s.by_month.as_ref());
-    let by_dow = stats.and_then(|s| s.by_dow.as_ref());
-    let by_hour = stats.and_then(|s| s.by_hour.as_ref()).filter(|_| !whole_days);
-    let gap_rate = stats.and_then(|s| s.gap_rate).map_or(0.0, |r| r.0);
-    if by_month.is_none() && by_dow.is_none() && by_hour.is_none() && gap_rate == 0.0 {
-        let granule = if whole_days { ticks_per_day } else { granule };
-        let count = ((high - low) / granule) as u64 + 1;
-        return Ok(Layout::Uniform { low, granule, count });
-    }
-    let (first_day, last_day) = if output.is_time_of_day() {
-        (0, 0)
-    } else {
-        (low.div_euclid(ticks_per_day), high.div_euclid(ticks_per_day))
-    };
-    let ticks_per_hour = ticks_per_day / 24;
-    let granules_per_day = (ticks_per_day / granule).max(1) as u64;
-    let granules_per_hour = (ticks_per_hour / granule).max(1) as u32;
-    let day_starts: Vec<i64> = (first_day..=last_day).map(|day| day * ticks_per_day).collect();
-    // The share of each day's weighted granules inside the extremes, below 1 on an edge day.
-    let mut inside = vec![1.0; day_starts.len()];
-    let mut edges = Vec::new();
-    if !whole_days {
-        let last = day_starts.len() - 1;
-        for index in if last == 0 { vec![0] } else { vec![0, last] } {
-            let start = day_starts[index];
-            if start >= low && start + ticks_per_day - 1 <= high {
-                continue;
-            }
-            let (runs, run_weights): (Vec<(i64, u64)>, Vec<f64>) = match by_hour {
-                Some(by_hour) => (0..24)
-                    .filter_map(|hour| {
-                        let hour_start = hour as i64 * ticks_per_hour;
-                        let (first, count) = granules_inside(start + hour_start, u64::from(granules_per_hour), granule, low, high);
-                        let weight = by_hour.get(hour).map_or(0.0, |r| r.0) * count as f64;
-                        (weight > 0.0).then_some(((hour_start + first, count), weight))
-                    })
-                    .unzip(),
-                None => {
-                    let (first, count) = granules_inside(start, granules_per_day, granule, low, high);
-                    ((count > 0).then_some(((first, count), count as f64))).into_iter().unzip()
-                }
-            };
-            let whole_day = match by_hour {
-                Some(by_hour) => by_hour.iter().map(|r| r.0).sum::<f64>() * f64::from(granules_per_hour),
-                None => granules_per_day as f64,
-            };
-            inside[index] = run_weights.iter().sum::<f64>() / whole_day;
-            if !runs.is_empty() {
-                edges.push(EdgeRuns {
-                    day: index,
-                    runs,
-                    weights: run_weights,
-                });
-            }
-        }
-    }
-    let calendar: Vec<(usize, usize)> = (first_day..=last_day)
-        .map(|day| {
-            let date = DateTime::from_timestamp(day * SECONDS_PER_DAY, 0).map(|d| d.date_naive());
-            date.map_or((0, 0), |d| (d.month0() as usize, d.weekday().num_days_from_monday() as usize))
-        })
-        .collect();
-    // A month's or weekday's share is spread over its days by how much of each lies inside the
-    // extremes, so a partial edge day holds less than a whole one and the shares stay as stored.
-    let mut months = [0.0; 12];
-    let mut weekdays = [0.0; 7];
-    for (&(month, weekday), &inside) in calendar.iter().zip(&inside) {
-        months[month] += inside;
-        weekdays[weekday] += inside;
-    }
-    let share = |weights: Option<&Vec<crate::profile::Rate>>, index: usize, slots: &[f64]| match weights {
-        Some(weights) if slots[index] > 0.0 => weights.get(index).map_or(0.0, |r| r.0) / slots[index],
-        _ => 1.0,
-    };
-    let weights: Vec<f64> = calendar
-        .iter()
-        .zip(&inside)
-        .map(|(&(month, weekday), &inside)| inside * share(by_month, month, &months) * share(by_dow, weekday, &weekdays))
-        .collect();
-    Ok(Layout::Weighted(DayLayout {
-        day_starts,
-        weights,
-        gap_rate,
-        by_hour: by_hour.map(|by_hour| by_hour.iter().map(|r| r.0).collect()),
-        edges,
-        whole_days,
-        granule,
-        granules_per_day,
-        granules_per_hour,
-        ticks_per_hour,
-        low,
-        high,
-    }))
-}
-
 impl TemporalSampler {
     /// `gap_days` shuffles the range's days when `gap_rate` leaves some empty.
     pub(crate) fn new(
@@ -433,30 +223,112 @@ impl TemporalSampler {
         output: TemporalOutput,
         gap_days: impl FnOnce() -> ChaCha8Rng,
     ) -> Result<Self, Refusal> {
-        let layout = match layout(stats, &output)? {
-            Layout::Uniform { low, granule, count } => {
-                return Ok(Self {
-                    output,
-                    draw: TemporalDraw::Uniform { low, granule, count },
-                });
-            }
-            Layout::Weighted(layout) => layout,
+        let extremes = stats.and_then(|s| s.extremes.as_ref());
+        let ticks_per_day = output.ticks_per_day();
+        let parse = |text: Option<&String>, default: &str| {
+            let text = text.map_or(default, String::as_str);
+            output
+                .ticks(text)
+                .ok_or_else(|| Refusal::new(ColumnFault::InvalidExtreme, format!("extreme {text:?} is not a {output:?} value")))
+        };
+        let (default_low, default_high) = if output.is_time_of_day() {
+            ("00:00:00", "23:59:59.999999999")
+        } else {
+            DEFAULT_RANGE
+        };
+        let low = parse(extremes.and_then(|e| e.low.as_ref()), default_low)?;
+        let high = parse(extremes.and_then(|e| e.high.as_ref()), default_high)?.max(low);
+        let granule = granule(extremes.and_then(|e| e.granularity), &output);
+        let whole_days = output.is_date() || granule >= ticks_per_day;
+        let by_month = stats.and_then(|s| s.by_month.as_ref());
+        let by_dow = stats.and_then(|s| s.by_dow.as_ref());
+        let by_hour = stats.and_then(|s| s.by_hour.as_ref()).filter(|_| !whole_days);
+        let gap_rate = stats.and_then(|s| s.gap_rate).map_or(0.0, |r| r.0);
+        if by_month.is_none() && by_dow.is_none() && by_hour.is_none() && gap_rate == 0.0 {
+            let granule = if whole_days { ticks_per_day } else { granule };
+            let count = ((high - low) / granule) as u64 + 1;
+            return Ok(Self {
+                output,
+                draw: TemporalDraw::Uniform { low, granule, count },
+            });
+        }
+        let (first_day, last_day) = if output.is_time_of_day() {
+            (0, 0)
+        } else {
+            (low.div_euclid(ticks_per_day), high.div_euclid(ticks_per_day))
         };
         let unusable = |what: &'static str| move |error| Refusal::new(ColumnFault::UnusableRates, format!("{what} are unusable: {error}"));
-        let hours = match &layout.by_hour {
-            Some(by_hour) => Some(WeightedAliasIndex::new(by_hour.clone()).map_err(unusable("by_hour's rates"))?),
+        let hours = match by_hour {
+            Some(by_hour) => Some(WeightedAliasIndex::new(by_hour.iter().map(|r| r.0).collect()).map_err(unusable("by_hour's rates"))?),
             None => None,
         };
+        let ticks_per_hour = ticks_per_day / 24;
+        let granules_per_day = (ticks_per_day / granule).max(1) as u64;
+        let granules_per_hour = (ticks_per_hour / granule).max(1) as u32;
+        let day_starts: Vec<i64> = (first_day..=last_day).map(|day| day * ticks_per_day).collect();
+        // The share of each day's weighted granules inside the extremes, below 1 on an edge day.
+        let mut inside = vec![1.0; day_starts.len()];
         let mut edges = Vec::new();
-        for EdgeRuns { day, runs, weights } in layout.edges {
-            let choice = match runs.len() {
-                1 => None,
-                _ => Some(WeightedAliasIndex::new(weights).map_err(unusable("by_hour's rates"))?),
-            };
-            edges.push((day, EdgeDay { runs, choice }));
+        if !whole_days {
+            let last = day_starts.len() - 1;
+            for index in if last == 0 { vec![0] } else { vec![0, last] } {
+                let start = day_starts[index];
+                if start >= low && start + ticks_per_day - 1 <= high {
+                    continue;
+                }
+                let (runs, run_weights): (Vec<(i64, u64)>, Vec<f64>) = match by_hour {
+                    Some(by_hour) => (0..24)
+                        .filter_map(|hour| {
+                            let hour_start = hour as i64 * ticks_per_hour;
+                            let (first, count) = granules_inside(start + hour_start, u64::from(granules_per_hour), granule, low, high);
+                            let weight = by_hour.get(hour).map_or(0.0, |r| r.0) * count as f64;
+                            (weight > 0.0).then_some(((hour_start + first, count), weight))
+                        })
+                        .unzip(),
+                    None => {
+                        let (first, count) = granules_inside(start, granules_per_day, granule, low, high);
+                        ((count > 0).then_some(((first, count), count as f64))).into_iter().unzip()
+                    }
+                };
+                let whole_day = match by_hour {
+                    Some(by_hour) => by_hour.iter().map(|r| r.0).sum::<f64>() * f64::from(granules_per_hour),
+                    None => granules_per_day as f64,
+                };
+                inside[index] = run_weights.iter().sum::<f64>() / whole_day;
+                if runs.is_empty() {
+                    continue;
+                }
+                let choice = match runs.len() {
+                    1 => None,
+                    _ => Some(WeightedAliasIndex::new(run_weights).map_err(unusable("by_hour's rates"))?),
+                };
+                edges.push((index, EdgeDay { runs, choice }));
+            }
         }
-        let mut weights = layout.weights;
-        let gaps = ((layout.gap_rate * weights.len() as f64).round() as usize).min(weights.len().saturating_sub(1));
+        let calendar: Vec<(usize, usize)> = (first_day..=last_day)
+            .map(|day| {
+                let date = DateTime::from_timestamp(day * SECONDS_PER_DAY, 0).map(|d| d.date_naive());
+                date.map_or((0, 0), |d| (d.month0() as usize, d.weekday().num_days_from_monday() as usize))
+            })
+            .collect();
+        // A month's or weekday's share is spread over its days by how much of each lies inside the
+        // extremes, so a partial edge day holds less than a whole one and the shares stay as stored.
+        let mut months = [0.0; 12];
+        let mut weekdays = [0.0; 7];
+        for (&(month, weekday), &inside) in calendar.iter().zip(&inside) {
+            months[month] += inside;
+            weekdays[weekday] += inside;
+        }
+        let share = |weights: Option<&Vec<crate::profile::Rate>>, index: usize, slots: &[f64]| match weights {
+            Some(weights) if slots[index] > 0.0 => weights.get(index).map_or(0.0, |r| r.0) / slots[index],
+            _ => 1.0,
+        };
+        let mut weights: Vec<f64> = calendar
+            .iter()
+            .zip(&inside)
+            .map(|(&(month, weekday), &inside)| inside * share(by_month, month, &months) * share(by_dow, weekday, &weekdays))
+            .collect();
+        let gaps = ((gap_rate * weights.len() as f64).round() as usize).min(weights.len().saturating_sub(1));
         if gaps > 0 {
             let mut rng = gap_days();
             let mut order: Vec<usize> = (0..weights.len()).collect();
@@ -470,17 +342,17 @@ impl TemporalSampler {
         Ok(Self {
             output,
             draw: TemporalDraw::Weighted(Box::new(WeightedDays {
-                day_starts: layout.day_starts,
+                day_starts,
                 days,
                 hours,
-                whole_days: layout.whole_days,
-                granule: layout.granule,
-                granules_per_day: layout.granules_per_day,
-                granules_per_hour: layout.granules_per_hour,
-                ticks_per_hour: layout.ticks_per_hour,
+                whole_days,
+                granule,
+                granules_per_day,
+                granules_per_hour,
+                ticks_per_hour,
                 edges,
-                low: layout.low,
-                high: layout.high,
+                low,
+                high,
             })),
         })
     }

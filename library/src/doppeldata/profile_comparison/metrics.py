@@ -4,20 +4,19 @@ A metric is a function from two profiles to values, each for one column or for t
 added to `METRICS` reaches the reports and `--thresholds` with no other change.
 """
 
-import bisect
 import dataclasses as dc
 import enum
-import json
+import itertools
 from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Mapping
 from typing import Any
 from typing import NamedTuple
 
-from doppeldata import _core
-
 Document = dict[str, Any]
 Column = dict[str, Any]
-Knots = list[tuple[float, float]]
+Shares = tuple[float, float]
+TEMPORAL_SHARES = ('by_month', 'by_dow', 'by_hour')
 
 
 class Bound(enum.Enum):
@@ -66,45 +65,86 @@ def per_column(measure_column: Callable[[Column, Column], Compared | None]) -> C
     return measure
 
 
-# The CDF the generator draws each kind of column from, by the profile block that holds its statistics.
-CDF_KNOTS: dict[str, Callable[[str], Knots]] = {'numeric': _core.numeric_cdf_knots, 'temporal': _core.temporal_cdf_knots}
+@dc.dataclass(frozen=True)
+class Stated:
+    """What a profile states about its CDF at `value`: the least and greatest share below it, and through it."""
+
+    value: float
+    below: Shares
+    through: Shares
 
 
-def share_up_to(knots: Knots, values: list[float], x: float, *, strictly: bool) -> float:
-    """The share of the distribution at or below `x`, or strictly below it, read from its inverse CDF's knots.
+def quantile_level(name: str) -> float | None:
+    """The level a quantile's name stands for: `p05` is 0.05, `p999` is 0.999."""
+    digits = name.removeprefix('p')
+    return int(digits) / 10 ** len(digits) if name.startswith('p') and digits.isdigit() else None
 
-    Two knots at one value are a jump at that value, so the share strictly below it is the lower level.
+
+def stated_points(numeric: dict[str, Any]) -> list[Stated]:
+    """Every point a numeric block states its CDF at: each quantile, each histogram edge its counts pin, and zero.
+
+    A p-quantile q states only that the share below q is at most p and the share through q at least p, so a value
+    several quantiles share is a jump they all sit on. Every rate is a share of the non-null values, as the counts are.
     """
-    found = (bisect.bisect_left if strictly else bisect.bisect_right)(values, x) - 1
-    if found < 0:
-        return 0.0
-    if found == len(knots) - 1:
-        return knots[found][0]
-    (low_level, low), (high_level, high) = knots[found], knots[found + 1]
-    return low_level + (x - low) / (high - low) * (high_level - low_level)
+    points = [
+        Stated(value, (0.0, level), (level, 1.0))
+        for name, value in (numeric.get('quantiles') or {}).items()
+        if (level := quantile_level(name)) is not None
+    ]
+    histogram = numeric.get('histogram') or {}
+    edges, counts, overflow = histogram.get('edges') or [], histogram.get('counts') or [], histogram.get('overflow')
+    below, above = (overflow['below'], overflow['above']) if overflow else (0, 0)
+    total = below + sum(counts) + above
+    if total and len(edges) == len(counts) + 1:
+        cumulative = [share / total for share in itertools.accumulate(counts, initial=below)]
+        # Without overflow, the outer bins hold the rows beyond the trimmed extremes, so the outer edges pin nothing.
+        pinned = range(len(edges) - 1) if overflow else range(1, len(edges) - 1)
+        points += [Stated(edges[at], (cumulative[at], cumulative[at]), (cumulative[at], 1.0)) for at in pinned]
+        if overflow:
+            # The last bin holds its upper edge, so its count reaches through that edge rather than below it.
+            points.append(Stated(edges[-1], (0.0, cumulative[-1]), (cumulative[-1], cumulative[-1])))
+    negative, zero = numeric.get('negative_rate'), numeric.get('zero_rate')
+    if negative is not None and zero is not None:
+        points.append(Stated(0.0, (negative, negative), (negative + zero, negative + zero)))
+    return points
 
 
-def largest_cdf_gap(a: Knots, b: Knots) -> float:
-    """The supremum of the two CDFs' difference. Both are linear between knots, so it falls at a knot's value or just below one."""
-    values_a, values_b = [value for _, value in a], [value for _, value in b]
-    gaps = (
-        abs(share_up_to(a, values_a, x, strictly=strictly) - share_up_to(b, values_b, x, strictly=strictly))
-        for x in sorted({*values_a, *values_b})
-        for strictly in (False, True)
+def allowed(points: list[Stated], x: float) -> tuple[Shares, Shares]:
+    """The least and greatest share below `x`, and through `x`, of any CDF holding every stated point."""
+    below = (
+        max([p.through[0] for p in points if p.value < x] + [p.below[0] for p in points if p.value == x], default=0.0),
+        min([p.below[1] for p in points if p.value >= x], default=1.0),
     )
-    return max(gaps, default=0.0)
+    through = (
+        max([p.through[0] for p in points if p.value <= x], default=0.0),
+        min([p.below[1] for p in points if p.value > x] + [p.through[1] for p in points if p.value == x], default=1.0),
+    )
+    return below, through
+
+
+def apart(a: Shares, b: Shares) -> float:
+    """How far apart two ranges of share are, zero where they overlap."""
+    return max(0.0, b[0] - a[1], a[0] - b[1])
 
 
 def kolmogorov_smirnov(source: Column, observed: Column) -> Compared | None:
-    """The largest gap between the CDFs the generator would draw a numeric, date or timestamp column from, by each profile."""
-    for block, knots_of in CDF_KNOTS.items():
-        a, b = source.get(block), observed.get(block)
-        if a and b:
-            # A sequence draws nothing, so it holds its start and step at any row count rather than a distribution.
-            if a.get('sequence'):
-                return None
-            return Compared(largest_cdf_gap(knots_of(json.dumps(a)), knots_of(json.dumps(b))))
-    return None
+    """The largest gap between two numeric columns' CDFs that their profiles force, at the points the source states.
+
+    At each point, each side's share below it and through it is the range its own stated points allow, with nothing
+    interpolated between them. So the value is a lower bound on the KS distance between the two datasets.
+    """
+    a, b = source.get('numeric'), observed.get('numeric')
+    # A sequence draws nothing, so it holds its start and step at any row count rather than a distribution.
+    if not a or not b or a.get('sequence'):
+        return None
+    mine, theirs = stated_points(a), stated_points(b)
+    if not mine or not theirs:
+        return None
+    gaps = []
+    for x in {point.value for point in mine}:
+        (below_mine, through_mine), (below_theirs, through_theirs) = allowed(mine, x), allowed(theirs, x)
+        gaps += [apart(below_mine, below_theirs), apart(through_mine, through_theirs)]
+    return Compared(max(gaps))
 
 
 def category_shares(column: Column) -> dict[str, float] | None:
@@ -117,18 +157,38 @@ def category_shares(column: Column) -> dict[str, float] | None:
     return None
 
 
+def share_distance(p: Mapping[Any, float], q: Mapping[Any, float]) -> float:
+    """Half the summed difference in share, over `p`'s categories and every other value as one more."""
+    listed = {category: q.get(category, 0.0) for category in p}
+    other_p, other_q = max(0.0, 1 - sum(p.values())), max(0.0, 1 - sum(listed.values()))
+    return (sum(abs(p[category] - listed[category]) for category in p) + abs(other_p - other_q)) / 2
+
+
 def total_variation(source: Column, observed: Column) -> Compared | None:
-    """Half the summed difference in share over the source's categories, and over every other value as one more."""
-    p, listed = category_shares(source), category_shares(observed)
-    if p is None or listed is None:
+    """The share distance over a categorical column's values, or the largest over a date or timestamp's month, weekday and hour."""
+    a, b = source.get('temporal') or {}, observed.get('temporal') or {}
+    if a and b:
+        distances = [
+            share_distance(dict(enumerate(a[shares])), dict(enumerate(b[shares])))
+            for shares in TEMPORAL_SHARES
+            if a.get(shares) and b.get(shares)
+        ]
+        return Compared(max(distances)) if distances else None
+    p, q = category_shares(source), category_shares(observed)
+    if p is None or q is None:
         return None
-    q = {category: listed.get(category, 0.0) for category in p}
-    other_p, other_q = max(0.0, 1 - sum(p.values())), max(0.0, 1 - sum(q.values()))
-    return Compared((sum(abs(p[category] - q[category]) for category in p) + abs(other_p - other_q)) / 2)
+    return Compared(share_distance(p, q))
 
 
 def null_rate_change(source: Column, observed: Column) -> Compared | None:
     a, b = source.get('null_rate'), observed.get('null_rate')
+    if a is None or b is None:
+        return None
+    return Compared(abs(b - a), a, b)
+
+
+def zero_rate_change(source: Column, observed: Column) -> Compared | None:
+    a, b = ((column.get('numeric') or {}).get('zero_rate') for column in (source, observed))
     if a is None or b is None:
         return None
     return Compared(abs(b - a), a, b)
@@ -145,7 +205,7 @@ def distinct_ratio_change(source: Column, observed: Column) -> Compared | None:
 def boundary_adherence(source: Column, observed: Column) -> Compared | None:
     """The share of observed values inside the source's outer histogram edges, from the rows counted outside them.
 
-    The outer edges are the source's trimmed extremes, or half a unit beyond them in an integer column. Only a
+    The outer edges are the source's trimmed extremes, or half a unit beyond them in an integral column. Only a
     histogram counted against the source's edges carries `overflow`, so a profile binned afresh is not measured.
     """
     numeric = source.get('numeric') or {}
@@ -163,6 +223,7 @@ METRICS = (
     Metric('ks', Bound.AT_MOST, 0.05, per_column(kolmogorov_smirnov)),
     Metric('tvd', Bound.AT_MOST, 0.05, per_column(total_variation)),
     Metric('null_rate_delta', Bound.AT_MOST, 0.01, per_column(null_rate_change)),
+    Metric('zero_rate_delta', Bound.AT_MOST, 0.01, per_column(zero_rate_change)),
     Metric('distinct_ratio_delta', Bound.AT_MOST, 0.10, per_column(distinct_ratio_change)),
     Metric('boundary_adherence', Bound.AT_LEAST, 0.99, per_column(boundary_adherence)),
 )

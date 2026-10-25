@@ -106,8 +106,16 @@ class ProfilesDrifted(DoppeldataError):
 
 
 def missed(report: 'CheckReport | DiffReport') -> str:
-    """`2 of 15 metrics and 1 of 1 field changes: ks on amount, tvd on status, column_added fee`."""
-    metrics = [f'{result.metric} on {result.column}' if result.column else result.metric for result in report.metrics if not result.passed]
+    """`2 of 15 metrics and 1 of 1 field changes: ks on amount, null_rate_delta on status (0.01 to 0.05), column_added fee`."""
+    metrics = [
+        ' '.join(
+            [result.metric]
+            + ([f'on {result.column}'] if result.column else [])
+            + ([f'({result.source:g} to {result.observed:g})'] if result.source is not None and result.observed is not None else [])
+        )
+        for result in report.metrics
+        if not result.passed
+    ]
     changes = [f'{change.change.value} {change.column or ""}'.rstrip() for change in report.changes if not change.passed]
     counts = f'{len(metrics)} of {len(report.metrics)} metrics and {len(changes)} of {len(report.changes)} field changes'
     return f'{counts}: {", ".join(metrics + changes)}'
