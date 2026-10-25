@@ -16,7 +16,9 @@ GENERATED_ROWS = ROWS // 4
 
 
 def source_table() -> pa.Table:
-    """Columns the generator holds every metric for: continuous floats, few categories, unique codes, seconds and flags."""
+    """Columns the generator holds every metric for: continuous floats, few categories, unique codes, seconds, flags, and a
+    numeric code whose 900 values each hold fewer than k_min rows of a quarter-size run.
+    """
     draw = random.Random(3)
     start = dt.datetime(2025, 3, 1)
     return pa.table(
@@ -26,6 +28,7 @@ def source_table() -> pa.Table:
             'code': [f'ORD{index:06d}' for index in draw.sample(range(10**6), ROWS)],
             'ordered_at': [start + dt.timedelta(seconds=draw.randrange(30 * 86_400)) for _ in range(ROWS)],
             'paid': [draw.random() < 0.7 for _ in range(ROWS)],
+            'store_id': [draw.randrange(900) for _ in range(ROWS)],
         }
     )
 

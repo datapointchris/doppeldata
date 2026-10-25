@@ -14,6 +14,10 @@ from collections.abc import Mapping
 from typing import Any
 from typing import NamedTuple
 
+from doppeldata import _core
+from doppeldata.profile_format import LISTING_SECTIONS
+from doppeldata.profile_format import described_rows
+from doppeldata.profile_format import listed_section
 from doppeldata.profile_format import quantile_level
 
 Document = dict[str, Any]
@@ -62,6 +66,14 @@ class Metric:
         return value <= threshold if self.bound is Bound.AT_MOST else value >= threshold
 
 
+def shared_columns(source: Document, observed: Document) -> Iterator[tuple[Column, Column]]:
+    """Each top-level column both profiles hold, in the source profile's order, beside the other profile's."""
+    theirs = {column['name']: column for column in observed.get('columns') or []}
+    for column in source.get('columns') or []:
+        if column['name'] in theirs:
+            yield column, theirs[column['name']]
+
+
 def per_column(
     measure_column: Callable[[Column, Column], Compared | Unmeasured | None],
 ) -> Callable[[Document, Document], Iterator[Measurement]]:
@@ -71,14 +83,18 @@ def per_column(
     """
 
     def measure(source: Document, observed: Document) -> Iterator[Measurement]:
-        theirs = {column['name']: column for column in observed.get('columns') or []}
-        for column in source.get('columns') or []:
-            if column['name'] in theirs:
-                compared = measure_column(column, theirs[column['name']])
-                if compared is not None:
-                    yield Measurement(column['name'], compared)
+        for ours, theirs in shared_columns(source, observed):
+            compared = measure_column(ours, theirs)
+            if compared is not None:
+                yield Measurement(ours['name'], compared)
 
     return measure
+
+
+def described_values(document: Document, column: Column) -> float:
+    """The values not null a profile's rates for `column` are shares of, or 0 where it states no row count."""
+    rows = described_rows(document) or 0
+    return rows * (1 - (column.get('null_rate') or 0.0))
 
 
 @dc.dataclass(frozen=True)
@@ -157,39 +173,77 @@ def kolmogorov_smirnov(source: Column, observed: Column) -> Compared | Unmeasure
 
 
 def category_shares(column: Column) -> dict[Any, float] | None:
-    """A column's share of values in each listed category: a string or numeric column's top values, or a boolean's two."""
-    string, numeric, boolean = (column.get(kind) or {} for kind in ('string', 'numeric', 'boolean'))
-    listed = string.get('top_values') or numeric.get('top_values')
-    if listed:
-        return {entry['value']: entry['rate'] for entry in listed}
+    """A column's share of values in each listed category: a string or numeric column's top values, or a boolean's two.
+
+    A column counted against a frozen list where every value fell under k_min lists none, and has no share in any.
+    """
+    listing = listed_section(column)
+    if listing:
+        return {entry['value']: entry['rate'] for entry in listing[1]['top_values']}
+    if any('overflow' in (column.get(section) or {}) for section in LISTING_SECTIONS):
+        return {}
+    boolean = column.get('boolean') or {}
     if boolean.get('true_rate') is not None:
         return {'true': boolean['true_rate'], 'false': 1 - boolean['true_rate']}
     return None
 
 
-def share_distance(p: Mapping[Any, float], q: Mapping[Any, float]) -> float:
-    """Half the summed difference in share, over `p`'s categories and every other value as one more."""
+def share_distance(p: Mapping[Any, float], q: Mapping[Any, float], *, folded: float = 0.0) -> float:
+    """Half the summed difference in share, over `p`'s categories and every other value as one more.
+
+    A category `q` leaves out may hold up to `folded` of its values inside its other share, as a value under k_min rows
+    folds into `other`, and is taken to hold as much of its share in `p` as that allows.
+    """
     listed = {category: q.get(category, 0.0) for category in p}
+    room = max(0.0, 1 - sum(q.values()))
+    for category in p:
+        if category not in q:
+            listed[category] = min(p[category], folded, room)
+            room -= listed[category]
     other_p, other_q = max(0.0, 1 - sum(p.values())), max(0.0, 1 - sum(listed.values()))
     return (sum(abs(p[category] - listed[category]) for category in p) + abs(other_p - other_q)) / 2
 
 
-def total_variation(source: Column, observed: Column) -> Compared | Unmeasured | None:
-    """The share distance over a categorical column's values, or the largest over a date or timestamp's month, weekday and hour."""
+def beyond_sampling(distance: float, shares: Mapping[Any, float], inverse_values: float) -> float:
+    """`distance` less the share distance two samples of `shares` are expected to lie apart, and never below 0.
+
+    `inverse_values` is the sum of one over each sample's values. A category's expected gap is the normal
+    approximation's, `sqrt(2/π · p(1 − p) · inverse_values)`, and never more than `2p`, which bounds it where few rows hold the category.
+    """
+    every = [*shares.values(), max(0.0, 1 - sum(shares.values()))]
+    expected = sum(min(math.sqrt(2 / math.pi * share * (1 - share) * inverse_values), 2 * share) for share in every) / 2
+    return max(0.0, distance - expected)
+
+
+def total_variation(source: Document, observed: Document) -> Iterator[Measurement]:
+    """For each column, the share distance over a categorical column's values, or the largest over a date or
+    timestamp's month, weekday and hour, beyond what sampling alone puts between two profiles of one distribution.
+    """
+    k_min = (observed.get('privacy') or {}).get('k_min') or _core.DEFAULT_K_MIN
+    for ours, theirs in shared_columns(source, observed):
+        counts = described_values(source, ours), described_values(observed, theirs)
+        inverse_values = sum(1 / count for count in counts if count)
+        folded = (k_min - 1) / counts[1] if counts[1] else 0.0
+        compared = column_variation(ours, theirs, inverse_values, folded)
+        if compared is not None:
+            yield Measurement(ours['name'], compared)
+
+
+def column_variation(source: Column, observed: Column, inverse_values: float, folded: float) -> Compared | Unmeasured | None:
     a, b = source.get('temporal') or {}, observed.get('temporal') or {}
     if any(a.get(shares) for shares in TEMPORAL_SHARES):
-        distances = [
-            share_distance(dict(enumerate(a[shares])), dict(enumerate(b[shares])))
-            for shares in TEMPORAL_SHARES
-            if a.get(shares) and b.get(shares)
-        ]
+        distances = []
+        for shares in TEMPORAL_SHARES:
+            if a.get(shares) and b.get(shares):
+                stated = dict(enumerate(a[shares]))
+                distances.append(beyond_sampling(share_distance(stated, dict(enumerate(b[shares]))), stated, inverse_values))
         return Compared(max(distances)) if distances else Unmeasured('the other profile holds none of the month, weekday or hour shares')
     p, q = category_shares(source), category_shares(observed)
     if p is None:
         return None
     if q is None:
         return Unmeasured('the other profile lists no top values or true rate for the column')
-    return Compared(share_distance(p, q))
+    return Compared(beyond_sampling(share_distance(p, q, folded=folded), p, inverse_values))
 
 
 def null_rate_change(source: Column, observed: Column) -> Compared | Unmeasured | None:
@@ -353,10 +407,11 @@ METRICS = (
     ),
     Metric(
         'tvd',
-        "the total variation distance between the shares of the source's listed values, or a date's months, weekdays and hours",
+        "the total variation distance between the shares of the source's listed values, or a date's months, weekdays and hours, "
+        'beyond what sampling puts between two profiles of one distribution',
         Bound.AT_MOST,
         0.05,
-        per_column(total_variation),
+        total_variation,
     ),
     Metric('null_rate_delta', 'the difference in the share of values that are null', Bound.AT_MOST, 0.01, per_column(null_rate_change)),
     Metric(
