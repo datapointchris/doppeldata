@@ -105,8 +105,9 @@ that changed between them. It exits 1 on drift.
 `--thresholds FILE` sets each metric's threshold, and `--json` prints the report that `schemas show
 check` or `schemas show diff` describes.
 
-`--against REAL_DATA` also scores a seeded sample of each side, 100,000 rows by default, by six of
-SDMetrics' scores, which doppeldata computes itself. The report holds the scores and no real row.
+`--against REAL_DATA` also scores a seeded sample of each side by the scores `data check --help`
+lists. Each follows SDMetrics' definition, and doppeldata computes it itself. The report holds the
+scores and no real row.
 They decide nothing until `--thresholds` sets them. `--html FILE` writes the two samples side by
 side with sweetviz. It shows the real data's extremes and category names, so it is not for sharing.
 

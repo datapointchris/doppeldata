@@ -3,7 +3,6 @@
 import dataclasses as dc
 import importlib
 import importlib.metadata
-import importlib.util
 import os
 import warnings
 from collections.abc import Mapping
@@ -11,6 +10,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 from typing import Any
 
+from doppeldata import errors
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import ProfilingEnginesMissing
@@ -203,18 +203,23 @@ class SampledTable:
 
 
 def sampled_table(data: Any, rows: int, *, engine: str = 'polars', seed: int = table_profile.SAMPLE_SEED) -> SampledTable:
-    """A seeded random sample of up to `rows` rows of `data`, anything `profile` reads, at the types `profile` reads them as."""
+    """A seeded random sample of up to `rows` rows of `data`, anything `profile` reads, at the types `profile` reads them as.
+
+    A file that changes, appears or goes away while it is read raises the `SourceError` profiling raises.
+    """
     if rows < 1:
         raise ValueError(f'rows must be a positive number of rows, not {rows}')
     backend = engine_backend(engine)
     source, _ = listed_source(data, engine)
     table = table_profile.typed_table(backend, source)
     held = table_profile.answered(backend, table, [Request(None, 'rows')])[(None, 'rows')]
-    return SampledTable(backend.sample(table, rows, seed), held, source.fingerprint)
+    sampled = SampledTable(backend.sample(table, rows, seed), held, source.fingerprint)
+    importlib.import_module(SOURCES_MODULE).check_unchanged(source)
+    return sampled
 
 
 def uninstalled(packages: Sequence[EnginePackage]) -> list[str]:
-    return [package.distribution for package in packages if importlib.util.find_spec(package.module) is None]
+    return errors.uninstalled({package.distribution: package.module for package in packages})
 
 
 def applied_policy(policy: str, k_min: int | None) -> Policy:

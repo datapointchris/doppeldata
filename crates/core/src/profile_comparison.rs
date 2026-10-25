@@ -5,6 +5,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::profile::CorrelationMethod;
+
 /// The check report format version this engine publishes.
 pub const CHECK_VERSION: u64 = 1;
 /// The diff report format version this engine publishes.
@@ -98,12 +100,12 @@ pub struct RealData {
     pub fingerprint: Option<String>,
     /// The rows of each side's seeded sample that the scores read.
     pub scored_rows: u64,
-    /// The coefficient `CorrelationSimilarity` compares, such as `spearman`.
-    pub correlation: String,
+    /// The coefficient `CorrelationSimilarity` compares, spelled as a profile's correlations spell it.
+    pub correlation: CorrelationMethod,
 }
 
 /// One metric's value for one column, or for a pair where `paired_with` names the second, or for
-/// the table where `column` is null.
+/// the table where `column` is null. `metric`, `column` and `paired_with` together name the row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MetricResult {
     /// The metric's name, such as `ks` or `KSComplement`, as `--thresholds` keys it.
@@ -119,11 +121,12 @@ pub struct MetricResult {
     pub threshold: f64,
     /// Whether `value` passes at or below `threshold`, or at or above it.
     pub bound: Bound,
+    /// Whether the row counts against the report: false only on a row that decides and whose
+    /// value misses `threshold` or is unmeasured.
     pub passed: bool,
-    /// False on a row the report's `passed` leaves out: a score against the real data whose
-    /// threshold no thresholds file sets. Such a row's `passed` reads its value against the
-    /// score's reference threshold.
-    #[serde(default = "deciding", skip_serializing_if = "is_deciding")]
+    /// False on a row the report's verdict leaves out: a score against the real data whose
+    /// threshold no thresholds file sets. Such a row passes, and its `threshold` is the score's
+    /// reference, which `value` and `bound` say whether it meets.
     pub decides: bool,
     /// The statistic the metric compares, as the source profile holds it, or the real data for a
     /// score against it: A's, in a diff.
@@ -141,14 +144,6 @@ pub struct MetricResult {
     /// is not measured and passes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped_by: Option<String>,
-}
-
-fn deciding() -> bool {
-    true
-}
-
-fn is_deciding(decides: &bool) -> bool {
-    *decides
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

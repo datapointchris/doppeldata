@@ -21,7 +21,7 @@ class MetricResult:
 
     `value` is None where `unmeasured` says why it has none, or where `skipped_by` names the scenario's perturbation that
     moves what it compares. A row whose `decides` is False is one the report's verdict leaves out, such as a score against
-    the real data no thresholds file sets.
+    the real data no thresholds file sets, and it passes.
     """
 
     metric: str
@@ -39,8 +39,11 @@ class MetricResult:
 
     def to_plain(self) -> dict[str, Any]:
         plain = dc.asdict(self) | {'bound': self.bound.value}
-        kept = {key: value for key, value in plain.items() if value is not None or key not in OPTIONAL_METRIC_FIELDS}
-        return kept if not self.decides else {key: value for key, value in kept.items() if key != 'decides'}
+        return {key: value for key, value in plain.items() if value is not None or key not in OPTIONAL_METRIC_FIELDS}
+
+    def meets_threshold(self) -> bool:
+        """Whether `value` meets `threshold`, which for a row that decides nothing is its reference and not its verdict."""
+        return self.value is not None and self.bound.holds(self.value, self.threshold)
 
     def where(self) -> str:
         """` on amount`, ` on fare and total`, or nothing for the table."""
@@ -275,10 +278,10 @@ def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: 
     informational = [result for result in metrics if not result.decides]
     if informational:
         lines += [
-            f'{len(informational)} scores against the real data decide nothing, because no thresholds file sets their threshold. '
-            f'{sum(not result.passed for result in informational)} miss the threshold shown.',
+            f'Scores that decide nothing, because no thresholds file sets their threshold: {len(informational)}. '
+            f'Missing the threshold shown: {sum(not result.meets_threshold() for result in informational)}.',
             '',
-            *metric_table(informational),
+            *metric_table(informational, against_reference=True),
         ]
     if changes:
         lines += ['| Change | Column | Passed | Detail |', '| --- | --- | --- | --- |']
@@ -288,12 +291,17 @@ def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: 
     return lines
 
 
-def metric_table(metrics: list[MetricResult]) -> list[str]:
-    """The metrics as a Markdown table, failures first, a pair's columns joined in one cell."""
+def metric_table(metrics: list[MetricResult], *, against_reference: bool = False) -> list[str]:
+    """The metrics as a Markdown table, failures first, a pair's columns joined in one cell.
+
+    With `against_reference`, the last column says whether each value meets the threshold shown, as each row passes.
+    """
     if not metrics:
         return []
-    lines = ['| Metric | Column | Value | Threshold | Expected | Observed | Passed |', '| --- | --- | --- | --- | --- | --- | --- |']
-    for result in sorted(metrics, key=lambda result: result.passed):
+    judged = MetricResult.meets_threshold if against_reference else (lambda result: result.passed)
+    heading = 'Meets it' if against_reference else 'Passed'
+    lines = [f'| Metric | Column | Value | Threshold | Expected | Observed | {heading} |', '| --- | --- | --- | --- | --- | --- | --- |']
+    for result in sorted(metrics, key=judged):
         threshold = f'{BOUND_SIGNS[result.bound]} {result.threshold:g}'
         if result.skipped_by is not None:
             shown = f'skipped by {result.skipped_by}'
@@ -301,7 +309,7 @@ def metric_table(metrics: list[MetricResult]) -> list[str]:
             shown = f'{result.value:.6g}' if result.value is not None else f'unmeasured: {result.unmeasured}'
         expected, observed = (f'{value:.6g}' if value is not None else '' for value in (result.expected, result.observed))
         column = ', '.join(name for name in (result.column, result.paired_with) if name)
-        lines.append(f'| {result.metric} | {column} | {shown} | {threshold} | {expected} | {observed} | {verdict(result.passed)} |')
+        lines.append(f'| {result.metric} | {column} | {shown} | {threshold} | {expected} | {observed} | {verdict(judged(result))} |')
     return [*lines, '']
 
 

@@ -5,12 +5,13 @@ column's real categories. So it is a view for someone who already holds the real
 """
 
 import contextlib
-import importlib.util
 import io
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from doppeldata.errors import PackagesMissing
+from doppeldata.errors import uninstalled
 
 if TYPE_CHECKING:
     import polars as pl
@@ -21,9 +22,24 @@ HTML_PACKAGES = {'sweetviz': 'sweetviz'}
 
 def missing_packages() -> None:
     """Refuse with PackagesMissing where a package the HTML imports is not installed."""
-    missing = [distribution for distribution, module in HTML_PACKAGES.items() if importlib.util.find_spec(module) is None]
+    missing = uninstalled(HTML_PACKAGES)
     if missing:
-        raise PackagesMissing('comparison', missing, doing='writing the side-by-side HTML')
+        listed = ' '.join(f'--with {name}' for name in missing)
+        route = (
+            f', or reinstall doppeldata-cli with {"it" if len(missing) == 1 else "them"}, as `uv tool install {listed} doppeldata-cli` does'
+        )
+        raise PackagesMissing('comparison', missing, doing='writing the side-by-side HTML', installed_by=route)
+
+
+def unwritable(path: Path) -> str | None:
+    """Why the HTML cannot be written to `path`, or None where it can."""
+    if path.is_dir():
+        return f'{path} is a directory; name a FILE'
+    if not path.parent.is_dir():
+        return f'{path.parent} is not a directory; create it, or name a FILE in one that exists'
+    if not os.access(path if path.exists() else path.parent, os.W_OK):
+        return f'{path} cannot be written'
+    return None
 
 
 def write_side_by_side(real: 'pl.DataFrame', checked: 'pl.DataFrame', path: str | Path) -> None:

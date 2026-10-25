@@ -184,46 +184,63 @@ Arrow decimal type telling a decimal from a float.
 ## `--against` scores the data against the real data by SDMetrics' definitions, and decides nothing until a threshold is set
 
 Someone who holds the real data can score the generated data against it too:
-`data check PROFILE DATA --against REAL_DATA`. KSComplement, BoundaryAdherence, TVComplement,
-CategoryCoverage, CorrelationSimilarity and ContingencySimilarity join the report's `metrics`.
-`real_data_scores.SCORES` lists each with its summary and reference threshold, and
-`data check --help` prints them.
+`data check PROFILE DATA --against REAL_DATA`. Each score in `real_data_scores.SCORES` joins the
+report's `metrics`, and `data check --help` prints each one's summary and reference threshold.
 
 Each score follows its definition in SDMetrics 0.32.0, under the same name: `sdmetrics.single_column`
 and `sdmetrics.column_pairs`, documented at <https://docs.sdv.dev/sdmetrics>. doppeldata computes
-them in Polars and imports no SDMetrics. Over the taxi samples below, each of the 209 scores matched
-SDMetrics 0.32.0's within 3e-15.
+them in Polars and imports no SDMetrics. On the same samples, each matches SDMetrics' value to a
+double's rounding.
+
+Three scores sit beside a profile metric of a like name, and compare another thing:
+
+| Profile metric | Score | What the score compares |
+| --- | --- | --- |
+| `ks`, at most | `KSComplement`, at least | 1 minus the Kolmogorov-Smirnov distance between the two samples' values. `ks` reads the profile's quantiles. |
+| `tvd`, at most | `TVComplement`, at least | 1 minus the total variation distance between the two samples' category shares. `tvd` reads the profile's value list. |
+| `boundary_adherence`, at least | `BoundaryAdherence`, at least | The share of the data's values inside the real sample's minimum and maximum. `boundary_adherence` reads the profile's outer histogram edges. |
 
 - **REAL_DATA is read as DATA is**, through the profiler's readers. So `--against` reaches every source
   `profile create` reaches, and a CSV or JSON side is typed as `profile create` types it.
-- **Each side is a seeded random sample of `--against-sample` rows, 100,000 by default.** Over the NYC
-  yellow taxi trips of February to April 2024, 10,104,443 rows, scored against 10 million rows
-  generated from their profile, each KSComplement's mean over five samples sat within 0.0017 of its
-  value on every row. The larger sample is cut to the smaller's rows, and `against.scored_rows` says
-  how many each side's scores read.
+- **Each side is a seeded random sample of `--against-sample` rows.** A sample's KSComplement sits
+  close enough to the full table's that scoring every row buys nothing. The larger sample is cut to
+  the smaller's rows, and `against.scored_rows` says how many each side's scores read.
+  `--against-sample` and `--html` exit 2 without `--against`.
+- **DATA is listed again once its sample is read.** A file that changed between DATA's profile and its
+  sample exits 3. The profile metrics and the scores would otherwise read two tables.
 - **The profile decides which columns are scored.** A numeric, date or timestamp column is continuous,
   except a sequence, which draws nothing. A boolean, and a string the profile lists the values of, is
   categorical. A string with no value list, an identifier or free text, is left out.
+- **A column the profile types as an identifier or sensitive is left out too**, and so is one its
+  privacy policy holds to more than `k_min`, such as a date under `healthcare`. The HTML prints a
+  scored column's real extremes and categories, so it shows only what the policy lets the profile
+  state. A profile with no scored column exits 2 on `--against`, and so does real data holding none of
+  them.
+- **A scored column one side lacks gets an unmeasured row.** It fails only where it decides.
 - **Every timestamp is read in microseconds on both sides.** SDMetrics compares a timestamp's integer
   count, so a real side stored in nanoseconds against generated microseconds would score 0.
 - **A continuous pair is scored by CorrelationSimilarity, and a pair holding a categorical column by
   ContingencySimilarity.** That is the split SDMetrics' own quality report makes. ContingencySimilarity
-  cuts a continuous column at ten equal-width bins of the real values' range, as SDMetrics'
+  cuts a continuous column at equal-width bins of the real values' range, as SDMetrics'
   `continuous_column_names` does. The quality report bins each side over that side's own range instead.
 - **CorrelationSimilarity compares Spearman's coefficient, not SDMetrics' default Pearson.** One
-  extreme real value swings Pearson's from sample to sample. On the taxi data, one pair's Pearson
-  score spread 0.41 across five 100,000-row samples. Its Spearman score spread 0.016.
-- **The pairs grow quadratically**: n scored columns make n(n − 1)/2. The taxi data's 19 scored
-  columns make 153 CorrelationSimilarity pairs and 18 ContingencySimilarity pairs. On its samples
-  each pair took about 7 ms, so its 171 pairs take about 1.2 s. 100 columns would make 4,950 pairs,
-  about 35 s.
-- **A score decides nothing until a thresholds file sets its threshold.** No sampler draws a copula
-  or a conditional table, so each generated column is drawn on its own. A pair of correlated real
-  columns then scores near 0.5 on any round trip. On the taxi samples, CorrelationSimilarity fell
-  to 0.50 and 17 of 153 pairs missed 0.8, while every metric the profile states passed. So each
-  score's row carries `decides: false`, and its `passed` reads its value against the reference
-  threshold. Where `--thresholds` sets a score's threshold, for its column or under `defaults`, the
-  row decides. A pair is set by `defaults` alone.
+  extreme real value swings Pearson's from sample to sample. `against.correlation` names the
+  coefficient.
+- **The pairs grow quadratically.** n scored columns make n(n − 1)/2 pairs, so a wide table's pairs
+  dominate the run.
+- **A score decides nothing until a thresholds file sets its threshold.** A pair score measures a
+  dependence the generator reproduces only where a sampler draws one column from another. No sampler
+  reads a profile's `correlations` or `conditionals`. So a round trip that passes every profile metric
+  still misses the reference on its correlated pairs.
+- **A score that decides nothing passes.** Its row carries `decides: false`, and its `threshold` is the
+  score's reference. The Markdown's "Meets it" column says whether its value meets it.
+- **Where `--thresholds` sets a score's threshold, for its column or under `defaults`, the row
+  decides.** A pair score is set under `defaults` alone, so one threshold gates every pair. A
+  thresholds file exits 2 when it sets a pair score under a column, or sets any score for a check
+  without `--against` or for `profile diff`.
+- **A row is named by its `metric`, `column` and `paired_with`.** A pair score's `column` is the pair's
+  first column in the profile's order, and `paired_with` its second. A single-column row has no
+  `paired_with`.
 - **The report holds scores, never a row.** `against` names the real data, its row count and listing
   fingerprint, the rows scored and the coefficient. A CorrelationSimilarity row's `expected` and
   `observed` are the real and generated coefficients.
@@ -238,11 +255,14 @@ grant excludes a synthetic data creation service.
 It shows each numeric and temporal column's smallest, largest and most frequent real values, and
 each categorical column's real categories. So it is a view for someone who already holds the real
 data, and is not for sharing. It renders no row: sweetviz has no table of rows, and the frames hold
-only the columns a score reads, so an identifier or free-text column never reaches it. sweetviz is
-declared nowhere, and `--html` without it exits 2 with one line naming it, before any row is read.
+only the columns a score reads. So no column the scores leave out reaches it.
 
-It renders from the sample because sweetviz's pairwise associations grow faster than the rows. On
-the taxi samples, 100,000 rows from each side rendered in about 55 s, and 1 million in 26 minutes.
+- **sweetviz is declared nowhere.** `--html` without it exits 2 with one line naming it, before any
+  row is read.
+- **A FILE that cannot be written exits 2 before any row is read**: a directory, a file in a missing
+  directory, or one without write access.
+- **A write that fails partway exits 3 naming the error**, and prints no report.
+- **It renders from the sample**, because sweetviz's pairwise associations grow faster than the rows.
 
 *Rejected:* fg-data-profiling's comparison report. It renders real rows in three places: a head and
 tail sample unless `samples=None`, the most frequent duplicate rows unless `duplicates=None`, and each

@@ -150,6 +150,15 @@
         "rows"
       ]
     },
+    "CorrelationMethod": {
+      "type": "string",
+      "enum": [
+        "pearson",
+        "spearman",
+        "kendall",
+        "cramers_v"
+      ]
+    },
     "ExpectationResult": {
       "description": "A scenario's declared expectation and the value the data holds.",
       "type": "object",
@@ -240,7 +249,7 @@
       ]
     },
     "MetricResult": {
-      "description": "One metric's value for one column, or for a pair where `paired_with` names the second, or for\nthe table where `column` is null.",
+      "description": "One metric's value for one column, or for a pair where `paired_with` names the second, or for\nthe table where `column` is null. `metric`, `column` and `paired_with` together name the row.",
       "type": "object",
       "properties": {
         "bound": {
@@ -255,7 +264,7 @@
           ]
         },
         "decides": {
-          "description": "False on a row the report's `passed` leaves out: a score against the real data whose\nthreshold no thresholds file sets. Such a row's `passed` reads its value against the\nscore's reference threshold.",
+          "description": "False on a row the report's verdict leaves out: a score against the real data whose\nthreshold no thresholds file sets. Such a row passes, and its `threshold` is the score's\nreference, which `value` and `bound` say whether it meets.",
           "type": "boolean"
         },
         "expected": {
@@ -286,6 +295,7 @@
           ]
         },
         "passed": {
+          "description": "Whether the row counts against the report: false only on a row that decides and whose\nvalue misses `threshold` or is unmeasured.",
           "type": "boolean"
         },
         "skipped_by": {
@@ -319,7 +329,8 @@
         "metric",
         "threshold",
         "bound",
-        "passed"
+        "passed",
+        "decides"
       ]
     },
     "RealData": {
@@ -327,8 +338,8 @@
       "type": "object",
       "properties": {
         "correlation": {
-          "description": "The coefficient `CorrelationSimilarity` compares, such as `spearman`.",
-          "type": "string"
+          "description": "The coefficient `CorrelationSimilarity` compares, spelled as a profile's correlations spell it.",
+          "$ref": "#/$defs/CorrelationMethod"
         },
         "fingerprint": {
           "description": "The `source_fingerprint` of the real data's files, or null for an in-memory table.",

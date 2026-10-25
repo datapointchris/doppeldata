@@ -43,11 +43,13 @@ from doppeldata.privacy_policy import DEFAULT_K_MIN
 from doppeldata.privacy_policy import ProfileFileCheck
 from doppeldata.privacy_policy import TableCheck
 from doppeldata.privacy_policy import file_checks
+from doppeldata.profile_comparison import NOTHING_SCORED
 from doppeldata.profile_comparison.metrics import METRICS
 from doppeldata.profile_comparison.real_data_scores import DEFAULT_SAMPLE_ROWS
 from doppeldata.profile_comparison.real_data_scores import SCORES
+from doppeldata.profile_comparison.real_data_scores import scored_columns
+from doppeldata.profile_comparison.side_by_side_html import unwritable
 from doppeldata.profiling import applied_policy
-from doppeldata.profiling import listed_source
 from doppeldata.published_schemas import enum_values
 from doppeldata.published_schemas import output_formats
 from doppeldata.published_schemas import partition_styles
@@ -186,10 +188,11 @@ METRIC_DEFINITIONS = '\n\n'.join(
     for metric in METRICS
 )
 SCORE_DEFINITIONS = (
-    'With --against, these scores compare a sample of DATA with one of REAL_DATA. Each decides nothing until a --thresholds '
-    'file sets its threshold, and its row reads its value against the reference shown.\n\n'
+    "With --against, these scores compare a sample of DATA with one of REAL_DATA, by SDMetrics' definitions. Each decides "
+    'nothing until a --thresholds file sets its threshold, a pair score under defaults alone. A row that decides nothing '
+    'passes, and shows whether it meets the reference.\n\n'
     + '\n\n'.join(
-        f'{score.name}: {score.summary}. Reference {score.bound.value.removeprefix("at_")} {score.threshold:g}.' for score in SCORES
+        f'{score.name}: {score.summary}. Reference at {score.bound.value.removeprefix("at_")} {score.threshold:g}.' for score in SCORES
     )
 )
 
@@ -389,6 +392,9 @@ def failure_exits_3() -> Iterator[None]:
         if error.exit_code == 1:
             error.exit_code = 3
         raise
+    except OSError as error:
+        typer.echo(f'doppeldata: the comparison stopped: {error}', err=True)
+        raise typer.Exit(3) from error
     except Exception as error:
         traceback.print_exc()
         typer.echo(f'doppeldata: the comparison stopped on {type(error).__name__}, which is a bug in doppeldata', err=True)
@@ -443,13 +449,21 @@ def data_check(
         typer.Option(
             '--against',
             metavar='REAL_DATA',
-            help="Also score DATA against the real data with SDMetrics' scores. The report holds the scores and none of its rows.",
+            help=(
+                "Also score DATA against REAL_DATA by the scores listed below, which follow SDMetrics' definitions and need no "
+                'SDMetrics. The report holds the scores and no real row.'
+            ),
         ),
     ] = None,
     against_sample: Annotated[
-        int,
-        typer.Option('--against-sample', metavar='N', min=1, help='Score a seeded random sample of N rows from each side.'),
-    ] = DEFAULT_SAMPLE_ROWS,
+        int | None,
+        typer.Option(
+            '--against-sample',
+            metavar='N',
+            min=1,
+            help=f'With --against, score a seeded random sample of N rows from each side. Defaults to {DEFAULT_SAMPLE_ROWS:,}.',
+        ),
+    ] = None,
     html: Annotated[
         Path | None,
         typer.Option(
@@ -474,19 +488,15 @@ def data_check(
     source = loaded_profile(profile_name, 'PROFILE')
     chosen = loaded_thresholds(thresholds)
     applied = loaded_scenario(scenario)
-    if html is not None and against is None:
-        raise typer.BadParameter('the HTML shows the real data beside DATA; name it with --against', param_hint='--html')
-    if html is not None and not html.parent.is_dir():
-        raise typer.BadParameter(f'{html.parent} is not a directory; create it, or name a FILE in one that exists', param_hint='--html')
-    if against is not None:
-        # Listed before DATA is profiled, so a name that lists nothing is refused as --against's rather than DATA's.
-        try:
-            with failure_exits_3():
-                listed_source(against)
-        except SourceError as error:
-            if error.exit_code != 2:
-                raise
-            raise typer.BadParameter(str(error), param_hint='--against') from error
+    if against is None:
+        for given, hint in ((html, '--html'), (against_sample, '--against-sample')):
+            if given is not None:
+                raise typer.BadParameter(f'{hint} reads the real data beside DATA; name it with --against', param_hint=hint)
+    elif not scored_columns(source.to_plain()).ordered:
+        raise typer.BadParameter(NOTHING_SCORED, param_hint='--against')
+    unwritten = unwritable(html) if html is not None else None
+    if unwritten is not None:
+        raise typer.BadParameter(unwritten, param_hint='--html')
     try:
         with failure_exits_3(), warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', ProfilingWarning)
@@ -497,7 +507,7 @@ def data_check(
     except SourceError as error:
         if error.exit_code != 2:
             raise
-        raise typer.BadParameter(str(error), param_hint='DATA') from error
+        raise typer.BadParameter(str(error), param_hint='--against' if error.role == 'against' else 'DATA') from error
     print_notices(caught)
     typer.echo(shown, nl=False)
     if not (report.passed and report.verified):
