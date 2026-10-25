@@ -57,9 +57,8 @@ a column. One above it, such as the `run=7/` holding a file named on its own, is
 ## A source that changes while it is profiled fails the profile
 
 A profile reads its source in several queries. After the last one, the files are listed again. A
-file whose size or revision changed, or one that appeared or went away, fails the profile with exit
-
-1. A revision is the modification time on disk, or the S3 ETag.
+file whose size or revision changed, or one that appeared or went away, fails the profile, and
+`profile create` exits 1. A revision is the modification time on disk, or the S3 ETag.
 
 `source_fingerprint` hashes the same listing. It tells two listings apart, and never hashes the
 content. It is left out of the profile's digest, so a copy of the data profiles to the same
