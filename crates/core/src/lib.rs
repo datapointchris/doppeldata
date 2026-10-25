@@ -14,6 +14,7 @@ mod samplers;
 mod values_digest;
 
 pub use identity::DatasetIdentity;
+pub use physical_type::physical_type_name;
 pub use plan::BlockOutOfRange;
 pub use plan::ColumnFault;
 pub use plan::ColumnSampler;

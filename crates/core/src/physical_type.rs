@@ -85,6 +85,53 @@ fn parameterized(text: &str) -> Option<DataType> {
     None
 }
 
+/// `data_type` as pyarrow writes it, the spelling a profile's `physical_type` takes, such as
+/// `timestamp[us, tz=UTC]` or `list<item: int64>`. A type pyarrow has no other name for is written
+/// as arrow-rs names it.
+pub fn physical_type_name(data_type: &DataType) -> String {
+    match data_type {
+        DataType::Boolean => "bool".into(),
+        DataType::Int8 => "int8".into(),
+        DataType::Int16 => "int16".into(),
+        DataType::Int32 => "int32".into(),
+        DataType::Int64 => "int64".into(),
+        DataType::UInt8 => "uint8".into(),
+        DataType::UInt16 => "uint16".into(),
+        DataType::UInt32 => "uint32".into(),
+        DataType::UInt64 => "uint64".into(),
+        DataType::Float32 => "float".into(),
+        DataType::Float64 => "double".into(),
+        DataType::Utf8 => "string".into(),
+        DataType::LargeUtf8 => "large_string".into(),
+        DataType::Date32 => "date32[day]".into(),
+        DataType::Date64 => "date64[ms]".into(),
+        DataType::Decimal128(precision, scale) => format!("decimal128({precision}, {scale})"),
+        DataType::Timestamp(unit, None) => format!("timestamp[{}]", unit_name(*unit)),
+        DataType::Timestamp(unit, Some(tz)) => format!("timestamp[{}, tz={tz}]", unit_name(*unit)),
+        DataType::Time32(unit) => format!("time32[{}]", unit_name(*unit)),
+        DataType::Time64(unit) => format!("time64[{}]", unit_name(*unit)),
+        DataType::List(item) => format!("list<{}: {}>", item.name(), physical_type_name(item.data_type())),
+        DataType::LargeList(item) => format!("large_list<{}: {}>", item.name(), physical_type_name(item.data_type())),
+        DataType::Struct(fields) => {
+            let fields: Vec<String> = fields
+                .iter()
+                .map(|field| format!("{}: {}", field.name(), physical_type_name(field.data_type())))
+                .collect();
+            format!("struct<{}>", fields.join(", "))
+        }
+        other => other.to_string(),
+    }
+}
+
+fn unit_name(unit: TimeUnit) -> &'static str {
+    match unit {
+        TimeUnit::Second => "s",
+        TimeUnit::Millisecond => "ms",
+        TimeUnit::Microsecond => "us",
+        TimeUnit::Nanosecond => "ns",
+    }
+}
+
 fn time_unit(text: &str) -> Option<TimeUnit> {
     Some(match text {
         "s" => TimeUnit::Second,

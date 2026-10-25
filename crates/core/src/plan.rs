@@ -79,6 +79,29 @@ impl ColumnFault {
     }
 }
 
+impl PlanError {
+    /// The kebab-case code a caller branches on, in the form of the library's issue codes.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Bundle { .. } => "bundle",
+            Self::NoColumns { .. } => "no-columns",
+            Self::DuplicateColumn { .. } => "duplicate-column",
+            Self::ProfileDigest { .. } => "invalid-profile-digest",
+            Self::Column { code, .. } => code.code(),
+        }
+    }
+
+    /// The RFC 6901 JSON Pointer into the profile that the refusal names.
+    pub fn field(&self) -> &str {
+        match self {
+            Self::Bundle { .. } => "/kind",
+            Self::NoColumns { .. } | Self::DuplicateColumn { .. } => "/columns",
+            Self::ProfileDigest { .. } => "",
+            Self::Column { field, .. } => field,
+        }
+    }
+}
+
 impl std::fmt::Display for ColumnFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.code())
