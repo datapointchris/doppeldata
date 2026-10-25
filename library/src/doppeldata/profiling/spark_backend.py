@@ -615,8 +615,7 @@ class SparkBackend:
         self.listing = {listed_path(file.path): index for index, file in enumerate(source.files)}
         match source.format:
             case SourceFormat.PARQUET:
-                frame = self.with_split_columns(self.reader(source).parquet(*(file.path for file in source.files)))
-                read = SourceRead(self.with_partition_types(frame, source), footers=parquet_footers.read_footers(source.files))
+                read = self.read_parquet(source)
             case SourceFormat.CSV | SourceFormat.TSV:
                 read = self.read_delimited(source)
             case _:
@@ -625,6 +624,34 @@ class SparkBackend:
                     f'engine spark reads Parquet, CSV and TSV, and {format_name} is none of them; profile it with engine polars'
                 )
         return read
+
+    def read_parquet(self, source: Source) -> SourceRead:
+        """Parquet read as one table. Files holding different schemas, as a drifted dataset's do, are read a schema at a time
+        and joined by name, which widens a column to the widest type a file stores it as and leaves it null in a file that
+        lacks it, as the Polars backend reads them. Spark's `mergeSchema` refuses an int32 column widened to int64.
+        """
+        footers = parquet_footers.read_footers(source.files)
+        if all(footer.schema.equals(footers[0].schema) for footer in footers):
+            frame = self.with_split_columns(self.reader(source).parquet(*(file.path for file in source.files)))
+            return SourceRead(self.with_partition_types(frame, source), footers=footers)
+        # A sample holding two schemas may miss a third, so every file's footer places it.
+        every = footers if len(footers) == len(source.files) else parquet_footers.read_footers(source.files, every=True)
+        groups: list[tuple[pa.Schema, list[str]]] = []
+        for file, footer in zip(source.files, every, strict=True):
+            group = next((paths for schema, paths in groups if footer.schema.equals(schema)), None)
+            if group is None:
+                groups.append((footer.schema, [file.path]))
+            else:
+                group.append(file.path)
+        try:
+            pa.unify_schemas([schema for schema, _ in groups], promote_options='permissive')
+        except pa.ArrowException as error:
+            raise SourceError(f'{", ".join(source.roots)} could not be read as Parquet: {error}', exit_code=1) from error
+        frames = [self.with_split_columns(self.reader(source).parquet(*paths)) for _, paths in groups]
+        frame = frames[0]
+        for later in frames[1:]:
+            frame = frame.unionByName(later, allowMissingColumns=True)
+        return SourceRead(self.with_partition_types(frame, source), footers=footers)
 
     def reader(self, source: Source) -> Any:
         """Spark's reader, finding Hive keys below the root that was named, as the listing does."""

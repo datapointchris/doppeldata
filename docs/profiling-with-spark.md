@@ -315,6 +315,12 @@ casts.
 
 - **Parquet is read with `basePath` at the root named**, so Spark finds the Hive keys the listing
   found. A key Spark types as a small integer is widened to `bigint`, as Polars types it.
+- **Parquet files holding different schemas are read a schema at a time and joined by name**, so a
+  drifted dataset is one table, as under Polars. A column takes the widest type a file stores it as,
+  and is null in a file that lacks it. Spark's `mergeSchema` refuses an int32 column a later file
+  widens to int64, on Spark 3.5.9 and 4.1.3 alike. An explicit union schema reads it on 4.1.3 but
+  not on 3.5.9, whose Parquet reader does not widen. A column stored as an integer in one file and
+  a string in another fails the read, as it does under Polars.
 - **Spark holds every timestamp in microseconds**, so a timestamp column's `physical_type` is
   `timestamp[us]` whatever the file stores. `source.parquet.timestamp_units` keeps the stored unit,
   which the writers cast to. Polars takes a unit from a file's stored Arrow schema where one is
