@@ -32,9 +32,10 @@ The library installs no profiling engine, so a job that only generates carries n
 that are missing. `profile(data, engine='spark')` computes the profile in Spark instead: of a Spark
 DataFrame in its own session, or of files in the session `spark=` names, else the active one. It
 needs pyspark, pyarrow and boto3, with duckdb, clevercsv and charset-normalizer to sniff a CSV or
-TSV, and estimates distinct counts and quantiles within 1%. A directory whose folders hold unlike
-schemas profiles to a `Bundle` of one table per kind of folder, as an AWS Glue crawler splits one. With scipy installed too, it fits a distribution family to each numeric column
-with enough distinct values. Without it, each such fit is written as null, and `profile()` issues
+TSV. It estimates distinct counts with a 1% standard error, and quantiles within a rank error of
+1/10,000. A directory whose folders hold unlike schemas profiles to a `Bundle` of one table per
+kind of folder, as an AWS Glue crawler splits one. With scipy installed too, it fits a distribution
+family to each numeric column with enough distinct values. Without it, each such fit is written as null, and `profile()` issues
 a `FitsSkipped` warning. Every warning `profile()` issues is a `ProfilingWarning`. A write to S3
 needs boto3.
 

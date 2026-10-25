@@ -84,8 +84,9 @@ sd.spark.write(spark, profile, 's3://bucket/orders/', rows=1_000_000_000, seed=7
 AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files.
 
 `--engine spark` computes the profile in Spark instead: in the Spark Connect session `SPARK_REMOTE`
-names, or in one it starts on `local[*]`. Spark reads Parquet, CSV and TSV, from S3 too, and
-estimates distinct counts and quantiles within 1%. From Python, `sd.profile(frame,
+names, or in one it starts on `local[*]`. Spark reads Parquet, CSV and TSV, from S3 too. It
+estimates distinct counts with a 1% standard error, and quantiles within a rank error of 1/10,000.
+From Python, `sd.profile(frame,
 engine='spark')` profiles a DataFrame in its own session, and `spark=` names a session for files.
 `docs/profiling-with-spark.md` gives the commands for a Glue job and a Glue Spark Connect session.
 
