@@ -2,6 +2,7 @@
 
 import importlib
 from types import ModuleType
+from typing import TYPE_CHECKING
 
 from doppeldata.dataset_generation import ColumnSampler
 from doppeldata.dataset_generation import PlannedRange
@@ -58,8 +59,12 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str) -> ModuleType:
-    """`doppeldata.spark` on first use, so importing doppeldata never imports pyspark."""
-    if name == 'spark':
-        return importlib.import_module('doppeldata.spark')
-    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+if TYPE_CHECKING:
+    from doppeldata import spark as spark
+else:
+
+    def __getattr__(name: str) -> ModuleType:
+        """`doppeldata.spark` on first use, so importing doppeldata never imports pyspark."""
+        if name == 'spark':
+            return importlib.import_module('doppeldata.spark')
+        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
