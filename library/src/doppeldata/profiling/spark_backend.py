@@ -304,6 +304,17 @@ def whole(nanoseconds: int) -> Callable[[Operand, Any], Folded]:
     return lambda o, _: Folded([sf.min((o.ordered % micros == 0).cast('int'))], lambda values: values[0] in (None, 1))
 
 
+def decimal_places(o: Operand, most: int) -> Folded:
+    """The fewest places, up to `most`, that every value equals itself rounded to, or None: the most any one value needs."""
+    needed: Column = sf.lit(most + 1)
+    for places in reversed(range(most + 1)):
+        needed = sf.when(sf.round(o.value, places) == o.value, sf.lit(places)).otherwise(needed)
+    return Folded(
+        [sf.max(sf.when(o.value.isNotNull(), needed))],
+        lambda values: 0 if values[0] is None else values[0] if values[0] <= most else None,
+    )
+
+
 def quantiles(c: Column, levels: tuple[float, ...]) -> Folded:
     return Folded(
         [sf.percentile_approx(c, list(levels), QUANTILE_ACCURACY)],
@@ -326,6 +337,7 @@ AGGREGATED: dict[str, Translation] = {
     'zero_rate': lambda o, _: single(sf.mean((o.value == 0).cast('int'))),
     'negative_rate': lambda o, _: single(sf.mean((o.value < 0).cast('int'))),
     'quantiles': lambda o, levels: quantiles(o.value, levels),
+    'decimal_places': decimal_places,
     'histogram_counts': histogram_counts,
     'length_mean': lambda o, _: single(sf.mean(sf.length(o.raw))),
     'length_quantiles': lambda o, levels: quantiles(sf.length(o.raw), levels),
