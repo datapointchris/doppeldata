@@ -15,6 +15,11 @@ DEFAULT_FILE_ROWS: Final[int]
 The rows in each file a write makes when neither the caller nor the profile sizes them.
 """
 
+DEFAULT_K_MIN: Final[int]
+"""
+The fewest rows a stored literal or cell rests on, where a profile states no `privacy.k_min`.
+"""
+
 FORMAT_VERSION: Final[int]
 """
 The profile format version the engine reads.
@@ -174,6 +179,13 @@ def patched_profile(profile_json: str, scenario_json: str) -> tuple[str, list[st
     """
     ``profile_json`` with the scenario's patch applied as the engine applies it, and each column
     the patch names that the profile does not hold.
+    """
+
+def pattern_is_generalized(pattern: str) -> bool |None:
+    """
+    Whether ``pattern`` holds no literal only some values have, as the privacy floor admits a
+    stored pattern: every class is ``\d`` or whole ASCII digit and letter ranges. None when it
+    does not parse.
     """
 
 def pattern_problem(pattern: str) -> str |None:
