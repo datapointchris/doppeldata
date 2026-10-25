@@ -1,0 +1,153 @@
+# Hand-written: the eight-column table the engine's throughput is measured on.
+# No data was read, so it has no `generated` block.
+profile_version: 1
+kind: table
+name: eight-columns
+privacy:
+  policy: default
+  k_min: 11
+  audit:
+    - {column: category, values: 50, rule: "count >= k_min"}
+source:
+  format: parquet
+  compression: zstd
+dataset:
+  row_count: 10000000
+  duplicate_row_rate: 0.0
+  keys:
+    primary: {columns: [id], uniqueness: 1.0}
+columns:
+  - name: id
+    physical_type: int64
+    logical_type: integer
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 10000000, ratio: 1.0}
+    numeric:
+      integral: true
+      extremes: {low: 0, high: 9999999}
+      monotonic: increasing
+      sequence: {start: 0, step: 1}
+  - name: amount
+    physical_type: float64
+    logical_type: number
+    nullable: false
+    null_rate: 0.0
+    numeric:
+      integral: false
+      extremes: {low: 0.1, high: 2000.0}
+      mean: 33.12
+      std: 43.41
+      quantiles: {p01: 1.96, p05: 3.88, p25: 10.24, p50: 20.09, p75: 39.41, p95: 104.06, p99: 205.61}
+      fit: {family: lognorm, params: {s: 1.0, loc: 0.0, scale: 20.0855}}
+      monotonic: none
+  - name: qty
+    physical_type: int64
+    logical_type: integer
+    nullable: false
+    null_rate: 0.0
+    numeric:
+      integral: true
+      extremes: {low: 0, high: 15}
+      mean: 4.0
+      quantiles: {p05: 1, p25: 3, p50: 4, p75: 5, p95: 8, p99: 9}
+      fit: {family: poisson, params: {mu: 4.0}}
+      monotonic: none
+  - name: category
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 50, ratio: 0.000005}
+    string:
+      # Zipf-weighted, s 1.1 over 50 values.
+      top_values:
+        - {value: category_00, rate: 0.2610}
+        - {value: category_01, rate: 0.1218}
+        - {value: category_02, rate: 0.0780}
+        - {value: category_03, rate: 0.0568}
+        - {value: category_04, rate: 0.0445}
+        - {value: category_05, rate: 0.0364}
+        - {value: category_06, rate: 0.0307}
+        - {value: category_07, rate: 0.0265}
+        - {value: category_08, rate: 0.0233}
+        - {value: category_09, rate: 0.0207}
+        - {value: category_10, rate: 0.0187}
+        - {value: category_11, rate: 0.0170}
+        - {value: category_12, rate: 0.0155}
+        - {value: category_13, rate: 0.0143}
+        - {value: category_14, rate: 0.0133}
+        - {value: category_15, rate: 0.0124}
+        - {value: category_16, rate: 0.0116}
+        - {value: category_17, rate: 0.0109}
+        - {value: category_18, rate: 0.0102}
+        - {value: category_19, rate: 0.0097}
+        - {value: category_20, rate: 0.0092}
+        - {value: category_21, rate: 0.0087}
+        - {value: category_22, rate: 0.0083}
+        - {value: category_23, rate: 0.0079}
+        - {value: category_24, rate: 0.0076}
+        - {value: category_25, rate: 0.0073}
+        - {value: category_26, rate: 0.0070}
+        - {value: category_27, rate: 0.0067}
+        - {value: category_28, rate: 0.0064}
+        - {value: category_29, rate: 0.0062}
+        - {value: category_30, rate: 0.0060}
+        - {value: category_31, rate: 0.0058}
+        - {value: category_32, rate: 0.0056}
+        - {value: category_33, rate: 0.0054}
+        - {value: category_34, rate: 0.0052}
+        - {value: category_35, rate: 0.0051}
+        - {value: category_36, rate: 0.0049}
+        - {value: category_37, rate: 0.0048}
+        - {value: category_38, rate: 0.0046}
+        - {value: category_39, rate: 0.0045}
+        - {value: category_40, rate: 0.0044}
+        - {value: category_41, rate: 0.0043}
+        - {value: category_42, rate: 0.0042}
+        - {value: category_43, rate: 0.0041}
+        - {value: category_44, rate: 0.0040}
+        - {value: category_45, rate: 0.0039}
+        - {value: category_46, rate: 0.0038}
+        - {value: category_47, rate: 0.0037}
+        - {value: category_48, rate: 0.0036}
+        - {value: category_49, rate: 0.0035}
+      other_rate: 0.0
+  - name: ts
+    physical_type: "timestamp[us]"
+    logical_type: timestamp
+    nullable: false
+    null_rate: 0.0
+    temporal:
+      # Uniform over 2025, so the extremes alone describe it.
+      extremes: {low: "2025-01-01T00:00:00", high: "2025-12-31T23:59:59.999999", granularity: microsecond}
+  - name: flag
+    physical_type: bool
+    logical_type: boolean
+    nullable: false
+    null_rate: 0.0
+    boolean: {true_rate: 0.3}
+  - name: score
+    physical_type: float64
+    logical_type: number
+    nullable: true
+    null_rate: 0.05
+    numeric:
+      integral: false
+      extremes: {low: -4.0, high: 4.0}
+      mean: 0.0
+      std: 1.0
+      quantiles: {p01: -2.326, p05: -1.645, p25: -0.674, p50: 0.0, p75: 0.674, p95: 1.645, p99: 2.326}
+      fit: {family: norm, params: {loc: 0.0, scale: 1.0}}
+      monotonic: none
+  - name: code
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 10000000, ratio: 1.0}
+    string:
+      # A random 10-character alphanumeric code, every character drawn independently.
+      length: {min: 10, max: 10, mean: 10, quantiles: {p50: 10}}
+      charset: {ascii: true, classes: [upper, lower, digit]}
+      pattern: '^[A-Za-z0-9]{10}$'

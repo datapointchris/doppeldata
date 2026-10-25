@@ -8,8 +8,14 @@ import pytest
 from doppeldata import Bundle
 from doppeldata import InvalidProfile
 from doppeldata import Profile
+from doppeldata.profile import example_names
 
 EXAMPLE = Path(__file__).parent / 'fixtures' / 'orders.profile.yaml'
+
+
+@pytest.mark.parametrize('name', example_names())
+def test_every_shipped_example_is_a_valid_profile_named_as_its_file(name):
+    assert Profile.example(name).document['name'] == name
 
 
 def write_json(path: Path, document: dict) -> Path:

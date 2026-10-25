@@ -5,16 +5,24 @@ benchmark needs some.
 
 A profile is a YAML file holding a dataset's types, distributions, skew, null and error rates, file
 layout and table relationships. It holds no rows. doppeldata is built to read CSV, TSV, JSON,
-Parquet, Arrow, ORC, Avro and Spark DataFrames, and to write any of them back at any size: in memory,
-to disk, to S3, or inside Spark executors.
+Parquet, Arrow and Spark DataFrames, and to write any of them back at any size: in memory, to disk,
+to S3, or inside Spark executors.
 
 A scenario file layered on a profile is meant to bend the data on purpose: a hot join key, a burst of
 malformed rows, a flood of small files. The same profile, scenario and seed must always produce the
 same data.
 
-doppeldata is experimental, and so far `doppeldata --version` is its whole command line. Each
-release's notes list what it does. Its commands and its profile format change without notice until
-1.0.
+doppeldata is experimental. So far it ships the profile format and its hand-written example
+profiles:
+
+```bash
+doppeldata profile list                # the example profiles
+doppeldata profile show orders         # one of them, as YAML to start a profile from
+doppeldata schemas show profile        # the JSON Schema every profile validates against
+```
+
+Each release's notes list what it does. Its commands and its profile format change without notice
+until 1.0.
 
 ## Install
 

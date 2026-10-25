@@ -1,0 +1,128 @@
+# Hand-written: an order table holding one of each column kind the generator samples.
+# No data was read, so it has no `generated` block.
+profile_version: 1
+kind: table
+name: orders
+privacy:
+  policy: default
+  k_min: 11
+  suppressed:
+    - {column: customer_email, reason: identifier, semantic: email}
+  audit:
+    - {column: status, values: 5, rule: "count >= k_min"}
+source:
+  format: parquet
+  compression: zstd
+dataset:
+  row_count: 100000
+  duplicate_row_rate: 0.0
+  keys:
+    primary: {columns: [order_id], uniqueness: 1.0}
+columns:
+  - name: order_id
+    physical_type: int64
+    logical_type: integer
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 100000, ratio: 1.0}
+    numeric:
+      integral: true
+      extremes: {low: 1, high: 100000}
+      monotonic: increasing
+      sequence: {start: 1, step: 1}
+  - name: customer_id
+    physical_type: int64
+    logical_type: integer
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 20000, ratio: 0.2}
+    numeric:
+      integral: true
+      extremes: {low: 1, high: 20000}
+      quantiles: {p05: 1000, p25: 5000, p50: 10000, p75: 15000, p95: 19000}
+      fit: {family: randint, params: {low: 1, high: 20001}}
+      monotonic: none
+    semantic: {type: customer_id, confidence: 0.9, detectors: [name_hint], sensitivity: identifier}
+  - name: amount
+    physical_type: "decimal128(12, 2)"
+    logical_type: number
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 60000, ratio: 0.6}
+    numeric:
+      integral: false
+      precision: 12
+      scale: 2
+      extremes: {low: 0.5, high: 4000.0}
+      mean: 92.45
+      std: 165.91
+      zero_rate: 0.0
+      negative_rate: 0.0
+      quantiles: {p01: 2.76, p05: 6.25, p25: 20.04, p50: 45.0, p75: 101.03, p95: 323.97, p99: 733.53}
+      fit: {family: lognorm, params: {s: 1.2, loc: 0.0, scale: 45.0}}
+      monotonic: none
+  - name: quantity
+    physical_type: int32
+    logical_type: integer
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 10, ratio: 0.0001}
+    numeric:
+      integral: true
+      extremes: {low: 1, high: 10}
+      mean: 2.5
+      quantiles: {p05: 1, p25: 2, p50: 2, p75: 3, p95: 5, p99: 6}
+      fit: {family: poisson, params: {mu: 1.5, loc: 1.0}}
+      monotonic: none
+  - name: status
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 5, ratio: 0.00005}
+    string:
+      top_values:
+        - {value: delivered, rate: 0.4644}
+        - {value: shipped, rate: 0.2167}
+        - {value: processing, rate: 0.1387}
+        - {value: cancelled, rate: 0.1011}
+        - {value: returned, rate: 0.0791}
+      other_rate: 0.0
+  - name: ordered_at
+    physical_type: "timestamp[us, tz=UTC]"
+    logical_type: timestamp
+    nullable: false
+    null_rate: 0.0
+    temporal:
+      timezone: UTC
+      extremes: {low: "2025-01-01T00:00:00Z", high: "2025-12-31T23:59:59Z", granularity: second}
+      by_month: [0.0851, 0.0767, 0.0849, 0.0822, 0.0849, 0.0822, 0.0849, 0.0849, 0.0822, 0.0849, 0.0822, 0.0849]
+      by_dow: [0.1423, 0.1425, 0.1452, 0.1425, 0.1425, 0.1425, 0.1425]
+  - name: customer_email
+    physical_type: string
+    logical_type: string
+    nullable: true
+    null_rate: 0.02
+    distinct: {approx: 19500, ratio: 0.195}
+    string:
+      length: {min: 9, max: 64, mean: 22.5, quantiles: {p05: 14, p50: 21, p95: 34}}
+    semantic:
+      type: email
+      confidence: 0.98
+      detectors: [pattern, name_hint]
+      sensitivity: identifier
+      generator_hint: {provider: email}
+    quality:
+      invalid_rate: 0.0
+  - name: ship_zip
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 9000, ratio: 0.09}
+    string:
+      length: {min: 5, max: 5, mean: 5, quantiles: {p50: 5}}
+      charset: {ascii: true, classes: [digit]}
+      shapes: [{shape: "99999", rate: 1.0}]
+      pattern: '^\d{5}$'
+    semantic: {type: us_zip, confidence: 0.95, detectors: [pattern, name_hint], sensitivity: quasi_identifier}

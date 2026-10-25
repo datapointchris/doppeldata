@@ -4,15 +4,43 @@ import json
 from typing import Annotated
 
 import typer
+from doppeldata.profile import Profile
+from doppeldata.profile import example_names
+from doppeldata.profile import example_text
 from doppeldata.profile import schema_names
 from doppeldata.profile import schema_summaries
 from doppeldata.profile import schema_text
 
 app = typer.Typer(no_args_is_help=True)
+profile_app = typer.Typer(no_args_is_help=True, help='Profiles: reviewable files that describe a dataset without holding its rows.')
+app.add_typer(profile_app, name='profile')
 schemas_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas doppeldata validates its files against.')
 app.add_typer(schemas_app, name='schemas')
 
 JsonOption = Annotated[bool, typer.Option('--json', help='Print JSON instead of a table.')]
+
+
+@profile_app.command('list')
+def profile_list(as_json: JsonOption = False) -> None:
+    """List the hand-written example profiles doppeldata ships, by the name profile show takes."""
+    examples = [Profile.example(name).document for name in example_names()]
+    rows = [{'name': doc['name'], 'row_count': doc['dataset']['row_count'], 'columns': len(doc['columns'])} for doc in examples]
+    if as_json:
+        typer.echo(json.dumps(rows, indent=2))
+        return
+    width = max(len(row['name']) for row in rows)
+    for row in rows:
+        typer.echo(f'{row["name"]:<{width}}  {row["columns"]} columns, {row["row_count"]:,} rows')
+
+
+@profile_app.command('show', no_args_is_help=True)
+def profile_show(name: Annotated[str, typer.Argument(metavar='NAME', help='An example name, as profile list prints it.')]) -> None:
+    """Print an example profile's YAML, to start a profile from: doppeldata profile show orders > orders.profile.yaml"""
+    if name not in example_names():
+        raise typer.BadParameter(
+            f'{name!r} is not an example profile doppeldata ships; choose from {", ".join(example_names())}', param_hint='NAME'
+        )
+    typer.echo(example_text(name), nl=False)
 
 
 @schemas_app.command('list')
