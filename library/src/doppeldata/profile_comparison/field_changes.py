@@ -3,14 +3,17 @@
 import dataclasses as dc
 import enum
 from collections.abc import Iterator
+from collections.abc import Mapping
 from typing import Any
 
 from doppeldata.profile_comparison.metrics import Column
 from doppeldata.profile_comparison.metrics import Document
 from doppeldata.profile_format import pointer
 from doppeldata.profiling.statistic_catalog import ColumnKind
-from doppeldata.profiling.table_profile import LOGICAL_TYPES
+from doppeldata.profiling.table_profile import profiled_kind
 
+# Text formats hold no decimal type, so a decimal column written as CSV or JSON reads back as a float.
+TEXT_READ_KINDS = {ColumnKind.DECIMAL.value, ColumnKind.FLOAT.value}
 # A diff reports a column when more than this share of its values falls outside the edges or value list frozen from A.
 OVERFLOW_SHARE = 0.05
 
@@ -43,22 +46,23 @@ class FieldChange:
 
 
 def column_kind(column: Column) -> str:
-    """The profiler's `ColumnKind` the column was profiled as, read back from the logical type it wrote.
-
-    Float and decimal share the logical type `number`, so an Arrow decimal type tells them apart.
-    """
-    kinds = [kind for kind, logical in LOGICAL_TYPES.items() if logical == column.get('logical_type')]
-    if len(kinds) > 1:
-        decimal = (column.get('physical_type') or '').startswith('decimal')
-        kinds = [kind for kind in kinds if (kind is ColumnKind.DECIMAL) == decimal]
-    return kinds[0].value if kinds else ColumnKind.OTHER.value
+    return profiled_kind(column).value
 
 
-def column_changes(source: Document, observed: Document, *, physical_type_drifts: bool) -> list[FieldChange]:
+def packs_run(document: Document) -> frozenset[str]:
+    """The detector packs a profile records its run enabled, none for a profile no run wrote."""
+    return frozenset((document.get('generated') or {}).get('detector_packs') or {})
+
+
+def column_changes(source: Document, observed: Document, *, writer_changes_pass: bool, declaring: Mapping[str, str]) -> list[FieldChange]:
     """Columns added, dropped, or holding another kind, Arrow type or semantic type.
 
-    A check passes an Arrow type change alone, because a writer may store a column at another width or unit.
-    A diff fails it, because there the source itself changed.
+    With `writer_changes_pass`, as a check sets it, a change a writer alone causes is listed and passes: an Arrow type,
+    because a writer may store a column at another width or unit, and a decimal read back from text as a float. A diff
+    fails both, because there the source itself changed.
+
+    A semantic type change passes where the type is declared by no detector pack both profiles ran, because only a run
+    of that pack could find it. A column's `semantic.pack` names the pack, and `declaring` does where it is absent.
     """
     ours = {column['name']: index for index, column in enumerate(source.get('columns') or [])}
     theirs = {column['name']: index for index, column in enumerate(observed.get('columns') or [])}
@@ -78,27 +82,42 @@ def column_changes(source: Document, observed: Document, *, physical_type_drifts
                 FieldChange(ChangeKind.COLUMN_ADDED, name, pointer(('columns', index)), None, column_kind(column), False, message)
             )
             continue
-        changes += list(retyped(source['columns'][ours[name]], column, index, physical_type_drifts=physical_type_drifts))
+        ran = packs_run(source), packs_run(observed)
+        changes += list(retyped(source['columns'][ours[name]], column, index, writer_changes_pass, ran, declaring))
     return changes
 
 
-def retyped(source: Column, observed: Column, index: int, *, physical_type_drifts: bool) -> Iterator[FieldChange]:
+def retyped(
+    source: Column,
+    observed: Column,
+    index: int,
+    writer_changes_pass: bool,
+    ran: tuple[frozenset[str], frozenset[str]],
+    declaring: Mapping[str, str],
+) -> Iterator[FieldChange]:
     name = observed['name']
     kinds = column_kind(source), column_kind(observed)
     if kinds[0] != kinds[1]:
         message = f'{name} is {kinds[0]} in the source profile and {kinds[1]} in the other'
-        yield FieldChange(ChangeKind.KIND_CHANGED, name, pointer(('columns', index, 'logical_type')), *kinds, False, message)
+        passed = writer_changes_pass and {*kinds} == TEXT_READ_KINDS
+        yield FieldChange(ChangeKind.KIND_CHANGED, name, pointer(('columns', index, 'logical_type')), *kinds, passed, message)
     types = source.get('physical_type'), observed.get('physical_type')
     if types[0] != types[1]:
         message = f'{name} is {types[0]} in the source profile and {types[1]} in the other'
         at = pointer(('columns', index, 'physical_type'))
-        yield FieldChange(ChangeKind.PHYSICAL_TYPE_CHANGED, name, at, *types, not physical_type_drifts, message)
-    semantic = (source.get('semantic') or {}).get('type'), (observed.get('semantic') or {}).get('type')
+        yield FieldChange(ChangeKind.PHYSICAL_TYPE_CHANGED, name, at, *types, writer_changes_pass, message)
+    blocks = source.get('semantic') or {}, observed.get('semantic') or {}
+    semantic = blocks[0].get('type'), blocks[1].get('type')
     if semantic[0] != semantic[1]:
         source_type, observed_type = (f'as {kind}' if kind is not None else 'as no semantic type' for kind in semantic)
         message = f'{name} is detected {source_type} in the source profile and {observed_type} in the other'
+        packs = [block.get('pack') or declaring.get(kind or '') for block, kind in zip(blocks, semantic, strict=True)]
+        # Each side's type is confirmed only by the other side's run of the pack that declares it.
+        unconfirmed = [kind for kind, pack, other in zip(semantic, packs, reversed(ran), strict=True) if kind and pack not in other]
+        if unconfirmed:
+            message += f'; no detector pack both profiles ran declares {", ".join(unconfirmed)}, so it is listed and passes'
         at = pointer(('columns', index, 'semantic', 'type'))
-        yield FieldChange(ChangeKind.SEMANTIC_TYPE_CHANGED, name, at, *semantic, False, message)
+        yield FieldChange(ChangeKind.SEMANTIC_TYPE_CHANGED, name, at, *semantic, bool(unconfirmed), message)
 
 
 def overflow_changes(source: Document, observed: Document) -> list[FieldChange]:

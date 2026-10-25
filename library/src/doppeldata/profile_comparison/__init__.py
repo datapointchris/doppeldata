@@ -25,6 +25,8 @@ from doppeldata.profile_comparison.thresholds import Thresholds
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import DEFAULT_K_MIN
 from doppeldata.profiling import profile as profile_data
+from doppeldata.profiling.detector_packs import EnabledPack
+from doppeldata.profiling.detector_packs import enabled_packs
 
 # A report's values keep this many significant digits, and each verdict is taken on the value as written.
 REPORT_DIGITS = 6
@@ -40,13 +42,15 @@ def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) 
     thresholds = thresholds or Thresholds()
     thresholds.check_columns(source)
     k_min = (source.get('privacy') or {}).get('k_min') or DEFAULT_K_MIN
+    # The data is typed with the packs the profile was, so a type one of them declares can be confirmed.
+    packs = enabled_packs((source.get('generated') or {}).get('detector_packs') or ())
     with warnings.catch_warnings():
         # The report states both in its own terms: a fit's looseness through `ks`, and a missing column as a change.
         warnings.simplefilter('ignore', PoorFits)
         warnings.simplefilter('ignore', ColumnsNotFrozen)
         # Generated data is never the data the profile was made from, so the profile is always made again.
         warnings.simplefilter('ignore', EarlierProfileNotReused)
-        checked = profile_data(data, k_min=k_min, edges_from=profile)
+        checked = profile_data(data, k_min=k_min, edges_from=profile, packs=[each.pack.name for each in packs])
     observed = checked.to_plain()
     return CheckReport(
         profile=reported(profile),
@@ -56,7 +60,7 @@ def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) 
             (observed.get('generated') or {}).get('source_fingerprint'),
         ),
         metrics=measured(source, observed, thresholds),
-        changes=column_changes(source, observed, physical_type_drifts=False),
+        changes=column_changes(source, observed, writer_changes_pass=True, declaring=declared_types(packs)),
     )
 
 
@@ -68,7 +72,8 @@ def diff(a: Profile, b: Profile, *, thresholds: Thresholds | None = None) -> Dif
     earlier, later = a.to_plain(), b.to_plain()
     thresholds = thresholds or Thresholds()
     thresholds.check_columns(earlier)
-    changes = column_changes(earlier, later, physical_type_drifts=True) + overflow_changes(earlier, later) + source_changes(earlier, later)
+    changes = column_changes(earlier, later, writer_changes_pass=False, declaring={})
+    changes += overflow_changes(earlier, later) + source_changes(earlier, later)
     return DiffReport(reported(a), reported(b), measured(earlier, later, thresholds), changes)
 
 
@@ -93,6 +98,11 @@ def measured(source: Document, observed: Document, thresholds: Thresholds) -> li
                 )
             )
     return results
+
+
+def declared_types(packs: list[EnabledPack]) -> dict[str, str]:
+    """The pack that declares each semantic type, by type."""
+    return {detector.type: each.pack.name for each in packs for detector in each.pack.detectors}
 
 
 def reported(profile: Profile) -> ReportedProfile:

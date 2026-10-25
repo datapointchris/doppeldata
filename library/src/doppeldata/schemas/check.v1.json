@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "changes": {
-      "description": "Columns the data adds, drops or holds as another kind. A changed Arrow type alone is listed\nand passes, because a writer may store a column at another width or unit.",
+      "description": "Columns the data adds or drops, or holds as another kind or semantic type. A change a writer\nalone causes is listed and passes: an Arrow type, which a writer may store at another width\nor unit, and a decimal read back from text as a float. So does a semantic type no detector\npack both profiles ran declares.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/FieldChange"
@@ -95,7 +95,7 @@
           ]
         },
         {
-          "description": "The profiler's column kind: integer, float, decimal, string, boolean, date, datetime or other.",
+          "description": "The column kind the profiler read the column as, from its logical type and an Arrow\ndecimal type.",
           "type": "string",
           "const": "kind_changed"
         },

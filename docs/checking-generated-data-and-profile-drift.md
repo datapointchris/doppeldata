@@ -5,7 +5,8 @@
 `data check PROFILE DATA` profiles DATA with `edges_from=PROFILE` and PROFILE's `k_min`, then
 measures the new profile against PROFILE. The histograms and value lists then compare bin for bin.
 Generated data has its own `source_fingerprint`, so the stats cache never hands PROFILE back
-unchanged.
+unchanged. DATA is typed with the detector packs PROFILE records, so a type one of them declares can
+be confirmed.
 
 `profile diff A B` measures B against A with the same metrics. B profiled with `--edges-from A`
 carries overflow counts, so its boundary adherence and overflow can be measured. A B binned
@@ -89,13 +90,19 @@ A column's kind is the profiler's `ColumnKind`, read back from the `logical_type
 Arrow decimal type telling a decimal from a float.
 
 - **A check fails** on a column the data adds or drops, or holds as another kind or semantic type.
-- **A check lists and passes an Arrow type change alone.** The writers cast every timestamp to one
-  unit, because Parquet's Arrow writer cannot write INT96. Data written as CSV reads back at the
-  text reader's widths, so an `int32` source column profiles as `int64`.
-- **A diff fails on every changed field.** That covers a changed Arrow type, which there means the
-  source itself changed. It also covers a column with more than `OVERFLOW_SHARE` of its values
-  outside the edges or value list frozen from A, a CSV dialect setting that changed, and a
-  partition key B adds.
+- **A check lists and passes a change a writer alone causes.** A Parquet write given
+  `timestamp_unit` casts every timestamp column to that unit, and no unit reproduces a source's
+  INT96. Data written as CSV or JSON reads back at the text reader's types, so an `int32` column
+  profiles as `int64`, and a decimal as a float.
+- **A semantic type change passes where no detector pack both profiles ran declares the type.** A
+  hand-written profile may carry any type, and one no pack declares is found in no data. A
+  column's `semantic.pack` names the pack, and in a check the packs it ran name it for a column
+  that does not.
+- **A diff fails on every other changed field.** That covers a changed Arrow type or kind, which
+  there means the source itself changed. It also covers a column with more than `OVERFLOW_SHARE`
+  of its values outside the edges or value list frozen from A, a CSV dialect setting that changed,
+  and a partition key B adds. The tool versions and packs a profile records are how it was made,
+  so a diff compares none of them.
 
 ## A failed check exits 3, drift exits 1, and a verb that could not finish exits 3
 

@@ -26,8 +26,10 @@ pub struct CheckReport {
     /// Whether every declared expectation held. True when no scenario declares any.
     pub verified: bool,
     pub metrics: Vec<MetricResult>,
-    /// Columns the data adds, drops or holds as another kind. A changed Arrow type alone is listed
-    /// and passes, because a writer may store a column at another width or unit.
+    /// Columns the data adds or drops, or holds as another kind or semantic type. A change a writer
+    /// alone causes is listed and passes: an Arrow type, which a writer may store at another width
+    /// or unit, and a decimal read back from text as a float. So does a semantic type no detector
+    /// pack both profiles ran declares.
     pub changes: Vec<FieldChange>,
     /// The scenario's declared expectations, empty when no scenario applies.
     pub expectations: Vec<ExpectationResult>,
@@ -128,7 +130,8 @@ pub struct FieldChange {
 pub enum ChangeKind {
     ColumnAdded,
     ColumnDropped,
-    /// The profiler's column kind: integer, float, decimal, string, boolean, date, datetime or other.
+    /// The column kind the profiler read the column as, from its logical type and an Arrow
+    /// decimal type.
     KindChanged,
     /// The Arrow type, such as `int32` becoming `int64`.
     PhysicalTypeChanged,

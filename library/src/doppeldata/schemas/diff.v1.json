@@ -70,7 +70,7 @@
           ]
         },
         {
-          "description": "The profiler's column kind: integer, float, decimal, string, boolean, date, datetime or other.",
+          "description": "The column kind the profiler read the column as, from its logical type and an Arrow\ndecimal type.",
           "type": "string",
           "const": "kind_changed"
         },

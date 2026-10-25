@@ -82,6 +82,19 @@ LOGICAL_TYPES = {
 }
 CONTAINER_LOGICAL_TYPES = {'list': 'array', 'fixed_size_list': 'array', 'struct': 'object'}
 
+
+def profiled_kind(column: dict[str, Any]) -> ColumnKind:
+    """The kind a profile column was profiled as, read back from the logical type `LOGICAL_TYPES` gave it.
+
+    Float and decimal share the logical type `number`, so an Arrow decimal type tells them apart.
+    """
+    kinds = [kind for kind, logical in LOGICAL_TYPES.items() if logical == column.get('logical_type')]
+    if len(kinds) > 1:
+        decimal = (column.get('physical_type') or '').startswith('decimal')
+        kinds = [kind for kind in kinds if (kind is ColumnKind.DECIMAL) == decimal]
+    return kinds[0] if kinds else ColumnKind.OTHER
+
+
 # Each answer by its column, None for the table, and its statistic's name.
 Answers = dict[tuple[str | None, str], Any]
 Stat = Callable[[str], Any]
