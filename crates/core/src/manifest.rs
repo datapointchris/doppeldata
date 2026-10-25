@@ -91,7 +91,7 @@ impl From<&DatasetIdentity> for ManifestIdentity {
         Self {
             dataset_rows: identity.rows(),
             profile_digest: identity.profile_digest().to_string(),
-            scenario_digest: None,
+            scenario_digest: identity.scenario_digest().map(String::from),
             seed: identity.seed(),
             stream_version: identity.stream_version(),
         }
@@ -134,6 +134,19 @@ pub struct ManifestProfile {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ManifestScenario {
+    /// The scenario's name. A composition's joins its members' names with `+`.
+    pub name: String,
+    /// The scenario's path as the caller gave it, or null when it came from memory or composes
+    /// several.
+    pub path: Option<String>,
+    /// The scenarios composed, in order, present only for a composition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composed_of: Option<Vec<ScenarioMember>>,
+}
+
+/// One scenario of a composition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ScenarioMember {
     pub name: String,
     /// The scenario's path as the caller gave it, or null when it came from memory.
     pub path: Option<String>,

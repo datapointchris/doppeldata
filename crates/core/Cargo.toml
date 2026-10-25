@@ -13,8 +13,11 @@ publish.workspace = true
 # PyCapsule export through pyo3-arrow accepts. `cargo info pyo3-arrow` names that major.
 arrow-array = "59"
 arrow-buffer = "59"
+arrow-cast = "59"
 arrow-data = "59"
+arrow-ord = "59"
 arrow-schema = "59"
+arrow-select = "59"
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 fake = { version = "5.1.0", default-features = false }
 grex = { version = "1.4.6", default-features = false }

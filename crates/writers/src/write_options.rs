@@ -10,21 +10,24 @@ use doppeldata_core::format_settings::ParquetSettings;
 use doppeldata_core::format_settings::TextCompression;
 use doppeldata_core::manifest::FileRows;
 use doppeldata_core::manifest::LayoutSettings;
+use doppeldata_core::manifest::ManifestScenario;
 use doppeldata_core::profile::Compression;
 use doppeldata_core::profile::PartitionStyle;
 use doppeldata_core::profile::Profile;
+use doppeldata_core::profile::Quantiles;
 use doppeldata_core::profile::SourceFormat;
 use doppeldata_core::profile::TableProfile;
 
 use crate::WriteError;
 
 /// What to write: the format and its settings, how rows split into files, and the profile's path
-/// for the manifest to name.
+/// and the scenario's record for the manifest to name.
 #[derive(Debug, Clone, Default)]
 pub struct WriteOptions {
     pub output: Output,
     pub layout: LayoutSettings,
     pub profile_path: Option<String>,
+    pub scenario: Option<ManifestScenario>,
 }
 
 /// What a caller chooses over a profile's recorded settings. A field left `None` keeps what the
@@ -40,16 +43,24 @@ pub struct WriteChoices {
     pub partition_by: Option<Vec<String>>,
     pub partition_style: Option<PartitionStyle>,
     pub profile_path: Option<String>,
+    /// The scenario applied, as the manifest records it.
+    pub scenario: Option<ManifestScenario>,
 }
 
 impl WriteOptions {
     /// The options `profile` records, with `choices` laid over them in the order the manifest's
-    /// fields depend on: the format, its settings, the file size, then the partitions.
-    pub fn chosen(profile: &Profile, choices: WriteChoices) -> Result<Self, WriteError> {
+    /// fields depend on: the format, its settings, the file size, then the partitions. A
+    /// scenario's `scenario_file_rows` sizes the files over the profile's, and under a size the
+    /// choices give.
+    pub fn chosen(profile: &Profile, scenario_file_rows: Option<&Quantiles>, choices: WriteChoices) -> Result<Self, WriteError> {
         let mut options = Self::from_profile(profile, choices.format)?;
         options.profile_path = choices.profile_path;
+        options.scenario = choices.scenario;
         if let Some(writer) = choices.writer {
             options.override_writer(writer)?;
+        }
+        if let Some(quantiles) = scenario_file_rows {
+            options.layout.file_rows = FileRows::Drawn(quantiles.clone());
         }
         if let Some(file_rows) = choices.file_rows {
             options.layout.file_rows = FileRows::Fixed(file_rows);

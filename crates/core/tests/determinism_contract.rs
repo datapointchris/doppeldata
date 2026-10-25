@@ -6,18 +6,21 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use arrow_array::RecordBatch;
+use doppeldata_core::AppliedScenario;
 use doppeldata_core::BLOCK_ROWS;
 use doppeldata_core::DatasetIdentity;
 use doppeldata_core::STREAM_VERSION;
 use doppeldata_core::TextCell;
 use doppeldata_core::profile::Profile;
+use doppeldata_core::scenario::Scenario;
 use doppeldata_core::values_digest;
 use rayon::prelude::*;
 
-// `crates/check-pinned-values-through-wheel.py` reads PROFILE_DIGEST, SEED, ROWS,
-// PINNED_STREAM_VERSION and PINNED_VALUES from this file, and generates the fixture through the
-// built wheel, so each stays a literal on one line.
+// `crates/check-pinned-values-through-wheel.py` reads PROFILE_DIGEST, SCENARIO_DIGEST, SEED, ROWS,
+// PINNED_STREAM_VERSION, PINNED_VALUES and PINNED_SCENARIO_VALUES from this file, and generates the
+// fixture through the built wheel, so each stays a literal on one line.
 const PROFILE_DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const SCENARIO_DIGEST: &str = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 const SEED: u64 = 20_251_025;
 const ROWS: u64 = 135_393;
 const _: () = assert!(
@@ -25,11 +28,13 @@ const _: () = assert!(
     "two whole blocks and part of a third"
 );
 
-/// The stream version the fixture's values were generated under, and a SHA-256 over them. A release
-/// freezes the pair: once released, a change to any value raises STREAM_VERSION.
-/// `crates/check-stream-version-raised.sh` reads both lines and refuses a new hash at a released version.
+/// The stream version the fixture's values were generated under, and a SHA-256 over them, without a
+/// scenario and with the scenario fixture. A release freezes all three: once released, a change to
+/// any value raises STREAM_VERSION. `crates/check-stream-version-raised.sh` reads these lines and
+/// refuses a new hash at a released version.
 const PINNED_STREAM_VERSION: u32 = 7;
 const PINNED_VALUES: &str = "12735e7dbf80220695779bfdad51845c4897e2a2fcf7ee8ab08f2f058a65b385";
+const PINNED_SCENARIO_VALUES: &str = "aea357ad08e9b4c96e574aa4f21b2a22eee727b2bf7d43e6c46ab1ee2b12fa04";
 
 fn document(path: &Path) -> serde_json::Value {
     let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -40,11 +45,24 @@ fn fixture() -> serde_json::Value {
     document(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/every-column-kind.profile.yaml"))
 }
 
+fn scenario_fixture() -> Scenario {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/every-column-kind.scenario.yaml");
+    serde_json::from_value(document(&path)).unwrap()
+}
+
 type Block = (RecordBatch, Vec<Vec<TextCell>>);
 
 fn generate(document: &serde_json::Value, threads: usize) -> Vec<Block> {
+    generate_with(document, None, threads)
+}
+
+fn generate_with(document: &serde_json::Value, scenario: Option<&Scenario>, threads: usize) -> Vec<Block> {
     let profile: Profile = serde_json::from_value(document.clone()).unwrap();
-    let plan = doppeldata_core::plan(&profile, PROFILE_DIGEST, SEED, ROWS).unwrap();
+    let applied = scenario.map(|scenario| AppliedScenario {
+        scenario,
+        digest: SCENARIO_DIGEST,
+    });
+    let plan = doppeldata_core::plan_with_scenario(&profile, PROFILE_DIGEST, applied, SEED, ROWS).unwrap();
     let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
     pool.install(|| {
         (0..plan.block_count())
@@ -86,9 +104,29 @@ fn values_depend_on_no_thread_count_and_no_other_column() {
 }
 
 #[test]
+fn a_scenario_values_depend_on_no_thread_count() {
+    let document = fixture();
+    let scenario = scenario_fixture();
+    let one_thread = generate_with(&document, Some(&scenario), 1);
+    assert!(
+        one_thread == generate_with(&document, Some(&scenario), 16),
+        "16 threads changed a value"
+    );
+    assert_eq!(
+        (STREAM_VERSION, values_digest(&one_thread).as_str()),
+        (PINNED_STREAM_VERSION, PINNED_SCENARIO_VALUES),
+        "the scenario's values changed; a change to a released stream version's draws raises STREAM_VERSION"
+    );
+}
+
+#[test]
 fn every_bundled_example_plans() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library/src/doppeldata/examples");
-    let paths: Vec<PathBuf> = fs::read_dir(&examples).unwrap().map(|entry| entry.unwrap().path()).collect();
+    let paths: Vec<PathBuf> = fs::read_dir(&examples)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.to_string_lossy().ends_with(".profile.yaml"))
+        .collect();
     assert!(!paths.is_empty(), "{} holds no examples", examples.display());
     for path in paths {
         let profile: Profile = serde_json::from_value(document(&path)).unwrap();
@@ -112,5 +150,19 @@ fn a_dataset_identity_digests_to_its_pinned_value() {
     assert_eq!(
         identity.digest(),
         "sha256:3fbdfbf82031470bc8e14a248d3d80ff37224337afb951a031a7233b7c4fd029"
+    );
+    let with_scenario = identity.with_scenario(SCENARIO_DIGEST);
+    assert_eq!(
+        with_scenario.canonical_json(),
+        concat!(
+            r#"{"dataset_rows":"10000000","#,
+            r#""profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
+            r#""scenario_digest":"sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","#,
+            r#""seed":"18446744073709551615","stream_version":4}"#
+        )
+    );
+    assert_eq!(
+        with_scenario.digest(),
+        "sha256:bd55826c0c6410bd412152c07fd50aa41b847bd9cd54283af45d5ff5e2474b92"
     );
 }

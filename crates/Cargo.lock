@@ -546,9 +546,12 @@ version = "0.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
+ "arrow-cast",
  "arrow-data",
  "arrow-ipc",
+ "arrow-ord",
  "arrow-schema",
+ "arrow-select",
  "chrono",
  "fake",
  "grex",

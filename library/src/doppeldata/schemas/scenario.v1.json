@@ -1,0 +1,756 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "doppeldata scenario v1",
+  "description": "A scenario file.",
+  "type": "object",
+  "properties": {
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expect": {
+      "description": "What the scenario promises of the generated data, which `data check --scenario` certifies.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Expectation"
+      }
+    },
+    "patch": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfilePatch"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "perturbations": {
+      "description": "Faults applied in order to each block of generated rows. Each draws from its own stream,\nkeyed by its `id`, so inserting one never moves another's rows.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Perturbation"
+      }
+    },
+    "scenario": {
+      "description": "The scenario's name.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "scenario"
+  ],
+  "$defs": {
+    "AddedColumn": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "description": "An Arrow type string, as a profile's `physical_type` spells it.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type"
+      ]
+    },
+    "DuplicateScope": {
+      "oneOf": [
+        {
+          "description": "Each copy is written to the file its source row is written to.",
+          "type": "string",
+          "const": "within_file"
+        },
+        {
+          "description": "Each copy comes from a block half the dataset away, so from another file.",
+          "type": "string",
+          "const": "across_files"
+        }
+      ]
+    },
+    "Duration": {
+      "description": "A length of time as a whole number and a unit: ms, s, m, h, d or w, such as 2d.",
+      "type": "string",
+      "pattern": "^[0-9]+(ms|s|m|h|d|w)$"
+    },
+    "Expectation": {
+      "description": "A statistic the scenario promises of the generated data, within its bounds.",
+      "type": "object",
+      "properties": {
+        "at_least": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "at_most": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "column": {
+          "description": "The column measured, for a metric of one column.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metric": {
+          "$ref": "#/$defs/ExpectedMetric"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "metric"
+      ]
+    },
+    "ExpectedMetric": {
+      "description": "The statistics an expectation can name. Each is measured on the generated data.",
+      "oneOf": [
+        {
+          "description": "The share of rows holding the `keys` most frequent values of `column`, with `keys` from the\ncolumn's `hot_keys` perturbation.",
+          "type": "string",
+          "const": "hot_keys.share"
+        },
+        {
+          "description": "The share of rows repeating an earlier row: in `column`, or in every column without one.",
+          "type": "string",
+          "const": "duplicates.rate"
+        },
+        {
+          "description": "The share of rows whose `column` is earlier than the `ingest` column of its `late_arrival`\nperturbation.",
+          "type": "string",
+          "const": "late_arrival.rate"
+        },
+        {
+          "description": "The share of rows whose `column` is null.",
+          "type": "string",
+          "const": "missingness.rate"
+        }
+      ]
+    },
+    "LagSpread": {
+      "description": "How far a late row's time moves, as a lognormal by its median and 99th percentile.",
+      "type": "object",
+      "properties": {
+        "family": {
+          "$ref": "#/$defs/SpreadFamily"
+        },
+        "median": {
+          "$ref": "#/$defs/Duration"
+        },
+        "p99": {
+          "description": "Without it, the lognormal's sigma is 1, which puts the 99th percentile about ten times the\nmedian.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Duration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "median"
+      ]
+    },
+    "Mechanism": {
+      "oneOf": [
+        {
+          "description": "Missing completely at random.",
+          "type": "string",
+          "const": "MCAR"
+        },
+        {
+          "description": "Missing at random, given another column.",
+          "type": "string",
+          "const": "MAR"
+        },
+        {
+          "description": "Missing not at random: the column's own value decides.",
+          "type": "string",
+          "const": "MNAR"
+        }
+      ]
+    },
+    "Perturbation": {
+      "description": "One fault, named by `op`. `id` keys its random stream, and defaults to\n`<op>:<column or \"table\">:<n>`, where n counts earlier entries of the same op and column.",
+      "oneOf": [
+        {
+          "description": "`share` of rows take one of `keys` values: the column's most frequent ones, or values its own\nsampler draws where it lists none.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "keys": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 1
+            },
+            "op": {
+              "type": "string",
+              "const": "hot_keys"
+            },
+            "share": {
+              "$ref": "#/$defs/Rate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "column",
+            "keys",
+            "share"
+          ]
+        },
+        {
+          "description": "Copies of existing rows, so that `rate` of the rows written are copies. Each block's count is\nplanned up front, so block boundaries never move.",
+          "type": "object",
+          "properties": {
+            "exact": {
+              "description": "False varies one non-key column of each copy, taking that column's value from another row.",
+              "type": "boolean",
+              "default": true
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "duplicates"
+            },
+            "rate": {
+              "$ref": "#/$defs/Rate"
+            },
+            "scope": {
+              "$ref": "#/$defs/DuplicateScope"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "rate"
+          ]
+        },
+        {
+          "description": "`rate` of rows have their event time shifted earlier by a drawn lag.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "description": "The event time.",
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "ingest": {
+              "description": "A column to hold each row's unshifted time, as when it arrived. It is written whether or not\nthe profile holds it, and added with the event column's type when it does not. A date\ncolumn takes the time truncated to its day. `late_arrival.rate` is measured against it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "lag": {
+              "$ref": "#/$defs/LagSpread"
+            },
+            "op": {
+              "type": "string",
+              "const": "late_arrival"
+            },
+            "rate": {
+              "$ref": "#/$defs/Rate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "column",
+            "rate",
+            "lag"
+          ]
+        },
+        {
+          "description": "Nulls written into `column`: MCAR uniformly, MAR more often for higher values of `depends_on`,\nand MNAR more often for the column's own higher values. Each averages `rate` over the rows.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "depends_on": {
+              "description": "The column MAR's chance of a null rises with. Only MAR takes it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mechanism": {
+              "$ref": "#/$defs/Mechanism"
+            },
+            "op": {
+              "type": "string",
+              "const": "missingness"
+            },
+            "rate": {
+              "$ref": "#/$defs/Rate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "column",
+            "mechanism",
+            "rate"
+          ]
+        },
+        {
+          "description": "`rate` of rows take a sentinel from `values`, or a value past the column's extreme on the side\n`beyond` names. Exactly one of the two is given.",
+          "type": "object",
+          "properties": {
+            "beyond": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Side"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "column": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "out_of_range"
+            },
+            "rate": {
+              "$ref": "#/$defs/Rate"
+            },
+            "values": {
+              "description": "Sentinels, each cast to the column's type.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": true
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "column",
+            "rate"
+          ]
+        },
+        {
+          "description": "Two columns' values exchanged in `rate` of rows. Both must have one type.",
+          "type": "object",
+          "properties": {
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "swapped_values"
+            },
+            "rate": {
+              "$ref": "#/$defs/Rate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "columns",
+            "rate"
+          ]
+        },
+        {
+          "description": "The category mix moved: each value named takes its share, and every other value keeps its\nproportion of what is left. As few rows change as reach the new mix.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "categorical_shift"
+            },
+            "to": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Rate"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "column",
+            "to"
+          ]
+        },
+        {
+          "description": "Gaussian noise of standard deviation `sigma`, in the column's units, added to `rate` of rows.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "noise"
+            },
+            "rate": {
+              "$ref": "#/$defs/Rate"
+            },
+            "sigma": {
+              "type": "number",
+              "format": "double",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "column",
+            "rate",
+            "sigma"
+          ]
+        },
+        {
+          "description": "`rate` of rows multiplied by `factor`, a unit error such as cents written as dollars.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "factor": {
+              "type": "number",
+              "format": "double"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "scaling"
+            },
+            "rate": {
+              "$ref": "#/$defs/Rate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "column",
+            "rate",
+            "factor"
+          ]
+        },
+        {
+          "description": "`rate` of strings broken: one holding a character past ASCII is mojibake, its UTF-8 read as\nwindows-1252, and any other has one character replaced by U+FFFD.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "broken_characters"
+            },
+            "rate": {
+              "$ref": "#/$defs/Rate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "column",
+            "rate"
+          ]
+        },
+        {
+          "description": "`rate` of rows set far past the trimmed extremes: between `multiplier` and `multiplier + 1`\ntimes the span between them, beyond the high extreme, or beyond the low one in a column that\ngoes below zero.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "multiplier": {
+              "type": "number",
+              "format": "double",
+              "minimum": 0
+            },
+            "op": {
+              "type": "string",
+              "const": "outliers"
+            },
+            "rate": {
+              "$ref": "#/$defs/Rate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "column",
+            "rate",
+            "multiplier"
+          ]
+        },
+        {
+          "description": "Files whose first row lies at or past `after_fraction` of the rows carry a new shape. Every\nname but `add`'s and `reorder`'s is a column as the profile names it.",
+          "type": "object",
+          "properties": {
+            "add": {
+              "description": "Columns that appear, generated from their type alone.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AddedColumn"
+              }
+            },
+            "after_fraction": {
+              "$ref": "#/$defs/Rate"
+            },
+            "drop": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "schema_drift"
+            },
+            "rename": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "reorder": {
+              "description": "Columns moved to the front in this order, by the names they end with. The rest follow in\ntheir order.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
+            },
+            "widen": {
+              "description": "Columns cast to a wider Arrow type, such as int32 to int64.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "after_fraction"
+          ]
+        },
+        {
+          "description": "File sizes drawn from `file_rows` in place of the layout's. A caller's own file size still\noverrides it.",
+          "type": "object",
+          "properties": {
+            "file_rows": {
+              "$ref": "#/$defs/RowsSpread"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "small_files"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "file_rows"
+          ]
+        },
+        {
+          "description": "Each value named takes its share of rows, written as the column's type. Every other row keeps\nits own value, so a partitioned write's directories hold those shares.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "partition_skew"
+            },
+            "shares": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Rate"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "column",
+            "shares"
+          ]
+        }
+      ]
+    },
+    "ProfilePatch": {
+      "description": "An RFC 7396 JSON Merge Patch onto the profile. `columns` is a map keyed by column name, an extension of RFC 7396, whose arrays replace wholesale, so a patch names only the columns it changes. A column patched to null is removed, and one the profile does not hold is refused.",
+      "type": "object",
+      "properties": {
+        "columns": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "Rate": {
+      "description": "A share of rows, from 0 to 1.",
+      "type": "number",
+      "maximum": 1,
+      "minimum": 0
+    },
+    "RowsSpread": {
+      "description": "A count of rows, as a lognormal by its median and 99th percentile.",
+      "type": "object",
+      "properties": {
+        "family": {
+          "$ref": "#/$defs/SpreadFamily"
+        },
+        "median": {
+          "type": "number",
+          "format": "double",
+          "minimum": 1
+        },
+        "p99": {
+          "description": "Without it, the lognormal's sigma is 1, which puts the 99th percentile about ten times the\nmedian.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "median"
+      ]
+    },
+    "Side": {
+      "type": "string",
+      "enum": [
+        "low",
+        "high"
+      ]
+    },
+    "SpreadFamily": {
+      "type": "string",
+      "enum": [
+        "lognormal"
+      ]
+    }
+  }
+}

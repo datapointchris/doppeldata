@@ -3,6 +3,7 @@
 use crate::manifest;
 use crate::profile;
 use crate::profile_comparison;
+use crate::scenario;
 
 pub struct PublishedSchema {
     /// The name `doppeldata schemas show` takes.
@@ -32,6 +33,11 @@ pub fn all() -> Vec<PublishedSchema> {
             name: "diff",
             file_name: format!("diff.v{}.json", profile_comparison::DIFF_VERSION),
             derive: profile_comparison::diff_json_schema,
+        },
+        PublishedSchema {
+            name: "scenario",
+            file_name: format!("scenario.v{}.json", scenario::SCENARIO_VERSION),
+            derive: scenario::json_schema,
         },
     ]
 }

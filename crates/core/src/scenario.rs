@@ -1,0 +1,512 @@
+//! Scenario format v1: a layer over a profile that bends the generated data on purpose.
+//!
+//! A merge patch changes what a profile can express as a value. An ordered list of perturbations
+//! applies faults a profile cannot express. `expect` declares what the scenario promises, which a
+//! check certifies. The library applies the patch and owns the scenario's digest. The engine reads
+//! the perturbations.
+
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+
+use schemars::JsonSchema;
+use schemars::Schema;
+use schemars::SchemaGenerator;
+use schemars::json_schema;
+use serde::Deserialize;
+
+use crate::profile::Rate;
+
+/// The scenario format version the engine reads, which names the published schema's file.
+pub const SCENARIO_VERSION: u64 = 1;
+
+/// A scenario file.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Scenario {
+    /// The scenario's name.
+    pub scenario: String,
+    pub description: Option<String>,
+    pub patch: Option<ProfilePatch>,
+    /// Faults applied in order to each block of generated rows. Each draws from its own stream,
+    /// keyed by its `id`, so inserting one never moves another's rows.
+    #[serde(default)]
+    pub perturbations: Vec<Perturbation>,
+    /// What the scenario promises of the generated data, which `data check --scenario` certifies.
+    #[serde(default)]
+    pub expect: Vec<Expectation>,
+}
+
+/// An RFC 7396 JSON Merge Patch onto the profile, with one extension: `columns` is a map keyed by
+/// column name rather than the profile's list, so a patch names only the columns it changes. A
+/// column patched to null is removed. A column the profile does not hold is refused.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(transparent)]
+pub struct ProfilePatch(pub serde_json::Map<String, serde_json::Value>);
+
+impl JsonSchema for ProfilePatch {
+    fn schema_name() -> Cow<'static, str> {
+        "ProfilePatch".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "An RFC 7396 JSON Merge Patch onto the profile. `columns` is a map keyed by column name, an extension of RFC 7396, whose arrays replace wholesale, so a patch names only the columns it changes. A column patched to null is removed, and one the profile does not hold is refused.",
+            "type": "object",
+            "properties": {
+                "columns": {
+                    "type": "object",
+                    "additionalProperties": { "type": ["object", "null"] },
+                },
+            },
+        })
+    }
+}
+
+/// One fault, named by `op`. `id` keys its random stream, and defaults to
+/// `<op>:<column or "table">:<n>`, where n counts earlier entries of the same op and column.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum Perturbation {
+    HotKeys(HotKeys),
+    Duplicates(Duplicates),
+    LateArrival(LateArrival),
+    Missingness(Missingness),
+    OutOfRange(OutOfRange),
+    SwappedValues(SwappedValues),
+    CategoricalShift(CategoricalShift),
+    Noise(Noise),
+    Scaling(Scaling),
+    BrokenCharacters(BrokenCharacters),
+    Outliers(Outliers),
+    SchemaDrift(SchemaDrift),
+    SmallFiles(SmallFiles),
+    PartitionSkew(PartitionSkew),
+}
+
+/// `share` of rows take one of `keys` values: the column's most frequent ones, or values its own
+/// sampler draws where it lists none.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HotKeys {
+    pub id: Option<String>,
+    pub column: String,
+    #[schemars(range(min = 1))]
+    pub keys: u32,
+    pub share: Rate,
+}
+
+/// Copies of existing rows, so that `rate` of the rows written are copies. Each block's count is
+/// planned up front, so block boundaries never move.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Duplicates {
+    pub id: Option<String>,
+    pub rate: Rate,
+    #[serde(default)]
+    pub scope: DuplicateScope,
+    /// False varies one non-key column of each copy, taking that column's value from another row.
+    #[serde(default = "exact_by_default")]
+    pub exact: bool,
+}
+
+fn exact_by_default() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DuplicateScope {
+    /// Each copy is written to the file its source row is written to.
+    WithinFile,
+    /// Each copy comes from a block half the dataset away, so from another file.
+    #[default]
+    AcrossFiles,
+}
+
+/// `rate` of rows have their event time shifted earlier by a drawn lag.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LateArrival {
+    pub id: Option<String>,
+    /// The event time.
+    pub column: String,
+    pub rate: Rate,
+    pub lag: LagSpread,
+    /// A column to hold each row's unshifted time, as when it arrived. It is written whether or not
+    /// the profile holds it, and added with the event column's type when it does not. A date
+    /// column takes the time truncated to its day. `late_arrival.rate` is measured against it.
+    pub ingest: Option<String>,
+}
+
+/// How far a late row's time moves, as a lognormal by its median and 99th percentile.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LagSpread {
+    pub family: SpreadFamily,
+    pub median: Duration,
+    /// Without it, the lognormal's sigma is 1, which puts the 99th percentile about ten times the
+    /// median.
+    pub p99: Option<Duration>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SpreadFamily {
+    Lognormal,
+}
+
+/// A length of time written as an integer and a unit: `250ms`, `30s`, `15m`, `6h`, `2d` or `1w`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct Duration {
+    pub microseconds: i64,
+}
+
+impl TryFrom<String> for Duration {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, String> {
+        let split = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+        let (count, unit) = text.split_at(split);
+        let per_unit: i64 = match unit {
+            "ms" => 1_000,
+            "s" => 1_000_000,
+            "m" => 60_000_000,
+            "h" => 3_600_000_000,
+            "d" => 86_400_000_000,
+            "w" => 604_800_000_000,
+            _ => {
+                return Err(format!(
+                    "{text:?} is not a duration such as 30s, 6h or 2d; the units are ms, s, m, h, d and w"
+                ));
+            }
+        };
+        let count: i64 = count
+            .parse()
+            .map_err(|_| format!("{text:?} is not a duration: it needs a whole number before its unit"))?;
+        let microseconds = count.checked_mul(per_unit).filter(|&total| total > 0);
+        microseconds
+            .map(|microseconds| Self { microseconds })
+            .ok_or_else(|| format!("{text:?} is not a duration above zero and under 292,000 years"))
+    }
+}
+
+impl JsonSchema for Duration {
+    fn schema_name() -> Cow<'static, str> {
+        "Duration".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "A length of time as a whole number and a unit: ms, s, m, h, d or w, such as 2d.",
+            "type": "string",
+            "pattern": "^[0-9]+(ms|s|m|h|d|w)$",
+        })
+    }
+}
+
+/// Nulls written into `column`: MCAR uniformly, MAR more often for higher values of `depends_on`,
+/// and MNAR more often for the column's own higher values. Each averages `rate` over the rows.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Missingness {
+    pub id: Option<String>,
+    pub column: String,
+    pub mechanism: Mechanism,
+    pub rate: Rate,
+    /// The column MAR's chance of a null rises with. Only MAR takes it.
+    pub depends_on: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+pub enum Mechanism {
+    /// Missing completely at random.
+    #[serde(rename = "MCAR")]
+    Mcar,
+    /// Missing at random, given another column.
+    #[serde(rename = "MAR")]
+    Mar,
+    /// Missing not at random: the column's own value decides.
+    #[serde(rename = "MNAR")]
+    Mnar,
+}
+
+/// `rate` of rows take a sentinel from `values`, or a value past the column's extreme on the side
+/// `beyond` names. Exactly one of the two is given.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutOfRange {
+    pub id: Option<String>,
+    pub column: String,
+    pub rate: Rate,
+    /// Sentinels, each cast to the column's type.
+    pub values: Option<Vec<serde_json::Value>>,
+    pub beyond: Option<Side>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    Low,
+    High,
+}
+
+/// Two columns' values exchanged in `rate` of rows. Both must have one type.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SwappedValues {
+    pub id: Option<String>,
+    pub columns: [String; 2],
+    pub rate: Rate,
+}
+
+/// The category mix moved: each value named takes its share, and every other value keeps its
+/// proportion of what is left. As few rows change as reach the new mix.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CategoricalShift {
+    pub id: Option<String>,
+    pub column: String,
+    pub to: BTreeMap<String, Rate>,
+}
+
+/// Gaussian noise of standard deviation `sigma`, in the column's units, added to `rate` of rows.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Noise {
+    pub id: Option<String>,
+    pub column: String,
+    pub rate: Rate,
+    #[schemars(range(min = 0))]
+    pub sigma: f64,
+}
+
+/// `rate` of rows multiplied by `factor`, a unit error such as cents written as dollars.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Scaling {
+    pub id: Option<String>,
+    pub column: String,
+    pub rate: Rate,
+    pub factor: f64,
+}
+
+/// `rate` of strings broken: one holding a character past ASCII is mojibake, its UTF-8 read as
+/// windows-1252, and any other has one character replaced by U+FFFD.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrokenCharacters {
+    pub id: Option<String>,
+    pub column: String,
+    pub rate: Rate,
+}
+
+/// `rate` of rows set far past the trimmed extremes: between `multiplier` and `multiplier + 1`
+/// times the span between them, beyond the high extreme, or beyond the low one in a column that
+/// goes below zero.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Outliers {
+    pub id: Option<String>,
+    pub column: String,
+    pub rate: Rate,
+    #[schemars(range(min = 0))]
+    pub multiplier: f64,
+}
+
+/// Files whose first row lies at or past `after_fraction` of the rows carry a new shape. Every
+/// name but `add`'s and `reorder`'s is a column as the profile names it.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SchemaDrift {
+    pub id: Option<String>,
+    pub after_fraction: Rate,
+    /// Columns that appear, generated from their type alone.
+    #[serde(default)]
+    pub add: Vec<AddedColumn>,
+    #[serde(default)]
+    pub drop: Vec<String>,
+    #[serde(default)]
+    pub rename: BTreeMap<String, String>,
+    /// Columns cast to a wider Arrow type, such as int32 to int64.
+    #[serde(default)]
+    pub widen: BTreeMap<String, String>,
+    /// Columns moved to the front in this order, by the names they end with. The rest follow in
+    /// their order.
+    #[serde(default)]
+    pub reorder: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AddedColumn {
+    pub name: String,
+    /// An Arrow type string, as a profile's `physical_type` spells it.
+    #[serde(rename = "type")]
+    pub physical_type: String,
+}
+
+/// File sizes drawn from `file_rows` in place of the layout's. A caller's own file size still
+/// overrides it.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SmallFiles {
+    pub id: Option<String>,
+    pub file_rows: RowsSpread,
+}
+
+/// A count of rows, as a lognormal by its median and 99th percentile.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RowsSpread {
+    pub family: SpreadFamily,
+    #[schemars(range(min = 1))]
+    pub median: f64,
+    /// Without it, the lognormal's sigma is 1, which puts the 99th percentile about ten times the
+    /// median.
+    pub p99: Option<f64>,
+}
+
+/// Each value named takes its share of rows, written as the column's type. Every other row keeps
+/// its own value, so a partitioned write's directories hold those shares.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PartitionSkew {
+    pub id: Option<String>,
+    pub column: String,
+    pub shares: BTreeMap<String, Rate>,
+}
+
+/// A statistic the scenario promises of the generated data, within its bounds.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Expectation {
+    pub metric: ExpectedMetric,
+    /// The column measured, for a metric of one column.
+    pub column: Option<String>,
+    pub at_least: Option<f64>,
+    pub at_most: Option<f64>,
+}
+
+/// The statistics an expectation can name. Each is measured on the generated data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+pub enum ExpectedMetric {
+    /// The share of rows holding the `keys` most frequent values of `column`, with `keys` from the
+    /// column's `hot_keys` perturbation.
+    #[serde(rename = "hot_keys.share")]
+    HotKeysShare,
+    /// The share of rows repeating an earlier row: in `column`, or in every column without one.
+    #[serde(rename = "duplicates.rate")]
+    DuplicatesRate,
+    /// The share of rows whose `column` is earlier than the `ingest` column of its `late_arrival`
+    /// perturbation.
+    #[serde(rename = "late_arrival.rate")]
+    LateArrivalRate,
+    /// The share of rows whose `column` is null.
+    #[serde(rename = "missingness.rate")]
+    MissingnessRate,
+}
+
+impl Perturbation {
+    /// The op's name, as `op` spells it.
+    pub fn op_name(&self) -> &'static str {
+        match self {
+            Self::HotKeys(_) => "hot_keys",
+            Self::Duplicates(_) => "duplicates",
+            Self::LateArrival(_) => "late_arrival",
+            Self::Missingness(_) => "missingness",
+            Self::OutOfRange(_) => "out_of_range",
+            Self::SwappedValues(_) => "swapped_values",
+            Self::CategoricalShift(_) => "categorical_shift",
+            Self::Noise(_) => "noise",
+            Self::Scaling(_) => "scaling",
+            Self::BrokenCharacters(_) => "broken_characters",
+            Self::Outliers(_) => "outliers",
+            Self::SchemaDrift(_) => "schema_drift",
+            Self::SmallFiles(_) => "small_files",
+            Self::PartitionSkew(_) => "partition_skew",
+        }
+    }
+
+    /// The id given in the file, if any.
+    pub fn given_id(&self) -> Option<&str> {
+        match self {
+            Self::HotKeys(op) => op.id.as_deref(),
+            Self::Duplicates(op) => op.id.as_deref(),
+            Self::LateArrival(op) => op.id.as_deref(),
+            Self::Missingness(op) => op.id.as_deref(),
+            Self::OutOfRange(op) => op.id.as_deref(),
+            Self::SwappedValues(op) => op.id.as_deref(),
+            Self::CategoricalShift(op) => op.id.as_deref(),
+            Self::Noise(op) => op.id.as_deref(),
+            Self::Scaling(op) => op.id.as_deref(),
+            Self::BrokenCharacters(op) => op.id.as_deref(),
+            Self::Outliers(op) => op.id.as_deref(),
+            Self::SchemaDrift(op) => op.id.as_deref(),
+            Self::SmallFiles(op) => op.id.as_deref(),
+            Self::PartitionSkew(op) => op.id.as_deref(),
+        }
+    }
+
+    /// The column part of the default id: the column, both columns joined by a comma, or `table`.
+    fn id_subject(&self) -> String {
+        match self {
+            Self::HotKeys(HotKeys { column, .. })
+            | Self::LateArrival(LateArrival { column, .. })
+            | Self::Missingness(Missingness { column, .. })
+            | Self::OutOfRange(OutOfRange { column, .. })
+            | Self::CategoricalShift(CategoricalShift { column, .. })
+            | Self::Noise(Noise { column, .. })
+            | Self::Scaling(Scaling { column, .. })
+            | Self::BrokenCharacters(BrokenCharacters { column, .. })
+            | Self::Outliers(Outliers { column, .. })
+            | Self::PartitionSkew(PartitionSkew { column, .. }) => column.clone(),
+            Self::SwappedValues(SwappedValues { columns, .. }) => columns.join(","),
+            Self::Duplicates(_) | Self::SchemaDrift(_) | Self::SmallFiles(_) => "table".into(),
+        }
+    }
+
+    /// Whether the op shapes the files written rather than the rows, so a run that writes no files
+    /// cannot apply it.
+    pub fn shapes_files(&self) -> bool {
+        matches!(self, Self::SchemaDrift(_) | Self::SmallFiles(_))
+    }
+}
+
+/// Two perturbations would share an id, and so a stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateId {
+    pub index: usize,
+    pub id: String,
+}
+
+impl Scenario {
+    /// Each perturbation's id, in list order: the one given, or `<op>:<subject>:<n>`, where n
+    /// counts earlier entries of the same op and subject.
+    pub fn resolved_ids(&self) -> Result<Vec<String>, DuplicateId> {
+        let mut earlier: BTreeMap<(&str, String), usize> = BTreeMap::new();
+        let mut ids: Vec<String> = Vec::with_capacity(self.perturbations.len());
+        for (index, perturbation) in self.perturbations.iter().enumerate() {
+            let counted = earlier.entry((perturbation.op_name(), perturbation.id_subject())).or_default();
+            let id = match perturbation.given_id() {
+                Some(id) => id.to_string(),
+                None => format!("{}:{}:{counted}", perturbation.op_name(), perturbation.id_subject()),
+            };
+            *counted += 1;
+            if ids.contains(&id) {
+                return Err(DuplicateId { index, id });
+            }
+            ids.push(id);
+        }
+        Ok(ids)
+    }
+}
+
+/// The scenario's JSON Schema (Draft 2020-12), as the library ships it.
+pub fn json_schema() -> String {
+    let mut schema = schemars::schema_for!(Scenario);
+    schema.insert("title".into(), format!("doppeldata scenario v{SCENARIO_VERSION}").into());
+    let mut text = serde_json::to_string_pretty(&schema).expect("a derived schema always serializes");
+    text.push('\n');
+    text
+}

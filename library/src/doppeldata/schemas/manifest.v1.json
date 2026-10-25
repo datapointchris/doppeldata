@@ -543,11 +543,22 @@
     "ManifestScenario": {
       "type": "object",
       "properties": {
+        "composed_of": {
+          "description": "The scenarios composed, in order, present only for a composition.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ScenarioMember"
+          }
+        },
         "name": {
+          "description": "The scenario's name. A composition's joins its members' names with `+`.",
           "type": "string"
         },
         "path": {
-          "description": "The scenario's path as the caller gave it, or null when it came from memory.",
+          "description": "The scenario's path as the caller gave it, or null when it came from memory or composes\nseveral.",
           "type": [
             "string",
             "null"
@@ -702,6 +713,25 @@
           "type": "string",
           "const": "never"
         }
+      ]
+    },
+    "ScenarioMember": {
+      "description": "One scenario of a composition.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "description": "The scenario's path as the caller gave it, or null when it came from memory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
       ]
     },
     "TextCompression": {

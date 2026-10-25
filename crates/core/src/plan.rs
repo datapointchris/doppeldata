@@ -5,17 +5,29 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_array::BooleanArray;
 use arrow_array::RecordBatch;
 use arrow_array::RecordBatchOptions;
 use arrow_schema::DataType;
 use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
+use arrow_select::filter::filter_record_batch;
 
 use crate::identity::DatasetIdentity;
 use crate::identity::is_sha256_digest;
+use crate::perturbations;
+use crate::perturbations::Block;
+use crate::perturbations::BlockPerturbation;
+use crate::perturbations::Planned;
+use crate::perturbations::Planning;
+use crate::perturbations::ScenarioFault;
+use crate::perturbations::SchemaDriftPlan;
+use crate::perturbations::plan_perturbation;
 use crate::profile::DEFAULT_K_MIN;
 use crate::profile::FORMAT_VERSION;
 use crate::profile::Profile;
+use crate::profile::Quantiles;
+use crate::profile::TableProfile;
 use crate::profile::provenance;
 use crate::rng::BLOCK_ROWS;
 use crate::samplers::BlockPosition;
@@ -24,6 +36,10 @@ use crate::samplers::ColumnSite;
 use crate::samplers::PlanContext;
 use crate::samplers::TextCell;
 use crate::samplers::column_plan;
+use crate::scenario::DuplicateScope;
+use crate::scenario::Duplicates;
+use crate::scenario::Perturbation;
+use crate::scenario::Scenario;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlanError {
@@ -39,6 +55,16 @@ pub enum PlanError {
     /// as the library's own issues carry.
     #[error("{field}: {message} [{code}]")]
     Column { code: ColumnFault, field: String, message: String },
+    /// A scenario the engine cannot apply to the profile. `field` is an RFC 6901 JSON Pointer into
+    /// the scenario.
+    #[error("{field}: {message} [{code}]")]
+    Scenario {
+        code: ScenarioFault,
+        field: String,
+        message: String,
+    },
+    #[error("scenario digest {digest:?} is not `sha256:` and 64 lowercase hex digits")]
+    ScenarioDigest { digest: String },
 }
 
 /// Why a column cannot be generated, as a code a caller can branch on.
@@ -89,17 +115,31 @@ impl PlanError {
             Self::DuplicateColumn { .. } => "duplicate-column",
             Self::ProfileDigest { .. } => "invalid-profile-digest",
             Self::Column { code, .. } => code.code(),
+            Self::Scenario { code, .. } => code.code(),
+            Self::ScenarioDigest { .. } => "invalid-scenario-digest",
         }
     }
 
-    /// The RFC 6901 JSON Pointer into the profile that the refusal names.
+    /// The RFC 6901 JSON Pointer that the refusal names: into the scenario where
+    /// [`Self::in_scenario`] holds, else into the profile.
     pub fn field(&self) -> &str {
         match self {
             Self::Bundle { .. } => "/kind",
             Self::NoColumns { .. } | Self::DuplicateColumn { .. } => "/columns",
-            Self::ProfileDigest { .. } => "",
-            Self::Column { field, .. } => field,
+            Self::ProfileDigest { .. } | Self::ScenarioDigest { .. } => "",
+            Self::Column { field, .. } | Self::Scenario { field, .. } => field,
         }
+    }
+
+    /// Whether the refusal is of the scenario rather than the profile.
+    pub fn in_scenario(&self) -> bool {
+        matches!(self, Self::Scenario { .. } | Self::ScenarioDigest { .. })
+    }
+}
+
+impl std::fmt::Display for ScenarioFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.code())
     }
 }
 
@@ -132,9 +172,98 @@ pub struct BlockOutOfRange {
 #[derive(Debug)]
 pub struct Plan {
     identity: DatasetIdentity,
-    schema: SchemaRef,
+    /// The schema the samplers' rows carry, before any perturbation.
+    generated_schema: SchemaRef,
     columns: Vec<ColumnPlan>,
     block_count: u64,
+    stages: Vec<PlannedStage>,
+    drift: Option<SchemaDriftPlan>,
+    file_rows: Option<Quantiles>,
+    /// The `scope` pointer of each perturbation copying rows from across the dataset.
+    across_files: Vec<String>,
+}
+
+/// One perturbation applied to every block, and the schema its rows carry after it.
+#[derive(Debug)]
+struct PlannedStage {
+    op: Box<dyn BlockPerturbation>,
+    schema: SchemaRef,
+}
+
+/// A scenario as the engine applies it: the file read, and the digest the library computed over
+/// its resolved document.
+#[derive(Debug, Clone, Copy)]
+pub struct AppliedScenario<'a> {
+    pub scenario: &'a Scenario,
+    pub digest: &'a str,
+}
+
+/// A block's rows as a file takes them: the batch, the text cells only a text format prints, and
+/// the generated row each row is filed with.
+#[derive(Debug, Clone)]
+pub struct PlacedBlock {
+    pub batch: RecordBatch,
+    /// One list per column, each in row order, empty where the caller asked for none.
+    pub text_cells: Vec<Vec<TextCell>>,
+    homes: Option<Vec<u32>>,
+}
+
+impl PlacedBlock {
+    /// The rows filed with generated rows `start..stop` of the block: a slice where no perturbation
+    /// added a row, else every row whose home lies in the range, in block order.
+    pub fn rows_homed_in(self, start: u32, stop: u32) -> PlacedBlock {
+        let Some(homes) = &self.homes else {
+            let batch = self.batch.slice(start as usize, (stop - start) as usize);
+            let text_cells = self
+                .text_cells
+                .into_iter()
+                .map(|column| {
+                    column
+                        .into_iter()
+                        .filter(|cell| (start..stop).contains(&cell.row))
+                        .map(|cell| TextCell {
+                            row: cell.row - start,
+                            text: cell.text,
+                        })
+                        .collect()
+                })
+                .collect();
+            return PlacedBlock {
+                batch,
+                text_cells,
+                homes: None,
+            };
+        };
+        let kept: Vec<bool> = homes.iter().map(|home| (start..stop).contains(home)).collect();
+        let mut placed_at: Vec<Option<u32>> = Vec::with_capacity(kept.len());
+        let mut next = 0;
+        for &keep in &kept {
+            placed_at.push(keep.then_some(next));
+            next += u32::from(keep);
+        }
+        let batch = filter_record_batch(&self.batch, &BooleanArray::from(kept)).expect("a mask of the batch's length filters it");
+        let text_cells = self
+            .text_cells
+            .into_iter()
+            .map(|column| {
+                column
+                    .into_iter()
+                    .filter_map(|cell| placed_at[cell.row as usize].map(|row| TextCell { row, text: cell.text }))
+                    .collect()
+            })
+            .collect();
+        let homes = homes
+            .iter()
+            .copied()
+            .filter(|home| (start..stop).contains(home))
+            .map(|home| home - start)
+            .collect();
+        PlacedBlock {
+            batch,
+            text_cells,
+            homes: Some(homes),
+        }
+    }
 }
 
 const _: () = {
@@ -145,6 +274,18 @@ const _: () = {
 /// Resolves a table profile into a plan for `rows` rows from `seed`. The library computes the
 /// profile's digest, `sha256:` and the hex SHA-256 of its RFC 8785 canonical JSON.
 pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Result<Plan, PlanError> {
+    plan_with_scenario(profile, profile_digest, None, seed, rows)
+}
+
+/// As [`plan`], with `scenario`'s perturbations applied to every block. `profile` is the profile
+/// the scenario's patch already made, and `profile_digest` is its digest.
+pub fn plan_with_scenario(
+    profile: &Profile,
+    profile_digest: &str,
+    scenario: Option<AppliedScenario<'_>>,
+    seed: u64,
+    rows: u64,
+) -> Result<Plan, PlanError> {
     let table = match profile {
         Profile::Table(table) => table,
         Profile::Bundle(bundle) => {
@@ -161,20 +302,7 @@ pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Re
         return Err(PlanError::NoColumns { name: table.name.clone() });
     }
     let mut seen = BTreeSet::new();
-    let source_rows = table.dataset.as_ref().and_then(|dataset| dataset.row_count);
-    let rows_read = table
-        .generated
-        .as_ref()
-        .and_then(|g| g.sample.as_ref())
-        .and_then(|sample| sample.rows_read);
-    let context = PlanContext {
-        table: &table.name,
-        seed,
-        rows: rows as f64,
-        source_rows: source_rows.map(|rows| rows as f64),
-        described_rows: rows_read.or(source_rows).map(|rows| rows as f64),
-        k_min: table.privacy.as_ref().and_then(|privacy| privacy.k_min).unwrap_or(DEFAULT_K_MIN),
-    };
+    let context = plan_context(table, &table.name, seed, rows);
     let mut planned = Vec::with_capacity(columns.len());
     for (index, column) in columns.iter().enumerate() {
         if !seen.insert(column.name.as_str()) {
@@ -184,8 +312,16 @@ pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Re
         }
         planned.push(column_plan(&context, column, &ColumnSite::top_level(index, column))?);
     }
-    let identity = DatasetIdentity::new(profile_digest, seed, rows);
-    let metadata = HashMap::from([
+    let mut identity = DatasetIdentity::new(profile_digest, seed, rows);
+    if let Some(applied) = scenario {
+        if !is_sha256_digest(applied.digest) {
+            return Err(PlanError::ScenarioDigest {
+                digest: applied.digest.into(),
+            });
+        }
+        identity = identity.with_scenario(applied.digest);
+    }
+    let mut metadata = HashMap::from([
         (provenance::PROFILE_NAME.to_string(), table.name.clone()),
         (provenance::PROFILE_VERSION.to_string(), FORMAT_VERSION.to_string()),
         (provenance::PROFILE_DIGEST.to_string(), profile_digest.to_string()),
@@ -194,19 +330,148 @@ pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Re
         (provenance::DATASET_ROWS.to_string(), rows.to_string()),
         (provenance::DATASET_DIGEST.to_string(), identity.digest()),
     ]);
+    if let Some(applied) = scenario {
+        metadata.insert(provenance::SCENARIO_NAME.to_string(), applied.scenario.scenario.clone());
+        metadata.insert(provenance::SCENARIO_DIGEST.to_string(), applied.digest.to_string());
+    }
     let fields: Vec<_> = planned.iter().map(|column| column.field.clone()).collect();
-    Ok(Plan {
+    let mut plan = Plan {
         identity,
-        schema: Arc::new(Schema::new_with_metadata(fields, metadata)),
+        generated_schema: Arc::new(Schema::new_with_metadata(fields, metadata)),
         columns: planned,
         block_count: rows.div_ceil(BLOCK_ROWS),
-    })
+        stages: Vec::new(),
+        drift: None,
+        file_rows: None,
+        across_files: Vec::new(),
+    };
+    if let Some(applied) = scenario {
+        plan.apply_scenario(table, applied.scenario)?;
+    }
+    Ok(plan)
+}
+
+/// What `table`'s column samplers are planned against for `rows` rows from `seed`, with streams
+/// named for `name`.
+pub(crate) fn plan_context<'a>(table: &TableProfile, name: &'a str, seed: u64, rows: u64) -> PlanContext<'a> {
+    let source_rows = table.dataset.as_ref().and_then(|dataset| dataset.row_count);
+    let rows_read = table
+        .generated
+        .as_ref()
+        .and_then(|g| g.sample.as_ref())
+        .and_then(|sample| sample.rows_read);
+    PlanContext {
+        table: name,
+        seed,
+        rows: rows as f64,
+        source_rows: source_rows.map(|rows| rows as f64),
+        described_rows: rows_read.or(source_rows).map(|rows| rows as f64),
+        k_min: table.privacy.as_ref().and_then(|privacy| privacy.k_min).unwrap_or(DEFAULT_K_MIN),
+    }
 }
 
 impl Plan {
+    /// Plans each of `scenario`'s perturbations against the schema the one before it leaves. A
+    /// schema drift is planned last, against every other op's rows, because the writers apply it
+    /// to a file's rows after every op has written them.
+    fn apply_scenario(&mut self, table: &TableProfile, scenario: &Scenario) -> Result<(), PlanError> {
+        let ids = scenario.resolved_ids().map_err(|duplicate| PlanError::Scenario {
+            code: ScenarioFault::DuplicatePerturbationId,
+            field: format!("/perturbations/{}/id", duplicate.index),
+            message: format!(
+                "id {:?} is an earlier perturbation's too, and two perturbations never share a stream",
+                duplicate.id
+            ),
+        })?;
+        let mut schema = self.generated_schema.clone();
+        let mut drift_at: Option<usize> = None;
+        for (index, perturbation) in scenario.perturbations.iter().enumerate() {
+            let planning = Planning {
+                table,
+                seed: self.identity.seed(),
+                rows: self.identity.rows(),
+                block_count: self.block_count,
+                schema: &schema,
+                index,
+                id: &ids[index],
+            };
+            let one_only = || {
+                planning.refuse(
+                    ScenarioFault::InvalidParameter,
+                    "",
+                    format!("a dataset takes one {}, and an earlier perturbation is one", perturbation.op_name()),
+                )
+            };
+            if matches!(perturbation, Perturbation::SchemaDrift(_)) {
+                if drift_at.replace(index).is_some() {
+                    return Err(one_only());
+                }
+                continue;
+            }
+            if let Perturbation::Duplicates(Duplicates {
+                scope: DuplicateScope::AcrossFiles,
+                ..
+            }) = perturbation
+            {
+                self.across_files.push(format!("/perturbations/{index}/scope"));
+            }
+            match plan_perturbation(perturbation, &planning)? {
+                Planned::Rows { op, schema: output } => {
+                    self.stages.push(PlannedStage {
+                        op,
+                        schema: output.clone(),
+                    });
+                    schema = output;
+                }
+                Planned::SmallFiles(quantiles) => {
+                    if self.file_rows.replace(quantiles).is_some() {
+                        return Err(one_only());
+                    }
+                }
+                Planned::SchemaDrift(_) => unreachable!("a schema drift is planned after the loop"),
+            }
+        }
+        if let Some(index) = drift_at {
+            let planning = Planning {
+                table,
+                seed: self.identity.seed(),
+                rows: self.identity.rows(),
+                block_count: self.block_count,
+                schema: &schema,
+                index,
+                id: &ids[index],
+            };
+            if let Planned::SchemaDrift(drift) = plan_perturbation(&scenario.perturbations[index], &planning)? {
+                self.drift = Some(drift);
+            }
+        }
+        Ok(())
+    }
+
     /// The Arrow schema every block's batch carries, with the provenance metadata.
     pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.stages
+            .last()
+            .map_or_else(|| self.generated_schema.clone(), |stage| stage.schema.clone())
+    }
+
+    /// The schema drift a scenario applies to the files after a row, where it applies one.
+    pub fn drift(&self) -> Option<&SchemaDriftPlan> {
+        self.drift.as_ref()
+    }
+
+    /// The file sizes a scenario's `small_files` draws, where it has one. A caller's own file size
+    /// still overrides them.
+    pub fn file_rows(&self) -> Option<&Quantiles> {
+        self.file_rows.as_ref()
+    }
+
+    /// Where a perturbation copies rows from across the dataset: its `scope` pointer, and the fewest
+    /// dataset rows that lie between a copy's home and its source. A file holding more rows than
+    /// that could hold both.
+    pub fn across_files_reach(&self) -> Option<(&str, u64)> {
+        let field = self.across_files.first()?;
+        Some((field, self.block_count / 2 * BLOCK_ROWS))
     }
 
     pub fn identity(&self) -> &DatasetIdentity {
@@ -247,18 +512,70 @@ impl Plan {
         Ok((position, rows))
     }
 
-    /// The rows of `block`, a pure function of the plan and the block number.
-    pub fn generate_block(&self, block: u64) -> Result<RecordBatch, BlockOutOfRange> {
-        let (position, rows) = self.position(block)?;
+    /// `block` as it reaches the perturbation at `through`, every earlier one applied. `cells`
+    /// asks for the text cells too.
+    pub(crate) fn block_through(&self, block: u64, through: usize, cells: bool) -> Block {
+        let (position, rows) = self.position(block).expect("a perturbation reads a block inside the plan");
         let arrays = self.columns.iter().map(|column| column.generate(&position, rows)).collect();
         let options = RecordBatchOptions::new().with_row_count(Some(rows));
-        Ok(RecordBatch::try_new_with_options(self.schema.clone(), arrays, &options).expect("every column's array matches its field"))
+        let batch = RecordBatch::try_new_with_options(self.generated_schema.clone(), arrays, &options)
+            .expect("every column's array matches its field");
+        let cells = cells.then(|| self.columns.iter().map(|column| column.text_cells(&position, rows)).collect());
+        let mut placed = Block { batch, cells, homes: None };
+        for (index, stage) in self.stages[..through].iter().enumerate() {
+            let at = perturbations::Stage {
+                plan: self,
+                index,
+                block,
+                schema: &stage.schema,
+            };
+            placed = stage.op.apply(&at, placed);
+        }
+        placed
+    }
+
+    /// The rows of `block`, a pure function of the plan and the block number.
+    pub fn generate_block(&self, block: u64) -> Result<RecordBatch, BlockOutOfRange> {
+        self.position(block)?;
+        Ok(self.block_through(block, self.stages.len(), false).batch)
     }
 
     /// The cells of `block` only a text format can carry, one list per column in schema order,
     /// each in row order. The batch [`Plan::generate_block`] returns holds a null at each.
     pub fn text_cells(&self, block: u64) -> Result<Vec<Vec<TextCell>>, BlockOutOfRange> {
-        let (position, rows) = self.position(block)?;
-        Ok(self.columns.iter().map(|column| column.text_cells(&position, rows)).collect())
+        self.position(block)?;
+        let rows = self.block_through(block, self.stages.len(), true);
+        Ok(rows.cells.expect("cells were asked for"))
+    }
+
+    /// `block`'s rows as the writers file them, with its text cells where `text_cells` asks.
+    pub fn placed_block(&self, block: u64, text_cells: bool) -> Result<PlacedBlock, BlockOutOfRange> {
+        self.position(block)?;
+        let rows = self.block_through(block, self.stages.len(), text_cells);
+        let width = rows.batch.num_columns();
+        Ok(PlacedBlock {
+            batch: rows.batch,
+            text_cells: rows.cells.unwrap_or_else(|| vec![Vec::new(); width]),
+            homes: rows.homes,
+        })
+    }
+
+    /// `placed`, the rows of `block`, in the shape the scenario's schema drift gives a file past
+    /// its cut. Unchanged where no drift applies.
+    pub fn drifted(&self, block: u64, placed: PlacedBlock) -> PlacedBlock {
+        let Some(drift) = &self.drift else {
+            return placed;
+        };
+        let rows = Block {
+            batch: placed.batch,
+            cells: Some(placed.text_cells),
+            homes: placed.homes,
+        };
+        let drifted = drift.apply(self.identity.seed(), block, rows);
+        PlacedBlock {
+            batch: drifted.batch,
+            text_cells: drifted.cells.expect("the cells went in"),
+            homes: drifted.homes,
+        }
     }
 }

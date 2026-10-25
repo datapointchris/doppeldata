@@ -39,9 +39,11 @@ The engine's release, which is the tag the wheel was built from.
 class Plan:
     """
     A table profile resolved for generation: ``rows`` rows from ``seed``. ``source`` names the
-    profile in an error.
+    profile in an error. ``scenario``, where given, is the scenario applied: its JSON with each
+    perturbation's id resolved, its digest, and the name an error gives it. The profile is the
+    one its patch made.
     """
-    def __new__(cls, /, profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, source: str) -> Plan: ...
+    def __new__(cls, /, profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, source: str, scenario: tuple[str, str, str] |None = None) -> Plan: ...
     @property
     def block_count(self, /) -> int: ...
     def claim(self, /, options: WriteOptions, destination: str, *, replace: bool, s3_store: dict |None = None) -> None:
@@ -142,11 +144,12 @@ def destination_scheme(url: str) -> tuple[str, str |None]:
     ``("memory", None)``. Any other scheme raises the library's ``WriteFailed``.
     """
 
-def determinism_values_digest(profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, *, threads: SupportsIndex) -> str:
+def determinism_values_digest(profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, *, threads: SupportsIndex, scenario: tuple[str, str] |None = None) -> str:
     """
     The determinism contract's SHA-256 over every value and text cell generated from a profile,
-    made on ``threads`` threads the way ``Plan.generate`` makes its blocks. A wheel's build
-    compares it with the hash the contract pins.
+    with the scenario ``scenario`` gives as its JSON and its digest, made on ``threads`` threads
+    the way ``Plan.generate`` makes its blocks. A wheel's build compares it with the hash the
+    contract pins.
     """
 
 def fitted_families() -> dict[str, bool]:
@@ -172,6 +175,12 @@ def pattern_problem(pattern: str) -> str |None:
     """
     Why the engine cannot generate from ``pattern``, as planning a profile that stores it
     refuses it, or None when it can.
+    """
+
+def scenario_ids(scenario_json: str) -> tuple[list[str], tuple[int, str] |None]:
+    """
+    Each perturbation's id in ``scenario_json``, in list order. Where one repeats an earlier
+    one's, the list is empty and the second item is its index and id.
     """
 
 def schema_file_names() -> dict[str, str]:

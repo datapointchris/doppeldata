@@ -118,6 +118,7 @@ impl WriteError {
         use FailureKind::Failed;
         use FailureKind::Refused;
         match self {
+            Self::Layout(LayoutError::Scenario { .. }) => ("invalid-parameter", Refused),
             Self::Layout(_) => ("invalid-layout", Refused),
             Self::Settings(_) => ("invalid-settings", Refused),
             Self::UnsupportedColumn { .. } => ("unsupported-column", Refused),

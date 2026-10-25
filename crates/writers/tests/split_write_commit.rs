@@ -36,7 +36,7 @@ fn a_commit_missing_a_range_stores_the_partial_manifest_and_fails() {
             file_rows: FileRows::Fixed(40_000),
             ..LayoutSettings::default()
         },
-        profile_path: None,
+        ..WriteOptions::default()
     };
     let run = RunOptions::default();
     doppeldata_writers::claim(&plan, &options, &run, &destination).unwrap();
