@@ -80,6 +80,27 @@ mod _core {
             .collect()
     }
 
+    /// The (level, value) knots of the inverse CDF the generator draws a numeric column through,
+    /// from the column's ``numeric`` block as JSON. Raises ValueError when the block does not
+    /// deserialize or names a fit the engine refuses.
+    #[pyfunction]
+    fn numeric_cdf_knots(numeric: &str) -> PyResult<Vec<(f64, f64)>> {
+        let stats: doppeldata_core::profile::NumericStats =
+            serde_json::from_str(numeric).map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        doppeldata_core::numeric_cdf_knots(&stats).map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+
+    /// The (level, seconds since the Unix epoch) knots of the CDF the generator draws a date or
+    /// timestamp column from, before ``gap_rate`` empties any day, from the column's ``temporal``
+    /// block as JSON. Raises ValueError when the block does not deserialize or its extremes or
+    /// rates are unusable.
+    #[pyfunction]
+    fn temporal_cdf_knots(temporal: &str) -> PyResult<Vec<(f64, f64)>> {
+        let stats: doppeldata_core::profile::TemporalStats =
+            serde_json::from_str(temporal).map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        doppeldata_core::temporal_cdf_knots(&stats).map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+
     /// The anchored regular expression grex generalizes the values to, with each digit as a digit
     /// class, or None when it would hold a literal or a character class only some values have.
     #[pyfunction]

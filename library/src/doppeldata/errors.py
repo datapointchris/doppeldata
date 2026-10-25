@@ -70,6 +70,10 @@ class DetectorPackError(DoppeldataError):
         super().__init__(message)
         self.kind = kind
         self.exit_code = EXIT_CODES[kind]
+class InvalidThresholds(DoppeldataError, ValueError):
+    """A thresholds file names a metric no check measures, a column neither profile holds, or a value that is not a number."""
+
+    exit_code = 2
 
 
 class ProfilingWarning(UserWarning):

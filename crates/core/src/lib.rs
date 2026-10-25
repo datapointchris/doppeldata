@@ -8,6 +8,7 @@ pub mod manifest;
 mod physical_type;
 mod plan;
 pub mod profile;
+pub mod profile_comparison;
 pub mod published_schemas;
 mod rng;
 mod samplers;
@@ -29,7 +30,9 @@ pub use samplers::TextCell;
 pub use samplers::check_digit_holds;
 pub use samplers::file_rows_draws;
 pub use samplers::pattern_problem;
+pub use samplers::numeric_cdf_knots;
 pub use samplers::shape_of;
+pub use samplers::temporal_cdf_knots;
 pub use values_digest::values_digest;
 
 /// The engine's release, which is the tag the wheel was built from.

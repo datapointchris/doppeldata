@@ -11,6 +11,7 @@ from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import DetectorPackError
 from doppeldata.errors import DoppeldataError
 from doppeldata.errors import FitsSkipped
+from doppeldata.errors import InvalidThresholds
 from doppeldata.errors import PoorFits
 from doppeldata.errors import ProfilingEnginesMissing
 from doppeldata.errors import ProfilingWarning
@@ -19,6 +20,11 @@ from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
 from doppeldata.errors import WriteInterrupted
 from doppeldata.manifest import Manifest
+from doppeldata.profile_comparison import check
+from doppeldata.profile_comparison import diff
+from doppeldata.profile_comparison.reports import CheckReport
+from doppeldata.profile_comparison.reports import DiffReport
+from doppeldata.profile_comparison.thresholds import Thresholds
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Issue
@@ -28,12 +34,15 @@ from doppeldata.profiling import profile
 
 __all__ = [
     'Bundle',
+    'CheckReport',
     'ColumnSampler',
     'ColumnsNotFrozen',
     'DetectorPackError',
+    'DiffReport',
     'DoppeldataError',
     'FitsSkipped',
     'InvalidProfile',
+    'InvalidThresholds',
     'Issue',
     'Manifest',
     'PlannedRange',
@@ -43,10 +52,13 @@ __all__ = [
     'ProfilingWarning',
     'SourceError',
     'StoppedWrite',
+    'Thresholds',
     'UngenerableProfile',
     'WriteFailed',
     'WriteInterrupted',
     'WritePlan',
+    'check',
+    'diff',
     'generate',
     'plan',
     'profile',

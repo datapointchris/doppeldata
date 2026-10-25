@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "doppeldata diff report v1",
+  "description": "Two profiles of one table, such as last month's and this month's, and how far the second\ndrifted from the first.",
+  "type": "object",
+  "properties": {
+    "a": {
+      "description": "The earlier profile, which each metric measures the other against.",
+      "$ref": "#/$defs/ReportedProfile"
+    },
+    "b": {
+      "$ref": "#/$defs/ReportedProfile"
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FieldChange"
+      }
+    },
+    "diff_version": {
+      "type": "integer",
+      "format": "uint64",
+      "const": 1,
+      "minimum": 0
+    },
+    "drifted": {
+      "description": "Whether any metric failed or any field changed.",
+      "type": "boolean"
+    },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MetricResult"
+      }
+    }
+  },
+  "required": [
+    "diff_version",
+    "a",
+    "b",
+    "drifted",
+    "metrics",
+    "changes"
+  ],
+  "$defs": {
+    "Bound": {
+      "oneOf": [
+        {
+          "description": "The value passes at or below the threshold.",
+          "type": "string",
+          "const": "at_most"
+        },
+        {
+          "description": "The value passes at or above the threshold.",
+          "type": "string",
+          "const": "at_least"
+        }
+      ]
+    },
+    "ChangeKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "column_added",
+            "column_dropped",
+            "semantic_type_changed",
+            "csv_dialect_changed",
+            "partition_key_added"
+          ]
+        },
+        {
+          "description": "The profiler's column kind: integer, float, decimal, string, boolean, date, datetime or other.",
+          "type": "string",
+          "const": "kind_changed"
+        },
+        {
+          "description": "The Arrow type, such as `int32` becoming `int64`.",
+          "type": "string",
+          "const": "physical_type_changed"
+        },
+        {
+          "description": "More rows than the diff allows fall outside the histogram edges or value list frozen from A.",
+          "type": "string",
+          "const": "overflow"
+        }
+      ]
+    },
+    "FieldChange": {
+      "description": "A field that differs between the two profiles, outside what the metrics measure.",
+      "type": "object",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/ChangeKind"
+        },
+        "column": {
+          "description": "The column the change is in, or null for a table-level field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "field": {
+          "description": "An RFC 6901 pointer to the field: in the source profile, or A, for a dropped column, and in\nthe other profile for every other change.",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "observed": {
+          "description": "The field's value in the profile of the data checked, or B, and null where it holds none."
+        },
+        "passed": {
+          "description": "False when the change fails the check or counts as drift.",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "The field's value in the source profile, or A, and null where it holds none."
+        }
+      },
+      "required": [
+        "change",
+        "field",
+        "passed",
+        "message"
+      ]
+    },
+    "MetricResult": {
+      "description": "One metric's value for one column, or for the table where `column` is null.",
+      "type": "object",
+      "properties": {
+        "bound": {
+          "description": "Whether `value` passes at or below `threshold`, or at or above it.",
+          "$ref": "#/$defs/Bound"
+        },
+        "column": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metric": {
+          "description": "The metric's name, such as `ks`, as `--thresholds` keys it.",
+          "type": "string"
+        },
+        "observed": {
+          "description": "The same statistic in the profile of the data checked: B's, in a diff.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "source": {
+          "description": "The statistic the metric compares, as the source profile holds it: A's, in a diff.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "threshold": {
+          "type": "number",
+          "format": "double"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "metric",
+        "value",
+        "threshold",
+        "bound",
+        "passed"
+      ]
+    },
+    "ReportedProfile": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The profile's `name`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The profile's path as the caller gave it, or null when it came from memory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "digest"
+      ]
+    }
+  }
+}

@@ -136,6 +136,11 @@ def pattern_problem(pattern: str) -> str |None:
     """
     Why the engine cannot generate from ``pattern``, as planning a profile that stores it
     refuses it, or None when it can.
+def numeric_cdf_knots(numeric: str) -> list[tuple[float, float]]:
+    """
+    The (level, value) knots of the inverse CDF the generator draws a numeric column through,
+    from the column's ``numeric`` block as JSON. Raises ValueError when the block does not
+    deserialize or names a fit the engine refuses.
     """
 
 def schema_file_names() -> dict[str, str]:
@@ -147,4 +152,12 @@ def shape_of(value: str) -> str:
     """
     The value's shape, as a profile stores it: each ASCII upper-case letter as A, lower-case
     letter as a and digit as 9, and every other character as itself.
+    """
+
+def temporal_cdf_knots(temporal: str) -> list[tuple[float, float]]:
+    """
+    The (level, seconds since the Unix epoch) knots of the CDF the generator draws a date or
+    timestamp column from, before ``gap_rate`` empties any day, from the column's ``temporal``
+    block as JSON. Raises ValueError when the block does not deserialize or its extremes or
+    rates are unusable.
     """
