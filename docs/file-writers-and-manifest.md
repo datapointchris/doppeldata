@@ -11,8 +11,10 @@ are serde and schemars types with no I/O.
 - **A profile's `source.csv`, `source.parquet` and `source.json` take the keys a manifest's `writer`
   takes, beside what the profiler saw of the files.** Each flattens the writer's settings type into a
   profile-only struct, such as `CsvSource`, whose other keys record a detected encoding, malformed
-  rows or a footer's writer. The writers read the settings alone. An unknown key is refused in
-  either, so `profile.v1.json` publishes every key a writer or a reviewer reads.
+  rows or a footer's writer. The writers read the settings alone. The profile's copy reads past a key
+  neither takes, as every profile section does, through `recorded_settings`. A caller's settings
+  are read as the writer's own type, which refuses one. `profile.v1.json` publishes every key either
+  takes.
 - **`WriteOptions::from_profile` turns a profile into write settings.** The format is the caller's,
   then the profile's recorded one, then Parquet. A recorded codec applies only when the format is the
   recorded one. `override_writer` lays a caller's keys over the result, and `partition_by` sets the

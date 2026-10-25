@@ -6,7 +6,26 @@ use std::ops::RangeInclusive;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde::de::Error;
+use serde_json::Value;
+
+/// Reads a profile's copy of a writer's settings past any key the settings do not take, as every
+/// profile section is read, so a profile a later release wrote still loads. A caller's settings,
+/// read as the type itself, still refuse an unknown key. The keys taken are those the type's
+/// default serializes.
+pub fn recorded_settings<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned + Serialize + Default,
+{
+    let mut recorded = serde_json::Map::<String, Value>::deserialize(deserializer)?;
+    let taken = serde_json::to_value(T::default()).map_err(D::Error::custom)?;
+    recorded.retain(|key, _| taken.get(key).is_some());
+    serde_json::from_value(Value::Object(recorded)).map_err(D::Error::custom)
+}
 
 /// The format, under `format`, and that format's settings, under `writer`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

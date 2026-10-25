@@ -576,8 +576,7 @@
             "null"
           ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "Dataset": {
       "description": "Facts about the table as a whole.",
@@ -1276,8 +1275,7 @@
           "format": "uint32",
           "minimum": 0
         }
-      },
-      "additionalProperties": false
+      }
     },
     "Key": {
       "type": "object",
@@ -1790,8 +1788,7 @@
             "null"
           ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "ParquetStatistics": {
       "description": "How much of the min, max and null count each column chunk records.",

@@ -10,6 +10,7 @@ use crate::format_settings::DelimitedSettings;
 use crate::format_settings::JsonSettings;
 use crate::format_settings::LineTerminator;
 use crate::format_settings::ParquetSettings;
+use crate::format_settings::recorded_settings;
 
 /// One table's profile. Every section is optional, and the generator falls back to defaults.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
@@ -130,9 +131,8 @@ pub struct Source {
 
 /// A delimited source's dialect, as a writer takes it, and how it was found.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct CsvSource {
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "recorded_settings")]
     pub settings: DelimitedSettings,
     /// The encoding charset-normalizer named for the first block, such as `ascii`, `utf_8` or
     /// `cp1252`. `encoding` holds the nearest one a writer writes.
@@ -193,9 +193,8 @@ pub enum MalformedRow {
 /// A Parquet source's writer settings, read from its files' footers, and what the footers say of
 /// the writer. No value statistic is read from a footer.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ParquetSource {
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "recorded_settings")]
     pub settings: ParquetSettings,
     /// The `created_by` most footers name, such as `parquet-mr version 1.13.1 (build ...)`.
     pub writer: Option<String>,
@@ -232,9 +231,8 @@ pub enum StoredTimestampUnit {
 
 /// A JSON source's writer settings and its nesting.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct JsonSource {
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "recorded_settings")]
     pub settings: JsonSettings,
     /// The deepest nesting of objects and arrays, counting the record as 1.
     pub max_depth: Option<u32>,
