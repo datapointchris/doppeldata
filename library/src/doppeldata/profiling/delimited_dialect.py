@@ -24,6 +24,7 @@ from doppeldata.profiling.backend import DialectFound
 from doppeldata.profiling.backend import SourceFile
 from doppeldata.profiling.first_blocks import FIRST_BLOCK_BYTES
 from doppeldata.profiling.first_blocks import first_block
+from doppeldata.profiling.first_blocks import first_blocks
 from doppeldata.profiling.first_blocks import local_copy
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
 from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT
@@ -143,8 +144,7 @@ def check_first_records(files: tuple[SourceFile, ...], path: str, dialect: CsvDi
     if len(others) > FILES_CHECKED:
         others = sorted(random.Random(FILES_CHECKED_SEED).sample(others, FILES_CHECKED), key=lambda file: file.path)
     names = [field.text for field in first]
-    for file in others:
-        raw = first_block(file.path)
+    for file, raw in zip(others, first_blocks([file.path for file in others]), strict=True):
         if not raw.removeprefix(UTF8_BOM).strip():
             continue
         record = split_records(block_text(raw, dialect.encoding), dialect.delimiter, dialect.quote, dialect.escape, limit=1)[0]

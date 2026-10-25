@@ -99,7 +99,7 @@ def grouped(source: Source) -> list[GroupedTable]:
         folders.setdefault(folder, []).append(file)
     if len(folders) < 2:
         return [GroupedTable(source)]
-    schemas = {folder: folder_schema(files, source.format) for folder, files in folders.items()}
+    schemas = folder_schemas(folders, source.format)
     unread = sorted(folder for folder, schema in schemas.items() if schema is None)
     if len(unread) == len(schemas):
         return [GroupedTable(source)]
@@ -165,25 +165,34 @@ def joined(root: str, folder: str) -> str:
     return f'{root.rstrip("/")}/{folder}' if root.startswith('s3://') else str(Path(root) / folder)
 
 
-def folder_schema(files: list[SourceFile], source_format: SourceFormat) -> Schema | None:
-    """The union of the sampled files' schemas, or None where no file's could be read."""
-    chosen = files if len(files) <= FILES_READ else sorted(random.Random(FILES_SEED).sample(files, FILES_READ), key=lambda file: file.path)
+def folder_schemas(folders: dict[str, list[SourceFile]], source_format: SourceFormat) -> dict[str, Schema | None]:
+    """Each folder's column names, the union of up to `FILES_READ` of its files' read all at once, or None where no
+    file's could be read."""
+    chosen = {
+        folder: files
+        if len(files) <= FILES_READ
+        else sorted(random.Random(FILES_SEED).sample(files, FILES_READ), key=lambda file: file.path)
+        for folder, files in folders.items()
+    }
+    every = tuple(file for files in chosen.values() for file in files)
+    named = dict(zip((file.path for file in every), file_schemas(every, source_format), strict=True))
+    schemas: dict[str, Schema | None] = {}
+    for folder, files in chosen.items():
+        read = [schema for schema in (named[file.path] for file in files) if schema is not None]
+        schemas[folder] = frozenset().union(*read) if read else None
+    return schemas
+
+
+def file_schemas(files: tuple[SourceFile, ...], source_format: SourceFormat) -> list[Schema | None]:
+    """Each file's column names, or None where none could be read."""
     if source_format is SourceFormat.PARQUET:
-        footers = importlib.import_module(PARQUET_FOOTERS_MODULE).read_footers(tuple(chosen))
-        return frozenset().union(*(fields_of(footer.schema) for footer in footers))
-    read = [schema for schema in (file_schema(file, source_format) for file in chosen) if schema is not None]
-    return frozenset().union(*read) if read else None
-
-
-def file_schema(file: SourceFile, source_format: SourceFormat) -> Schema | None:
-    """A file's column names, or None where none could be read."""
-    match source_format:
-        case SourceFormat.ARROW:
-            return arrow_schema(file)
-        case SourceFormat.CSV | SourceFormat.TSV:
-            return delimited_schema(file, '\t' if source_format is SourceFormat.TSV else None)
-        case _:
-            return json_schema(file)
+        return [fields_of(footer.schema) for footer in importlib.import_module(PARQUET_FOOTERS_MODULE).read_footers(files)]
+    if source_format is SourceFormat.ARROW:
+        return [arrow_schema(file) for file in files]
+    blocks = importlib.import_module(FIRST_BLOCKS_MODULE).first_blocks([file.path for file in files])
+    if source_format in (SourceFormat.CSV, SourceFormat.TSV):
+        return [delimited_schema(block, '\t' if source_format is SourceFormat.TSV else None) for block in blocks]
+    return [json_schema(block) for block in blocks]
 
 
 def fields_of(schema: Any) -> Schema:
@@ -194,20 +203,22 @@ def arrow_schema(file: SourceFile) -> Schema | None:
     """An Arrow IPC file's schema. One on S3 is not read, because its schema sits behind its first batch."""
     if file.path.startswith('s3://'):
         return None
-    ipc = importlib.import_module('pyarrow.ipc')
+    pa = importlib.import_module('pyarrow')
     try:
-        schema = ipc.open_file(file.path).schema
-    except OSError:
-        schema = ipc.open_stream(file.path).schema
+        try:
+            schema = pa.ipc.open_file(file.path).schema
+        except pa.ArrowInvalid:
+            schema = pa.ipc.open_stream(file.path).schema
+    except (OSError, pa.ArrowException) as error:
+        raise SourceError(f'{file.path} could not be read as Arrow IPC: {error}', exit_code=1) from error
     return fields_of(schema)
 
 
-def delimited_schema(file: SourceFile, delimiter: str | None) -> Schema | None:
+def delimited_schema(raw: bytes, delimiter: str | None) -> Schema | None:
     """A delimited file's column names, from its header as Glue decides one, or numbered as Glue numbers them."""
-    dialect = importlib.import_module(DELIMITED_DIALECT_MODULE)
-    raw = importlib.import_module(FIRST_BLOCKS_MODULE).first_block(file.path)
     if not raw.strip():
         return None
+    dialect = importlib.import_module(DELIMITED_DIALECT_MODULE)
     text = dialect.block_text(raw, 'utf-8')
     first_line = text.splitlines()[0] if text else ''
     separator = delimiter or max(dialect.GLUE_DELIMITERS, key=first_line.count)
@@ -219,11 +230,10 @@ def delimited_schema(file: SourceFile, delimiter: str | None) -> Schema | None:
     return frozenset(names)
 
 
-def json_schema(file: SourceFile) -> Schema | None:
+def json_schema(raw: bytes) -> Schema | None:
     """The keys of the first records a JSON file's first block holds."""
-    raw = importlib.import_module(FIRST_BLOCKS_MODULE).first_block(file.path).decode('utf-8', errors='replace')
     keys: set[str] = set()
-    for record in json_records(raw):
+    for record in json_records(raw.decode('utf-8', errors='replace')):
         if isinstance(record, dict):
             keys.update(record)
     return frozenset(keys) or None

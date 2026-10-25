@@ -301,7 +301,11 @@ typed as a CSV field is.
 
 The dialect comes from the first `FIRST_BLOCK_BYTES` of the first file holding a record,
 decompressed. A block cut mid-record is trimmed at its last line break. A source none of whose
-files holds a record is refused with a `SourceError` naming them.
+files holds a record is refused with a `SourceError` naming them. A file whose block cannot be read
+or decompressed fails the profile with exit 1, naming it. An S3 object's compressed bytes are read
+only so far, so a block cut mid-stream keeps what decompressed before the cut, and fails where
+nothing did. The blocks of several S3 objects are read through one client, on `BLOCK_THREADS`
+threads.
 
 - **A block that decodes as UTF-8 is read as UTF-8, and any other as Latin-1.** A UTF-8 BOM is
   recorded as `bom` and stripped. charset-normalizer's name for the block is recorded as
