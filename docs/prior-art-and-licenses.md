@@ -5,13 +5,14 @@ doppeldata is MIT-licensed, so a dependency must allow use anywhere, by anyone, 
 ## SDV and its libraries are source-available, so the copula is written here
 
 SDV, and the copulas, ctgan and rdt libraries beside it, are under the Business Source License 1.1.
-The Gaussian copula and the conditional tables doppeldata needs are implemented in its own engine.
+So the Gaussian copula and the conditional tables doppeldata needs are written in its own engine,
+never taken from SDV.
 
 ## SDMetrics loads copulas on import, so its scores are computed here
 
 SDMetrics is MIT-licensed, and it requires copulas. Importing `sdmetrics.single_column` or
 `sdmetrics.column_pairs` loads copulas, through the package's own `__init__`. So `data check
---against` takes six of its scores by name and definition, and imports none of its code.
+--against` takes its scores by name and definition, and imports none of its code.
 
 ## sweetviz renders the side-by-side HTML
 
