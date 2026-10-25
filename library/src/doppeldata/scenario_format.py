@@ -388,11 +388,11 @@ def composed(scenario: 'Scenario | Sequence[Scenario] | None') -> Scenario | Non
     raise TypeError(f'scenario takes a Scenario, such as Scenario.load(path), or a list of them, not {type(scenario).__name__}')
 
 
-def refuse_file_shaping(scenario: Scenario, run: str) -> None:
-    """Raise InvalidScenario naming each op that shapes the files a write makes, which `run`, writing none, cannot apply."""
+def refuse_file_shaping(scenario: Scenario, run: str, *, cannot: str = 'writes none') -> None:
+    """Raise InvalidScenario naming each op that shapes the files a write makes, which `run` cannot apply, because it `cannot`."""
     plain = scenario.to_plain()
     issues = [
-        Issue('op-needs-files', pointer(('perturbations', index)), f'{entry["op"]} shapes the files a write makes, and {run} writes none')
+        Issue('op-needs-files', pointer(('perturbations', index)), f'{entry["op"]} shapes the files a write makes, and {run} {cannot}')
         for index, (entry, facts) in enumerate(zip(plain.get('perturbations') or [], perturbation_facts(plain), strict=True))
         if facts.shapes_files
     ]

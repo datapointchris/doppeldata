@@ -13,12 +13,15 @@ uv add --index https://pypi.ichrisbirch.com/simple/ doppeldata
 ```python
 import doppeldata as sd
 
+table = sd.generate(['name', 'email', 'city', 'zip'], rows=1000)   # each column takes the fake its name hints
+table = sd.generate({'age': sd.integers(18, 90), 'plan': sd.choice(['free', 'pro'])}, rows=1000)
 table = sd.generate(sd.Profile.load('orders.profile.yaml'), rows=1_000_000, seed=7)
 ```
 
 The table crosses through the Arrow PyCapsule interface, so Polars, DuckDB and pyarrow 14 or later
 read it with no copy, and none of them is needed to generate. `sd.stream()` returns a
-RecordBatchReader for data larger than memory. `sd.write()` writes files with a manifest, and
+RecordBatchReader for data larger than memory. `sd.write()` writes a directory of files with a
+manifest, or one file such as `people.csv`, and
 `sd.plan()` says what it would write. A write that stops raises a `StoppedWrite`.
 `sd.spark.generate()` and `sd.spark.write()` do the same inside Spark's executors, with the values
 and files a local run gives. They need PySpark 3.5 or later, with pyarrow 15 or later and the pandas

@@ -4,6 +4,7 @@ import importlib
 from types import ModuleType
 from typing import TYPE_CHECKING
 
+from doppeldata import fakes
 from doppeldata.dataset_generation import ColumnSampler
 from doppeldata.dataset_generation import PlannedRange
 from doppeldata.dataset_generation import WritePlan
@@ -28,6 +29,10 @@ from doppeldata.errors import SourceError
 from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
 from doppeldata.errors import WriteInterrupted
+from doppeldata.inline_columns import choice
+from doppeldata.inline_columns import dates
+from doppeldata.inline_columns import decimals
+from doppeldata.inline_columns import integers
 from doppeldata.manifest import Manifest
 from doppeldata.profile_comparison import check
 from doppeldata.profile_comparison import diff
@@ -78,8 +83,13 @@ __all__ = [
     'WriteInterrupted',
     'WritePlan',
     'check',
+    'choice',
+    'dates',
+    'decimals',
     'diff',
+    'fakes',
     'generate',
+    'integers',
     'plan',
     'profile',
     'stream',

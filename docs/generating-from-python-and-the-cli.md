@@ -1,5 +1,149 @@
 # Generating from Python and the command line
 
+Rows come first, from a line of column names. Each section after the first adds one thing the one
+before it lacks, and none is needed to generate.
+
+## A list of column names generates rows, each column taking the fake its name hints
+
+```python
+import doppeldata as sd
+
+table = sd.generate(['name', 'email', 'city', 'zip'], rows=1000)
+```
+
+```bash
+doppeldata data generate --columns name,email,city,zip --rows 1000 --out people.csv
+```
+
+- **A name takes the general pack's type whose hint ends it, else a provider.** `customer_zip` is a
+  `us_zip` and `email_address` an `email`. A provider matches its whole name, such as `city`, or an
+  alias in `PROVIDER_HINTS` ending the name, such as `street` for `street_address`. So
+  `billing_city` draws cities, and `city_count` matches nothing.
+- **A provider's own name draws that provider where its type draws another.** So `free_email` and
+  `state` draw as `sd.fakes.free_email` and `sd.fakes.state` do. A type drawn by a pattern keeps
+  it: `phone_number` takes the type's pattern over fake's numbers with extensions.
+- **A name matching nothing is refused, naming the closest fakes**, as `InvalidProfile` in Python
+  and exit 2 on the command line. A column of random text would pass for data until someone read it.
+  Each says what to give instead where the name was written: a dict in Python, a short YAML on the
+  command line.
+
+  ```text
+  /columns/zipp: 'zipp' names no fake; give it one from sd.fakes, sd.integers, sd.decimals, sd.dates or sd.choice in a dict; the closest are zip_code [no-fake-for-name]
+  Invalid value for --columns: 'age' names no fake; give it a fake, a low..high range such as 18..90, or a list of values, in a short YAML
+  ```
+
+- **Expanding the names imports no profiling engine.** The table of name hints sits in
+  `name_hinted_types.py`, apart from the general pack, which imports pyarrow. So a job that only
+  generates installs no pyarrow, Polars or DuckDB.
+
+## A dict gives each column a fake, a range or a list of values
+
+```python
+table = sd.generate({
+    'name': sd.fakes.name,
+    'street': sd.fakes.street_address,
+    'zip': sd.fakes.zip_code,
+    'age': sd.integers(18, 90),
+    'price': sd.decimals(0, 500, places=2),
+    'signed_up': sd.dates('2023-01-01', '2025-12-31'),
+    'plan': sd.choice(['free', 'pro', 'team'], weights=[0.7, 0.25, 0.05]),
+    'score': sd.decimals(0, 1, nulls=0.05),
+    'email': None,
+}, rows=1000, seed=0)
+```
+
+- **`sd.fakes` holds one fake for each provider the engine draws**, so tab completion lists them.
+  A test fails when the profile schema names a provider `sd.fakes` lacks.
+- **`sd.integers`, `sd.decimals` and `sd.dates` draw between two ends, both included.**
+  `places=` rounds a decimal. `sd.choice` draws each value at its weight, or each equally.
+- **Each takes `nulls=`, the share of rows that are null.**
+- **`None` takes the column's fake from its name**, as the list does.
+- **Every call that generates takes the dict and the list**, Spark's included.
+
+## A short YAML gives each column a fake, a range or a list, and every command reading a profile reads it
+
+```yaml
+rows: 1000
+columns:
+  name:
+  street:
+  zip: zip_code
+  age: 18..90
+  plan: [free, pro, team]
+```
+
+```bash
+doppeldata data generate people.yaml --out people.csv
+doppeldata data check people.yaml people.csv
+```
+
+- **A column's value is a provider, a `low..high` range, a list, or empty.** A range of integers,
+  numbers or ISO dates is `sd.integers`, `sd.decimals` or `sd.dates`. A list is `sd.choice`. Empty
+  takes the name's fake.
+- **`0..1` is a range of integers.** Write `0.0..1` for decimals.
+- **Null shares, weights and decimal places need the dict or the expanded profile.** A short YAML
+  holds none of them.
+- **`rows` is the count `--rows` defaults to.** The table is named for the file, so this one is
+  `people`.
+- **A file holding `profile_version` or `kind` is read as a full profile.**
+
+## A write to one local file writes that file alone
+
+`--out people.csv` writes `people.csv` and nothing beside it. The suffix is the name of a format
+`doppeldata schemas show manifest` lists, such as `.csv` or `.parquet`. `--manifest`, or
+`manifest=True` on `sd.write`, writes `_manifest.json` beside the file. A directory or S3
+destination always holds one.
+
+- **The path alone decides.** A suffixed path with no trailing `/` is one file, and
+  `--out events.parquet/` is a directory. A path with no format suffix, such as `--out people`, is
+  a directory too. An existing directory at a one-file path is refused as
+  `destination-is-a-directory`, exit 2, and `--replace` does not remove it.
+- **The file is staged in `.people.csv.doppeldata-staging` beside it, then moved into place
+  whole.** A write that fails, or that Ctrl-C or SIGTERM stops, removes the staging directory. A
+  write killed outright leaves it. The next write to the file then refuses, and `--replace`
+  removes it.
+- **`--replace` writes over the file**, whether or not doppeldata made it.
+- **A manifest recording only the file goes when the file is replaced**, with or without
+  `--manifest`. So no manifest is left naming rows the file no longer holds. It goes before the
+  file moves.
+- **A directory whose manifest records other files refuses the write, exit 2, even with
+  `--replace`.** That directory is their dataset, and a reader of it would count the file's rows
+  among theirs. Write the file to another directory.
+- **`data check` finds the manifest beside the file** where it records that file alone, as it finds
+  one in a directory.
+- **One file refuses what would split it, exit 2.** That is `--file-rows`, `--partition-by`, a
+  `--format` its suffix does not name, and a scenario op that shapes the files. Writer settings
+  that change the file's extension are refused too, such as gzip, which writes `.csv.gz`.
+- **`sd.spark.write` refuses one file**, with `one-file-from-executors`. Its executors write their
+  own objects, and none of them can move a staged file into place.
+- **No rows write no file**, as they write none in a directory.
+
+## `profile expand` writes the full profile, to edit once a column needs more
+
+```bash
+doppeldata profile expand people.yaml --out people.profile.yaml
+doppeldata profile expand --columns name,email,city,zip --rows 1000
+```
+
+```python
+sd.Profile.expand({'name': None, 'age': sd.integers(18, 90)}, rows=1000).save('people.profile.yaml')
+```
+
+The list, the dict and the short YAML each expand to an ordinary profile, which is what generates.
+So `data generate people.profile.yaml` writes the same bytes as `data generate people.yaml`. The
+manifest, determinism, `data check`, scenarios and Spark read it as any profile. From there, a
+column takes any source [column-samplers.md](column-samplers.md) lists, and `profile create`
+profiles real data into the same format.
+
+- **Every column gets a `physical_type` and a `logical_type`.** `data check` reads a column's kind
+  from its logical type, so a column without one fails `kind_changed`.
+- **A named type writes its `semantic.type` beside the hint.** A column the general pack types
+  then passes `data check`'s semantic type comparison.
+- **`sd.integers` writes one histogram bin, half a unit beyond each end.** Extremes alone draw a
+  number between them, which rounds to each end at half the weight of the values between.
+- *Rejected:* `sd.expand`. A name on `Profile` says what it returns.
+- *Rejected:* `sd.profile` taking a dict. It profiles real data, where a dict reads as rows.
+
 ## Tables cross into Python through the Arrow PyCapsule interface, so no Arrow library is a dependency
 
 `doppeldata.generate()` returns a table and `doppeldata.stream()` a RecordBatchReader. Both are
@@ -93,8 +237,9 @@ doppeldata data plan orders --rows 250000 --seed 7 --file-rows 100000 --out orde
 doppeldata data generate orders --rows 250000 --seed 7 --file-rows 100000 --out orders/
 ```
 
-`PROFILE` is a profile file or a bundled example's name. `--out` is a local directory, an `s3://`
-or `s3a://` URL, or `memory://`, which keeps nothing and times a write. `data plan` reads nothing at
+`PROFILE` is a profile file, a short YAML or a bundled example's name, and `--columns` stands in for
+it. `--out` is a local directory, a local file named for its format, an `s3://` or `s3a://` URL, or
+`memory://`, which keeps nothing and times a write. `data plan` reads nothing at
 `--out`. It prints the dataset digest and identity, the format with every writer setting, each
 column's sampler and null share, each row range, and an estimate of the bytes. A test runs both
 commands and requires the manifest's identity and ranges to equal the plan's.

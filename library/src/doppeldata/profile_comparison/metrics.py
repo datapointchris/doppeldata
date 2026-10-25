@@ -255,14 +255,44 @@ def column_variation(source: Column, observed: Column, inverse_values: float, fo
     return Compared(beyond_sampling(share_distance(p, q, folded=folded), p, inverse_values))
 
 
-def null_rate_change(source: Column, observed: Column) -> Compared | Unmeasured | None:
+def null_rate_changes(source: Document, observed: Document) -> Iterator[Measurement]:
+    """For each column, how far its null rate moved beyond what sampling alone puts between two profiles of one rate."""
+    inverse_rows = sum(1 / rows for rows in (described_rows(source), described_rows(observed)) if rows)
+    for ours, theirs in shared_columns(source, observed):
+        compared = null_rate_change(ours, theirs, inverse_rows)
+        if compared is not None:
+            yield Measurement(ours['name'], compared)
+
+
+def null_rate_change(source: Column, observed: Column, inverse_rows: float) -> Compared | Unmeasured | None:
     a, b = source.get('null_rate'), observed.get('null_rate')
-    return rate_change(a, b, 'the other profile holds no null rate for the column')
+    return rate_beyond_sampling(a, b, 'the other profile holds no null rate for the column', inverse_rows)
 
 
-def zero_rate_change(source: Column, observed: Column) -> Compared | Unmeasured | None:
+def zero_rate_changes(source: Document, observed: Document) -> Iterator[Measurement]:
+    """For each column, how far its share of zeros moved beyond what sampling alone puts between two profiles of one rate."""
+    for ours, theirs in shared_columns(source, observed):
+        counts = described_values(source, ours), described_values(observed, theirs)
+        compared = zero_rate_change(ours, theirs, sum(1 / count for count in counts if count))
+        if compared is not None:
+            yield Measurement(ours['name'], compared)
+
+
+def zero_rate_change(source: Column, observed: Column, inverse_values: float) -> Compared | Unmeasured | None:
     a, b = ((column.get('numeric') or {}).get('zero_rate') for column in (source, observed))
-    return rate_change(a, b, 'the other profile holds no zero rate for the column, which it writes from k_min values')
+    missing = 'the other profile holds no zero rate for the column, which it writes from k_min values'
+    return rate_beyond_sampling(a, b, missing, inverse_values)
+
+
+def rate_beyond_sampling(a: float | None, b: float | None, missing: str, inverse_counts: float) -> Compared | Unmeasured | None:
+    """The change from rate `a` to `b` less the gap sampling puts between two profiles of `a`, as `tvd` measures a column
+    of two values. `inverse_counts` sums one over the count each rate is a share of, and a profile stating no row count
+    adds no term, because its rate is the parameter itself.
+    """
+    compared = rate_change(a, b, missing)
+    if not isinstance(compared, Compared) or a is None:
+        return compared
+    return compared._replace(value=beyond_sampling(compared.value, {'rate': a}, inverse_counts))
 
 
 def rate_change(a: float | None, b: float | None, missing: str) -> Compared | Unmeasured | None:
@@ -422,13 +452,19 @@ METRICS = (
         0.05,
         total_variation,
     ),
-    Metric('null_rate_delta', 'the difference in the share of values that are null', Bound.AT_MOST, 0.01, per_column(null_rate_change)),
     Metric(
-        'zero_rate_delta',
-        'the difference in the share of non-null values that are zero',
+        'null_rate_delta',
+        'the difference in the share of values that are null, beyond what sampling puts between two profiles of one rate',
         Bound.AT_MOST,
         0.01,
-        per_column(zero_rate_change),
+        null_rate_changes,
+    ),
+    Metric(
+        'zero_rate_delta',
+        'the difference in the share of non-null values that are zero, beyond what sampling puts between two profiles of one rate',
+        Bound.AT_MOST,
+        0.01,
+        zero_rate_changes,
     ),
     Metric(
         'distinct_ratio_delta',

@@ -1,6 +1,7 @@
 #!/bin/sh
-# Fails when a values hash the determinism contract test pins differs from
-# the last release's while its pinned stream version is the same. A released
+# Fails when a values hash the determinism contract test pins, or the hash of
+# the hints library/tests/test_typed_column_hints.py pins, differs from the
+# last release's while its pinned stream version is the same. A released
 # stream version's values never change, so a new hash needs a raised version.
 # A pin the release did not hold yet has nothing to compare. Where a pin's
 # fixture changed since the release at the same stream version, its hash
@@ -96,3 +97,21 @@ compare() {
 
 compare PINNED_VALUES "$profile_fixture"
 compare PINNED_SCENARIO_VALUES "$profile_fixture" "$scenario_fixture"
+
+# The hints the library fills a typed column with, which no fixture the engine reads holds, so a
+# Python test pins them.
+hints_file=library/tests/test_typed_column_hints.py
+python_pin() {
+  sed -nE "s/^$1 = '([0-9a-f]+)'$/\1/p"
+}
+released_hints=$(git show "$tag:$hints_file" 2>/dev/null | python_pin PINNED_TYPE_HINTS)
+hints=$(python_pin PINNED_TYPE_HINTS <"$hints_file")
+if [ -z "$released_hints" ]; then
+  echo "check-stream-version-raised: $tag pins no PINNED_TYPE_HINTS, so it has nothing to compare"
+elif [ "$version" = "$released_version" ] && [ "$hints" != "$released_hints" ]; then
+  echo "check-stream-version-raised: PINNED_TYPE_HINTS changed since $tag at stream version $version." >&2
+  echo "Raise STREAM_VERSION and both PINNED_STREAM_VERSIONs with it." >&2
+  exit 1
+else
+  echo "check-stream-version-raised: PINNED_TYPE_HINTS at stream version $version against $tag's $released_version, consistent"
+fi

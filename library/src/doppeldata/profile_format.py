@@ -394,6 +394,19 @@ class Profile:
         profile.path = None
         return profile
 
+    @classmethod
+    def expand(cls, columns: Any, *, rows: int | None = None) -> 'Profile':
+        """The ordinary profile `columns` stands for, to save as YAML and shape by hand, or to check generated data against.
+
+        `columns` is a list of column names, each taking the fake its name hints, or a dict of each name to a column such as
+        `sd.fakes.email`, `sd.integers(18, 90)` or None. It may also be a short YAML file of `rows` and a `columns` map, a
+        profile file, an example's name, or a Profile. `rows` is the row count the profile records, in place of the source's.
+        A name that hints no fake raises InvalidProfile naming the closest. `generate`, `write` and the rest take the same.
+        """
+        from doppeldata.short_profiles import expanded_profile
+
+        return expanded_profile(columns, rows)
+
     def validate(self) -> list[Issue]:
         """Every reason the profile is invalid. Empty when it is valid."""
         return check(self.to_plain())

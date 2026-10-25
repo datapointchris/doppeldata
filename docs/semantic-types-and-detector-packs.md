@@ -88,7 +88,6 @@ value:
 
 | Type | Provider that fails | Hint instead |
 | --- | --- | --- |
-| `us_zip` | fake's `zip_code` draws 3- and 4-digit codes beside 5-digit ones, and `post_code` draws half ZIP+4 | `\d{5}` |
 | `phone_number` | fake's `phone_number` adds an extension to half its numbers. `cell_number` starts an area code or an exchange with 0 or 1 in many of its numbers | `[2-9]\d\d-[2-9]\d\d-\d{4}` |
 | `person_name` | `name` would put full names in a first-name column | `first_name`, `last_name` or `name` |
 

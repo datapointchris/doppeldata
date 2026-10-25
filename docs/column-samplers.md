@@ -121,11 +121,17 @@ doppeldata data check taxi.profile.yaml taxi-generated/
    replacing the faker library breaks no profile. A profile naming another fails validation.
    `icd10cm` and `hcpcs_level2` draw a code in the shape the healthcare pack types the column by.
    The code may name nothing in the code set, and `healthcare-policy.md` says how each is drawn.
+   `zip_code` is five digits, which fake 5.1's `ZipCode` is not.
 3. **A pattern**, from `generator_hint.pattern` or `string.pattern`. A line anchor is dropped,
    because a value is the whole line, and `\d` and the other classes are ASCII.
 4. **`shapes`**: a shape is drawn by rate, then each `A` becomes an upper-case letter, each `a` a
    lower-case one, and each `9` a digit.
 5. **Characters** of `charset.classes`, at a length drawn from `length`.
+
+A column typed by the general pack that holds no hint, `string.pattern` or `string.shapes` takes
+its type's hint before the engine reads the profile. So a hand-written `type: email` column draws
+addresses, not characters. The profiler writes no hint where grex stored a pattern, so a profiled
+column keeps its own format.
 
 `generator_hint.check_digit: luhn` writes the Luhn digit over a value's last digit, wrong on a
 `quality.invalid_rate` share of values. `npi` is the Luhn digit over `80840` and the first nine
@@ -159,7 +165,8 @@ function of its index, no pool of values is held, and any block still generates 
   drawn into `S` equally likely strings give `S · (1 − e^(−m/S))` distinct strings, so the index
   target is raised to meet the value target. A pattern is counted from its syntax, as if every
   string were equally likely. A shape is counted per character at its rate. `email`, `city`, and
-  the providers drawing one entry of one list are counted from fake's lists. `icd10cm` and
+  the providers drawing one entry of one list are counted from fake's lists, and `zip_code` from
+  its digits. `icd10cm` and
   `hcpcs_level2` are counted from their shapes, ICD-10-CM's at the share of each length it draws. Characters and every other provider are uncounted, and each
   distinct index is taken as a distinct string.
 - **Where fresh draws reach no more than the target, the column draws fresh**, with no index. A

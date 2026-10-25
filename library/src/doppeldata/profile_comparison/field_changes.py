@@ -66,8 +66,9 @@ def column_changes(
     """Columns added, dropped, or holding another kind, Arrow type or semantic type.
 
     With `writer_changes_pass`, as a check sets it, a change a writer alone causes is listed and passes: an Arrow type,
-    because a writer may store a column at another width or unit, and a decimal read back from text as a float. A diff
-    fails both, because there the source itself changed.
+    because a writer may store a column at another width or unit, a decimal read back from text as a float, and a string
+    column whose text a read types as another kind, as CSV's 16-digit card numbers read as integers. A diff fails all
+    three, because there the source itself changed.
 
     A semantic type change passes where the type is declared by no detector pack both profiles ran, because only a run
     of that pack could find it. A column's `semantic.pack` names the pack, and `declaring` does where it is absent. It
@@ -135,7 +136,7 @@ def retyped(source: Column, observed: Column, index: int, writer_changes_pass: b
     kinds = column_kind(source), column_kind(observed)
     if kinds[0] != kinds[1]:
         message = f'{name} is {kinds[0]} in the source profile and {kinds[1]} in the other'
-        passed = writer_changes_pass and {*kinds} == TEXT_READ_KINDS
+        passed = writer_changes_pass and ({*kinds} == TEXT_READ_KINDS or kinds[0] == ColumnKind.STRING.value)
         yield FieldChange(ChangeKind.KIND_CHANGED, name, pointer(('columns', index, 'logical_type')), *kinds, passed, message)
     types = source.get('physical_type'), observed.get('physical_type')
     if types[0] != types[1]:
