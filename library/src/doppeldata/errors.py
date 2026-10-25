@@ -60,6 +60,14 @@ class ProfilingEnginesMissing(DoppeldataError, ImportError):
         )
 
 
+class DetectorPackError(DoppeldataError):
+    """A detector pack named for a run is not installed, does not load, or broke the protocol while typing a column."""
+
+    def __init__(self, message: str, *, exit_code: int = 1) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
 class ProfilingWarning(UserWarning):
     """A profile was written, and something in it is not what the caller may have asked for."""
 

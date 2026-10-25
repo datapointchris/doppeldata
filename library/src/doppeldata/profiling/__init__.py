@@ -3,6 +3,7 @@
 import importlib
 import importlib.util
 import warnings
+from collections.abc import Sequence
 from typing import Any
 
 from doppeldata.errors import ColumnsNotFrozen
@@ -10,6 +11,8 @@ from doppeldata.errors import ProfilingEnginesMissing
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import table_profile
+from doppeldata.profiling.detector_packs import EnabledPack
+from doppeldata.profiling.detector_packs import enabled_packs
 
 DEFAULT_K_MIN = 11
 # Each engine's backend class, as its module and name, and the packages that module imports, which install under the same names.
@@ -20,18 +23,29 @@ LISTING_PACKAGES = ('boto3',)
 
 
 def profile(
-    data: Any, *, engine: str = 'polars', sample: int | None = None, k_min: int = DEFAULT_K_MIN, edges_from: Profile | None = None
+    data: Any,
+    *,
+    engine: str = 'polars',
+    sample: int | None = None,
+    k_min: int = DEFAULT_K_MIN,
+    edges_from: Profile | None = None,
+    packs: Sequence[str] = (),
 ) -> Profile:
     """Profile `data` into a valid table profile holding no rows.
 
     `data` is a path, an `s3://` URL, a list of them, or a pyarrow, Polars or pandas table. `sample`
     profiles a seeded random sample of that many rows. No stored literal rests on fewer than `k_min` rows.
 
+    Each string column, and each integer column whose name hints a type, is typed by the detector packs
+    named in `packs` and the general pack, which every run enables. A pack the library does not ship is
+    found by name in the `doppeldata.detector_packs` entry-point group, and `DetectorPackError` names one
+    that is not installed or does not load.
+
     `edges_from` is an earlier profile of the same table. Where its source fingerprint matches the files
-    listed now, and it was made by this doppeldata and scipy with the same engine, `k_min` and sampling, it
-    is returned unchanged, so a reviewer's edits survive a re-run. Otherwise each column it holds a
-    histogram or value list for is counted against those, and the rows outside them are written as the
-    column's `overflow`. A column only one of the two tables holds issues `ColumnsNotFrozen`.
+    listed now, and it was made by this doppeldata, scipy and detector packs with the same engine, `k_min`
+    and sampling, it is returned unchanged, so a reviewer's edits survive a re-run. Otherwise each column
+    it holds a histogram or value list for is counted against those, and the rows outside them are written
+    as the column's `overflow`. A column only one of the two tables holds issues `ColumnsNotFrozen`.
     """
     if engine not in ENGINES:
         raise ValueError(f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}')
@@ -45,12 +59,15 @@ def profile(
         raise ProfilingEnginesMissing(engine, missing)
     # Imported by name, because each imports packages a library-only install lacks.
     backend = getattr(importlib.import_module(module_name), class_name)()
+    enabled = enabled_packs(packs)
     sources = importlib.import_module(SOURCES_MODULE)
     source = sources.resolve(data)
-    if edges_from is not None and profiles_unchanged_source(edges_from, source.fingerprint, engine=engine, sample=sample, k_min=k_min):
+    if edges_from is not None and profiles_unchanged_source(
+        edges_from, source.fingerprint, engine=engine, sample=sample, k_min=k_min, packs=enabled
+    ):
         return edges_from
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
-    profiled = Profile(table_profile.profile_table(backend, source, sample=sample, k_min=k_min, frozen=frozen))
+    profiled = Profile(table_profile.profile_table(backend, source, sample=sample, k_min=k_min, packs=enabled, frozen=frozen))
     sources.check_unchanged(source)
     issues = profiled.validate()
     if issues:
@@ -67,10 +84,13 @@ def column_names(document: dict[str, Any]) -> list[str]:
     return [column['name'] for column in document.get('columns') or []]
 
 
-def profiles_unchanged_source(previous: Profile, fingerprint: str | None, *, engine: str, sample: int | None, k_min: int) -> bool:
+def profiles_unchanged_source(
+    previous: Profile, fingerprint: str | None, *, engine: str, sample: int | None, k_min: int, packs: list[EnabledPack]
+) -> bool:
     """Whether `previous` is what profiling the listed source with these settings would give, so it can stand unchanged.
 
-    So an earlier doppeldata, or a run without scipy, never hands back a profile this one would write differently.
+    So an earlier doppeldata, a run without scipy, or one with other detector packs, never hands back a profile this one
+    would write differently.
     """
     document = previous.to_plain()
     generated = document.get('generated') or {}
@@ -78,7 +98,7 @@ def profiles_unchanged_source(previous: Profile, fingerprint: str | None, *, eng
         return False
     fitting, _ = table_profile.fitting_module()
     recorded = {field: generated[field] for field in table_profile.DERIVED_FROM if field in generated}
-    if recorded != table_profile.derivation(engine, fingerprint, fitting.FITTER if fitting else None):
+    if recorded != table_profile.derivation(engine, fingerprint, fitting.FITTER if fitting else None, packs):
         return False
     # A profile of every row stands for any sample of it, and a sampled one only for a sample of that size.
     read = generated.get('sample') or {}

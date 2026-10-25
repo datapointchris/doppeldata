@@ -27,8 +27,12 @@ def schema_text(name: str) -> str:
 
 
 def published_enum(definition: str) -> list[str]:
-    """The values the profile schema allows for one of its string enums, such as `SourceFormat`."""
-    return list(json.loads(schema_text('profile'))['$defs'][definition]['enum'])
+    """The values the profile schema allows for one of its string enums, such as `SourceFormat`.
+
+    An enum whose values carry descriptions is published as a `oneOf` of constants.
+    """
+    schema = json.loads(schema_text('profile'))['$defs'][definition]
+    return list(schema['enum']) if 'enum' in schema else [variant['const'] for variant in schema['oneOf']]
 
 
 def output_formats() -> list[str]:

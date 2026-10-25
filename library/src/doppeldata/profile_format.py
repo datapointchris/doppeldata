@@ -34,7 +34,7 @@ from doppeldata.published_schemas import schema_text
 FORMAT_VERSION = _core.FORMAT_VERSION
 BUNDLE_INDEX = 'bundle.yaml'
 # Left out of the digest, so profiling unchanged data again keeps the profile's identity.
-UNHASHED_GENERATED_FIELDS = ('at', 'tool', 'fitter', 'source_fingerprint')
+UNHASHED_GENERATED_FIELDS = ('at', 'tool', 'fitter', 'detector_packs', 'source_fingerprint')
 # Stored rates are rounded, so a set meant to sum to 1 is allowed this far off.
 RATE_SUM_TOLERANCE = 0.01
 # RFC 8785 writes numbers as IEEE 754 doubles, which hold every integer only up to this magnitude.

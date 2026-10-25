@@ -28,6 +28,10 @@ with enough distinct values. Without it, each such fit is written as null, and `
 a `FitsSkipped` warning. Every warning `profile()` issues is a `ProfilingWarning`. A write to S3
 needs boto3.
 
+`profile(..., packs=['acme'])` types columns with a third party's detector pack beside the general
+one. A pack registers under the `doppeldata.detector_packs` entry-point group, and implements the
+`DetectorPack` protocol in `doppeldata.profiling.detector_packs`.
+
 Every release is published to that package index, and nothing else is. PyPI does not carry
 doppeldata, so a package of that name there is someone else's. The library needs Python 3.11 or
 later, so it installs into an AWS Glue job:

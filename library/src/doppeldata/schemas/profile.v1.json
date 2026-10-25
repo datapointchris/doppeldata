@@ -865,7 +865,7 @@
       ]
     },
     "Generated": {
-      "description": "How and when the profile was made. `at`, `tool`, `fitter` and `source_fingerprint` are left out\nof the profile's digest.",
+      "description": "How and when the profile was made. `at`, `tool`, `fitter`, `detector_packs` and\n`source_fingerprint` are left out of the profile's digest.",
       "type": "object",
       "properties": {
         "at": {
@@ -874,6 +874,16 @@
             "string",
             "null"
           ]
+        },
+        "detector_packs": {
+          "description": "Each detector pack the profiler typed columns with, by name, with the distribution that\nprovides it and its version, as `doppeldata <version>`.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "engine": {
           "anyOf": [
@@ -1921,6 +1931,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "pack": {
+          "description": "The detector pack whose detector assigned the type, such as `general`.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "sensitivity": {
