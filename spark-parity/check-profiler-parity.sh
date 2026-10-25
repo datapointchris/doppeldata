@@ -6,7 +6,8 @@
 #   spark-parity/check-profiler-parity.sh WHEEL DATA [IMAGE...]
 #
 # WHEEL is the library's manylinux2014 x86_64 wheel. DATA is a CSV, TSV or Parquet file, or a directory of one table's
-# files. POLICY names the privacy policy, `default` when unset. With no IMAGE, it checks DEFAULT_IMAGES.
+# files. POLICY names the privacy policy, `default` when unset. KEEP names a directory each profile is copied into. With no
+# IMAGE, it checks DEFAULT_IMAGES.
 set -euo pipefail
 
 readonly CONTAINER_MEMORY=8g DRIVER_MEMORY=4g SPARK_MASTER='local[8]'
@@ -36,6 +37,7 @@ main() {
   mkdir -p "$cache"
   uv run --project "$here/.." doppeldata profile create "$data" --policy "$policy" --out "$work/polars.yaml" >&2
   uv run --project "$here/.." doppeldata profile check "$work/polars.yaml" >&2 || status=1
+  [[ -z "${KEEP:-}" ]] || cp "$work/polars.yaml" "$KEEP/${name%.*}.polars.yaml"
   for image in "$@"; do
     echo "== $image" >&2
     rm -f "$work/spark.yaml"
@@ -54,6 +56,7 @@ main() {
       continue
     }
     uv run --project "$here/.." doppeldata profile check "$work/spark.yaml" >&2 || status=1
+    [[ -z "${KEEP:-}" ]] || cp "$work/spark.yaml" "$KEEP/${name%.*}.$(basename "${image//:/-}").yaml"
     uv run --project "$here/.." python "$here/compare_spark_profile_with_polars.py" "$work/polars.yaml" "$work/spark.yaml" "$data" \
       || status=1
   done
