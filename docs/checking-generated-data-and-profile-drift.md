@@ -77,10 +77,26 @@ other profile's histogram.
 - A histogram not counted against the source's outer edges carries no `overflow` that
   measures them, so the column has no `boundary_adherence`.
 
-## `distinct_ratio_delta` measures every column
+## `distinct_ratio_delta` measures a column against the range both readings of its profile allow
 
-The ratio is the distinct count over the rows, so it compares profiles of different sizes. Every
-kind of column is measured. A float column whose source holds cents, generated as continuous
+The ratio is a column's distinct count over the rows it was counted over. One profile cannot show
+whether a column keeps that ratio at another size or keeps its count. So the generator holds the
+ratio, and the check accepts either. With N source rows holding D distinct values, and n rows
+checked:
+
+- **Below N**, the ratio may run from the source's, held, up to what a random sample of n source
+  rows holds where each value fills an equal share: `D · (1 − (1 − n/N)^(N/D)) / n`.
+- **Above N**, it may run from `D / n`, the count saturated, up to the source's.
+- **The value is how far the observed ratio falls outside that range**, relative to its nearer end,
+  and 0 inside it. At n = N both ends are the source's ratio, so the value is the relative change
+  in ratio.
+
+So the range widens as n moves from N, the same lower-bound stance `ks` takes. A column that drifts
+toward either reading passes, and only a count outside both fails. A few-valued column's lower end
+falls near zero at a small n: a 5-value column in 100,000 rows, checked at 2,000, passes holding
+anywhere from 0.1 to 5 values. `tvd` is what checks its values there.
+
+Every kind of column is measured. A float column whose source holds cents, generated as continuous
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.
 

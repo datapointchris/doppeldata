@@ -196,11 +196,34 @@ def zero_rate_change(source: Column, observed: Column) -> Compared | None:
 
 
 def distinct_ratio_change(source: Column, observed: Column) -> Compared | None:
-    """The change in distinct ratio relative to the source's. A source with no values has no ratio to measure against."""
-    a, b = ((column.get('distinct') or {}).get('ratio') for column in (source, observed))
+    """How far the observed distinct ratio falls outside the range `distinct_ratio_range` allows, relative to its nearer end.
+
+    At the source's own row count the range is the source's ratio, so the value is the relative change in ratio. A source
+    with no values has no ratio to measure against.
+    """
+    ours, theirs = ((column.get('distinct') or {}) for column in (source, observed))
+    a, b = ours.get('ratio'), theirs.get('ratio')
     if not a or b is None:
         return None
-    return Compared(abs(b - a) / a, a, b)
+    if not ours.get('approx') or not theirs.get('approx'):
+        return Compared(abs(b - a) / a, a, b)
+    low, high = distinct_ratio_range(ours['approx'], a, theirs['approx'] / b)
+    outside = (low - b) / low if b < low else (b - high) / high if b > high else 0.0
+    return Compared(outside, a, b)
+
+
+def distinct_ratio_range(count: int, ratio: float, rows: float) -> tuple[float, float]:
+    """The distinct ratios `rows` rows may hold of a source whose `count` distinct values are `ratio` of its rows.
+
+    One profile cannot show whether a column keeps its ratio at another size or keeps its count, so the range holds both.
+    One end is the ratio held. Above the source's rows the other is `count` saturated. Below them it is what a random
+    sample of the source holds where each value fills an equal share of its rows: `count · (1 − (1 − rows/N)^(N/count))`.
+    """
+    source_rows = count / ratio
+    if rows >= source_rows:
+        return count / rows, ratio
+    sampled = count * (1 - (1 - rows / source_rows) ** (source_rows / count))
+    return ratio, sampled / rows
 
 
 def boundary_adherence(source: Column, observed: Column) -> Compared | None:
@@ -245,7 +268,7 @@ METRICS = (
     ),
     Metric(
         'distinct_ratio_delta',
-        "the difference in distinct values per row, relative to the source's",
+        'how far the distinct values per row fall outside the range the source allows at this many rows, relative to it',
         Bound.AT_MOST,
         0.10,
         per_column(distinct_ratio_change),

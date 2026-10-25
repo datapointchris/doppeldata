@@ -11,6 +11,8 @@ import pyarrow.compute as pc
 from doppeldata.published_schemas import schema_text
 
 ROWS = 20_000
+# Generated at a quarter of the source's rows, as `data generate --rows` asks for a smaller sample.
+GENERATED_ROWS = ROWS // 4
 
 
 def source_table() -> pa.Table:
@@ -32,9 +34,9 @@ def failures(report: sd.CheckReport) -> list[tuple[str, str | None]]:
     return [(result.metric, result.column) for result in report.metrics if not result.passed]
 
 
-def test_generated_data_passes_its_check_and_a_raised_null_rate_fails_it_by_name():
+def test_data_generated_at_fewer_rows_than_its_source_passes_its_check_and_a_raised_null_rate_fails_it_by_name():
     profile = sd.profile(source_table())
-    generated = pa.table(sd.generate(profile, rows=ROWS, seed=1))
+    generated = pa.table(sd.generate(profile, rows=GENERATED_ROWS, seed=1))
     schema = jsonschema.Draft202012Validator(json.loads(schema_text('check')))
 
     report = sd.check(profile, generated)
