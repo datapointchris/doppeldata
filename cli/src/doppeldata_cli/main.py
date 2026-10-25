@@ -1,10 +1,13 @@
 import dataclasses as dc
 import importlib.metadata
 import json
+from pathlib import Path
 from typing import Annotated
 
 import typer
 from doppeldata import Profile
+from doppeldata import SourceError
+from doppeldata import profile
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_text
 from doppeldata.published_schemas import schema_names
@@ -31,6 +34,32 @@ def profile_list(as_json: JsonOption = False) -> None:
     width = max(len(row['name']) for row in rows)
     for row in rows:
         typer.echo(f'{row["name"]:<{width}}  {row["columns"]} columns, {row["row_count"]:,} rows')
+
+
+@profile_app.command('create', no_args_is_help=True)
+def profile_create(
+    data: Annotated[
+        list[str],
+        typer.Argument(metavar='DATA...', help='Files, directories or s3:// prefixes holding one table, all of one format.'),
+    ],
+    out: Annotated[
+        Path | None,
+        typer.Option('--out', metavar='FILE', help='Write the profile to FILE, as JSON when it ends in .json, rather than print its YAML.'),
+    ] = None,
+    sample: Annotated[int | None, typer.Option('--sample', metavar='N', min=1, help='Profile a seeded random sample of N rows.')] = None,
+) -> None:
+    """Profile a dataset into a file holding no rows: doppeldata profile create data/orders/ --out orders.profile.yaml
+
+    Parquet and Arrow are read locally or from S3, as the AWS environment's credentials allow. CSV, TSV and JSON are read locally.
+    """
+    try:
+        profiled = profile(data, sample=sample)
+    except SourceError as error:
+        raise typer.BadParameter(str(error), param_hint='DATA') from error
+    if out is None:
+        typer.echo(profiled.to_yaml(), nl=False)
+        return
+    profiled.save(out)
 
 
 @profile_app.command('show', no_args_is_help=True)
