@@ -6,7 +6,6 @@ stop between blocks on Ctrl-C.
 """
 
 import dataclasses as dc
-import importlib.util
 import json
 import os
 import re
@@ -16,6 +15,8 @@ from typing import Protocol
 
 from doppeldata import _core
 from doppeldata.errors import WriteFailed
+from doppeldata.errors import not_installed
+from doppeldata.errors import uninstalled
 from doppeldata.manifest import Manifest
 from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
@@ -120,9 +121,9 @@ def destination_of(out: str | os.PathLike[str]) -> tuple[str, str, str | None]:
         message = f'{destination} is a Path, which collapses a URL\'s //; pass the URL as a str, such as "s3://bucket/prefix/"'
         raise WriteFailed('url-in-a-path', message, kind='refused')
     scheme, bucket = _core.destination_scheme(destination)
-    if scheme == 's3' and importlib.util.find_spec('boto3') is None:
-        message = 'writing to s3:// resolves credentials through boto3, which doppeldata does not install; run `pip install boto3`'
-        raise WriteFailed('boto3-missing', message, kind='refused')
+    # boto3 resolves the credentials an S3 write signs with.
+    if scheme == 's3' and uninstalled({'boto3': 'boto3'}):
+        raise WriteFailed('boto3-missing', not_installed('writing to s3://', ['boto3']), kind='refused')
     return destination, scheme, bucket
 
 

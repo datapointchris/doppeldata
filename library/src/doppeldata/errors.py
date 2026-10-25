@@ -1,5 +1,7 @@
 """The errors doppeldata raises for a caller to report, each with the exit status a command ends on, and the warnings it issues."""
 
+import importlib.util
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from doppeldata.manifest import Manifest
@@ -21,11 +23,12 @@ class DoppeldataError(Exception):
 
 
 class SourceError(DoppeldataError, ValueError):
-    """The data named cannot be read as one table."""
+    """The data named cannot be read as one table. `role` is the input it was named as: `data`, or `against` for a check's real data."""
 
-    def __init__(self, message: str, *, exit_code: int = 2) -> None:
+    def __init__(self, message: str, *, exit_code: int = 2, role: str = 'data') -> None:
         super().__init__(message)
         self.exit_code = exit_code
+        self.role = role
 
 
 # Each kind of failure, such as a stopped write's, and the exit status a command ends on for it.
@@ -59,15 +62,38 @@ class WriteInterrupted(StoppedWrite, KeyboardInterrupt):
     """A write a signal stopped, such as Ctrl-C. It is a KeyboardInterrupt, so `except Exception` never swallows it."""
 
 
-class ProfilingEnginesMissing(DoppeldataError, ImportError):
+def uninstalled(modules: Mapping[str, str]) -> list[str]:
+    """Each distribution of `modules`, a map from distribution to the module it installs, whose module is not importable."""
+    return [distribution for distribution, module in modules.items() if importlib.util.find_spec(module) is None]
+
+
+def not_installed(doing: str, missing: list[str], installed_by: str = '') -> str:
+    """The sentence refusing `doing` for want of `missing`, naming the `pip install` line and any other route."""
+    return f'{doing} needs {", ".join(missing)}, which doppeldata does not install; run `pip install {" ".join(missing)}`{installed_by}'
+
+
+class PackagesMissing(DoppeldataError, ImportError):
+    """`feature` imports packages doppeldata does not install, and `missing` names each distribution not installed.
+
+    `doing` says what needed them, and the message names the `pip install` line and `installed_by`'s route.
+    """
+
+    kind = 'refused'
+    exit_code = EXIT_CODES['refused']
+
+    def __init__(self, feature: str, missing: list[str], *, doing: str, installed_by: str = '') -> None:
+        self.feature = feature
+        self.missing = missing
+        super().__init__(not_installed(doing, missing, installed_by))
+
+
+class ProfilingEnginesMissing(PackagesMissing):
     """Profiling was asked of an engine whose packages are not installed."""
 
     def __init__(self, engine: str, missing: list[str]) -> None:
         self.engine = engine
-        self.missing = missing
         super().__init__(
-            f'profiling with {engine} needs {", ".join(missing)}, which doppeldata does not install; '
-            f'run `pip install {" ".join(missing)}`, or install doppeldata-cli, which declares them'
+            'profiling', missing, doing=f'profiling with {engine}', installed_by=', or install doppeldata-cli, which declares them'
         )
 
 

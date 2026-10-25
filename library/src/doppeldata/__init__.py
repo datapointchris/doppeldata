@@ -19,6 +19,7 @@ from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import FitsSkipped
 from doppeldata.errors import InvalidCodeList
 from doppeldata.errors import InvalidThresholds
+from doppeldata.errors import PackagesMissing
 from doppeldata.errors import PoorFits
 from doppeldata.errors import ProfilesDrifted
 from doppeldata.errors import ProfilingEnginesMissing
@@ -61,6 +62,7 @@ __all__ = [
     'InvalidThresholds',
     'Issue',
     'Manifest',
+    'PackagesMissing',
     'PlannedRange',
     'PoorFits',
     'Profile',

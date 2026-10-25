@@ -43,7 +43,12 @@ from doppeldata.privacy_policy import DEFAULT_K_MIN
 from doppeldata.privacy_policy import ProfileFileCheck
 from doppeldata.privacy_policy import TableCheck
 from doppeldata.privacy_policy import file_checks
+from doppeldata.profile_comparison import NOTHING_SCORED
 from doppeldata.profile_comparison.metrics import METRICS
+from doppeldata.profile_comparison.real_data_scores import DEFAULT_SAMPLE_ROWS
+from doppeldata.profile_comparison.real_data_scores import SCORES
+from doppeldata.profile_comparison.real_data_scores import scored_columns
+from doppeldata.profile_comparison.side_by_side_html import unwritable
 from doppeldata.profiling import applied_policy
 from doppeldata.published_schemas import enum_values
 from doppeldata.published_schemas import output_formats
@@ -181,6 +186,14 @@ ThresholdsOption = Annotated[
 METRIC_DEFINITIONS = '\n\n'.join(
     f'{metric.name}: {metric.summary}. Passes at {metric.bound.value.removeprefix("at_")} {metric.threshold:g} by default.'
     for metric in METRICS
+)
+SCORE_DEFINITIONS = (
+    "With --against, these scores compare a sample of DATA with one of REAL_DATA, by SDMetrics' definitions. Each decides "
+    'nothing until a --thresholds file sets its threshold, a pair score under defaults alone. A row that decides nothing '
+    'passes, and shows whether it meets the reference.\n\n'
+    + '\n\n'.join(
+        f'{score.name}: {score.summary}. Reference at {score.bound.value.removeprefix("at_")} {score.threshold:g}.' for score in SCORES
+    )
 )
 
 
@@ -379,6 +392,9 @@ def failure_exits_3() -> Iterator[None]:
         if error.exit_code == 1:
             error.exit_code = 3
         raise
+    except OSError as error:
+        typer.echo(f'doppeldata: the comparison stopped: {error}', err=True)
+        raise typer.Exit(3) from error
     except Exception as error:
         traceback.print_exc()
         typer.echo(f'doppeldata: the comparison stopped on {type(error).__name__}, which is a bug in doppeldata', err=True)
@@ -420,7 +436,7 @@ def profile_diff(
         raise ProfilesDrifted(report)
 
 
-@data_app.command('check', no_args_is_help=True, epilog=METRIC_DEFINITIONS)
+@data_app.command('check', no_args_is_help=True, epilog=f'{METRIC_DEFINITIONS}\n\n{SCORE_DEFINITIONS}')
 def data_check(
     profile_name: Annotated[
         str, typer.Argument(metavar='PROFILE', help='The profile the data was generated from, a file or an example name.')
@@ -428,29 +444,70 @@ def data_check(
     data: Annotated[str, typer.Argument(metavar='DATA', help='A file, directory or s3:// prefix holding the generated table.')],
     thresholds: ThresholdsOption = None,
     scenario: ScenarioOption = None,
+    against: Annotated[
+        str | None,
+        typer.Option(
+            '--against',
+            metavar='REAL_DATA',
+            help=(
+                "Also score DATA against REAL_DATA by the scores listed below, which follow SDMetrics' definitions and need no "
+                'SDMetrics. The report holds the scores and no real row.'
+            ),
+        ),
+    ] = None,
+    against_sample: Annotated[
+        int | None,
+        typer.Option(
+            '--against-sample',
+            metavar='N',
+            min=1,
+            help=f'With --against, score a seeded random sample of N rows from each side. Defaults to {DEFAULT_SAMPLE_ROWS:,}.',
+        ),
+    ] = None,
+    html: Annotated[
+        Path | None,
+        typer.Option(
+            '--html',
+            metavar='FILE',
+            help=(
+                'With --against, write the two samples side by side to FILE with sweetviz, which doppeldata does not install. '
+                "It shows the real data's extremes and categories, so it is not for sharing."
+            ),
+        ),
+    ] = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Check generated data against its profile, without the real data: doppeldata data check orders.profile.yaml out/orders/
+    """Check generated data against its profile: doppeldata data check orders.profile.yaml out/orders/
 
     DATA is profiled with PROFILE's histogram edges and value lists, and each metric compares the two profiles.
     With --scenario, DATA is measured against the profile the scenario's patch makes, each metric a perturbation moves is
     skipped, naming it, and each expectation the scenario declares is measured.
-    Exits 0 when every metric, column and expectation passes, and 3 when one does not or the check could not finish.
+    Only --against reads the real data. Exits 0 when every metric, column and expectation passes, and 3 when one does not
+    or the check could not finish.
     """
     source = loaded_profile(profile_name, 'PROFILE')
     chosen = loaded_thresholds(thresholds)
     applied = loaded_scenario(scenario)
+    if against is None:
+        for given, hint in ((html, '--html'), (against_sample, '--against-sample')):
+            if given is not None:
+                raise typer.BadParameter(f'{hint} reads the real data beside DATA; name it with --against', param_hint=hint)
+    elif not scored_columns(source.to_plain()).ordered:
+        raise typer.BadParameter(NOTHING_SCORED, param_hint='--against')
+    unwritten = unwritable(html) if html is not None else None
+    if unwritten is not None:
+        raise typer.BadParameter(unwritten, param_hint='--html')
     try:
         with failure_exits_3(), warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', ProfilingWarning)
-            report = check(source, data, thresholds=chosen, scenario=applied)
+            report = check(source, data, thresholds=chosen, scenario=applied, against=against, against_sample=against_sample, html=html)
             shown = report.to_json() if as_json else report.to_markdown()
     except InvalidThresholds as error:
         raise typer.BadParameter(str(error), param_hint='--thresholds') from error
     except SourceError as error:
         if error.exit_code != 2:
             raise
-        raise typer.BadParameter(str(error), param_hint='DATA') from error
+        raise typer.BadParameter(str(error), param_hint='--against' if error.role == 'against' else 'DATA') from error
     print_notices(caught)
     typer.echo(shown, nl=False)
     if not (report.passed and report.verified):

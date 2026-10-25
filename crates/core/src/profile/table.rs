@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Serialize;
 
 use super::values::ProfileVersion;
 use super::values::Quantiles;
@@ -425,7 +426,7 @@ pub struct Correlation {
     pub value: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CorrelationMethod {
     Pearson,

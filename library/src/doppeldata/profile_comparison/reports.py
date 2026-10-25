@@ -12,13 +12,17 @@ DIFF_VERSION = 1
 BOUND_SIGNS = {Bound.AT_MOST: '≤', Bound.AT_LEAST: '≥'}
 
 
-OPTIONAL_METRIC_FIELDS = ('expected', 'observed', 'unmeasured', 'skipped_by')
+OPTIONAL_METRIC_FIELDS = ('expected', 'observed', 'unmeasured', 'skipped_by', 'paired_with')
 
 
 @dc.dataclass(frozen=True)
 class MetricResult:
-    """One metric's value for one column, with its verdict. `value` is None where `unmeasured` says why it has none, or where
-    `skipped_by` names the scenario's perturbation that moves what it compares."""
+    """One metric's value for one column, or a pair where `paired_with` names the second, with its verdict.
+
+    `value` is None where `unmeasured` says why it has none, or where `skipped_by` names the scenario's perturbation that
+    moves what it compares. A row whose `decides` is False is one the report's verdict leaves out, such as a score against
+    the real data no thresholds file sets, and it passes.
+    """
 
     metric: str
     column: str | None
@@ -30,18 +34,29 @@ class MetricResult:
     observed: float | None = None
     unmeasured: str | None = None
     skipped_by: str | None = None
+    paired_with: str | None = None
+    decides: bool = True
 
     def to_plain(self) -> dict[str, Any]:
         plain = dc.asdict(self) | {'bound': self.bound.value}
         return {key: value for key, value in plain.items() if value is not None or key not in OPTIONAL_METRIC_FIELDS}
 
+    def meets_threshold(self) -> bool:
+        """Whether `value` meets `threshold`, which for a row that decides nothing is its reference and not its verdict."""
+        return self.value is not None and self.bound.holds(self.value, self.threshold)
+
+    def where(self) -> str:
+        """` on amount`, ` on fare and total`, or nothing for the table."""
+        if self.paired_with is not None:
+            return f' on {self.column} and {self.paired_with}'
+        return f' on {self.column}' if self.column else ''
+
     def named(self) -> str:
         """`null_rate_delta on status (0.01 to 0.05)`, or `ks on amount (unmeasured)`."""
-        where = f' on {self.column}' if self.column else ''
         if self.unmeasured is not None:
-            return f'{self.metric}{where} (unmeasured)'
+            return f'{self.metric}{self.where()} (unmeasured)'
         moved = f' ({self.expected:g} to {self.observed:g})' if self.expected is not None and self.observed is not None else ''
-        return f'{self.metric}{where}{moved}'
+        return f'{self.metric}{self.where()}{moved}'
 
 
 @dc.dataclass(frozen=True)
@@ -78,7 +93,7 @@ class ExpectationResult:
 
 @dc.dataclass(frozen=True)
 class Failures:
-    """What failed in a report, out of every metric it measured, every change it listed and every expectation it measured."""
+    """What failed in a report, out of every metric that decides it, every change it listed and every expectation it measured."""
 
     metrics: list[MetricResult]
     changes: list[FieldChange]
@@ -90,12 +105,13 @@ class Failures:
     @classmethod
     def of(cls, metrics: list[MetricResult], changes: list[FieldChange], expectations: list[ExpectationResult] | None = None) -> 'Failures':
         expectations = expectations or []
+        deciding = [result for result in metrics if result.decides]
         failed = (
-            [result for result in metrics if not result.passed],
+            [result for result in deciding if not result.passed],
             [change for change in changes if not change.passed],
             [result for result in expectations if not result.passed],
         )
-        return cls(*failed, len(metrics), len(changes), len(expectations))
+        return cls(*failed, len(deciding), len(changes), len(expectations))
 
     def __bool__(self) -> bool:
         return bool(self.metrics or self.changes or self.expectations)
@@ -136,10 +152,25 @@ class CheckedData:
 
 
 @dc.dataclass(frozen=True)
-class CheckReport:
-    """Generated data measured against the profile it was generated from.
+class RealData:
+    """The real data a check scored the data against, named as the caller named it, and how it was scored.
 
-    `passed` covers every metric and column change, and `verified` every expectation a scenario declares.
+    `rows` is the rows it holds, and `scored_rows` the rows each side's seeded sample holds. `correlation` is the
+    coefficient CorrelationSimilarity compares.
+    """
+
+    path: str
+    rows: int
+    fingerprint: str | None
+    scored_rows: int
+    correlation: str
+
+
+@dc.dataclass(frozen=True)
+class CheckReport:
+    """Generated data measured against the profile it was generated from, and scored against the real data with `against`.
+
+    `passed` covers every metric that decides and every column change, and `verified` every expectation a scenario declares.
     """
 
     profile: ReportedProfile
@@ -148,6 +179,7 @@ class CheckReport:
     changes: list[FieldChange]
     scenario: ReportedScenario | None = None
     expectations: list[ExpectationResult] = dc.field(default_factory=list)
+    against: RealData | None = None
 
     def failures(self) -> Failures:
         return Failures.of(self.metrics, self.changes, self.expectations)
@@ -171,6 +203,7 @@ class CheckReport:
             'profile': dc.asdict(self.profile),
             'scenario': dc.asdict(self.scenario) if self.scenario is not None else None,
             'data': dc.asdict(self.data),
+            'against': dc.asdict(self.against) if self.against is not None else None,
             'passed': self.passed,
             'verified': self.verified,
             'metrics': [result.to_plain() for result in self.metrics],
@@ -188,6 +221,13 @@ class CheckReport:
         if self.scenario is not None:
             against += f' under scenario `{self.scenario.name}` ({self.scenario.digest})'
         lines = [f'# doppeldata check {verdict}', '', f'`{self.data.path}`, {self.data.rows:,} rows, against {against}.', '']
+        if self.against is not None:
+            real = self.against
+            lines += [
+                f'Scored against the real data at `{real.path}`, {real.rows:,} rows, '
+                f'on a seeded sample of {real.scored_rows:,} rows from each side.',
+                '',
+            ]
         return '\n'.join(lines + findings(self.metrics, self.changes, self.failures()) + expected(self.expectations)) + '\n'
 
 
@@ -234,25 +274,43 @@ class DiffReport:
 
 def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: Failures) -> list[str]:
     lines = [f'{len(failures.metrics)} of {failures.of_metrics} metrics failed.', '']
-    if metrics:
-        lines += ['| Metric | Column | Value | Threshold | Expected | Observed | Passed |', '| --- | --- | --- | --- | --- | --- | --- |']
-        for result in sorted(metrics, key=lambda result: result.passed):
-            threshold = f'{BOUND_SIGNS[result.bound]} {result.threshold:g}'
-            if result.skipped_by is not None:
-                shown = f'skipped by {result.skipped_by}'
-            else:
-                shown = f'{result.value:.6g}' if result.value is not None else f'unmeasured: {result.unmeasured}'
-            expected, observed = (f'{value:.6g}' if value is not None else '' for value in (result.expected, result.observed))
-            lines.append(
-                f'| {result.metric} | {result.column or ""} | {shown} | {threshold} | {expected} | {observed} | {verdict(result.passed)} |'
-            )
-        lines.append('')
+    lines += metric_table([result for result in metrics if result.decides])
+    informational = [result for result in metrics if not result.decides]
+    if informational:
+        lines += [
+            f'Scores that decide nothing, because no thresholds file sets their threshold: {len(informational)}. '
+            f'Missing the threshold shown: {sum(not result.meets_threshold() for result in informational)}.',
+            '',
+            *metric_table(informational, against_reference=True),
+        ]
     if changes:
         lines += ['| Change | Column | Passed | Detail |', '| --- | --- | --- | --- |']
         for change in sorted(changes, key=lambda change: change.passed):
             lines.append(f'| {change.change.value} | {change.column or ""} | {verdict(change.passed)} | {change.message} |')
         lines.append('')
     return lines
+
+
+def metric_table(metrics: list[MetricResult], *, against_reference: bool = False) -> list[str]:
+    """The metrics as a Markdown table, failures first, a pair's columns joined in one cell.
+
+    With `against_reference`, the last column says whether each value meets the threshold shown, as each row passes.
+    """
+    if not metrics:
+        return []
+    judged = MetricResult.meets_threshold if against_reference else (lambda result: result.passed)
+    heading = 'Meets it' if against_reference else 'Passed'
+    lines = [f'| Metric | Column | Value | Threshold | Expected | Observed | {heading} |', '| --- | --- | --- | --- | --- | --- | --- |']
+    for result in sorted(metrics, key=judged):
+        threshold = f'{BOUND_SIGNS[result.bound]} {result.threshold:g}'
+        if result.skipped_by is not None:
+            shown = f'skipped by {result.skipped_by}'
+        else:
+            shown = f'{result.value:.6g}' if result.value is not None else f'unmeasured: {result.unmeasured}'
+        expected, observed = (f'{value:.6g}' if value is not None else '' for value in (result.expected, result.observed))
+        column = ', '.join(name for name in (result.column, result.paired_with) if name)
+        lines.append(f'| {result.metric} | {column} | {shown} | {threshold} | {expected} | {observed} | {verdict(judged(result))} |')
+    return [*lines, '']
 
 
 def expected(expectations: list[ExpectationResult]) -> list[str]:

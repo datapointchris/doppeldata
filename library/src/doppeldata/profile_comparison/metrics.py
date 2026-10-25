@@ -30,6 +30,9 @@ class Bound(enum.Enum):
     AT_MOST = 'at_most'
     AT_LEAST = 'at_least'
 
+    def holds(self, value: float, threshold: float) -> bool:
+        return value <= threshold if self is Bound.AT_MOST else value >= threshold
+
 
 class Compared(NamedTuple):
     """One column's value, and the statistic it compares where it compares one: the source profile's and the other's."""
@@ -55,15 +58,21 @@ class Measurement:
 
 
 @dc.dataclass(frozen=True)
-class Metric:
+class Thresholded:
+    """What a report row is judged by: the name `--thresholds` keys it by, its summary, its bound and its default threshold."""
+
     name: str
     summary: str
     bound: Bound
     threshold: float
-    measure: Callable[[Document, Document], Iterator[Measurement]]
 
     def passes(self, value: float, threshold: float) -> bool:
-        return value <= threshold if self.bound is Bound.AT_MOST else value >= threshold
+        return self.bound.holds(value, threshold)
+
+
+@dc.dataclass(frozen=True)
+class Metric(Thresholded):
+    measure: Callable[[Document, Document], Iterator[Measurement]]
 
 
 def shared_columns(source: Document, observed: Document) -> Iterator[tuple[Column, Column]]:
