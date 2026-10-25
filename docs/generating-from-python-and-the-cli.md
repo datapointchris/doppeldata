@@ -17,9 +17,8 @@ doppeldata data generate --columns name,email,city,zip --rows 1000 --out people.
 
 - **A name takes the general pack's type whose hint ends it, else a provider.** `customer_zip` is a
   `us_zip` and `email_address` an `email`. A provider matches its whole name, such as `city`, or an
-  alias ending the name: `street` and `address` take `street_address`, `town` takes `city`,
-  `employer` takes `company`, and `job` and `occupation` take `job_title`. So `billing_city` draws
-  cities, and `city_count` matches nothing.
+  alias in `PROVIDER_HINTS` ending the name, such as `street` for `street_address`. So
+  `billing_city` draws cities, and `city_count` matches nothing.
 - **A name matching nothing is refused, naming the closest fakes**, as `InvalidProfile` in Python
   and exit 2 on the command line. A column of random text would pass for data until someone read it.
 
@@ -53,7 +52,7 @@ table = sd.generate({
   `places=` rounds a decimal. `sd.choice` draws each value at its weight, or each equally.
 - **Each takes `nulls=`, the share of rows that are null.**
 - **`None` takes the column's fake from its name**, as the list does.
-- **`stream`, `plan`, `write`, `spark.generate` and `spark.write` take the dict and the list.**
+- **Every call that generates takes the dict and the list**, Spark's included.
 
 ## A short YAML holds the same columns, and every command reading a profile reads it
 
@@ -81,12 +80,18 @@ doppeldata data check people.yaml people.csv
 
 ## A write to one local file writes that file alone
 
-`--out people.csv` writes `people.csv` and nothing beside it. The suffix names the format:
-`.parquet`, `.arrow`, `.csv`, `.tsv`, `.json` or `.ndjson`. `--manifest`, or `manifest=True` on
-`sd.write`, writes `_manifest.json` beside the file. A directory or S3 destination always holds one.
+`--out people.csv` writes `people.csv` and nothing beside it. The suffix is the name of a format
+`doppeldata schemas show manifest` lists, such as `.csv` or `.parquet`. An existing directory of
+that name is still written as a directory. `--manifest`, or `manifest=True` on `sd.write`, writes
+`_manifest.json` beside the file. A directory or S3 destination always holds one.
 
 - **The file is staged in a directory made beside it, then moved into place whole.** So a write
-  that stops leaves nothing.
+  that stops before the move leaves nothing.
+- **A manifest recording only the file goes when the file is replaced**, with or without
+  `--manifest`. So no manifest is left naming rows the file no longer holds. It goes before the
+  file moves.
+- **A manifest recording other files refuses `--manifest`, exit 2, even with `--replace`.** It
+  belongs to those files. Write the second file to another directory.
 - **One file refuses what would split it, exit 2.** That is `--file-rows`, `--partition-by`, a
   `--format` its suffix does not name, and a scenario op that shapes the files.
 - **`sd.spark.write` refuses one file**, with `one-file-from-executors`. Its executors write their
@@ -115,8 +120,7 @@ profiles real data into the same format.
 - **A named type writes its `semantic.type` beside the hint.** A column the general pack types
   then passes `data check`'s semantic type comparison.
 - **`sd.integers` writes one histogram bin, half a unit beyond each end.** Extremes alone draw a
-  number between them, which rounds to each end at half the weight of the values between. Of
-  60,000 rolls of extremes 1 and 6, 6,087 were 1s and 12,006 were 2s.
+  number between them, which rounds to each end at half the weight of the values between.
 - *Rejected:* `sd.expand`. A name on `Profile` says what it returns.
 - *Rejected:* `sd.profile` taking a dict. It profiles real data, where a dict reads as rows.
 

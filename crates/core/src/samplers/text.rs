@@ -231,8 +231,7 @@ fn push_email(rng: &mut ChaCha8Rng, out: &mut String) {
 }
 
 /// How many strings a provider draws. A provider choosing one entry of one list draws each
-/// equally often, `email` is a first name, a last name and a domain, and `zip_code` is five
-/// digits. fake's `city` is a
+/// equally often, and `email` is a first name, a last name and a domain. fake's `city` is a
 /// suffixed last name in three draws of five, a suffixed first name in one, and a prefixed,
 /// suffixed full name in the last. Every other provider is uncounted.
 fn provider_variety(provider: Provider) -> Variety {

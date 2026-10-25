@@ -86,7 +86,7 @@ profiles of one rate `p`, over `n_a` and `n_b` rows, lie about
 `sqrt(2/π · p(1 − p) · (1/n_a + 1/n_b))` apart by chance. That is subtracted, and the value is
 never below 0. A profile stating no `dataset.row_count`, such as one expanded from a dict of fakes,
 adds no term, because its rate is the parameter itself. So a correct 5% null column drawn at 1,000
-rows passes the 0.01 limit, and a column whose rate rose from 0 to 5% still fails.
+rows passes the default threshold, and a column whose rate rose from 0 to 5% still fails.
 
 ## `boundary_adherence` is read from the overflow counts
 

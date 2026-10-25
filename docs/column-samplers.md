@@ -165,8 +165,8 @@ function of its index, no pool of values is held, and any block still generates 
   drawn into `S` equally likely strings give `S · (1 − e^(−m/S))` distinct strings, so the index
   target is raised to meet the value target. A pattern is counted from its syntax, as if every
   string were equally likely. A shape is counted per character at its rate. `email`, `city`, and
-  the providers drawing one entry of one list are counted from fake's lists. `zip_code` holds
-  100,000 codes. `icd10cm` and
+  the providers drawing one entry of one list are counted from fake's lists, and `zip_code` from
+  its digits. `icd10cm` and
   `hcpcs_level2` are counted from their shapes, ICD-10-CM's at the share of each length it draws. Characters and every other provider are uncounted, and each
   distinct index is taken as a distinct string.
 - **Where fresh draws reach no more than the target, the column draws fresh**, with no index. A
