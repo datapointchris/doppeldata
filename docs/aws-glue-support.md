@@ -2,12 +2,12 @@
 
 ## Glue 5.0, 5.1 and 6.0 run the library, and Glue 4.0 does not
 
-| Glue | Spark | Python | Preinstalled pyarrow | Supported | `doppeldata.spark` checked |
-| --- | --- | --- | --- | --- | --- |
-| 6.0 | 4.1.1 | 3.13 | 23.0.1 | yes | on Apache's Spark 4.1.3 image, under Python 3.11 |
-| 5.1 | 3.5.6 | 3.11 | 22.0.0 | yes | on Glue, at 1B rows |
-| 5.0 | 3.5.4 | 3.11 | 17.0.0 | yes | on `public.ecr.aws/glue/aws-glue-libs:5`, Glue 5.0's runtime |
-| 4.0 | 3.3.0 | 3.10 | 10.0.0 | no | — |
+| Glue | Spark | Python | Preinstalled pyarrow | Supported | `doppeldata.spark` checked | `profile(engine='spark')` checked |
+| --- | --- | --- | --- | --- | --- | --- |
+| 6.0 | 4.1.1 | 3.13 | 23.0.1 | yes | on Apache's Spark 4.1.3 image, under Python 3.11 | on Apache's Spark 4.1.3 image, under Python 3.11 |
+| 5.1 | 3.5.6 | 3.11 | 22.0.0 | yes | on Glue, at 1B rows | on Glue, as a job and over Spark Connect |
+| 5.0 | 3.5.4 | 3.11 | 17.0.0 | yes | on `public.ecr.aws/glue/aws-glue-libs:5`, Glue 5.0's runtime | on `public.ecr.aws/glue/aws-glue-libs:5` |
+| 4.0 | 3.3.0 | 3.10 | 10.0.0 | no | — | — |
 
 Glue 4.0 is out for two reasons:
 
@@ -24,6 +24,10 @@ Glue 5.1 ran `sd.spark.generate` and `sd.spark.write` at 1B rows with
 ran both at 10M rows with the same setting.
 [generating-inside-spark.md](generating-inside-spark.md) holds what that run verified, and
 [performance.md](performance.md) its throughput.
+
+A job that profiles adds scipy, which no supported Glue preinstalls. A CSV or TSV source adds
+`duckdb==2.0.0`, `clevercsv==0.8.5` and `charset-normalizer` too.
+[profiling-with-spark.md](profiling-with-spark.md) gives the whole job.
 
 ## The library floors at Python 3.11 because Glue 5.0 and 5.1 run it
 

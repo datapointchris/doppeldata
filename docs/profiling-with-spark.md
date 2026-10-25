@@ -33,7 +33,7 @@ aws s3 cp profile_table.py s3://your-bucket/glue/
 aws glue create-job --name profile-claims --role your-glue-role --glue-version 5.1 \
   --worker-type G.1X --number-of-workers 2 \
   --command Name=glueetl,ScriptLocation=s3://your-bucket/glue/profile_table.py,PythonVersion=3 \
-  --default-arguments '{"--additional-python-modules": "s3://your-bucket/glue/doppeldata-<version>-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl,duckdb==2.0.0,clevercsv==0.8.5,charset-normalizer"}'
+  --default-arguments '{"--additional-python-modules": "s3://your-bucket/glue/doppeldata-<version>-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl,scipy,duckdb==2.0.0,clevercsv==0.8.5,charset-normalizer"}'
 aws glue start-job-run --job-name profile-claims \
   --arguments '{"--source": "s3://your-bucket/claims/", "--out_bucket": "your-bucket", "--out_key": "profiles/claims.profile.yaml"}'
 ```
@@ -45,10 +45,11 @@ engine='spark')`.
 
 Over Spark Connect, the client runs the profiler and the session computes every statistic. The
 client lists the source, sniffs a CSV's dialect and builds the profile, so it holds the library, its
-CSV packages and `pyspark[connect]` at the server's Spark version:
+CSV packages and `pyspark[connect]` at the server's Spark version. `pyspark[connect]` 3.5 pins a
+numpy below 2, which pyarrow 26 refuses, so the client holds pyarrow 22:
 
 ```bash
-uv pip install --index https://pypi.ichrisbirch.com/simple/ doppeldata 'pyspark[connect]==3.5.6' boto3 duckdb clevercsv charset-normalizer
+uv pip install --index https://pypi.ichrisbirch.com/simple/ doppeldata 'pyspark[connect]==3.5.6' pyarrow==22.0.0 boto3 scipy duckdb clevercsv charset-normalizer
 SPARK_REMOTE=sc://spark-host:15002 doppeldata profile create s3://your-bucket/claims/ --engine spark --out claims.profile.yaml
 ```
 
@@ -60,11 +61,60 @@ profile = sd.profile('s3://your-bucket/claims/', engine='spark', spark=spark)
 profile.save('claims.profile.yaml')
 ```
 
-A Glue 5.1 session is `create_session` with `SessionType='SPARK_CONNECT'` and
-`--additional-python-modules` naming the wheel alone, because the sniff runs on the client.
-[generating-inside-spark.md](generating-inside-spark.md) gives the endpoint's URL and the client's
-pins. The client reads S3 with its own credentials to list and sniff, and the session reads the
-rows with its role.
+The client reads S3 with its own credentials to list and sniff, and the session reads the rows with
+its role.
+
+## Profile over a Glue 5.1 Spark Connect session
+
+A Glue 5.1 session names the wheel alone, because the client sniffs and fits. It also sets a
+10-second sender stream, and the client runs its first query with reattachable execution off:
+
+```python
+import time
+import urllib.parse
+
+import boto3
+from pyspark.sql import SparkSession
+
+import doppeldata as sd
+
+glue = boto3.client('glue')
+glue.create_session(
+    Id='profile-claims', Role='your-glue-role', GlueVersion='5.1', SessionType='SPARK_CONNECT',
+    Command={'Name': 'glueetl', 'PythonVersion': '3'}, WorkerType='G.1X', NumberOfWorkers=2, IdleTimeout=15,
+    DefaultArguments={
+        '--additional-python-modules': 's3://your-bucket/glue/doppeldata-<version>-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl',
+        '--conf': 'spark.connect.execute.reattachable.senderMaxStreamDuration=10s',
+    },
+)
+while glue.get_session(Id='profile-claims')['Session']['Status'] == 'PROVISIONING':
+    time.sleep(5)
+try:
+    endpoint = glue.get_session_endpoint(SessionId='profile-claims')['SparkConnect']
+    token = urllib.parse.quote(endpoint['AuthToken'], safe='')
+    spark = SparkSession.builder.remote(f"{endpoint['Url']}:443/;use_ssl=true;x-aws-proxy-auth={token}").getOrCreate()
+    spark.client.disable_reattachable_execute()
+    spark.range(1).collect()
+    spark.client.enable_reattachable_execute()
+    sd.profile('s3://your-bucket/claims/', engine='spark', spark=spark).save('claims.profile.yaml')
+finally:
+    glue.stop_session(Id='profile-claims')
+```
+
+- **The endpoint ends a result stream that sends nothing for between 20 and 45 seconds**, with
+  `Stream removed (Data frame with END_STREAM flag received)`. An aggregate sends nothing until it
+  finishes, and one of the claims' takes a minute. gRPC keepalive pings do not hold the stream
+  open.
+- **`senderMaxStreamDuration=10s` has the session end each stream after 10 seconds**, and the client
+  reattaches to the running query. So no stream stays silent past the endpoint's limit, and queries
+  silent for 45 and 150 seconds returned.
+- **A session's first query fails with `INVALID_HANDLE.SESSION_NOT_FOUND` when reattachable
+  execution is on**, so it runs with execution off. It returns 3 to 5.5 minutes after Glue reports
+  the session `READY`.
+- **The endpoint's `AuthToken` lives 1,800 seconds.** The claims' profile ran 1,158 seconds on a
+  token fetched before the first query. Whether a profile outlives its token is not established.
+- [generating-inside-spark.md](generating-inside-spark.md) holds what else a Glue 5.1 Connect
+  session showed.
 
 ## Profile locally with `--engine spark`
 
@@ -80,12 +130,106 @@ doppeldata profile create data/claims/ --engine spark --out claims.profile.yaml
 
 | Source | Glue job | Glue Spark Connect session |
 | --- | --- | --- |
-| Parquet | the wheel | the wheel |
-| CSV or TSV | the wheel, `duckdb==2.0.0`, `clevercsv==0.8.5`, `charset-normalizer` | the wheel |
+| Parquet | the wheel, `scipy` | the wheel |
+| CSV or TSV | the wheel, `scipy`, `duckdb==2.0.0`, `clevercsv==0.8.5`, `charset-normalizer` | the wheel |
 
-Every supported Glue preinstalls pyarrow, pandas, boto3 and scipy, which the profiler also reads.
-Without scipy no column would be fitted, and a profile says so. The executors import the library
-for the `mapInArrow` passes, so the wheel is named in every case.
+- **The executors import the library for the `mapInArrow` passes**, so the wheel is named in every
+  case.
+- **Every supported Glue preinstalls pyarrow, pandas and boto3**, which the profiler also reads.
+- **No Glue preinstalls scipy**, which fits each numeric column's family on the driver. A job
+  without it fits no column, writes each `fit` as null and warns `FitsSkipped`.
+- **Over Spark Connect the client builds the profile**, so the client holds scipy and the CSV
+  packages, and the session holds the wheel alone.
+
+## Spark's profile matches Polars' within its bars, and is the same on Spark 3.5, Spark 4 and Glue
+
+`spark-parity/check-profiler-parity.sh` profiles a file through Polars on the host. It then
+profiles it through Spark in each image named, one container at a time, on `local[8]` with a 4 GB
+driver. Both profiles must pass `profile check`, and the Spark one is held to the Polars one:
+
+- row and null counts, types, nullability and extremes exactly;
+- each quantile within a rank error of 1%, measured against the file's own values;
+- each distinct count within 3%, three of HyperLogLog++'s 1% standard errors;
+- any other field that differs is printed.
+
+Build the wheel, then run the check over a file. `KEEP` names a directory to keep each profile in.
+
+```bash
+cd library && uv run --with ziglang maturin build --release --zig --compatibility manylinux2014 --out ../dist && cd ..
+POLICY=healthcare spark-parity/check-profiler-parity.sh \
+  dist/doppeldata-*-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
+  DE1_0_2008_to_2010_Carrier_Claims_Sample_1A.csv
+```
+
+It ran on CMS DE-SynPUF sample 1 under `--policy healthcare`, in `apache/spark:3.5.9-python3`,
+`apache/spark:4.1.3-python3` and `public.ecr.aws/glue/aws-glue-libs:5`:
+
+| File | Rows | Columns | Worst quantile rank error | Worst distinct count error | `profile check` |
+| --- | --- | --- | --- | --- | --- |
+| 2008 beneficiary summary | 116,352 | 32 | 0.0001, `MEDREIMB_OP` p99.9 | 1.0%, `BENRES_CAR` 403 against 399 | 123 literal fields, 0 violations |
+| 2008–2010 carrier claims 1A | 2,370,667 | 142 | 0.00005, `CLM_ID` p99.9 | 1.3%, `LINE_ICD9_DGNS_CD_7` 2,565 against 2,599 | 437 literal fields, 0 violations |
+
+- **The three images wrote the same profile.** Outside `generated` and `source`, all 3,402 fields of
+  the beneficiary profile and all 10,945 of the claims profile match across them. Spark 4.1.3 reads
+  through `try_cast` and the others with ANSI off.
+- **Every exact field matches Polars'.** That covers each value list, other rate and decimal scale.
+  The fields that differ are the estimates: distinct counts, tail quantiles, and the histogram edges
+  and counts set by those quantiles. The fits differ too, because each engine fits its own sample.
+- **`DESYNPUF_ID`, the beneficiary's identifier, holds no literal.** Its profile keeps a length, a
+  whitespace rate and shapes, each shape a run of `9` and `A` covering at least 11 rows.
+
+The same check passed on 10,104,443 rows of the New York yellow-taxi trips, February to April 2024,
+as Parquet in the Glue image. Its worst quantile rank error was 0.00005, at `fare_amount` p1. Its
+worst distinct count error was 1.7%, at `total_amount`'s 27,315 against 26,847. Every decimal scale
+and value list matched, such as two places on the fares and 249 pickup location codes. Only the
+timestamps' `physical_type` differed, for the reason below.
+
+## On Glue 5.1, a job and a Spark Connect session wrote the local Glue image's profile
+
+The carrier claims were profiled from S3 under the default policy, on two G.1X workers: one executor
+of 4 vCPUs and a 10 GB heap beside the driver.
+
+| Run | Profile | Billed |
+| --- | --- | --- |
+| job, the recipe above | 1,103 s of a 1,172 s run | 2,345 DPU-seconds, 0.65 DPU-hours |
+| Spark Connect session, the recipe above | 1,158 s | 3,386 DPU-seconds, 0.94 DPU-hours, over 1,693 s |
+
+- **The two profiles match each other in all 10,945 fields.** Each matches the profile from the
+  local Glue image but for `name`. A prefix names its table for the last folder, `claims`, and one
+  file for its stem.
+- **Both record `readers.pyspark` as `3.5.6-amzn-1`**, the session's Spark.
+- **The session's 1,693 seconds include its first query's wait** and two queries that tested the
+  stream limit.
+
+## On one machine Polars profiles several times faster than Spark
+
+Polars ran on the host's 16 cores. Spark ran in the Glue image on `local[8]` with a 4 GB driver,
+under the default policy.
+
+| Data | Rows | Columns | Polars | Spark |
+| --- | --- | --- | --- | --- |
+| taxi trips, three Parquet files | 10,104,443 | 19 | 9.6 s, 3.4 GB peak | 75.6 s |
+| carrier claims, one CSV | 2,370,667 | 142 | 36 s, 12 GB peak | 548 s |
+| beneficiary summary, one CSV | 116,352 | 32 | 5 s | 48 s |
+
+Polars computes each pass as one streaming query over the files. Spark runs a query per pass over a
+table persisted to disk, and a CSV adds the passes that type its text. On the claims no query
+dominates:
+
+| Query | Time |
+| --- | --- |
+| read the CSV and persist its text | 40 s |
+| try each text column's layouts on a sample | 17.5 s |
+| count each column's raw types | 36.1 s |
+| count the rows a parse would reject | 25.8 s |
+| parse and persist the typed table, with the first 16 columns' aggregate | 59.4 s |
+| each later 16-column aggregate | 1 to 3 s |
+| quantiles | 41.4 s |
+| distinct counts | 58.1 s |
+| end values | 21.9 s |
+
+So Spark is the engine for a table that already sits on a cluster, or that one machine's memory
+cannot hold.
 
 ## Each statistic comes from one of seven passes, so no query is larger than Spark compiles
 
@@ -171,6 +315,11 @@ casts.
 
 - **Parquet is read with `basePath` at the root named**, so Spark finds the Hive keys the listing
   found. A key Spark types as a small integer is widened to `bigint`, as Polars types it.
+- **Spark holds every timestamp in microseconds**, so a timestamp column's `physical_type` is
+  `timestamp[us]` whatever the file stores. `source.parquet.timestamp_units` keeps the stored unit,
+  which the writers cast to. Polars takes a unit from a file's stored Arrow schema where one is
+  written. The taxi files store microseconds under an Arrow schema naming nanoseconds, so Polars
+  writes `timestamp[ns]` for them.
 - **CSV and TSV are read with every column as text**, in the dialect DuckDB and CleverCSV sniff
   from the first block. On S3 that block comes from one ranged read through boto3, decompressed
   where the file is `.gz`, `.zst` or `.bz2`. A malformed row is classified by its field count, as
@@ -179,3 +328,6 @@ casts.
   by path through Polars' nested types, which the Spark backend does not translate.
 - **The backend uses the DataFrame API alone**, never `_jdf` or the JVM, so it runs over Spark
   Connect unchanged.
+- **A Spark Connect plan's protobuf nests at most 100 levels.** So a condition over every column is
+  one `greatest`, where a chain of `|` would nest a level per column. The claims' 142 columns
+  chained by `|` failed with `Exceeded upb_DecodeOptions_MaxDepth`.

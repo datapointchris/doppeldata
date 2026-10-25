@@ -216,6 +216,10 @@ wheel, and its dependencies from PyPI:
 --additional-python-modules  s3://your-bucket/glue/doppeldata-<version>-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 ```
 
+A job that profiles names more modules after the wheel. It names `scipy`, which no Glue
+preinstalls and which fits the numeric columns. For CSV or TSV it also names `duckdb==2.0.0`,
+`clevercsv==0.8.5` and `charset-normalizer`. `docs/profiling-with-spark.md` gives the whole job.
+
 Never give pip the package index as an extra index beside PyPI. pip installs the highest version it
 finds on either, so anyone uploading a `doppeldata` to PyPI would run their code in the job.
 
@@ -241,7 +245,7 @@ Upload the zip, pass its `s3://` path to `--additional-python-modules`, and pass
 | `cli/` | the `doppeldata-cli` distribution: the `doppeldata` command over the library |
 | `docs/` | why the design is what it is |
 | `benchmarks/` | the scripts `task bench` runs to time the engine against numpy, Faker and Mimesis |
-| `spark-parity/` | the check that `doppeldata.spark` gives a local run's values and files inside each Spark image named |
+| `spark-parity/` | the checks that `doppeldata.spark` gives a local run's values and files, and that `profile(engine='spark')` gives Polars' profile, inside each Spark image named |
 
 ## Develop
 
