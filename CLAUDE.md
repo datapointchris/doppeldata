@@ -36,12 +36,14 @@ spark-parity/   the check that doppeldata.spark matches a local run inside each 
   without it. It must install on CPython 3.11 from a wheel. It arrives in the change that first
   imports it. A heavy engine used by one feature, such as pyspark or scipy, is imported lazily and
   declared nowhere, and its missing-import error names what to install.
-- **A change to a sampler's draw order raises the engine's stream version**, and so does the
-  engine starting to read a profile field it ignored before. The stream version is part of a
-  generated dataset's identity. `docs/determinism-contract.md` says what else must never change.
+- **A change to a sampler's or a perturbation's draw order raises the engine's stream version**, and
+  so does a change to how a scenario's patch merges, or the engine starting to read a profile field
+  it ignored before. The stream version is part
+  of a generated dataset's identity. `docs/determinism-contract.md` says what else must never change.
   The determinism contract test pins the stream version and a hash over what
-  `crates/core/tests/every-column-kind.profile.yaml` generates, as one pair. A column kind, family,
-  provider or profile field the engine gains adds a column there.
+  `crates/core/tests/every-column-kind.profile.yaml` generates, as one pair. A second hash covers it
+  under `every-column-kind.scenario.yaml` beside it. A column kind, family, provider or profile field
+  the engine gains adds a column there, and a perturbation op that writes rows adds an entry.
 - **Nothing that feeds a generated value calls std's `exp`, `ln`, `powf`, `powi` or any other
   transcendental.** Call the `libm` crate's function instead. std's may round differently by
   platform, and a dataset must regenerate to the same bits anywhere. `crates/clippy.toml` refuses

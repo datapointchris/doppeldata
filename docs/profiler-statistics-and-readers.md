@@ -360,6 +360,14 @@ statistic is taken from the rows, under the floor below.
 - **`timestamp_units` gives each timestamp column's stored unit.** `timestamp_unit` is set only where
   they agree and none is INT96. The writers cannot write INT96.
 - **`decimal_scale_drift` is true where one decimal column's scale differs between files.**
+- **Files holding different schemas are read as the union of their footers.** The reader gives
+  Polars the union as its scan schema, so no file's own schema decides the table's. A column is
+  read at the widest type a footer stores it as, and is null in a file that lacks it. A
+  schema-drifted dataset, generated or not, then profiles as one table.
+- **A sample of footers holding two schemas sends the reader to every footer.** A third schema
+  outside the sample would otherwise lose its columns.
+- **A column two files store as an integer and a string fails the read**, naming the column.
+  Neither type widens to the other.
 
 ## A dataset's layout is its files, their rows, its Hive keys and its sort order
 

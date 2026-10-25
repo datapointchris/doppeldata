@@ -22,7 +22,10 @@ a task yields are the rows `sd.generate` yields for those blocks, and `partition
 which task makes them.
 
 - **Each executor builds the engine's plan from what the driver resolved**: the profile's JSON, its
-  digest, the seed and the row count. It builds it once per Python worker process.
+  digest, the scenario, the seed and the row count. It builds it once per Python worker process.
+- **A scenario's perturbations apply inside each block, so `scenario=` moves no value with the
+  partition count either.** `generate` refuses `schema_drift` and `small_files` as
+  `op-needs-files`, because they shape files and a DataFrame has none. `write` applies them.
 - **An executor running another doppeldata release or stream version than the driver refuses the
   task.** A dataset's bytes are the build's that writes them, so a mixed cluster would write a
   manifest that names one build over files from two. Every unstamped build reports version 0.0.0,
@@ -124,6 +127,11 @@ spark-parity/check-spark-parity.sh dist/doppeldata-*-cp311-abi3-manylinux_2_17_x
   own Python and pyarrow, and installs the wheel beside them.
 - **Each container runs as the caller's uid, with that uid added to the image's `/etc/passwd`.**
   Hadoop's login refuses a uid with no name.
+- **`--scenario FILE` applies a scenario to every run.** `spark-parity/eight-columns.scenario.yaml`
+  holds every op that writes rows, and a schema drift. `write` and the host's run apply all of it.
+  `generate` and `sd.stream` apply its ops that write rows. `spark-parity/check-spark-parity.sh
+  --scenario spark-parity/eight-columns.scenario.yaml WHEEL apache/spark:3.5.9-python3` gave
+  identical values at 7 and 40 partitions, and 10 of 10 files matched, the drifted half included.
 
 ## On Glue 5.1, a billion rows written from the executors match a local run file for file
 

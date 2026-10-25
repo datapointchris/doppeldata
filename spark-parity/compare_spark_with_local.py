@@ -5,6 +5,9 @@ compared value for value with `doppeldata.stream`, each float by its bits. `writ
 manifest of a `doppeldata data generate` with the same arguments. Each column of the every-column-kind fixture then goes through
 `mapInArrow` alone, and whether Spark gave every value back is compared with `spark_holds`. It prints one JSON object per check,
 and exits 1 when any differs.
+
+Given a scenario, `write` and the local run apply all of it, and `generate` and the stream its ops that write rows, because
+`generate` writes no files. Each op draws from its own stream, so the rest generate the same values without them.
 """
 
 import json
@@ -15,6 +18,7 @@ from typing import Any
 
 import doppeldata as sd
 import pyarrow as pa
+from doppeldata.scenario_format import perturbation_facts
 from doppeldata.spark import spark_holds
 from pyspark.sql import SparkSession
 from pyspark.sql.pandas.types import from_arrow_schema
@@ -89,23 +93,46 @@ def report(check: dict[str, Any]) -> bool:
     return check['identical']
 
 
-def main(local_manifest_path: str, out: str, fixture: str) -> int:
+def row_ops(scenario: sd.Scenario | None) -> sd.Scenario | None:
+    """The scenario without the ops that shape files, which `generate` refuses."""
+    if scenario is None:
+        return None
+    plain = scenario.to_plain()
+    entries = zip(plain.get('perturbations') or [], perturbation_facts(plain), strict=True)
+    return sd.Scenario(plain | {'perturbations': [entry for entry, facts in entries if not facts.shapes_files]})
+
+
+def main(local_manifest_path: str, out: str, fixture: str, scenario_path: str = '') -> int:
     spark = SparkSession.builder.getOrCreate()
     profile = sd.Profile.example('eight-columns')
+    scenario = sd.Scenario.load(scenario_path) if scenario_path else None
+    rows_scenario = row_ops(scenario)
     local = {file['path']: file['sha256'] for file in json.loads(pathlib.Path(local_manifest_path).read_text())['files']}
     identical = True
     for partitions in PARTITIONS:
         started = time.monotonic()
-        collected = arrow_of(sd.spark.generate(spark, profile, rows=ROWS, seed=SEED, partitions=partitions))
+        frame = sd.spark.generate(spark, profile, rows=ROWS, seed=SEED, partitions=partitions, scenario=rows_scenario)
+        collected = arrow_of(frame)
         seconds = time.monotonic() - started
-        difference = first_difference(collected, pa.RecordBatchReader.from_stream(sd.stream(profile, rows=ROWS, seed=SEED)))
+        expected = sd.stream(profile, rows=ROWS, seed=SEED, scenario=rows_scenario)
+        difference = first_difference(collected, pa.RecordBatchReader.from_stream(expected))
+        rows = collected.num_rows
         del collected
-        check = {'check': 'generate', 'partitions': partitions, 'rows': ROWS, 'seconds': round(seconds, 1)}
+        check = {'check': 'generate', 'partitions': partitions, 'rows': rows, 'seconds': round(seconds, 1)}
+        if scenario is not None:
+            check['scenario'] = scenario.name
         identical &= report(check | {'identical': difference is None, 'difference': difference})
     for partitions in PARTITIONS:
         started = time.monotonic()
         manifest = sd.spark.write(
-            spark, profile, f'{out}/direct-{partitions}', rows=ROWS, seed=SEED, file_rows=FILE_ROWS, partitions=partitions
+            spark,
+            profile,
+            f'{out}/direct-{partitions}',
+            rows=ROWS,
+            seed=SEED,
+            file_rows=FILE_ROWS,
+            partitions=partitions,
+            scenario=scenario,
         )
         seconds = time.monotonic() - started
         written = {file['path']: file['sha256'] for file in manifest.files}

@@ -7,6 +7,7 @@ use std::collections::btree_map::Entry;
 use arrow_schema::DataType;
 use arrow_schema::SchemaRef;
 use doppeldata_core::Plan;
+use doppeldata_core::ScenarioFault;
 use doppeldata_core::file_rows_draws;
 use doppeldata_core::format_settings::Output;
 use doppeldata_core::manifest::FileRows;
@@ -36,6 +37,14 @@ pub enum LayoutError {
     EveryColumnPartitioned,
     #[error("the manifest's ranges do not rebuild the dataset: {0}")]
     ManifestRanges(String),
+    /// A scenario's perturbation the files cannot hold. `field` is its RFC 6901 JSON Pointer into
+    /// the scenario.
+    #[error("{field}: {message} [{fault}]")]
+    Scenario {
+        fault: ScenarioFault,
+        field: String,
+        message: String,
+    },
 }
 
 /// The contiguous rows one file holds. A partitioned range writes one object per value it holds.
@@ -84,8 +93,10 @@ pub fn layout(plan: &Plan, settings: &LayoutSettings, output: &Output) -> Result
         FileRows::Fixed(file_rows) => fixed_sizes(rows, file_rows.saturating_mul(scale)),
         FileRows::Drawn(quantiles) => drawn_sizes(rows, plan.identity().seed(), quantiles, scale)?,
     };
+    let ranges = ranges_from_sizes(sizes);
+    check_scenario(plan, &settings.partition_by, &ranges, output)?;
     Ok(FileLayout {
-        ranges: ranges_from_sizes(sizes),
+        ranges,
         partition_by: settings.partition_by.clone(),
         partition_style: settings.partition_style,
         identity8: identity8(&plan.identity().digest()),
@@ -136,8 +147,10 @@ pub fn layout_from_manifest(plan: &Plan, manifest: &Manifest) -> Result<FileLayo
             "the ranges cover {next_row} of the dataset's {rows} rows"
         )));
     }
+    let ranges: Vec<FileRange> = ranges.into_values().collect();
+    check_scenario(plan, &manifest.layout.partition_by, &ranges, &manifest.output)?;
     Ok(FileLayout {
-        ranges: ranges.into_values().collect(),
+        ranges,
         partition_by: manifest.layout.partition_by.clone(),
         partition_style: manifest.layout.partition_style,
         identity8: identity8(&manifest.dataset_digest),
@@ -162,6 +175,64 @@ fn check_partition_keys(schema: &SchemaRef, keys: &[String]) -> Result<(), Layou
     }
     if !keys.is_empty() && keys.len() == schema.fields().len() {
         return Err(LayoutError::EveryColumnPartitioned);
+    }
+    Ok(())
+}
+
+/// Refuses a layout the plan's scenario cannot hold: a schema drift written in a format that reads
+/// as one table only under one schema, a partition key the drift drops or renames, a drift no file
+/// starts past, or an `across_files` copy whose source could share its file.
+fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange], output: &Output) -> Result<(), LayoutError> {
+    let one_schema = match output {
+        Output::Csv(_) => Some("CSV files, which read as one table only under one header"),
+        Output::Tsv(_) => Some("TSV files, which read as one table only under one header"),
+        Output::Arrow(_) => Some("Arrow files, which read as one table only under one schema"),
+        Output::Parquet(_) | Output::Json(_) | Output::Ndjson(_) => None,
+    };
+    if let (Some(drift), Some(format)) = (plan.drift(), one_schema) {
+        return Err(LayoutError::Scenario {
+            fault: ScenarioFault::OpNotForFormat,
+            field: drift.field(),
+            message: format!("schema_drift gives later files other columns, and the write makes {format}; write parquet, json or ndjson"),
+        });
+    }
+    if let Some(drift) = plan.drift()
+        && let Some((key, field)) = partition_by.iter().find_map(|key| drift.moves(key).map(|field| (key, field)))
+    {
+        return Err(LayoutError::Scenario {
+            fault: ScenarioFault::InvalidParameter,
+            field,
+            message: format!("the write is partitioned by {key:?}, which schema_drift drops or renames in the files past its cut"),
+        });
+    }
+    if let Some(drift) = plan.drift()
+        && !ranges.is_empty()
+        && ranges.iter().all(|range| range.first_row < drift.first_row())
+    {
+        return Err(LayoutError::Scenario {
+            fault: ScenarioFault::InvalidParameter,
+            field: drift.cut_field(),
+            message: format!(
+                "no file starts at or past row {}, where schema_drift's files begin, so none would drift; write smaller files, or lower after_fraction",
+                drift.first_row()
+            ),
+        });
+    }
+    if let Some((field, reach)) = plan.across_files_reach()
+        && let Some(range) = ranges.iter().find(|range| range.rows > reach)
+    {
+        let message = match reach {
+            0 => "the dataset is one block, so an across_files copy has no other block to come from; copy within_file".to_string(),
+            _ => format!(
+                "file {} holds {} rows, and an across_files copy lies {reach} rows from its source, so every file must hold at most that many; write smaller files, or copy within_file",
+                range.index, range.rows
+            ),
+        };
+        return Err(LayoutError::Scenario {
+            fault: ScenarioFault::InvalidParameter,
+            field: field.to_string(),
+            message,
+        });
     }
     Ok(())
 }

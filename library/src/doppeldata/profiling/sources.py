@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 import botocore.exceptions
 
 from doppeldata.errors import SourceError
+from doppeldata.manifest import MANIFEST_FILE_NAME
+from doppeldata.manifest import Manifest
 from doppeldata.profiling.backend import FORMAT_TRAITS
 from doppeldata.profiling.backend import TEXT_CODEC_SUFFIXES
 from doppeldata.profiling.backend import TEXT_FORMATS
@@ -145,6 +147,25 @@ def s3_files(url: str) -> list[SourceFile]:
     if not found:
         raise SourceError(f'{url} holds no object doppeldata reads, one ending in {", ".join(SUFFIX_FORMATS)}')
     return found
+
+
+def s3_manifest(url: str) -> Manifest | None:
+    """The manifest a doppeldata write left under the `s3://` prefix `url`, or None where it holds none."""
+    parsed = urlparse(url)
+    prefix = parsed.path.strip('/')
+    key = f'{prefix}/{MANIFEST_FILE_NAME}' if prefix else MANIFEST_FILE_NAME
+    try:
+        _, client = s3_session()
+    except ValueError as error:
+        raise SourceError(f'{url} could not be read: {error}', exit_code=2) from error
+    with s3_errors(url, endpoint_named(client), doing='read'):
+        try:
+            body: bytes = client.get_object(Bucket=parsed.netloc, Key=key)['Body'].read()
+        except botocore.exceptions.ClientError as error:
+            if error.response.get('ResponseMetadata', {}).get('HTTPStatusCode') == 404:
+                return None
+            raise
+    return Manifest.from_json(body.decode('utf-8'))
 
 
 def object_head(client: Any, bucket: str, key: str) -> dict[str, Any] | None:

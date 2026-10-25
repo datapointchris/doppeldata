@@ -1,0 +1,8 @@
+# Written for the orders example profile. ingested_at holds each order's unshifted time, so a late
+# order's ordered_at falls before it.
+scenario: late-data
+description: 5% of orders arrive late, their order time days before the time they were ingested.
+perturbations:
+  - {op: late_arrival, column: ordered_at, rate: 0.05, lag: {family: lognormal, median: 2d, p99: 30d}, ingest: ingested_at}
+expect:
+  - {metric: late_arrival.rate, column: ordered_at, at_least: 0.04, at_most: 0.06}

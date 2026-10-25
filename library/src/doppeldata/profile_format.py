@@ -85,6 +85,8 @@ class Issue:
     code: str
     field: str
     message: str
+    # The names an unknown name is closest to, nearest first, where the issue is one.
+    closest: tuple[str, ...] = ()
 
 
 class InvalidProfile(DoppeldataError, ValueError):

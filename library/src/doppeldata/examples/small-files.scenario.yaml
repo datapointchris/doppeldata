@@ -1,0 +1,5 @@
+# Written for the orders example profile. A file size given to the write still overrides it.
+scenario: small-files
+description: Files of a few thousand rows each, as a stream flushing every few minutes leaves behind.
+perturbations:
+  - {op: small_files, file_rows: {family: lognormal, median: 2000, p99: 20000}}

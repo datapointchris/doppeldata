@@ -22,6 +22,7 @@ from doppeldata.profiling.backend import HIDDEN_COLUMN_PREFIX
 from doppeldata.profiling.backend import ColumnSpec
 from doppeldata.profiling.backend import JsonNode
 from doppeldata.profiling.backend import JsonRead
+from doppeldata.profiling.backend import ParquetFooter
 from doppeldata.profiling.backend import ParsedType
 from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
@@ -379,7 +380,12 @@ def read_files(source: Source) -> SourceRead:
     try:
         match source.format:
             case SourceFormat.PARQUET:
-                read = SourceRead(pl.scan_parquet(paths, hive_partitioning=hive), footers=parquet_footers.read_footers(source.files))
+                footers = parquet_footers.read_footers(source.files)
+                union = schema_union(footers)
+                if union and len(footers) < len(source.files):
+                    # A sample holding two schemas may miss a third, whose columns the union would leave out.
+                    union = schema_union(parquet_footers.read_footers(source.files, every=True))
+                read = SourceRead(pl.scan_parquet(paths, hive_partitioning=hive, **union), footers=footers)
             case SourceFormat.ARROW:
                 read = SourceRead(pl.scan_ipc(paths, hive_partitioning=hive))
             case SourceFormat.CSV | SourceFormat.TSV:
@@ -389,9 +395,29 @@ def read_files(source: Source) -> SourceRead:
         table = read.table.drop(ancestor_partition_keys(source), strict=False)
         # Counting rows reads every file's footer, so a corrupt file fails here rather than mid-profile.
         table.select(pl.len()).collect(engine='streaming')
-    except (pl.exceptions.PolarsError, duckdb.Error, OSError) as error:
+    except (pl.exceptions.PolarsError, duckdb.Error, OSError, pa.ArrowException) as error:
         raise SourceError(f'{", ".join(source.roots)} could not be read as {format_name}: {first_line(error)}', exit_code=1) from error
     return dc.replace(read, table=table)
+
+
+def schema_union(footers: tuple[ParquetFooter, ...]) -> dict[str, Any]:
+    """The scan options reading files whose schemas differ, as a drifted dataset's do, as one table. Each column any footer
+    read holds is read at the widest type one stores it as, and is null in a file that lacks it. A column two files store as
+    types neither widens to, such as an integer and a string, raises ArrowTypeError.
+    """
+    distinct: list[pa.Schema] = []
+    for footer in footers:
+        if not any(footer.schema.equals(seen) for seen in distinct):
+            distinct.append(footer.schema)
+    if len(distinct) < 2:
+        return {}
+    union = pa.unify_schemas(distinct, promote_options='permissive')
+    return {
+        'schema': pl.DataFrame(union.empty_table()).schema,
+        'missing_columns': 'insert',
+        'extra_columns': 'ignore',
+        'cast_options': pl.ScanCastOptions(integer_cast='upcast', float_cast='upcast'),
+    }
 
 
 def first_line(error: Exception) -> str:

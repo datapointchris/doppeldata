@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "doppeldata manifest v1",
-  "description": "The record of a generated dataset, which with its profile regenerates every file byte for byte.",
+  "description": "The record of a generated dataset, which with its profile and scenario regenerates every file byte for byte.",
   "type": "object",
   "properties": {
     "dataset_digest": {
@@ -482,15 +482,15 @@
       "type": "object",
       "properties": {
         "dataset_rows": {
-          "description": "The dataset's row count, in decimal.",
+          "description": "The rows generated, in decimal, before any copies a scenario's `duplicates` adds. `files`\ngives the rows each file holds.",
           "$ref": "#/$defs/Decimal"
         },
         "profile_digest": {
-          "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON.",
+          "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON, as given, before a\nscenario's patch.",
           "type": "string"
         },
         "scenario_digest": {
-          "description": "The scenario's digest, or null for none.",
+          "description": "`sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON, or null for none.\nThe JSON is taken with each perturbation's `id` resolved, and with `description` and\n`expect` left out. A composition's is its composed document's: the patches merged in order,\nthe perturbations concatenated, and the names joined with `+`.",
           "type": [
             "string",
             "null"
@@ -543,11 +543,27 @@
     "ManifestScenario": {
       "type": "object",
       "properties": {
+        "composed_of": {
+          "description": "The scenarios composed, in order, present only for a composition.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ScenarioMember"
+          }
+        },
+        "document": {
+          "description": "The canonical document `identity.scenario_digest` is taken over, so the dataset regenerates\nwith no scenario file.",
+          "type": "object",
+          "additionalProperties": true
+        },
         "name": {
+          "description": "The scenario's name. A composition's joins its members' names with `+`.",
           "type": "string"
         },
         "path": {
-          "description": "The scenario's path as the caller gave it, or null when it came from memory.",
+          "description": "The scenario's path as the caller gave it, or null when it came from memory or composes\nseveral.",
           "type": [
             "string",
             "null"
@@ -555,7 +571,8 @@
         }
       },
       "required": [
-        "name"
+        "name",
+        "document"
       ]
     },
     "ManifestVersion": {
@@ -702,6 +719,30 @@
           "type": "string",
           "const": "never"
         }
+      ]
+    },
+    "ScenarioMember": {
+      "description": "One scenario of a composition.",
+      "type": "object",
+      "properties": {
+        "digest": {
+          "description": "The scenario's own digest, taken as `identity.scenario_digest` is.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "description": "The scenario's path as the caller gave it, or null when it came from memory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "digest"
       ]
     },
     "TextCompression": {

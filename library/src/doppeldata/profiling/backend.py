@@ -118,6 +118,8 @@ class ParquetFooter:
     timestamp_units: dict[str, str]
     # Each decimal column's scale.
     decimal_scales: dict[str, int]
+    # The file's columns as Arrow types.
+    schema: 'pa.Schema'
 
 
 @dc.dataclass(frozen=True)

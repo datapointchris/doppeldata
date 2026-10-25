@@ -33,10 +33,11 @@ jobs:
       - run: cargo test --release -p doppeldata-core --test determinism_contract
 
   # The pinned hash can be edited alone. This refuses a new hash at the stream
-  # version the last release pinned.
+  # version the last release pinned. Where a fixture changed since that release,
+  # it builds the test and generates the release's fixtures, so it takes longer.
   stream-version-raised:
     runs-on: ubuntu-26.04
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:

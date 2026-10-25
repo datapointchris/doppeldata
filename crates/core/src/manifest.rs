@@ -31,7 +31,7 @@ pub const PARTIAL_MANIFEST_FILE_NAME: &str = "_manifest.partial.json";
 /// The rows a file holds when neither the call nor the profile sets a size.
 pub const DEFAULT_FILE_ROWS: u64 = 1_000_000;
 
-/// The record of a generated dataset, which with its profile regenerates every file byte for byte.
+/// The record of a generated dataset, which with its profile and scenario regenerates every file byte for byte.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Manifest {
     pub manifest_version: ManifestVersion,
@@ -70,13 +70,18 @@ pub struct Manifest {
 /// JSON, so a reader rebuilds `dataset_digest` from them with no mapping.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ManifestIdentity {
-    /// The dataset's row count, in decimal.
+    /// The rows generated, in decimal, before any copies a scenario's `duplicates` adds. `files`
+    /// gives the rows each file holds.
     #[serde(with = "decimal")]
     #[schemars(with = "Decimal")]
     pub dataset_rows: u64,
-    /// `sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON.
+    /// `sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON, as given, before a
+    /// scenario's patch.
     pub profile_digest: String,
-    /// The scenario's digest, or null for none.
+    /// `sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON, or null for none.
+    /// The JSON is taken with each perturbation's `id` resolved, and with `description` and
+    /// `expect` left out. A composition's is its composed document's: the patches merged in order,
+    /// the perturbations concatenated, and the names joined with `+`.
     pub scenario_digest: Option<String>,
     /// The seed, in decimal.
     #[serde(with = "decimal")]
@@ -91,7 +96,7 @@ impl From<&DatasetIdentity> for ManifestIdentity {
         Self {
             dataset_rows: identity.rows(),
             profile_digest: identity.profile_digest().to_string(),
-            scenario_digest: None,
+            scenario_digest: identity.scenario_digest().map(String::from),
             seed: identity.seed(),
             stream_version: identity.stream_version(),
         }
@@ -134,9 +139,27 @@ pub struct ManifestProfile {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ManifestScenario {
+    /// The scenario's name. A composition's joins its members' names with `+`.
+    pub name: String,
+    /// The scenario's path as the caller gave it, or null when it came from memory or composes
+    /// several.
+    pub path: Option<String>,
+    /// The canonical document `identity.scenario_digest` is taken over, so the dataset regenerates
+    /// with no scenario file.
+    pub document: serde_json::Map<String, serde_json::Value>,
+    /// The scenarios composed, in order, present only for a composition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composed_of: Option<Vec<ScenarioMember>>,
+}
+
+/// One scenario of a composition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ScenarioMember {
     pub name: String,
     /// The scenario's path as the caller gave it, or null when it came from memory.
     pub path: Option<String>,
+    /// The scenario's own digest, taken as `identity.scenario_digest` is.
+    pub digest: String,
 }
 
 /// One object the run wrote. A row or byte count is a JSON number, exact to 2^53 rows, which no

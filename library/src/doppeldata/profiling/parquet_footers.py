@@ -28,13 +28,13 @@ SPARK_VERSION_KEY = b'org.apache.spark.version'
 TIME_UNITS = {'milliseconds': 'ms', 'microseconds': 'us', 'nanoseconds': 'ns'}
 
 
-def read_footers(files: tuple[SourceFile, ...]) -> tuple[ParquetFooter, ...]:
-    """Each chosen file's footer. On S3, through the boto3 client that lists the source, so its timeouts, retries and
-    region redirects apply, and its failures map as a listing's do.
+def read_footers(files: tuple[SourceFile, ...], *, every: bool = False) -> tuple[ParquetFooter, ...]:
+    """Each chosen file's footer, or every file's with `every`. On S3, through the boto3 client that lists the source, so its
+    timeouts, retries and region redirects apply, and its failures map as a listing's do.
     """
     chosen = (
         list(files)
-        if len(files) <= FOOTERS_READ
+        if every or len(files) <= FOOTERS_READ
         else sorted(random.Random(FOOTER_SEED).sample(list(files), FOOTERS_READ), key=lambda file: file.path)
     )
     if not chosen or not chosen[0].path.startswith('s3://'):
@@ -94,6 +94,7 @@ def footer_of(metadata: pq.FileMetaData) -> ParquetFooter:
         sorting_columns=declared.pop() if len(declared) == 1 else (),
         timestamp_units={path: unit for index, path in enumerate(paths) if (unit := stored_unit(metadata.schema.column(index)))},
         decimal_scales={path: column.scale for index, path in enumerate(paths) if is_decimal(column := metadata.schema.column(index))},
+        schema=metadata.schema.to_arrow_schema(),
     )
 
 

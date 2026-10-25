@@ -12,9 +12,13 @@ DIFF_VERSION = 1
 BOUND_SIGNS = {Bound.AT_MOST: '≤', Bound.AT_LEAST: '≥'}
 
 
+OPTIONAL_METRIC_FIELDS = ('expected', 'observed', 'unmeasured', 'skipped_by')
+
+
 @dc.dataclass(frozen=True)
 class MetricResult:
-    """One metric's value for one column, with its verdict. `value` is None where `unmeasured` says why it has none."""
+    """One metric's value for one column, with its verdict. `value` is None where `unmeasured` says why it has none, or where
+    `skipped_by` names the scenario's perturbation that moves what it compares."""
 
     metric: str
     column: str | None
@@ -25,10 +29,11 @@ class MetricResult:
     expected: float | None = None
     observed: float | None = None
     unmeasured: str | None = None
+    skipped_by: str | None = None
 
     def to_plain(self) -> dict[str, Any]:
         plain = dc.asdict(self) | {'bound': self.bound.value}
-        return {key: value for key, value in plain.items() if value is not None or key not in ('expected', 'observed', 'unmeasured')}
+        return {key: value for key, value in plain.items() if value is not None or key not in OPTIONAL_METRIC_FIELDS}
 
     def named(self) -> str:
         """`null_rate_delta on status (0.01 to 0.05)`, or `ks on amount (unmeasured)`."""
@@ -40,28 +45,71 @@ class MetricResult:
 
 
 @dc.dataclass(frozen=True)
+class ExpectationResult:
+    """One expectation a scenario declares, and the value the data holds."""
+
+    metric: str
+    column: str
+    at_least: float | None
+    at_most: float | None
+    value: float | None
+    passed: bool
+    # Why the data holds no value, such as a column it lacks.
+    unmeasured: str | None = None
+
+    def to_plain(self) -> dict[str, Any]:
+        return {
+            key: value for key, value in dc.asdict(self).items() if value is not None or key not in ('at_least', 'at_most', 'unmeasured')
+        }
+
+    def bounds(self) -> str:
+        """`≥ 0.55`, `≤ 0.06`, or `≥ 0.04 and ≤ 0.06`."""
+        given = ((Bound.AT_LEAST, self.at_least), (Bound.AT_MOST, self.at_most))
+        return ' and '.join(f'{BOUND_SIGNS[bound]} {value:g}' for bound, value in given if value is not None)
+
+    def measured(self) -> str:
+        """The value, or why there is none."""
+        return f'{self.value:g}' if self.value is not None else (self.unmeasured or 'unmeasured')
+
+    def named(self) -> str:
+        """`hot_keys.share on customer_id (0.41, expected ≥ 0.55)`."""
+        return f'{self.metric} on {self.column} ({self.measured()}, expected {self.bounds()})'
+
+
+@dc.dataclass(frozen=True)
 class Failures:
-    """What failed in a report, out of every metric it measured and every change it listed."""
+    """What failed in a report, out of every metric it measured, every change it listed and every expectation it measured."""
 
     metrics: list[MetricResult]
     changes: list[FieldChange]
+    expectations: list[ExpectationResult]
     of_metrics: int
     of_changes: int
+    of_expectations: int
 
     @classmethod
-    def of(cls, metrics: list[MetricResult], changes: list[FieldChange]) -> 'Failures':
-        failed = [result for result in metrics if not result.passed], [change for change in changes if not change.passed]
-        return cls(*failed, len(metrics), len(changes))
+    def of(cls, metrics: list[MetricResult], changes: list[FieldChange], expectations: list[ExpectationResult] | None = None) -> 'Failures':
+        expectations = expectations or []
+        failed = (
+            [result for result in metrics if not result.passed],
+            [change for change in changes if not change.passed],
+            [result for result in expectations if not result.passed],
+        )
+        return cls(*failed, len(metrics), len(changes), len(expectations))
 
     def __bool__(self) -> bool:
-        return bool(self.metrics or self.changes)
+        return bool(self.metrics or self.changes or self.expectations)
 
     def summary(self) -> str:
         """`2 of 15 metrics and 1 of 1 field changes: ks on amount, null_rate_delta on status (0.01 to 0.05), column_added fee`."""
         counts = f'{len(self.metrics)} of {self.of_metrics} metrics and {len(self.changes)} of {self.of_changes} field changes'
-        named = [result.named() for result in self.metrics] + [
-            f'{change.change.value} {change.column or ""}'.rstrip() for change in self.changes
-        ]
+        if self.of_expectations:
+            counts += f' and {len(self.expectations)} of {self.of_expectations} expectations'
+        named = (
+            [result.named() for result in self.metrics]
+            + [f'{change.change.value} {change.column or ""}'.rstrip() for change in self.changes]
+            + [result.named() for result in self.expectations]
+        )
         return f'{counts}: {", ".join(named)}'
 
 
@@ -70,6 +118,12 @@ class ReportedProfile:
     name: str
     digest: str
     path: str | None
+
+
+@dc.dataclass(frozen=True)
+class ReportedScenario:
+    name: str
+    digest: str
 
 
 @dc.dataclass(frozen=True)
@@ -92,11 +146,11 @@ class CheckReport:
     data: CheckedData
     metrics: list[MetricResult]
     changes: list[FieldChange]
-    scenario: None = None
-    expectations: tuple[()] = ()
+    scenario: ReportedScenario | None = None
+    expectations: list[ExpectationResult] = dc.field(default_factory=list)
 
     def failures(self) -> Failures:
-        return Failures.of(self.metrics, self.changes)
+        return Failures.of(self.metrics, self.changes, self.expectations)
 
     def failure_message(self) -> str:
         """What `CheckFailed` says of a check the data did not pass."""
@@ -104,23 +158,24 @@ class CheckReport:
 
     @property
     def passed(self) -> bool:
-        return not self.failures()
+        failures = self.failures()
+        return not (failures.metrics or failures.changes)
 
     @property
     def verified(self) -> bool:
-        return True
+        return all(result.passed for result in self.expectations)
 
     def to_plain(self) -> dict[str, Any]:
         return {
             'check_version': CHECK_VERSION,
             'profile': dc.asdict(self.profile),
-            'scenario': self.scenario,
+            'scenario': dc.asdict(self.scenario) if self.scenario is not None else None,
             'data': dc.asdict(self.data),
             'passed': self.passed,
             'verified': self.verified,
             'metrics': [result.to_plain() for result in self.metrics],
             'changes': [change.to_plain() for change in self.changes],
-            'expectations': list(self.expectations),
+            'expectations': [result.to_plain() for result in self.expectations],
         }
 
     def to_json(self) -> str:
@@ -129,13 +184,11 @@ class CheckReport:
     def to_markdown(self) -> str:
         """The report for a person, failures first."""
         verdict = 'passed' if self.passed and self.verified else 'failed'
-        lines = [
-            f'# doppeldata check {verdict}',
-            '',
-            f'`{self.data.path}`, {self.data.rows:,} rows, against profile `{self.profile.name}` ({self.profile.digest}).',
-            '',
-        ]
-        return '\n'.join(lines + findings(self.metrics, self.changes, self.failures())) + '\n'
+        against = f'profile `{self.profile.name}` ({self.profile.digest})'
+        if self.scenario is not None:
+            against += f' under scenario `{self.scenario.name}` ({self.scenario.digest})'
+        lines = [f'# doppeldata check {verdict}', '', f'`{self.data.path}`, {self.data.rows:,} rows, against {against}.', '']
+        return '\n'.join(lines + findings(self.metrics, self.changes, self.failures()) + expected(self.expectations)) + '\n'
 
 
 @dc.dataclass(frozen=True)
@@ -185,7 +238,10 @@ def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: 
         lines += ['| Metric | Column | Value | Threshold | Expected | Observed | Passed |', '| --- | --- | --- | --- | --- | --- | --- |']
         for result in sorted(metrics, key=lambda result: result.passed):
             threshold = f'{BOUND_SIGNS[result.bound]} {result.threshold:g}'
-            shown = f'{result.value:.6g}' if result.value is not None else f'unmeasured: {result.unmeasured}'
+            if result.skipped_by is not None:
+                shown = f'skipped by {result.skipped_by}'
+            else:
+                shown = f'{result.value:.6g}' if result.value is not None else f'unmeasured: {result.unmeasured}'
             expected, observed = (f'{value:.6g}' if value is not None else '' for value in (result.expected, result.observed))
             lines.append(
                 f'| {result.metric} | {result.column or ""} | {shown} | {threshold} | {expected} | {observed} | {verdict(result.passed)} |'
@@ -197,6 +253,17 @@ def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: 
             lines.append(f'| {change.change.value} | {change.column or ""} | {verdict(change.passed)} | {change.message} |')
         lines.append('')
     return lines
+
+
+def expected(expectations: list[ExpectationResult]) -> list[str]:
+    if not expectations:
+        return []
+    failed = sum(not result.passed for result in expectations)
+    lines = [f'{failed} of {len(expectations)} expectations failed.', '']
+    lines += ['| Expectation | Column | Value | Bounds | Passed |', '| --- | --- | --- | --- | --- |']
+    for result in sorted(expectations, key=lambda result: result.passed):
+        lines.append(f'| {result.metric} | {result.column} | {result.measured()} | {result.bounds()} | {verdict(result.passed)} |')
+    return [*lines, '']
 
 
 def verdict(passed: bool) -> str:

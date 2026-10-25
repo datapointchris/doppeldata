@@ -4,6 +4,7 @@
 use std::io;
 use std::io::Write;
 
+use doppeldata_core::BLOCK_ROWS;
 use doppeldata_core::Plan;
 
 use crate::WriteError;
@@ -50,19 +51,18 @@ const SAMPLE_BLOCKS: u64 = 4;
 /// An object's bytes are taken as a fixed part plus a part per row. Encoding the first block as
 /// one object and the first `SAMPLE_BLOCKS` as another gives both: the difference is what the
 /// later blocks' rows add, and the rest of the first object is fixed, such as a header, a footer
-/// and a dictionary. Each range counts as many objects as `planned_ranges` bounds it to.
+/// and a dictionary. Each range counts as many objects as `planned_ranges` bounds it to. Rows a
+/// scenario adds are counted at the share the sampled blocks hold.
 pub fn estimate_bytes(plan: &Plan, options: &WriteOptions) -> Result<u64, WriteError> {
     let layout = layout(plan, &options.layout, &options.output)?;
     let partitioner = Partitioner::new(&plan.schema(), &layout.partition_by, layout.partition_style);
     encoders::check(&options.output, partitioner.file_schema())?;
     let mut pieces = Vec::new();
+    let mut generated_rows = 0;
     for block in 0..plan.block_count().min(SAMPLE_BLOCKS) {
-        let batch = plan.generate_block(block)?;
-        let cells = match options.output.is_text() {
-            true => plan.text_cells(block)?,
-            false => vec![Vec::new(); batch.num_columns()],
-        };
-        pieces.push(partitioner.split(batch, cells)?);
+        let placed = plan.placed_block(block, options.output.is_text())?;
+        generated_rows += (plan.identity().rows() - block * BLOCK_ROWS).min(BLOCK_ROWS);
+        pieces.push(partitioner.split(placed.batch, placed.text_cells)?);
     }
     let Some(first) = pieces.first() else {
         return Ok(0);
@@ -84,5 +84,7 @@ pub fn estimate_bytes(plan: &Plan, options: &WriteOptions) -> Result<u64, WriteE
     };
     let fixed = (small as f64 - per_row * small_rows as f64).max(0.0);
     let objects: u64 = planned_ranges(plan, options)?.iter().map(|range| range.objects_at_most).sum();
-    Ok((fixed * objects as f64 + per_row * plan.identity().rows() as f64).round() as u64)
+    let written_per_generated = large_rows as f64 / generated_rows.max(1) as f64;
+    let written_rows = plan.identity().rows() as f64 * written_per_generated;
+    Ok((fixed * objects as f64 + per_row * written_rows).round() as u64)
 }

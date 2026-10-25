@@ -8,12 +8,11 @@ layout and table relationships. It holds no rows. doppeldata is built to read CS
 Parquet, Arrow and Spark DataFrames, and to write any of them back at any size: in memory, to disk,
 to S3, or inside Spark executors.
 
-A scenario file layered on a profile is meant to bend the data on purpose: a hot join key, a burst of
-malformed rows, a flood of small files. The same profile, scenario and seed must always produce the
-same data.
+A scenario file layered on a profile bends the data on purpose: a hot join key, late rows, a flood
+of small files. The same profile, scenario and seed always produce the same data.
 
-doppeldata is experimental. So far it profiles a table's columns and its files, generates a table from a profile,
-and ships the profile format and its hand-written example profiles:
+doppeldata is experimental. So far it profiles a table's columns and its files, generates a table from a profile
+under any scenarios, and ships the profile and scenario formats with hand-written examples of each:
 
 ```bash
 doppeldata profile create data/orders/ --out orders.profile.yaml   # profile a directory of one table
@@ -30,11 +29,16 @@ doppeldata schemas show profile        # the JSON Schema every profile validates
 doppeldata data plan orders --rows 1000000 --seed 7 --out orders/       # the files a write makes, and their size
 doppeldata data generate orders --rows 1000000 --seed 7 --out orders/   # write them, and _manifest.json
 doppeldata data generate orders.profile.yaml --rows 100000000 --format csv --out s3://bucket/orders/
+
+doppeldata scenario list               # the ops a scenario applies, its metrics, and the example scenarios
+doppeldata scenario check hot-key orders                            # a scenario against a profile, generating nothing
+doppeldata data generate orders --scenario hot-key --out orders/    # five customers place 60% of the orders
+doppeldata data check orders orders/ --scenario hot-key             # and the check verifies that share
 ```
 
 `data generate` writes every format `doppeldata schemas show manifest` lists, to a local directory or to S3.
-`_manifest.json` records the profile's digest, the seed, the row count and the engine's stream
-version. Those regenerate the same values in any format. From Python, a table arrives through the Arrow PyCapsule interface, so
+`_manifest.json` records the profile's digest, the scenario's, the seed, the row count and the
+engine's stream version. Those regenerate the same values in any format. From Python, a table arrives through the Arrow PyCapsule interface, so
 Polars, DuckDB and pyarrow 14 or later read it with no copy:
 
 ```python

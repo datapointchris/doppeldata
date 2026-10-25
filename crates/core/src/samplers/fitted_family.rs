@@ -254,7 +254,7 @@ fn normal_cdf(x: f64) -> f64 {
 }
 
 /// Φ⁻¹(p) by Wichura's algorithm AS 241 (PPND16), accurate to about 1e-16, from log and sqrt alone.
-fn normal_quantile(p: f64) -> f64 {
+pub(crate) fn normal_quantile(p: f64) -> f64 {
     const A: [f64; 8] = [
         3.3871328727963665,
         133.14166789178438,

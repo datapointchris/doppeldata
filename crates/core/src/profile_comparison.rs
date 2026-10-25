@@ -66,7 +66,9 @@ pub struct ReportedProfile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReportedScenario {
     pub name: String,
-    /// `sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON.
+    /// The scenario's digest, taken as a manifest's `identity.scenario_digest` is: the SHA-256 of
+    /// its RFC 8785 canonical JSON with each perturbation's `id` resolved, and with `description`
+    /// and `expect` left out.
     pub digest: String,
 }
 
@@ -87,7 +89,8 @@ pub struct MetricResult {
     /// The metric's name, such as `ks`, as `--thresholds` keys it.
     pub metric: String,
     pub column: Option<String>,
-    /// The metric's value, or null where `unmeasured` says why the other profile cannot supply it.
+    /// The metric's value. It is null where `unmeasured` says why the other profile cannot supply
+    /// it, and where `skipped_by` names the perturbation that moves it.
     pub value: Option<f64>,
     pub threshold: f64,
     /// Whether `value` passes at or below `threshold`, or at or above it.
@@ -104,6 +107,10 @@ pub struct MetricResult {
     /// quantiles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmeasured: Option<String>,
+    /// The id of the scenario's perturbation that moves what the metric compares, so the metric
+    /// is not measured and passes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -156,13 +163,17 @@ pub enum ChangeKind {
 pub struct ExpectationResult {
     /// The statistic expected, such as `hot_keys.share`.
     pub metric: String,
-    pub column: Option<String>,
+    pub column: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_least: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_most: Option<f64>,
-    pub value: f64,
+    /// The value the data holds, or null where `unmeasured` says why.
+    pub value: Option<f64>,
     pub passed: bool,
+    /// Why the data holds no value, such as a column it lacks. The expectation then fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmeasured: Option<String>,
 }
 
 /// The check report's JSON Schema (Draft 2020-12), as the library ships it.

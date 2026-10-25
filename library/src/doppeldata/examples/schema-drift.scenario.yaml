@@ -1,0 +1,10 @@
+# Written for the orders example profile. Only a file starting at or past half the rows drifts, so the
+# write needs several files, as --file-rows 10000 makes.
+scenario: schema-drift
+description: Files written past the halfway point gain a channel column, rename amount and widen quantity, as an upstream release would.
+perturbations:
+  - op: schema_drift
+    after_fraction: 0.5
+    add: [{name: channel, type: string}]
+    rename: {amount: amount_usd}
+    widen: {quantity: int64}

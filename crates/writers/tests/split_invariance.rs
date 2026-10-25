@@ -55,7 +55,7 @@ fn objects(plan: &Plan, output: Output, file_rows: u64) -> Vec<bytes::Bytes> {
             file_rows: FileRows::Fixed(file_rows),
             ..LayoutSettings::default()
         },
-        profile_path: None,
+        ..WriteOptions::default()
     };
     let run = RunOptions {
         threads: 4,

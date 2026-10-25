@@ -10,12 +10,14 @@ use sha2::Sha256;
 use crate::profile::provenance;
 use crate::rng::STREAM_VERSION;
 
-/// A dataset's identity. The library computes the profile digest and passes it in, as `sha256:`
-/// and 64 lowercase hex digits. This engine applies no scenario, so the scenario digest is null.
+/// A dataset's identity. The library computes the profile digest and the scenario digest and passes
+/// them in, each as `sha256:` and 64 lowercase hex digits. The scenario digest is null where no
+/// scenario applies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatasetIdentity {
     stream_version: u32,
     profile_digest: String,
+    scenario_digest: Option<String>,
     seed: u64,
     rows: u64,
 }
@@ -34,8 +36,17 @@ impl DatasetIdentity {
         Self {
             stream_version: STREAM_VERSION,
             profile_digest: profile_digest.into(),
+            scenario_digest: None,
             seed,
             rows,
+        }
+    }
+
+    /// The identity of the same dataset with the scenario whose digest is `scenario_digest` applied.
+    pub fn with_scenario(self, scenario_digest: impl Into<String>) -> Self {
+        Self {
+            scenario_digest: Some(scenario_digest.into()),
+            ..self
         }
     }
 
@@ -45,6 +56,10 @@ impl DatasetIdentity {
 
     pub fn profile_digest(&self) -> &str {
         &self.profile_digest
+    }
+
+    pub fn scenario_digest(&self) -> Option<&str> {
+        self.scenario_digest.as_deref()
     }
 
     pub fn seed(&self) -> u64 {
@@ -57,12 +72,12 @@ impl DatasetIdentity {
 
     /// The five values as RFC 8785 canonical JSON, the bytes [`Self::digest`] hashes. The map sorts
     /// its keys. The 64-bit integers are decimal strings, because RFC 8785 writes a number as an
-    /// IEEE 754 double.
+    /// IEEE 754 double. A null scenario digest is written as null.
     pub fn canonical_json(&self) -> String {
         let canonical = BTreeMap::from([
             (key(provenance::DATASET_ROWS), Value::from(self.rows.to_string())),
             (key(provenance::PROFILE_DIGEST), Value::from(self.profile_digest.as_str())),
-            (key(provenance::SCENARIO_DIGEST), Value::Null),
+            (key(provenance::SCENARIO_DIGEST), Value::from(self.scenario_digest.as_deref())),
             (key(provenance::SEED), Value::from(self.seed.to_string())),
             (key(provenance::STREAM_VERSION), Value::from(self.stream_version)),
         ]);

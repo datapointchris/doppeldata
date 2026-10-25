@@ -157,10 +157,7 @@
           "format": "double"
         },
         "column": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "metric": {
           "description": "The statistic expected, such as `hot_keys.share`.",
@@ -169,14 +166,25 @@
         "passed": {
           "type": "boolean"
         },
+        "unmeasured": {
+          "description": "Why the data holds no value, such as a column it lacks. The expectation then fails.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "value": {
-          "type": "number",
+          "description": "The value the data holds, or null where `unmeasured` says why.",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double"
         }
       },
       "required": [
         "metric",
-        "value",
+        "column",
         "passed"
       ]
     },
@@ -256,6 +264,13 @@
         "passed": {
           "type": "boolean"
         },
+        "skipped_by": {
+          "description": "The id of the scenario's perturbation that moves what the metric compares, so the metric\nis not measured and passes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "threshold": {
           "type": "number",
           "format": "double"
@@ -268,7 +283,7 @@
           ]
         },
         "value": {
-          "description": "The metric's value, or null where `unmeasured` says why the other profile cannot supply it.",
+          "description": "The metric's value. It is null where `unmeasured` says why the other profile cannot supply\nit, and where `skipped_by` names the perturbation that moves it.",
           "type": [
             "number",
             "null"
@@ -311,7 +326,7 @@
       "type": "object",
       "properties": {
         "digest": {
-          "description": "`sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON.",
+          "description": "The scenario's digest, taken as a manifest's `identity.scenario_digest` is: the SHA-256 of\nits RFC 8785 canonical JSON with each perturbation's `id` resolved, and with `description`\nand `expect` left out.",
           "type": "string"
         },
         "name": {
