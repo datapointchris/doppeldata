@@ -13,19 +13,12 @@ afresh is measured by every other metric.
 
 ## A metric is a function from two profiles to values, and the registry is data
 
-`doppeldata.profile_comparison.metrics.METRICS` lists each metric with its name, its bound, its
-default threshold and its measurement. A measurement takes both profiles and yields a value per
-column, or one for the table. The reports and `--thresholds` read the registry, so a metric added
-there reaches both with no other change.
-
-| Metric | Value | Passes |
-| --- | --- | --- |
-| `ks` | the largest gap between two numeric columns' CDFs at the points the source states: its quantiles, interior histogram edges and zero | at most 0.05 |
-| `tvd` | half the summed difference in share over the source's listed values and one share for every other value; for a date or timestamp, the largest over month, weekday and hour | at most 0.05 |
-| `null_rate_delta` | the absolute difference in null rate | at most 0.01 |
-| `zero_rate_delta` | the absolute difference in the share of non-null values that are zero | at most 0.01 |
-| `distinct_ratio_delta` | the difference in distinct ratio, relative to the source's | at most 0.10 |
-| `boundary_adherence` | the share of values inside the source's outer histogram edges | at least 0.99 |
+`doppeldata.profile_comparison.metrics.METRICS` lists each metric with its name, its summary, its
+bound, its default threshold and its measurement. A measurement takes both profiles and yields a
+value per column, or one for the table. The reports, `--thresholds` and the help of `data check`
+and `profile diff` read the registry. So a metric added there reaches all three with no other
+change, and that help is where each metric's summary and default threshold are listed. The
+sections below give the reason behind each measurement that needs one.
 
 The names follow SDMetrics where one exists. Its `KSComplement` is 1 − `ks`, and its `TVComplement`
 is 1 − `tvd`.
@@ -90,18 +83,19 @@ kind of column is measured. A float column whose source holds cents, generated a
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.
 
-## A check fails on a changed column kind, and a diff on any changed field
+## A check fails on a column the data adds, drops or retypes, and a diff on any changed field
 
-A column's kind is the profiler's: integer, float, decimal, string, boolean, date, datetime or
-other, read from `logical_type` and an Arrow decimal type.
+A column's kind is the profiler's `ColumnKind`, read back from the `logical_type` it wrote, with an
+Arrow decimal type telling a decimal from a float.
 
 - **A check fails** on a column the data adds or drops, or holds as another kind or semantic type.
 - **A check lists and passes an Arrow type change alone.** The writers cast every timestamp to one
   unit, because Parquet's Arrow writer cannot write INT96. Data written as CSV reads back at the
   text reader's widths, so an `int32` source column profiles as `int64`.
 - **A diff fails on every changed field.** That covers a changed Arrow type, which there means the
-  source itself changed. It also covers a column with more than 5% of its values outside the edges
-  or value list frozen from A, a CSV dialect setting that changed, and a partition key B adds.
+  source itself changed. It also covers a column with more than `OVERFLOW_SHARE` of its values
+  outside the edges or value list frozen from A, a CSV dialect setting that changed, and a
+  partition key B adds.
 
 ## A failed check exits 3, and drift exits 1
 

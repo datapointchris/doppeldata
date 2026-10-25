@@ -28,6 +28,7 @@ from doppeldata import profile
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_text
+from doppeldata.profile_comparison.metrics import METRICS
 from doppeldata.profiling import DEFAULT_K_MIN
 from doppeldata.published_schemas import output_formats
 from doppeldata.published_schemas import partition_styles
@@ -139,9 +140,13 @@ ThresholdsOption = Annotated[
     typer.Option(
         '--thresholds',
         metavar='FILE',
-        help="Each metric's threshold, as YAML or JSON: {defaults: {ks: 0.03}, columns: {amount: {ks: 0.08}}}.",
+        help="Each metric's threshold, as YAML or JSON: {defaults: {ks: 0.03}, columns: {amount: {ks: 0.08}}}. The metrics are below.",
     ),
 ]
+METRIC_DEFINITIONS = '\n\n'.join(
+    f'{metric.name}: {metric.summary}. Passes at {metric.bound.value.removeprefix("at_")} {metric.threshold:g} by default.'
+    for metric in METRICS
+)
 
 
 @profile_app.command('list')
@@ -256,7 +261,7 @@ def loaded_thresholds(path: Path | None) -> Thresholds | None:
         raise typer.BadParameter(str(error), param_hint='--thresholds') from error
 
 
-@profile_app.command('diff', no_args_is_help=True)
+@profile_app.command('diff', no_args_is_help=True, epilog=METRIC_DEFINITIONS)
 def profile_diff(
     a: Annotated[str, typer.Argument(metavar='A', help='The earlier profile, a file or an example name.')],
     b: Annotated[str, typer.Argument(metavar='B', help='The later profile, made with --edges-from A to measure overflow.')],
@@ -277,7 +282,7 @@ def profile_diff(
         raise ProfilesDrifted(report)
 
 
-@data_app.command('check', no_args_is_help=True)
+@data_app.command('check', no_args_is_help=True, epilog=METRIC_DEFINITIONS)
 def data_check(
     profile_name: Annotated[
         str, typer.Argument(metavar='PROFILE', help='The profile the data was generated from, a file or an example name.')

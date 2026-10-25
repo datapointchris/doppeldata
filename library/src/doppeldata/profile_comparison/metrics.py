@@ -1,7 +1,7 @@
-"""The metrics a check and a diff measure, as data: each one's name, bound, default threshold and measurement.
+"""The metrics a check and a diff measure, as data: each one's name, summary, bound, default threshold and measurement.
 
 A metric is a function from two profiles to values, each for one column or for the table. A metric
-added to `METRICS` reaches the reports and `--thresholds` with no other change.
+added to `METRICS` reaches the reports, `--thresholds` and the CLI's help with no other change.
 """
 
 import dataclasses as dc
@@ -43,6 +43,7 @@ class Measurement:
 @dc.dataclass(frozen=True)
 class Metric:
     name: str
+    summary: str
     bound: Bound
     threshold: float
     measure: Callable[[Document, Document], Iterator[Measurement]]
@@ -220,11 +221,41 @@ def boundary_adherence(source: Column, observed: Column) -> Compared | None:
 
 
 METRICS = (
-    Metric('ks', Bound.AT_MOST, 0.05, per_column(kolmogorov_smirnov)),
-    Metric('tvd', Bound.AT_MOST, 0.05, per_column(total_variation)),
-    Metric('null_rate_delta', Bound.AT_MOST, 0.01, per_column(null_rate_change)),
-    Metric('zero_rate_delta', Bound.AT_MOST, 0.01, per_column(zero_rate_change)),
-    Metric('distinct_ratio_delta', Bound.AT_MOST, 0.10, per_column(distinct_ratio_change)),
-    Metric('boundary_adherence', Bound.AT_LEAST, 0.99, per_column(boundary_adherence)),
+    Metric(
+        'ks',
+        'the Kolmogorov-Smirnov distance, the largest gap between two cumulative distributions at the points the source states',
+        Bound.AT_MOST,
+        0.05,
+        per_column(kolmogorov_smirnov),
+    ),
+    Metric(
+        'tvd',
+        "the total variation distance between the shares of the source's listed values, or a date's months, weekdays and hours",
+        Bound.AT_MOST,
+        0.05,
+        per_column(total_variation),
+    ),
+    Metric('null_rate_delta', 'the difference in the share of values that are null', Bound.AT_MOST, 0.01, per_column(null_rate_change)),
+    Metric(
+        'zero_rate_delta',
+        'the difference in the share of non-null values that are zero',
+        Bound.AT_MOST,
+        0.01,
+        per_column(zero_rate_change),
+    ),
+    Metric(
+        'distinct_ratio_delta',
+        "the difference in distinct values per row, relative to the source's",
+        Bound.AT_MOST,
+        0.10,
+        per_column(distinct_ratio_change),
+    ),
+    Metric(
+        'boundary_adherence',
+        "the share of values inside the source's outer histogram edges",
+        Bound.AT_LEAST,
+        0.99,
+        per_column(boundary_adherence),
+    ),
 )
 METRICS_BY_NAME = {metric.name: metric for metric in METRICS}

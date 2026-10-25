@@ -65,9 +65,8 @@ packs match the ones the earlier profile was made with, it is kept as it is, wit
 reviewer made. Otherwise `profile create` says what differs.
 
 `data check` profiles generated data with its profile's edges frozen, and never reads the real data.
-It measures each column against the profile by `ks`, `tvd`, `null_rate_delta`, `zero_rate_delta`,
-`distinct_ratio_delta` and `boundary_adherence`, each with a threshold and a verdict, and exits 3
-when any fails. `profile diff` measures the same metrics between two profiles of one table, and
+It measures each column against the profile by the metrics `data check --help` defines, each with a
+threshold and a verdict, and exits 3 when any fails. `profile diff` measures the same metrics between two profiles of one table, and
 lists each column, type, overflow, CSV setting and partition key that changed. It exits 1 on drift.
 `--thresholds FILE` sets each metric's threshold, and `--json` prints the report that `schemas show
 check` or `schemas show diff` describes.
