@@ -33,6 +33,8 @@ from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import Table
 from doppeldata.profiling.backend import is_hidden
 from doppeldata.profiling.detector_packs import EnabledPack
+from doppeldata.profiling.profiled_columns import Answers
+from doppeldata.profiling.profiled_columns import ProfiledColumns
 from doppeldata.profiling.recorded_counts import RATE_DIGITS
 from doppeldata.profiling.recorded_counts import TOP_VALUES_THRESHOLD
 from doppeldata.profiling.recorded_counts import kept_values
@@ -104,8 +106,6 @@ def profiled_kind(column: dict[str, Any]) -> ColumnKind:
     return kinds[0] if kinds else ColumnKind.OTHER
 
 
-# Each answer by its column, None for the table, and its statistic's name.
-Answers = dict[tuple[str | None, str], Any]
 Stat = Callable[[str], Any]
 
 
@@ -222,23 +222,6 @@ class ColumnSettings:
     packs: list[EnabledPack]
     frozen: FrozenLayout
     elements: dict[str, Table]
-
-
-@dc.dataclass(frozen=True)
-class ProfiledColumns:
-    """One table's columns profiled. `table` is parsed, `described` counts the rows read, and `unparsed_rows` the rows
-    holding a value that does not parse as its column's type. `null_token` is what a delimited source writes most for a
-    missing value, and a JSON table's paths and type counts are in `json`.
-    """
-
-    columns: list[dict[str, Any]]
-    table: Table
-    specs: list[ColumnSpec]
-    stats: Answers
-    described: int
-    unparsed_rows: int = 0
-    null_token: str = text_types.EMPTY
-    json: json_paths.ProfiledTable | None = None
 
 
 def profile_columns(

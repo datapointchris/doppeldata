@@ -5,7 +5,6 @@ reader rejects. No value statistic of a column is read from a file: a Parquet fo
 import collections
 from collections.abc import Iterable
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING
 from typing import Any
 
 from doppeldata.profiling import json_paths
@@ -16,6 +15,7 @@ from doppeldata.profiling.backend import ParquetFooter
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import SourceRead
+from doppeldata.profiling.profiled_columns import ProfiledColumns
 from doppeldata.profiling.recorded_counts import RATE_DIGITS
 from doppeldata.profiling.recorded_counts import TOP_VALUES_THRESHOLD
 from doppeldata.profiling.recorded_counts import kept_values
@@ -24,9 +24,6 @@ from doppeldata.profiling.recorded_counts import significant
 from doppeldata.profiling.statistic_catalog import QUANTILES
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.published_schemas import published_enum
-
-if TYPE_CHECKING:
-    from doppeldata.profiling.table_profile import ProfiledColumns
 
 # The codecs a text writer writes, which a profile's `csv` and `json` settings take, as the profile schema publishes them.
 WRITTEN_TEXT_CODECS = frozenset(published_enum('TextCompression'))
@@ -41,9 +38,7 @@ if unwritten:
     raise RuntimeError(f'the profile format has no text encoding {", ".join(unwritten)}')
 
 
-def source_section(
-    backend: Backend, source: Source, read: SourceRead, profiled: 'ProfiledColumns', rows: int, k_min: int
-) -> dict[str, Any]:
+def source_section(backend: Backend, source: Source, read: SourceRead, profiled: ProfiledColumns, rows: int, k_min: int) -> dict[str, Any]:
     """The source's section. `rows` counts every row read, where `profiled` may describe a sample of them.
 
     A setting no writer takes, such as a `bzip2` text codec, is left out, so a writer writes its own default.
@@ -77,7 +72,7 @@ def compression(source: Source, footers: tuple[ParquetFooter, ...]) -> str | Non
     return suffixes.pop() if len(suffixes) == 1 and source.format is not SourceFormat.ARROW else None
 
 
-def layout_section(backend: Backend, source: Source, read: SourceRead, profiled: 'ProfiledColumns', k_min: int) -> dict[str, Any]:
+def layout_section(backend: Backend, source: Source, read: SourceRead, profiled: ProfiledColumns, k_min: int) -> dict[str, Any]:
     sizes = sorted(file.size for file in source.files)
     layout: dict[str, Any] = {
         'files': {
@@ -96,7 +91,7 @@ def layout_section(backend: Backend, source: Source, read: SourceRead, profiled:
     return layout
 
 
-def partition_key(backend: Backend, profiled: 'ProfiledColumns', key: str, k_min: int) -> dict[str, Any]:
+def partition_key(backend: Backend, profiled: ProfiledColumns, key: str, k_min: int) -> dict[str, Any]:
     """A Hive key's type and values. Its shares are of every row, each held by at least k_min rows, as top values are."""
     spec = next(spec for spec in profiled.specs if spec.name == key)
     distinct = profiled.stats[(key, 'distinct_count')]
@@ -109,7 +104,7 @@ def partition_key(backend: Backend, profiled: 'ProfiledColumns', key: str, k_min
     return {'name': key, 'type': spec.physical_type, 'values': values}
 
 
-def sort_order(footers: tuple[ParquetFooter, ...], profiled: 'ProfiledColumns') -> list[str]:
+def sort_order(footers: tuple[ParquetFooter, ...], profiled: ProfiledColumns) -> list[str]:
     """The columns every footer declares its rows sorted by, else the first integer column that never falls in read order."""
     declared = {footer.sorting_columns for footer in footers}
     if len(declared) == 1 and (columns := declared.pop()):
@@ -121,7 +116,7 @@ def sort_order(footers: tuple[ParquetFooter, ...], profiled: 'ProfiledColumns') 
     return []
 
 
-def csv_section(found: DialectFound, rejected: dict[str, int], profiled: 'ProfiledColumns', rows: int, k_min: int) -> dict[str, Any]:
+def csv_section(found: DialectFound, rejected: dict[str, int], profiled: ProfiledColumns, rows: int, k_min: int) -> dict[str, Any]:
     """The writer's dialect, what the first block's bytes hold, how the two sniffers read it, and the malformed rows."""
     dialect = found.dialect
     breaks = sum(found.line_terminators.values())
