@@ -14,8 +14,9 @@ use doppeldata_core::profile::Profile;
 use doppeldata_core::values_digest;
 use rayon::prelude::*;
 
-// The wheel's build reads these four constants and the pinned values hash, and generates the
-// fixture through the built extension, so each stays a literal on one line.
+// `crates/check-pinned-values-through-wheel.py` reads PROFILE_DIGEST, SEED, ROWS,
+// PINNED_STREAM_VERSION and PINNED_VALUES from this file, and generates the fixture through the
+// built wheel, so each stays a literal on one line.
 const PROFILE_DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const SEED: u64 = 20_251_025;
 const ROWS: u64 = 135_393;

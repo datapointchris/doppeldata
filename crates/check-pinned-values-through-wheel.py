@@ -1,4 +1,5 @@
-"""Fails when the installed doppeldata wheel generates the determinism contract's fixture to a hash other than the pinned one.
+"""Fails when the installed doppeldata wheel generates the determinism contract's fixture to a hash other than the pinned one,
+or names a stream version other than the pinned one.
 
 The test's constants are read from its source, so the pin has one home. Run it with the Python the built wheel is installed into.
 Usage: python crates/check-pinned-values-through-wheel.py
@@ -18,6 +19,13 @@ CONSTANT = re.compile(r'^const (?P<name>[A-Z_]+): [^=]+ = "?(?P<value>[0-9a-z_:]
 
 def main() -> int:
     constants = {match['name']: match['value'] for match in CONSTANT.finditer((TESTS / 'determinism_contract.rs').read_text())}
+    pinned = constants['PINNED_STREAM_VERSION']
+    if int(pinned) != _core.STREAM_VERSION:
+        print(
+            f'check-pinned-values-through-wheel: the wheel names stream version {_core.STREAM_VERSION}, not the pinned {pinned}',
+            file=sys.stderr,
+        )
+        return 1
     profile = Profile.load(TESTS / 'every-column-kind.profile.yaml')
     values = _core.determinism_values_digest(
         json.dumps(profile.to_plain(), allow_nan=False),
