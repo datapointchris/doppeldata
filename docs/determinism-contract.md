@@ -98,5 +98,7 @@ could differ in its last bit on another machine, and "reproduce anywhere" would 
 - *Rejected:* statrs's inverse CDFs. They call std's functions, and a dependency's `num-traits`
   feature cannot force libm, because features unify across the build.
 
-CI runs the pinned-value test on Linux x86_64, macOS x86_64 and macOS arm64. A failure on one runner
-is a platform difference, and never a reason to loosen the pin.
+CI runs the pinned-value test on every platform with a wheel, in the library's wheel build, and on
+the platforms `determinism-contract.yml` adds. A failure on one runner is a platform difference, and
+never a reason to loosen the pin. The same workflow refuses a pinned hash that changed since the last
+release while the pinned stream version stayed level.

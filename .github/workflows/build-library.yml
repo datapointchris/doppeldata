@@ -32,6 +32,7 @@ jobs:
   # Anywhere else installs the sdist, which compiles the crates.
   wheels:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
@@ -39,10 +40,21 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-26-intel
     runs-on: ${{ matrix.runner }}
+    # Bounds a hung run. A queued job waiting for a runner is not covered.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
+
+      # Every platform shipping a wheel generates the pinned values, so a new
+      # target cannot ship untested. determinism-contract.yml covers the rest.
+      # Skipped once a release stamps the version, because the commit it builds
+      # passed here before it was tagged.
+      - name: Generate the determinism contract's pinned values
+        if: inputs.version == ''
+        working-directory: crates
+        run: cargo test --release -p doppeldata-core --test determinism_contract
 
       - name: Write the release version into the crates
         if: inputs.version != ''

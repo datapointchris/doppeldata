@@ -23,6 +23,7 @@ const ROWS: u64 = 2 * BLOCK_ROWS + 4_321;
 
 /// The stream version the fixture's values were generated under, and a SHA-256 over them. A release
 /// freezes the pair: once released, a change to any value raises STREAM_VERSION.
+/// `crates/check-stream-version-raised.sh` reads both lines and refuses a new hash at a released version.
 const PINNED_STREAM_VERSION: u32 = 1;
 const PINNED_VALUES: &str = "462a7eed3b876e0d99a5f31cd3c3f6f7d95181a157fa63a6e09647386ed21fc6";
 
