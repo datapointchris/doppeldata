@@ -142,7 +142,8 @@ The data is measured against the effective profile, so a patched null rate is th
   `scenario-differs-from-data`. No `--scenario` on data whose manifest records one is refused as
   `data-has-scenario`. Both exit 2. A scenario's skips would otherwise pass data it never touched.
 - **A metric a perturbation moves is a row with no value and `skipped_by` naming it.** It passes. A
-  perturbation moves every metric on a column it writes, as the engine reports its columns.
+  perturbation moves every metric on a column it writes, as the engine reports its columns. So it
+  moves each `--against` score on that column too, and each pair score holding it.
 - **An op that changes the row count or the file sizes also moves the table metrics those set.**
   `MOVED_METRICS` in `profile_comparison/scenario_moves.py` lists them. A partition key's
   `partition_share_delta` is named for its column, so `partition_skew` moves it.
