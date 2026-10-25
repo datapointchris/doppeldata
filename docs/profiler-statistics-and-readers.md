@@ -414,7 +414,8 @@ groups a directory or prefix the same way, with one difference below. It runs be
 chosen, so Polars and Spark group alike.
 
 - **Each folder directly under the root is a candidate table.** The files directly under the root
-  are one more, named after the root.
+  are one more, named after the root. The listing resolves links, so a linked file whose target
+  lies outside the root joins the root's own files.
 - **A folder's schema is the union of up to `FILES_READ` of its files' schemas.** A Parquet or
   Arrow file gives (name, type) pairs. A CSV or TSV gives its header's names, or `col0`, `col1` and
   on where Glue would find no header. A JSON file gives the keys of its first `RECORDS_READ` records.

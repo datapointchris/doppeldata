@@ -92,7 +92,11 @@ def relative_parts(root: str, path: str) -> tuple[str, ...]:
         prefix = urlparse(root).path.strip('/')
         key = urlparse(path).path.lstrip('/')
         return PurePosixPath(key.removeprefix(prefix).lstrip('/')).parts
-    return Path(path).relative_to(Path(root).resolve()).parts
+    try:
+        return Path(path).relative_to(Path(root).resolve()).parts
+    except ValueError:
+        # The lister resolves links, so a linked file can lie outside the root. It joins the root's own files.
+        return (Path(path).name,)
 
 
 def joined(root: str, folder: str) -> str:
@@ -102,6 +106,9 @@ def joined(root: str, folder: str) -> str:
 def folder_schema(files: list[SourceFile], source_format: SourceFormat) -> Schema | None:
     """The union of the sampled files' schemas, or None where no file's could be read."""
     chosen = files if len(files) <= FILES_READ else sorted(random.Random(FILES_SEED).sample(files, FILES_READ), key=lambda file: file.path)
+    if source_format is SourceFormat.PARQUET:
+        footers = importlib.import_module(PARQUET_FOOTERS_MODULE).read_footers(tuple(chosen), every=True)
+        return frozenset().union(*(fields_of(footer.schema) for footer in footers))
     read = [schema for schema in (file_schema(file, source_format) for file in chosen) if schema is not None]
     return frozenset().union(*read) if read else None
 
@@ -109,8 +116,6 @@ def folder_schema(files: list[SourceFile], source_format: SourceFormat) -> Schem
 def file_schema(file: SourceFile, source_format: SourceFormat) -> Schema | None:
     """A file's columns with their types where the format declares them, and their names alone in a text format."""
     match source_format:
-        case SourceFormat.PARQUET:
-            return parquet_schema(file)
         case SourceFormat.ARROW:
             return arrow_schema(file)
         case SourceFormat.CSV | SourceFormat.TSV:
@@ -119,15 +124,8 @@ def file_schema(file: SourceFile, source_format: SourceFormat) -> Schema | None:
             return json_schema(file)
 
 
-def parquet_schema(file: SourceFile) -> Schema:
-    parquet = importlib.import_module('pyarrow.parquet')
-    if file.path.startswith('s3://'):
-        pyarrow = importlib.import_module('pyarrow')
-        footers = importlib.import_module(PARQUET_FOOTERS_MODULE)
-        with s3_client(file.path) as client:
-            schema = parquet.read_metadata(pyarrow.BufferReader(footers.tail_of(client, file))).schema.to_arrow_schema()
-    else:
-        schema = parquet.read_schema(file.path)
+def fields_of(schema: Any) -> Schema:
+    """An Arrow schema's (name, type) pairs."""
     return frozenset((field.name, str(field.type)) for field in schema)
 
 
@@ -140,7 +138,7 @@ def arrow_schema(file: SourceFile) -> Schema | None:
         schema = ipc.open_file(file.path).schema
     except OSError:
         schema = ipc.open_stream(file.path).schema
-    return frozenset((field.name, str(field.type)) for field in schema)
+    return fields_of(schema)
 
 
 def delimited_schema(file: SourceFile, delimiter: str | None) -> Schema | None:
@@ -179,12 +177,3 @@ def json_records(text: str) -> Iterator[Any]:
     for line in text.splitlines()[:RECORDS_READ]:
         with contextlib.suppress(ValueError):
             yield json.loads(line)
-
-
-@contextlib.contextmanager
-def s3_client(url: str) -> Iterator[Any]:
-    sources = importlib.import_module('doppeldata.profiling.sources')
-    s3_access = importlib.import_module('doppeldata.s3_access')
-    _, client = s3_access.s3_session()
-    with sources.s3_errors(url, s3_access.endpoint_named(client), doing='read'):
-        yield client
