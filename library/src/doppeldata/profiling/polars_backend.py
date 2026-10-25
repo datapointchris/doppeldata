@@ -16,7 +16,6 @@ import pyarrow as pa
 from polars.datatypes import DataTypeClass
 
 from doppeldata.errors import SourceError
-from doppeldata.profiling import delimited_dialect
 from doppeldata.profiling import json_paths
 from doppeldata.profiling import parquet_footers
 from doppeldata.profiling.backend import HIDDEN_COLUMN_PREFIX
@@ -28,6 +27,7 @@ from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import SourceRead
+from doppeldata.profiling.first_blocks import first_block
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
 from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT
@@ -52,6 +52,8 @@ ROW_STAGE = '__doppeldata_stage_{}'
 # Nothing downloads at run time, so DuckDB may use only the extensions its wheel links in.
 DUCKDB_CONFIG: dict[str, str | bool | int | float | list[str]] = {'autoinstall_known_extensions': False, 'autoload_known_extensions': False}
 FILE_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_file'
+# Imported by name, because it imports clevercsv and charset-normalizer, which only a delimited source needs.
+DELIMITED_DIALECT_MODULE = 'doppeldata.profiling.delimited_dialect'
 # The directory value Hive and Spark write a null partition value under, as SQL text.
 HIVE_NULL = "'__HIVE_DEFAULT_PARTITION__'"
 # The packages that read or sniff each format's files.
@@ -402,7 +404,9 @@ def read_delimited(source: Source) -> SourceRead:
     A row DuckDB rejects is left out of the table and counted by its first error. A quoted empty field is an empty
     string, where a bare one is null.
     """
-    found = delimited_dialect.detected(source.files, '\t' if source.format is SourceFormat.TSV else None, DUCKDB_CONFIG)
+    found = importlib.import_module(DELIMITED_DIALECT_MODULE).detected(
+        source.files, '\t' if source.format is SourceFormat.TSV else None, DUCKDB_CONFIG
+    )
     dialect = found.dialect
     query = (
         'select * from read_csv($paths, auto_detect = false, columns = $columns, delim = $delimiter, quote = $quote, '
@@ -434,7 +438,7 @@ def rows_by_file(frame: pl.DataFrame, source: Source) -> tuple[int, ...]:
 def read_json(source: Source) -> SourceRead:
     """JSON read through DuckDB, a flat column for each path and a table for each array's elements, handed to Polars."""
     paths = [file.path for file in source.files]
-    lines = source.format is SourceFormat.NDJSON or not delimited_dialect.first_block(paths[0]).lstrip().startswith(b'[')
+    lines = source.format is SourceFormat.NDJSON or not first_block(paths[0]).lstrip().startswith(b'[')
     layout = sql_text('newline_delimited' if lines else 'array')
     records = f'read_json_objects($paths, format = {layout}, filename = {sql_text(FILE_COLUMN)})'
     parameters = {'paths': paths}

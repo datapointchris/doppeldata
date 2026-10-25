@@ -76,6 +76,8 @@ class DialectFound:
     # Each sniffer's delimiter, quote and escape, or None where it found no dialect.
     duckdb: tuple[str, str, str] | None
     clevercsv: tuple[str, str, str] | None
+    # Whether the two read the same delimiter and quote, a quote neither names being read as `"`.
+    agreed: bool
     chosen: str
     # The share of the block's records that split into the most common number of fields under `dialect`.
     confidence: float
@@ -84,13 +86,9 @@ class DialectFound:
     bom: bool
     # The block's line breaks counted by terminator, `lf` and `crlf`.
     line_terminators: dict[str, int]
-    # `never`, `always`, `non_numeric` or `necessary`, as the block's quoted fields show.
+    # `always`, `non_numeric` or `necessary`, as the block's quoted fields show.
     quoting: str
     trailing_delimiter: bool
-
-    @property
-    def agreed(self) -> bool:
-        return self.duckdb is not None and self.clevercsv is not None and self.duckdb[:2] == self.clevercsv[:2]
 
 
 @dc.dataclass(frozen=True)

@@ -15,7 +15,7 @@ from doppeldata.profiling.backend import SourceFile
 from doppeldata.s3_access import S3_CLIENT_CONFIG
 from doppeldata.s3_access import s3_session
 
-# The most footers read, from a seeded sample of the files beyond that. A footer on S3 costs two ranged GETs.
+# The most footers read, from a seeded sample of the files beyond that, because each footer on S3 is a remote read.
 FOOTERS_READ = 512
 FOOTER_THREADS = 16
 FOOTER_SEED = 0
@@ -39,7 +39,7 @@ def metadata_of(path: str, filesystem: pyarrow.fs.FileSystem | None) -> pq.FileM
         if filesystem is not None:
             return pq.read_metadata(path.removeprefix('s3://'), filesystem=filesystem)
         return pq.read_metadata(path)
-    except OSError as error:
+    except (OSError, pyarrow.ArrowException) as error:
         raise SourceError(f'the footer of {path} could not be read: {error}', exit_code=1) from error
 
 

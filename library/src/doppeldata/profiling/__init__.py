@@ -14,16 +14,22 @@ from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import table_profile
+from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
 
 DEFAULT_K_MIN = 11
-# Each engine's backend class, as its module and name, and the packages that module imports, which install under the same names.
+# Each engine's backend class, as its module and name, the packages that module imports, which install under the same names,
+# and the packages it imports to read a source of one format.
 ENGINES = {
     'polars': (
         'doppeldata.profiling.polars_backend',
         'PolarsBackend',
-        ('polars', 'duckdb', 'pyarrow', 'clevercsv', 'charset_normalizer'),
+        ('polars', 'duckdb', 'pyarrow'),
+        {
+            SourceFormat.CSV: ('clevercsv', 'charset_normalizer'),
+            SourceFormat.TSV: ('clevercsv', 'charset_normalizer'),
+        },
     )
 }
 # The module that lists what was named, and what it imports to list S3, which profiling needs whatever the engine.
@@ -64,8 +70,8 @@ def profile(
         raise ValueError(f'sample must be a positive number of rows, not {sample}')
     if k_min < 1:
         raise ValueError(f'k_min must be at least 1, not {k_min}')
-    module_name, class_name, packages = ENGINES[engine]
-    missing = [package for package in (*packages, *LISTING_PACKAGES) if importlib.util.find_spec(package) is None]
+    module_name, class_name, packages, format_packages = ENGINES[engine]
+    missing = uninstalled((*packages, *LISTING_PACKAGES))
     if missing:
         raise ProfilingEnginesMissing(engine, missing)
     # Imported by name, because each imports packages a library-only install lacks.
@@ -73,6 +79,9 @@ def profile(
     enabled = enabled_packs(packs)
     sources = importlib.import_module(SOURCES_MODULE)
     source = sources.resolve(data)
+    missing = uninstalled(format_packages.get(source.format, ()))
+    if missing:
+        raise ProfilingEnginesMissing(engine, missing)
     if edges_from is not None:
         readers = backend.readers(source.format)
         changed = what_changed(edges_from, source.fingerprint, engine=engine, sample=sample, k_min=k_min, packs=enabled, readers=readers)
@@ -91,6 +100,10 @@ def profile(
         if undescribed or missing:
             warnings.warn(ColumnsNotFrozen(undescribed, missing), stacklevel=2)
     return profiled
+
+
+def uninstalled(packages: Sequence[str]) -> list[str]:
+    return [package for package in packages if importlib.util.find_spec(package) is None]
 
 
 def column_names(document: dict[str, Any]) -> list[str]:

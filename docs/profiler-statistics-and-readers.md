@@ -181,12 +181,12 @@ identity.
 
 ## The library declares no engine, so a job that only generates installs none
 
-polars, duckdb, pyarrow, clevercsv, charset-normalizer and boto3 are imported only by the modules
-that profile, and boto3 also by a write to S3. `ENGINES` names each engine's packages, and `LISTING_PACKAGES` names boto3, which
-listing S3 needs whatever the engine.
-`profile()` checks for every one of them before it imports one, and raises
-`ProfilingEnginesMissing` naming each missing package. `doppeldata-cli` declares them, because
-`profile create` is one of its verbs.
+The profiling packages are imported only by the modules that profile, and boto3 also by a write to
+S3. `ENGINES` in `doppeldata.profiling` names each engine's packages, and the ones it needs to read
+a source of one format, such as CleverCSV for CSV. `LISTING_PACKAGES` names the ones listing S3
+needs whatever the engine. `profile()` checks the engine's and the listing's before it imports one,
+and a format's once the source is listed. Either check raises `ProfilingEnginesMissing` naming each
+missing package. `doppeldata-cli` declares every one, because `profile create` is one of its verbs.
 
 ## A text column is read as the type most of its values parse as
 
@@ -220,28 +220,34 @@ typed as a CSV field is.
 
 ## A delimited file's dialect is DuckDB's sniff, or CleverCSV's where the two disagree
 
-The dialect comes from the first `FIRST_BLOCK_BYTES` of the first file, decompressed. A block cut
-mid-record is trimmed at its last line break.
+The dialect comes from the first `FIRST_BLOCK_BYTES` of the first file holding a record,
+decompressed. A block cut mid-record is trimmed at its last line break. A source none of whose
+files holds a record is refused with a `SourceError` naming them.
 
 - **The encoding is charset-normalizer's guess**, recorded as `detected_encoding`. A UTF-8 BOM is
   recorded as `bom` and stripped. A block named one of `LATIN1_ENCODINGS` is read as Latin-1, and
   any other as UTF-8.
 - **DuckDB's `sniff_csv` and CleverCSV each name a delimiter, a quote and an escape.** CleverCSV is
-  held to `GLUE_DELIMITERS`, the ones Glue's CSV classifier tries. DuckDB's dialect is read where the
-  two agree on the delimiter and the quote, or where CleverCSV finds none. Otherwise CleverCSV's is.
+  held to `GLUE_DELIMITERS`, the ones Glue's CSV classifier tries, as the AWS Glue Developer Guide's
+  "Defining and managing classifiers" lists them. DuckDB's dialect is read where the two agree on
+  the delimiter and the quote, or where CleverCSV finds none. Otherwise CleverCSV's is.
+- **A quote neither sniffer names is read as `"`.** A block quoting no field names none, and a
+  later file of the source may quote one. Reading `"` keeps that file's quoted delimiters inside
+  their fields, where reading no quote splits them. An escape neither names doubles the quote.
 - **`detector` records the two sniffers, whether they agreed, and which was read.** Its `confidence`
   is the share of the block's records splitting into the most common number of fields.
-- **DuckDB misreads a file whose rows disagree.** On six pipe-delimited rows holding a quoted comma,
-  a stray quote, a short row and a long one, DuckDB 2.0.0 names `;` and one column. CleverCSV 0.8.5
-  names `|` with no quote.
-- **The header is decided as Glue's CSV classifier decides it.** That needs two columns and two data
-  rows. Every name in the first record must be text, neither a number nor a boolean. Each but the
-  last must be shorter than `GLUE_HEADER_FIELD_LENGTH`, and every one must match `GLUE_COLUMN_NAME`.
-  Some later record must hold a field that is not text. Where Glue would classify no CSV, DuckDB's
-  sniffed header is read.
-- **`quoting` is read from the block's fields.** It is `never` where no field is quoted and
-  `always` where every one is. It is `non_numeric` where exactly the fields that are not numbers are
-  quoted, and `necessary` otherwise.
+- **DuckDB misreads a file whose rows disagree.** On a pipe-delimited file holding a quoted comma, a
+  stray quote, a short row and a long one, DuckDB 2.0.0 names `;` and one column. CleverCSV 0.8.5
+  names `|` with no quote. `cli/tests/test_profile_file_traits.py` profiles that file.
+- **The header is decided as Glue's CSV classifier decides it**, by the rules "Defining and managing
+  classifiers" gives. That needs two columns and two data rows. Every name in the first record must
+  be text, neither a number nor a boolean. Each but the last must be shorter than
+  `GLUE_HEADER_FIELD_LENGTH`. Every one must match `GLUE_COLUMN_NAME`, the "Single-line string
+  pattern" of the AWS Glue API's "Common data types". Some later record must hold a field that is
+  not text. Where Glue would classify no CSV, DuckDB's sniffed header is read.
+- **`quoting` is read from the block's fields.** It is `always` where every field is quoted, and
+  `non_numeric` where exactly the fields that are not numbers are. Otherwise it is `necessary`,
+  including where no field is quoted, because a writer that never quotes writes that block alike.
 - **`line_terminator_mix` gives each terminator's share of the block's line breaks.** The commoner
   one is `line_terminator`. `trailing_delimiter` is true where every record ends in an empty field.
 

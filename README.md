@@ -116,7 +116,8 @@ The library installs no profiling engine, so a job that only generates carries n
 `doppeldata.profile()` installs them beside it:
 
 ```bash
-uv add polars duckdb pyarrow clevercsv charset-normalizer boto3
+uv add polars duckdb pyarrow boto3
+uv add clevercsv charset-normalizer   # to profile CSV or TSV files
 uv add scipy     # optional: without it, no column is fitted to a distribution family
 ```
 

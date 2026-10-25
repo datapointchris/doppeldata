@@ -1,4 +1,4 @@
-"""A delimited source's dialect and the traits of its bytes, found from its first file's first block.
+"""A delimited source's dialect and the traits of its bytes, found from the first block of its first file holding a record.
 
 DuckDB's sniffer reads first, and CleverCSV confirms it on the block. DuckDB misreads a file whose
 rows disagree, as one with an unbalanced quote, a short row and a long row does, where CleverCSV
@@ -14,20 +14,23 @@ from typing import Any
 import charset_normalizer
 import clevercsv
 import duckdb
-import pyarrow as pa
 
+from doppeldata.errors import SourceError
 from doppeldata.profiling.backend import CsvDialect
 from doppeldata.profiling.backend import DialectFound
 from doppeldata.profiling.backend import SourceFile
+from doppeldata.profiling.first_blocks import FIRST_BLOCK_BYTES
+from doppeldata.profiling.first_blocks import first_block
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
 from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT
 
-FIRST_BLOCK_BYTES = 64 * 1024
-# The delimiters Glue's built-in CSV classifier tries, which CleverCSV is held to.
+# The delimiters the built-in CSV classifier tries, which CleverCSV is held to, from the AWS Glue Developer Guide's
+# "Defining and managing classifiers".
 GLUE_DELIMITERS = (',', '|', '\t', ';', '\x01')
-# Glue reads a first row as a header only where each name but the last is shorter than this.
+# That classifier reads a first row as a header only where each name but the last is shorter than this.
 GLUE_HEADER_FIELD_LENGTH = 150
-# The Glue Data Catalog's single-line string pattern, which every column name must match.
+# The "Single-line string pattern" of the AWS Glue API's "Common data types", which a column name must match. Its
+# surrogate pair range is every code point past U+FFFF.
 GLUE_COLUMN_NAME = re.compile(r'[\u0020-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF\t]*')
 # DuckDB's sniffer writes a missing quote or escape as this text.
 DUCKDB_NONE = '(empty)'
@@ -46,9 +49,10 @@ class Field:
 
 
 def detected(files: tuple[SourceFile, ...], delimiter: str | None, config: dict[str, Any]) -> DialectFound:
-    """The dialect the source's files are read with. `delimiter` fixes the delimiter, as a TSV's is."""
-    path = files[0].path
-    raw = first_block(path)
+    """The dialect the source's files are read with, from the first file holding a record. `delimiter` fixes the
+    delimiter, as a TSV's is.
+    """
+    path, raw = first_record_block(files)
     bom = raw.startswith(UTF8_BOM)
     detected_encoding: str | None = 'utf_16'
     if raw.startswith(UTF16_BOMS):
@@ -63,13 +67,12 @@ def detected(files: tuple[SourceFile, ...], delimiter: str | None, config: dict[
         text = text[: max(text.rfind('\n'), text.rfind('\r'))]
     sniffed = duckdb_dialect(path, encoding, config)
     confirmed = clevercsv_dialect(text, delimiter)
-    agree = sniffed is not None and confirmed is not None and sniffed[:2] == confirmed[:2]
+    agree = sniffed is not None and confirmed is not None and read_as(sniffed)[:2] == read_as(confirmed)[:2]
     chosen = 'duckdb' if agree or confirmed is None else 'clevercsv'
-    separator, quote, escape = (sniffed if chosen == 'duckdb' else confirmed) or (delimiter or ',', '"', '"')
+    found = sniffed if chosen == 'duckdb' else confirmed
+    separator, quote, escape = read_as(found) if found else (delimiter or ',', '"', '"')
     if delimiter:
         separator = delimiter
-    # DuckDB doubles a quote where no escape is named, as RFC 4180 does.
-    escape = escape or quote
     records = split_records(text, separator, quote, escape)
     header = glue_header(records)
     if header is None:
@@ -79,20 +82,36 @@ def detected(files: tuple[SourceFile, ...], delimiter: str | None, config: dict[
         dialect=dialect,
         duckdb=sniffed,
         clevercsv=confirmed,
+        agreed=agree,
         chosen=chosen,
         confidence=consistency(records),
         detected_encoding=detected_encoding,
         bom=bom,
         line_terminators=line_terminators(text),
-        quoting=quoting_of(records, quote),
+        quoting=quoting_of(records),
         trailing_delimiter=bool(records) and all(len(record) > 1 and record[-1].text == '' and not record[-1].quoted for record in records),
     )
 
 
-def first_block(path: str) -> bytes:
-    """The file's first bytes, decompressed by its suffix."""
-    with pa.input_stream(path, compression='detect') as stream:
-        return bytes(stream.read(FIRST_BLOCK_BYTES))
+def first_record_block(files: tuple[SourceFile, ...]) -> tuple[str, bytes]:
+    """The first file whose first block holds more than a byte order mark and white space, and that block."""
+    for file in files:
+        raw = first_block(file.path)
+        if raw.removeprefix(UTF8_BOM).strip():
+            return file.path, raw
+    named = files[0].path if len(files) == 1 else f'every one of the {len(files)} files from {files[0].path}'
+    raise SourceError(f'{named} holds no record, so no dialect can be read from it', exit_code=1)
+
+
+def read_as(found: tuple[str, str, str]) -> tuple[str, str, str]:
+    """A sniffer's delimiter, quote and escape as the files are read.
+
+    A sniffer names no quote where the block quotes no field. Reading `"` then still reads a later file that quotes one,
+    where reading none would split its quoted delimiters. DuckDB doubles a quote where no escape is named, as RFC 4180 does.
+    """
+    delimiter, quote, escape = found
+    quote = quote or '"'
+    return delimiter, quote, escape or quote
 
 
 def duckdb_dialect(path: str, encoding: str, config: dict[str, Any]) -> tuple[str, str, str] | None:
@@ -216,11 +235,14 @@ def line_terminators(text: str) -> dict[str, int]:
     return {'lf': text.count('\n') - crlf, 'crlf': crlf}
 
 
-def quoting_of(records: list[list[Field]], quote: str) -> str:
-    """How the writer quoted: no field, every field, every field that is not a number, or where a field needs it."""
+def quoting_of(records: list[list[Field]]) -> str:
+    """How the writer quoted: every field, every field that is not a number, or where a field needs it.
+
+    A block quoting no field reads as `necessary`, because a writer that never quotes writes it alike.
+    """
     fields = [field for record in records for field in record if field.text or field.quoted]
-    if not quote or not any(field.quoted for field in fields):
-        return 'never' if not quote else 'necessary'
+    if not any(field.quoted for field in fields):
+        return 'necessary'
     if all(field.quoted for field in fields):
         return 'always'
     if all(field.quoted != bool(NUMBER.match(field.text)) for field in fields):
