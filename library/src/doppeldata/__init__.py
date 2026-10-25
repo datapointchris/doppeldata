@@ -46,6 +46,7 @@ from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import UngenerableProfile
 from doppeldata.profiling import profile
+from doppeldata.profiling import profile_tables
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 
@@ -92,6 +93,7 @@ __all__ = [
     'integers',
     'plan',
     'profile',
+    'profile_tables',
     'stream',
     'write',
 ]

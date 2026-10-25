@@ -130,24 +130,31 @@ def test_no_histogram_bin_less_the_listed_values_in_it_leaves_a_cell_under_k_min
     assert not 0 < round(numeric['zero_rate'] * len(values)) < 11
 
 
-def test_a_directory_whose_folders_share_a_schema_is_one_table_and_one_whose_folders_differ_is_a_bundle(tmp_path):
+def test_drifted_hive_folders_are_one_table_and_unlike_folders_are_refused_unless_tables_writes_a_bundle(tmp_path):
     orders = pl.DataFrame({'order_id': range(60), 'amount': [i * 1.5 for i in range(60)]})
     customers = pl.DataFrame({'customer_id': range(60), 'region': [('north', 'south')[i % 2] for i in range(60)]})
-    for year in (2023, 2024):
+    # A later partition widens a column and adds one, which leaves under 70 percent of the typed columns shared.
+    drifted = {2023: orders.with_columns(pl.col('order_id').cast(pl.Int32)), 2024: orders.with_columns(channel=pl.lit('web'))}
+    for year, table in drifted.items():
         (tmp_path / 'hive' / f'year={year}').mkdir(parents=True)
-        orders.write_parquet(tmp_path / 'hive' / f'year={year}' / 'part.parquet')
+        table.write_parquet(tmp_path / 'hive' / f'year={year}' / 'part.parquet')
         # Hive folders of CSV, whose keys a text read must type from their text.
         (tmp_path / 'hive-csv' / f'year={year}').mkdir(parents=True)
         orders.write_csv(tmp_path / 'hive-csv' / f'year={year}' / 'part.csv')
-    for name, table in (('orders', orders), ('customers', customers)):
+    for name, table in (('orders_2023', orders), ('orders_2024', orders), ('customers', customers)):
         (tmp_path / 'mixed' / name).mkdir(parents=True)
         table.write_parquet(tmp_path / 'mixed' / name / 'part.parquet')
 
-    for tree in ('hive', 'hive-csv', 'mixed'):
+    for tree in ('hive', 'hive-csv'):
         result = CliRunner().invoke(app, ['profile', 'create', str(tmp_path / tree), '--out', str(tmp_path / f'{tree}.yaml')])
         assert result.exit_code == 0, result.output
-
-    for tree in ('hive', 'hive-csv'):
         hive = Profile.load(tmp_path / f'{tree}.yaml').to_plain()
         assert [key['name'] for key in hive['source']['layout']['partitioning']['keys']] == ['year']
-    assert Bundle.load(tmp_path / 'mixed.yaml').tables.keys() == {'customers', 'orders'}
+        assert hive['dataset']['row_count'] == 120
+
+    refused = CliRunner().invoke(app, ['profile', 'create', str(tmp_path / 'mixed')])
+    assert refused.exit_code == 2
+    bundled = CliRunner().invoke(app, ['profile', 'create', str(tmp_path / 'mixed'), '--tables', '--out', str(tmp_path / 'mixed.yaml')])
+    assert bundled.exit_code == 0, bundled.output
+    tables = Bundle.load(tmp_path / 'mixed.yaml').tables
+    assert {name: table.to_plain()['dataset']['row_count'] for name, table in tables.items()} == {'customers': 60, 'orders': 120}

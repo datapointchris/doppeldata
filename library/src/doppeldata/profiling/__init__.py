@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from doppeldata import errors
-from doppeldata._core import FORMAT_VERSION
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import ProfilingEnginesMissing
@@ -117,16 +116,15 @@ def profile(
     edges_from: Profile | None = None,
     packs: Sequence[str] = (),
     code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
-) -> Profile | Bundle:
-    """Profile `data` into a valid profile holding no rows, written under the privacy policy `policy`.
+) -> Profile:
+    """Profile `data` into a valid profile of one table holding no rows, written under the privacy policy `policy`.
 
     `data` is a path, an `s3://` URL, a list of them, a pyarrow, Polars or pandas table, or under `engine='spark'` a
-    Spark DataFrame. One directory or prefix named is grouped into tables as an AWS Glue crawler groups one: where its
-    folders' schemas are similar it is one table, and otherwise the result is a `Bundle` of one table per cluster of
-    similar folders. `sample` profiles a seeded random sample of that many rows. Under `default`, `strict` and
-    `healthcare`, no stored literal rests on fewer than `k_min` rows, `DEFAULT_K_MIN` unless given, and
-    `privacy.audit` lists each one. `none` keeps every value, and takes and states no `k_min`. `healthcare` also
-    enables the healthcare detector pack.
+    Spark DataFrame. One directory or prefix named is grouped as an AWS Glue crawler groups one, and where it holds
+    several tables a `SourceError` names each, so `profile_tables` profiles them or one table's folder is named.
+    `sample` profiles a seeded random sample of that many rows. Under `default`, `strict` and `healthcare`, no stored
+    literal rests on fewer than `k_min` rows, `DEFAULT_K_MIN` unless given, and `privacy.audit` lists each one. `none`
+    keeps every value, and takes and states no `k_min`. `healthcare` also enables the healthcare detector pack.
 
     `engine` is `polars` or `spark`. Spark profiles in `spark`, the session given, else a DataFrame's own, the active
     session, or one pyspark's builder starts: over Spark Connect where `SPARK_REMOTE` names a server, else on
@@ -143,79 +141,37 @@ def profile(
     `generated.code_lists` records each list's sha256 and never its path. `InvalidCodeList` names a list no
     enabled detector reads, or a file that cannot be read.
 
-    `edges_from` is an earlier profile of the same table. Where its source fingerprint matches the files
-    listed now, and it was made by this doppeldata, scipy, detector packs, code lists and readers, such as DuckDB and
-    CleverCSV, with the same engine, policy, `k_min` and sampling, it is returned unchanged, so a reviewer's
-    edits survive a re-run. Otherwise an `EarlierProfileNotReused` names what differs, each column it holds a
-    histogram or value list for is counted against those, and the rows outside them are written as the
-    column's `overflow`. A column only one of the two tables holds, or whose list would move to another
-    section, issues `ColumnsNotFrozen`.
+    `edges_from` is an earlier profile of the same table, so the source is profiled as one table without grouping.
+    Where its source fingerprint matches the files listed now, and it was made by this doppeldata, scipy, detector
+    packs, code lists and readers, such as DuckDB and CleverCSV, with the same engine, policy, `k_min` and sampling,
+    it is returned unchanged, so a reviewer's edits survive a re-run. Otherwise an `EarlierProfileNotReused` names what
+    differs, each column it holds a histogram or value list for is counted against those, and the rows outside them
+    are written as the column's `overflow`. A column only one of the two tables holds, or whose list would move to
+    another section, issues `ColumnsNotFrozen`.
     """
-    if sample is not None and sample < 1:
-        raise ValueError(f'sample must be a positive number of rows, not {sample}')
-    chosen = available_engine(engine)
-    if spark is not None and not chosen.sessioned:
-        raise ValueError(f'spark names the session engine spark profiles in, and engine {engine} takes none')
-    applied = applied_policy(policy, k_min)
-    stated = applied.k_min(k_min)
-    # `none` holds no floor, so every statistic is computed over every row.
-    floor = stated or 1
-    named = [*packs, HEALTHCARE] if applied is Policy.HEALTHCARE and HEALTHCARE not in packs else list(packs)
-    enabled = enabled_packs(named)
-    supplied = read_code_lists(code_lists or {}, enabled)
-    source, reading = listed_source(data, engine)
-    tables = table_grouping.grouped(source)
-    if edges_from is not None and len(tables) > 1:
-        grouping = f'{", ".join(source.roots)} groups into {len(tables)} tables'
-        message = f"edges_from is one table's profile, and {grouping}; profile each table's folder on its own"
-        raise SourceError(message)
+    settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
+    listed, reading = listed_source(data, engine)
+    source = listed if edges_from is not None else table_grouping.only_table(listed)
     backend = engine_backend(engine, data, spark)
-    readers = {
-        package.distribution: backend.session_version
-        if package.read_by_session and backend.session_version
-        else importlib.metadata.version(package.distribution)
-        for package in reading
-    }
+    readers = session_readers(backend, reading)
     if edges_from is not None:
         changed = what_changed(
             edges_from,
             source.fingerprint,
             engine=engine,
             sample=sample,
-            policy=applied,
-            k_min=stated,
-            packs=enabled,
-            code_lists=supplied,
+            policy=settings.policy,
+            k_min=settings.k_min,
+            packs=settings.packs,
+            code_lists=settings.code_lists,
             readers=readers,
         )
         if changed is None:
             return edges_from
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=2)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
-    profiled = {}
-    with backend.profiling():
-        for table in tables:
-            document = table_profile.profile_table(
-                backend,
-                table,
-                sample=sample,
-                k_min=floor,
-                policy=applied,
-                packs=enabled,
-                code_lists=supplied,
-                readers=readers,
-                frozen=frozen,
-            )
-            profiled[table.name] = Profile(document)
-    importlib.import_module(SOURCES_MODULE).check_unchanged(source)
-    if len(tables) > 1:
-        bundle = Bundle({'profile_version': FORMAT_VERSION, 'kind': 'bundle', 'name': source.name, 'tables': {}}, tables=profiled)
-        bundle.document['tables'] = {name: table.document for name, table in profiled.items()}
-        issues = bundle.validate()
-        if issues:
-            raise InvalidProfile(f'the profile of {data!r}', issues)
-        return bundle
-    only = next(iter(profiled.values()))
+    only = profiled_tables(backend, [source], settings, readers, frozen)[source.name]
+    importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
     issues = only.validate()
     if issues:
         raise InvalidProfile(f'the profile of {data!r}', issues)
@@ -226,6 +182,103 @@ def profile(
         if undescribed or missing or relisted:
             warnings.warn(ColumnsNotFrozen(undescribed, missing, relisted), stacklevel=2)
     return only
+
+
+def profile_tables(
+    data: Any,
+    *,
+    engine: str = 'polars',
+    spark: Any = None,
+    sample: int | None = None,
+    policy: str = Policy.DEFAULT,
+    k_min: int | None = None,
+    packs: Sequence[str] = (),
+    code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
+) -> Bundle:
+    """Profile every table `data` holds into a valid bundle, taking `profile`'s arguments but `edges_from`.
+
+    One directory or prefix named is grouped as an AWS Glue crawler groups one. Folders whose column names are
+    similar are one table, named for the folders' common stem, and any other source is a bundle of one table.
+    """
+    settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
+    listed, reading = listed_source(data, engine)
+    tables = [table.source for table in table_grouping.grouped(listed)]
+    backend = engine_backend(engine, data, spark)
+    profiled = profiled_tables(backend, tables, settings, session_readers(backend, reading), None)
+    importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
+    bundle = Bundle.of(listed.name, profiled)
+    issues = bundle.validate()
+    if issues:
+        raise InvalidProfile(f'the profile of {data!r}', issues)
+    return bundle
+
+
+@dc.dataclass(frozen=True)
+class RunSettings:
+    """What a run profiles with, checked before any source is read. `k_min` is the floor stated, None under `none`."""
+
+    engine: str
+    sample: int | None
+    policy: Policy
+    k_min: int | None
+    packs: list[EnabledPack]
+    code_lists: Mapping[str, SuppliedCodeList]
+
+
+def run_settings(
+    engine: str,
+    spark: Any,
+    sample: int | None,
+    policy: str,
+    k_min: int | None,
+    packs: Sequence[str],
+    code_lists: Mapping[str, str | os.PathLike[str]] | None,
+) -> RunSettings:
+    if sample is not None and sample < 1:
+        raise ValueError(f'sample must be a positive number of rows, not {sample}')
+    chosen = available_engine(engine)
+    if spark is not None and not chosen.sessioned:
+        raise ValueError(f'spark names the session engine spark profiles in, and engine {engine} takes none')
+    applied = applied_policy(policy, k_min)
+    named = [*packs, HEALTHCARE] if applied is Policy.HEALTHCARE and HEALTHCARE not in packs else list(packs)
+    enabled = enabled_packs(named)
+    return RunSettings(engine, sample, applied, applied.k_min(k_min), enabled, read_code_lists(code_lists or {}, enabled))
+
+
+def session_readers(backend: Backend, reading: Sequence['EnginePackage']) -> dict[str, str]:
+    """The version of each package that reads the source, as `generated.readers` records it."""
+    return {
+        package.distribution: backend.session_version
+        if package.read_by_session and backend.session_version
+        else importlib.metadata.version(package.distribution)
+        for package in reading
+    }
+
+
+def profiled_tables(
+    backend: Backend,
+    tables: Sequence[Source],
+    settings: RunSettings,
+    readers: dict[str, str],
+    frozen: table_profile.FrozenLayout | None,
+) -> dict[str, Profile]:
+    profiled = {}
+    with backend.profiling():
+        for table in tables:
+            document = table_profile.profile_table(
+                backend,
+                table,
+                sample=settings.sample,
+                # `none` holds no floor, so every statistic is computed over every row.
+                k_min=settings.k_min or 1,
+                policy=settings.policy,
+                packs=settings.packs,
+                code_lists=settings.code_lists,
+                readers=readers,
+                frozen=frozen,
+            )
+            profiled[table.name] = Profile(document)
+    return profiled
 
 
 def available_engine(engine: str) -> Engine:
@@ -278,11 +331,13 @@ class SampledTable:
 def sampled_table(data: Any, rows: int, *, engine: str = 'polars', seed: int = table_profile.SAMPLE_SEED) -> SampledTable:
     """A seeded random sample of up to `rows` rows of `data`, anything `profile` reads, at the types `profile` reads them as.
 
-    A file that changes, appears or goes away while it is read raises the `SourceError` profiling raises.
+    A source that groups into several tables, and a file that changes, appears or goes away while it is read, raise
+    the `SourceError` `profile` raises.
     """
     if rows < 1:
         raise ValueError(f'rows must be a positive number of rows, not {rows}')
-    source, _ = listed_source(data, engine)
+    listed, _ = listed_source(data, engine)
+    source = table_grouping.only_table(listed)
     backend = engine_backend(engine, data)
     with backend.profiling():
         table = table_profile.typed_table(backend, source)

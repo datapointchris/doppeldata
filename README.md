@@ -90,9 +90,10 @@ From Python, `sd.profile(frame,
 engine='spark')` profiles a DataFrame in its own session, and `spark=` names a session for files.
 `docs/profiling-with-spark.md` gives the commands for a Glue job and a Glue Spark Connect session.
 
-A directory whose folders hold unlike schemas is profiled as a bundle, one table per kind of folder,
-as an AWS Glue crawler splits a prefix. Folders that match are one table, their `key=value` names
-Hive partitions.
+A directory whose folders hold unlike column names is refused, and the refusal names each table it
+holds. `--tables` profiles it as a bundle of one table per kind of folder, as an AWS Glue crawler
+splits a prefix. Folders sharing most of their column names are one table, and `key=value` folders
+are always Hive partitions of one.
 
 A profile is written under a privacy policy, `default` unless `--policy` names another. No data value
 it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. A

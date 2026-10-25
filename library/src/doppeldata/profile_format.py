@@ -382,7 +382,9 @@ class Profile:
         profile = cls(read_document(path), path)
         issues = profile.validate()
         if not issues and profile.document.get('kind') != 'table':
-            issues = [Issue('not-a-table', '/kind', 'this file is a bundle, which Bundle.load reads')]
+            tables = ', '.join(profile.document.get('tables') or {})
+            message = f"this file is a bundle of the tables {tables}; profile one table's folder for a table profile"
+            issues = [Issue('not-a-table', '/kind', message)]
         if issues:
             raise InvalidProfile(str(path), issues)
         return profile
@@ -442,11 +444,15 @@ class Profile:
 class Bundle:
     """Several tables' profiles and their relationships: a `kind: bundle` file, or a directory holding `bundle.yaml`."""
 
-    def __init__(self, document: Any, path: Path | None = None, tables: dict[str, Profile] | None = None) -> None:
-        """A bundle of `document`, whose tables are inline unless `tables` holds each one read from its own file."""
+    def __init__(self, document: Any, path: Path | None, tables: dict[str, Profile]) -> None:
         self.document = document
         self.path = path
-        self.tables = tables if tables is not None else {name: Profile(entry) for name, entry in document['tables'].items()}
+        self.tables = tables
+
+    @classmethod
+    def of(cls, name: str, tables: dict[str, Profile]) -> 'Bundle':
+        """A bundle named `name` of `tables`, with no file of its own, so its `save` needs a path."""
+        return cls({'profile_version': FORMAT_VERSION, 'kind': 'bundle', 'name': name, 'tables': {}}, None, tables)
 
     @classmethod
     def load(cls, path: str | Path) -> 'Bundle':

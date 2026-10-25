@@ -403,40 +403,55 @@ statistic is taken from the rows, under the floor below.
 - **`sort_order` is the sorting columns every footer declares.** Without them, it is the first
   integer column whose values never fall in read order.
 
-## A directory whose folders hold unlike schemas is profiled as a bundle, as a Glue crawler splits one
+## A directory whose folders hold unlike column names is grouped as a Glue crawler groups one, and profiled as tables only on request
 
 A Glue crawler compares the schemas of the folders under a prefix. Where they match "and the
 partition threshold is higher than 70 percent", the folders are partitions of one table. Otherwise
 "the crawler creates a table for every folder", each named after its folder
 (<https://repost.aws/knowledge-center/glue-crawler-multiple-tables>,
 <https://docs.aws.amazon.com/glue/latest/dg/add-crawler.html>). `profiling/table_grouping.py`
-groups a directory or prefix the same way, with one difference below. It runs before an engine is
-chosen, so Polars and Spark group alike.
+groups a directory or prefix the same way, with the differences below. It runs before an engine
+starts, so Polars and Spark group alike.
 
-- **Each folder directly under the root is a candidate table.** The files directly under the root
-  are one more, named after the root. The listing resolves links, so a linked file whose target
-  lies outside the root joins the root's own files.
-- **A folder's schema is the union of up to `FILES_READ` of its files' schemas.** A Parquet or
-  Arrow file gives (name, type) pairs. A CSV or TSV gives its header's names, or `col0`, `col1` and
-  on where Glue would find no header. A JSON file gives the keys of its first `RECORDS_READ` records.
-- **Two folders are one table where their schemas share more than `SIMILAR` of their pairs**, the
-  crawler's 70 percent. Each folder joins the first cluster whose first folder it matches, in name
-  order. A schema that could not be read matches any.
-- **One cluster is one table, its `key=value` folders Hive partitions.**
-- **Several clusters are a bundle of one table per cluster**, named after the cluster's first
-  folder. This is the difference from the crawler, which makes a table of every folder. Two kinds
-  of table under one prefix, each written as many folders, become two tables rather than one per
-  folder.
+- **`profile()` and `profile create` always give one table.** A source that groups into several is
+  refused with exit 2. The refusal names each table with its folders and up to `NAMES_SHOWN` of its
+  column names, and names both ways out: `profile_tables()` or `profile create --tables`, or one
+  table's folder. A caller then never gets a result whose type depends on what landed on disk.
+- **`profile_tables()` and `profile create --tables` give a `Bundle`**, of one table where the source
+  groups into one. `--out` writes one file of `kind: bundle` holding the tables inline. Two tables
+  taking one name fail the profile.
+- **`edges_from` skips grouping**, because an earlier profile's edges belong to one table. The
+  source is profiled as one table, as before grouping existed. So `data check`, which passes the
+  profile it checks as `edges_from`, reads a generated directory whole.
+- **Each folder directly under the root is a candidate table, and its `key=value` folders never
+  are.** The files directly under the root are one more candidate, and every `key=value` folder is
+  one, both named after the root. A partition is a partition by construction, so drift across
+  `dt=` or `year=` folders never splits a table. The listing resolves links, so a linked file
+  whose target lies outside the root joins the root's own files.
+- **A folder's column names are the union of up to `FILES_READ` of its files'.** A Parquet file's
+  come from its footer and an Arrow file's from its schema. A CSV or TSV gives its header's names,
+  or `col0`, `col1` and on where Glue would find no header. A JSON file gives the keys of its first
+  `RECORDS_READ` records, read a record at a time where it is one array.
+- **Two folders are one table where they share more than `SIMILAR` of their column names**, the
+  crawler's 70 percent. Types are left out, because both readers widen a column across files. One
+  int32 column widened to int64 would otherwise leave a four-column table under the bar. Each
+  folder joins the first cluster whose first folder it matches, in name order.
+- **A folder whose names could not be read matches no other**, and becomes a table of its own with
+  a `ProfilingWarning` naming it. An Arrow file on S3, a JSON file holding no object, and a folder
+  of empty files read no names. Where no folder's names could be read, the source is one table.
+- **Several clusters are a bundle of one table per cluster**, where the crawler makes a table of
+  every folder. Two kinds of table under one prefix, each written as many folders, become two
+  tables rather than one per folder.
+- **A cluster is named for its folders' common prefix, less trailing digits and separators**, so
+  `orders_2024/` and `orders_2025/` are `orders`, and a new `orders_2023/` keeps the name. A
+  cluster holding the root's own files or its `key=value` folders takes the root's name, and one
+  whose prefix leaves nothing takes its first folder's.
 - **More than `MOST_CLUSTERS` clusters make each folder its own table**, as the crawler does. That
   many kinds of table under one prefix says the folders share no structure worth keeping.
-- **`profile()` returns a `Bundle` for several tables, and `profile create --out` writes one file**
-  of `kind: bundle` holding them inline. Two tables taking one name fail the profile.
-- **`edges_from` refuses a source that groups into several tables**, because an earlier profile's
-  edges belong to one table. Each table's folder is profiled on its own instead.
 - **Several paths named are one table**, as a crawler's include path is.
 
 *Not established:* how the crawler measures a match. Neither page defines it, so the share of
-(name, type) pairs is this design's reading of "70 percent".
+column names is this design's reading of "70 percent".
 
 ## A JSON source is profiled path by path
 
