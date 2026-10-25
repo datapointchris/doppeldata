@@ -37,7 +37,8 @@ spark-parity/   the check that doppeldata.spark matches a local run inside each 
   imports it. A heavy engine used by one feature, such as pyspark or scipy, is imported lazily and
   declared nowhere, and its missing-import error names what to install.
 - **A change to a sampler's or a perturbation's draw order raises the engine's stream version**, and
-  so does the engine starting to read a profile field it ignored before. The stream version is part
+  so does a change to how a scenario's patch merges, or the engine starting to read a profile field
+  it ignored before. The stream version is part
   of a generated dataset's identity. `docs/determinism-contract.md` says what else must never change.
   The determinism contract test pins the stream version and a hash over what
   `crates/core/tests/every-column-kind.profile.yaml` generates, as one pair. A second hash covers it

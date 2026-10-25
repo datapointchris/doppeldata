@@ -129,8 +129,9 @@ spark-parity/check-spark-parity.sh dist/doppeldata-*-cp311-abi3-manylinux_2_17_x
   Hadoop's login refuses a uid with no name.
 - **`--scenario FILE` applies a scenario to every run.** `spark-parity/eight-columns.scenario.yaml`
   holds every op that writes rows, and a schema drift. `write` and the host's run apply all of it.
-  `generate` and `sd.stream` apply its ops that write rows. Under it, `apache/spark:3.5.9-python3`
-  gave identical values at 7 and 40 partitions. 10 of 10 files matched, the drifted half included.
+  `generate` and `sd.stream` apply its ops that write rows. `spark-parity/check-spark-parity.sh
+  --scenario spark-parity/eight-columns.scenario.yaml WHEEL apache/spark:3.5.9-python3` gave
+  identical values at 7 and 40 partitions, and 10 of 10 files matched, the drifted half included.
 
 ## On Glue 5.1, a billion rows written from the executors match a local run file for file
 

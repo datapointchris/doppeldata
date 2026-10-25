@@ -202,9 +202,13 @@ same shape either way.
 
 - **`scenario` holds the scenario's name and digest.** Several composed are named together, joined
   by `+`.
-- **`profile` still names the profile as given.** The data is measured against it patched, so a
-  null rate the scenario's patch sets is the one expected.
-- **Each expectation is a row of its metric, column, bounds, measured value and `passed`.**
+- **`profile` names the profile as given.** The data is measured against it patched, so a null
+  rate the scenario's patch sets is the one expected.
+- **Each expectation is a row of its metric, column, bounds, measured value and `passed`.** An
+  expectation the data cannot measure, such as on a column it lacks, has a null `value` and fails,
+  with `unmeasured` saying why.
+- **A metric's `value` is null for one of two reasons.** `unmeasured` says why the data cannot
+  supply it, and `skipped_by` names the perturbation that moves it.
 
 The JSON Schemas are derived from the core crate's `profile_comparison`
 model, and `doppeldata schemas show check` and `schemas show diff` print them.

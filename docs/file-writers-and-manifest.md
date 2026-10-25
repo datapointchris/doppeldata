@@ -194,9 +194,13 @@ so it never reads as data. Its schema is `doppeldata schemas show manifest`.
   object nears that bound.
 - **`format` and `writer` record every setting**, defaults included, so nothing depends on a later
   default.
-- **`scenario` records the scenario's name and the path it was loaded from.** A composition is
-  named with its members' names joined by `+`, lists them in `composed_of`, and has no path. The
-  identity's `scenario_digest` is what names the scenario exactly.
+- **`scenario` records the scenario's name, the path it was loaded from, and its `document`.** The
+  document is the canonical JSON the identity's `scenario_digest` covers. So the dataset
+  regenerates with no scenario file, including from a parameterized example.
+- **A composition is named with its members' names joined by `+`, and has no path.** `composed_of`
+  lists each member's name, path and digest, so an edited member shows which one moved.
+- **`identity.dataset_rows` counts the rows generated**, before any copies a scenario's
+  `duplicates` adds. The files' rows sum to the rows written.
 - **Each file records its path, its range, the range's first row and row count, its own rows, its
   bytes and its SHA-256.** `regenerate()` rebuilds the ranges from them. It refuses a partial
   manifest, a plan whose identity differs, and ranges that leave a gap.

@@ -36,7 +36,7 @@ The SHA-256 is taken over the RFC 8785 canonical JSON of one object with five ke
   the absence of one, so it hashes as an absence rather than as the digest of an empty file.
 - **The profile's digest is the profile's as given, before a scenario patches it.** The scenario's
   digest covers the patch. A scenario's digest resolves every perturbation's id and leaves out its
-  `description`, so rewording it keeps the dataset's identity.
+  `description` and `expect`. So rewording it or moving a bound keeps the dataset's identity.
 
 A test pins the digest of one fixed identity, which the library's `rfc8785` package reproduces.
 
@@ -95,7 +95,7 @@ manifest, and names any whose bytes moved.
 A test pins a SHA-256 beside the stream version, as one pair. The hash covers the values and text
 cells of a fixture holding one column of every kind, fitted family and provider, and of every
 profile field the engine reads. A second hash covers the same fixture under a scenario fixture
-holding every op that writes rows. A change that moves a value fails it until both are updated
+holding a patch and every op that writes rows. A change that moves a value fails it until both are updated
 together. The fixtures are the test's own, so editing a bundled example moves no pin.
 
 ## Every exp, log and pow that feeds a value is libm's, so values match on every platform
@@ -122,3 +122,6 @@ reads the pinned hash and the test's inputs from the test's source, so the pin h
 failure on one runner is a platform difference, and never a reason to loosen the pin. The same
 workflow refuses a pinned hash that changed since the last release while the pinned stream version
 stayed level. It compares only the pins that release held, so a new pin starts at the next one.
+Where a fixture changed since the release at a level stream version, its hash cannot be compared.
+The workflow then generates the release's own fixtures with this build, which must reach the
+release's hash.
