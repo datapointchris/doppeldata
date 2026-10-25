@@ -166,8 +166,8 @@ pa.RecordBatchReader.from_stream(sd.stream(profile, rows=10**9, seed=7))   # pya
 - **The stream holds at most two batches per thread.** Each worker owns a channel one batch deep,
   and the reader takes the workers' blocks in turn. So a billion-row stream runs in the memory of a
   few blocks, and its batches arrive in row order.
-- **The values are the Arrow values every format writes.** A `type_mix` error or a missing-value
-  token exists only as text, so the table holds those rows as null. CSV and JSON print them.
+- **The values are the Arrow values every format writes.** A missing-value token exists only as
+  text, so the table holds its rows as null. CSV and JSON print it.
 - *Rejected:* returning a pyarrow table. pyarrow would become a dependency of every job that only
   generates, and a Polars or DuckDB job reads the capsule without it.
 - *Rejected:* arro3-core. pyo3-arrow's classes already carry the capsule interface, so arro3 would

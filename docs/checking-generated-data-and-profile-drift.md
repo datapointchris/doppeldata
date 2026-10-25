@@ -147,6 +147,22 @@ relative change, as `distinct_ratio_delta`'s is, and each defaults to at most 0.
 - **Data whose profile records no layout leaves each of the three unmeasured**, as a table in
   memory does. A source profile with no layout, as a hand-written one may be, gets none of them.
 
+## `malformed_rate_delta` compares the rejected rows by type, only where the data was written broken
+
+A CSV or TSV source profile recording malformed rows gets one table row. Its value is the largest
+relative change in one `source.csv.malformed.by_type` share, over the types the source records. It
+defaults to at most 0.20.
+
+- **Data written without `malformed_rows` passes the row with no value.** Its `unmeasured` says no
+  perturbation asked for malformed rows, and it decides nothing. So a plain generation from a
+  profile of broken files passes its check.
+- **Data written under `malformed_rows` with no `rate` is compared.** The op reproduced the source's
+  shares, so the row checks it did.
+- **Data written under named `kinds` skips the row**, and `distinct_ratio_delta` on every column.
+  Those kinds replace the source's, and a broken row adds values to the column it breaks.
+- **Data the other profile reads as neither CSV nor TSV leaves the row unmeasured**, because no
+  reader rejected its rows.
+
 ## A metric the other profile cannot supply is a row with no value
 
 Where the source states what a metric compares and the other profile holds nothing to compare it
@@ -294,6 +310,9 @@ Drift between two months of one dataset is expected, so `profile diff` exits 1, 
 - **A missing file, an unreadable profile, an invalid scenario or a bad thresholds file exits
   2.** So does DATA holding
   `_manifest.partial.json`, because the write there stopped or is still running.
+- **DATA holding `header_drift`, `mixed_line_endings` or `wrong_delimiter` faults exits 2**, in one
+  line naming the kinds. The profiler reads every file in the first one's dialect and header, so
+  it cannot read such files back as one table.
 
 ## The report's shape does not change when a scenario applies
 

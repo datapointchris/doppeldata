@@ -24,8 +24,8 @@ which task makes them.
 - **Each executor builds the engine's plan from what the driver resolved**: the profile's JSON, its
   digest, the scenario, the seed and the row count. It builds it once per Python worker process.
 - **A scenario's perturbations apply inside each block, so `scenario=` moves no value with the
-  partition count either.** `generate` refuses `schema_drift` and `small_files` as
-  `op-needs-files`, because they shape files and a DataFrame has none. `write` applies them.
+  partition count either.** `generate` refuses `schema_drift`, `small_files` and `malformed_rows`
+  as `op-needs-files`, because they shape files and a DataFrame has none. `write` applies them.
 - **An executor running another doppeldata release or stream version than the driver refuses the
   task.** A dataset's bytes are the build's that writes them, so a mixed cluster would write a
   manifest that names one build over files from two. Every unstamped build reports version 0.0.0,
@@ -42,15 +42,17 @@ which task makes them.
 The write is split three ways. The driver claims the destination with `_manifest.partial.json`,
 exactly as a local write does. Each task writes whole planned ranges through the engine's
 `Plan.write_ranges`, which runs the range writer a local write runs, and yields one record per
-object it stored. The driver then stores `_manifest.json` from every record and removes the claim.
-So object *i* holds the bytes a local `doppeldata data generate` writes for range *i*.
+object it stored, with the faults `malformed_rows` placed in it. The driver then stores
+`_faults.ndjson` under that op, then `_manifest.json` from every record, and removes the claim. So
+object *i* holds the bytes a local `doppeldata data generate` writes for range *i*, and the fault
+list is the local one.
 
 ```text
 driver   claim ─── _manifest.partial.json
            │
-tasks    write_ranges(0) write_ranges(1) ... write_ranges(n)   one record per object
+tasks    write_ranges(0) write_ranges(1) ... write_ranges(n)   records and faults
            │
-driver   commit ─── _manifest.json, claim removed
+driver   commit ─── _faults.ndjson, _manifest.json, claim removed
 ```
 
 - **`partitions` is at most one per planned range, and one per range unless given.** A partition
@@ -110,7 +112,8 @@ integer.
 the `eight-columns` example through `generate` with 7 and with 40 partitions, collects them as
 Arrow, and compares every value with `sd.stream`, each float by its bits. It then writes them through
 `write` with each partition count, and compares every file's SHA-256 with a `doppeldata data
-generate` of the same arguments run on the host. Last, it checks `spark_holds` against how the image
+generate` of the same arguments run on the host. Under `malformed_rows` it compares `_faults.ndjson`
+byte for byte too. Last, it checks `spark_holds` against how the image
 carries each fixture column. Build the wheel, then run it over the images it names by default:
 
 ```bash

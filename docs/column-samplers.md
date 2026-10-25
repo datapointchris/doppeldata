@@ -246,15 +246,17 @@ last day hold only their granules inside the extremes, and count in a month's or
 by that fraction of the day. So a stored weekday share holds exactly, and no value is clamped onto
 an extreme.
 
-## A value only text can carry is a separate cell, and null in Arrow
+## A missing-value token is a separate cell, and null in Arrow
 
-A `type_mix` share such as 0.1% `string` in an integer column cannot be an Arrow value. The batch
-holds a null there, and `Plan::text_cells` returns the text a CSV or JSON writer prints in its place.
+A `missing_tokens` token such as `N/A` in an integer column cannot be an Arrow value. The batch
+holds a null there, and `Plan::text_cells` returns the token a CSV or JSON writer prints in its
+place.
 
-- **A string column's `type_mix` adds nothing.** A string holds any raw value as itself, and the
-  column's string statistics were taken over all of them, the ones parsing as numbers included.
 - **Each `missing_tokens` rate is a share of all rows.** A null row prints a token by those rates,
   and prints nothing in the share of rows the tokens leave uncovered. Tokens whose rates sum above
   the null rate are refused.
-- **A nested field's `type_mix` and `missing_tokens` are refused.** A text cell names a row of a
-  top-level column, so it has nowhere to put a value inside a list or struct.
+- **A nested field's `missing_tokens` are refused.** A text cell names a row of a top-level column,
+  so it has nowhere to put a value inside a list or struct.
+- **`type_mix` shapes no plain write.** A value of another type is a row a strict reader rejects,
+  so only `malformed_rows` writes one, as a `type_invalid` fault.
+  [scenario-overlays.md](scenario-overlays.md) says how it reproduces a profile's shares.

@@ -277,9 +277,9 @@ in, whose version is the cluster's, so a missing pyspark is refused with that sa
 Each non-null raw value is classified as the first of `RAW_TYPES` it parses as, in one chain, so the
 counts are disjoint. A value parsing as none of them is a string. The shares become `type_mix`. The
 type that reads the most values is the column's, and a decimal column reads every integer too, so
-decimal's count includes them. A value of another type is null in the parsed column, and the
-generator prints it back as text from `type_mix`. In a decimal column the integers' share folds into
-decimal's.
+decimal's count includes them. A value of another type is null in the parsed column. Only a
+`malformed_rows` perturbation writes one back, as a `type_invalid` fault. In a decimal column the
+integers' share folds into decimal's.
 
 A digit run with a leading zero, such as a ZIP code, parses as no number. A column holding one is
 read as text whatever its other values parse as, because padding means the digits are a code. A run
@@ -478,9 +478,8 @@ table of their own, profiled as a table is.
   its parent is an object, so a share of all rows would shrink twice.
 - **A nested field's `null_rate` is over the objects holding its key.** A field any object lacks is
   `nullable`, because Arrow holds it as null.
-- **A nested field's `type_mix` is recorded as the files hold it.** `data generate` refuses it with
-  `NotGeneratedYet`, because a text cell names a top-level row and has nowhere to sit inside a struct
-  or a list.
+- **A nested field's `type_mix` is recorded as the files hold it.** No write reproduces it, because
+  `malformed_rows` reads only top-level columns' shares.
 - **`source.json` records `max_depth` and `explicit_nulls`**, which is true where any path holds a
   JSON null.
 - **An array's element keeps no literal under a checked policy.** Its values are counted by element,
