@@ -10,7 +10,6 @@ pyspark is imported only here, and doppeldata declares it nowhere.
 import contextlib
 import dataclasses as dc
 import datetime as dt
-import functools
 import importlib
 import io
 import zoneinfo
@@ -295,7 +294,9 @@ def unparsed_rows(columns: tuple[tuple[str, ParsedType], ...], major: int) -> Fo
     ]
     if not failing:
         return single(sf.lit(0))
-    return single(count_where(functools.reduce(lambda left, right: left | right, failing)))
+    # One function of every column's flag, where a chain of ors would nest a level per column, past the 100 levels a
+    # Spark Connect plan's protobuf may nest.
+    return single(count_where(sf.greatest(*failing) if len(failing) > 1 else failing[0]))
 
 
 def whole(nanoseconds: int) -> Callable[[Operand, Any], Folded]:
