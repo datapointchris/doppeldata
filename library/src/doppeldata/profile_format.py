@@ -8,6 +8,7 @@ which the library alone computes and hands to the generator.
 import dataclasses as dc
 import hashlib
 import importlib.resources
+import io
 import json
 import math
 from collections.abc import Iterator
@@ -335,6 +336,12 @@ class Profile:
 
     def to_plain(self) -> dict[str, Any]:
         return to_plain(self.document)
+
+    def to_yaml(self) -> str:
+        """The profile as the YAML `save` writes."""
+        text = io.StringIO()
+        yaml().dump(self.document, text)
+        return text.getvalue()
 
     def canonical(self) -> bytes:
         """The RFC 8785 canonical JSON the digest is taken over, without the unhashed generated fields."""
