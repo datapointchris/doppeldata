@@ -11,6 +11,7 @@ use crate::WriteError;
 use crate::byte_sink::ByteSink;
 use crate::byte_sink::WrittenObject;
 use crate::encoders;
+use crate::encoders::Faulting;
 use crate::layout::layout;
 use crate::partition::Partitioner;
 use crate::partition::Piece;
@@ -62,19 +63,25 @@ pub fn estimate_bytes(plan: &Plan, options: &WriteOptions) -> Result<u64, WriteE
     for block in 0..plan.block_count().min(SAMPLE_BLOCKS) {
         let placed = plan.placed_block(block, options.output.is_text())?;
         generated_rows += (plan.identity().rows() - block * BLOCK_ROWS).min(BLOCK_ROWS);
-        pieces.push(partitioner.split(placed.batch, placed.text_cells)?);
+        pieces.push(partitioner.split(placed)?);
     }
     let Some(first) = pieces.first() else {
         return Ok(0);
     };
+    let faulting = plan.malformed().map(|_| Faulting::default());
     let encoded = |blocks: &[Vec<Piece>]| -> Result<(u64, u64), WriteError> {
-        let mut encoder = encoders::open(&options.output, partitioner.file_schema(), Box::new(CountingSink::default()))?;
+        let mut encoder = encoders::open(
+            &options.output,
+            partitioner.file_schema(),
+            Box::new(CountingSink::default()),
+            faulting,
+        )?;
         let mut rows = 0;
         for piece in blocks.iter().flatten() {
-            encoder.write(&piece.batch, &piece.cells)?;
+            encoder.write(&piece.batch, &piece.cells, &piece.faults)?;
             rows += piece.batch.num_rows() as u64;
         }
-        Ok((rows, encoder.finish()?.bytes))
+        Ok((rows, encoder.finish()?.object.bytes))
     };
     let (small_rows, small) = encoded(std::slice::from_ref(first))?;
     let (large_rows, large) = encoded(&pieces)?;

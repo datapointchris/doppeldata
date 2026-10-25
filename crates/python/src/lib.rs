@@ -19,13 +19,13 @@ mod _core {
     use arrow_schema::SchemaRef;
     use doppeldata_core::AppliedScenario;
     use doppeldata_core::PlanError;
-    use doppeldata_core::manifest::ManifestFile;
     use doppeldata_core::profile::Profile;
     use doppeldata_core::scenario::Scenario;
     use doppeldata_writers::Destination;
     use doppeldata_writers::DestinationUrl;
     use doppeldata_writers::FailureKind;
     use doppeldata_writers::LayoutError;
+    use doppeldata_writers::RangesWritten;
     use doppeldata_writers::RunOptions;
     use doppeldata_writers::SplitRun;
     use doppeldata_writers::WriteChoices;
@@ -79,10 +79,13 @@ mod _core {
             .collect()
     }
 
+    type PerturbationFacts = (String, Vec<String>, bool, bool);
+
     /// Each of a valid scenario's perturbations, in list order: its id, the columns it writes, adds,
-    /// drops or renames, and whether it shapes the files a write makes rather than the rows.
+    /// drops or renames, whether it shapes the files a write makes rather than the rows, and whether
+    /// it acts across several files, so a one-file write cannot hold it.
     #[pyfunction]
-    fn perturbation_facts(scenario_json: &str) -> PyResult<Vec<(String, Vec<String>, bool)>> {
+    fn perturbation_facts(scenario_json: &str) -> PyResult<Vec<PerturbationFacts>> {
         let scenario = read_scenario(scenario_json)?;
         let ids = scenario
             .resolved_ids()
@@ -93,7 +96,7 @@ mod _core {
             .zip(ids)
             .map(|(perturbation, id)| {
                 let written = perturbation.written_columns().into_iter().map(String::from).collect();
-                (id, written, perturbation.shapes_files())
+                (id, written, perturbation.shapes_files(), perturbation.spans_files())
             })
             .collect())
     }
@@ -409,8 +412,9 @@ mod _core {
         }
 
         /// Writes the objects of the ranges numbered ``ranges`` in the layout ``ranges_json``
-        /// lists, the bytes ``write`` writes for them, on one thread, and returns their manifest
-        /// records as a JSON list. It neither claims ``destination`` nor stores a manifest.
+        /// lists, the bytes ``write`` writes for them, on one thread. It returns their manifest
+        /// records and the faults ``malformed_rows`` placed in them as one JSON object, ``files``
+        /// and ``faults``. It neither claims ``destination`` nor stores a manifest.
         #[pyo3(signature = (options, destination, ranges, *, s3_store=None))]
         fn write_ranges(
             &self,
@@ -423,29 +427,31 @@ mod _core {
             let destination = destination_at(py, destination, s3_store)?;
             let (run, cancel) = run_options(SPLIT_TASK_THREADS, false);
             let (plan, options) = (&*self.plan, &options.options);
-            let files = self.settled(py, &cancel, || {
+            let written = self.settled(py, &cancel, || {
                 doppeldata_writers::write_ranges(plan, options, &ranges, &run, &destination)
             })?;
-            Ok(serde_json::to_string(&files).expect("a manifest record always serializes"))
+            Ok(serde_json::to_string(&written).expect("a manifest record always serializes"))
         }
 
-        /// Stores the manifest of a write ``claim`` claimed, from every record ``write_ranges``
-        /// returned, given as one JSON list, and returns it as JSON. ``tasks`` is how many the
+        /// Stores the manifest of a write ``claim`` claimed, and ``_faults.ndjson`` under
+        /// ``malformed_rows``, from everything ``write_ranges`` returned, given as one JSON object
+        /// of ``files`` and ``faults``, and returns the manifest as JSON. ``tasks`` is how many the
         /// ranges were divided among, and ``elapsed_ms`` the time from the claim. A range with no
         /// record leaves the partial manifest under the claim's name, and raises.
-        #[pyo3(signature = (options, destination, files_json, *, tasks, elapsed_ms, s3_store=None))]
+        #[pyo3(signature = (options, destination, written_json, *, tasks, elapsed_ms, s3_store=None))]
         fn commit(
             &self,
             options: PyRef<'_, WriteOptions>,
             destination: &str,
-            files_json: &str,
+            written_json: &str,
             tasks: u32,
             elapsed_ms: u64,
             s3_store: Option<Bound<'_, PyDict>>,
         ) -> PyResult<String> {
             let py = options.py();
-            let files: Vec<ManifestFile> = serde_json::from_str(files_json)
-                .map_err(|error| PyValueError::new_err(format!("files_json is not a list of manifest records: {error}")))?;
+            let files: RangesWritten = serde_json::from_str(written_json).map_err(|error| {
+                PyValueError::new_err(format!("written_json is not the files and faults write_ranges returns: {error}"))
+            })?;
             let destination = destination_at(py, destination, s3_store)?;
             let (run, cancel) = run_options(1, false);
             let (plan, options) = (&*self.plan, &options.options);

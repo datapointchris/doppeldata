@@ -125,8 +125,9 @@ pub struct MetricResult {
     /// value misses `threshold` or is unmeasured.
     pub passed: bool,
     /// False on a row the report's verdict leaves out: a score against the real data whose
-    /// threshold no thresholds file sets. Such a row passes, and its `threshold` is the score's
-    /// reference, which `value` and `bound` say whether it meets.
+    /// threshold no thresholds file sets, and `malformed_rate_delta` on data written with no
+    /// `malformed_rows`. Such a row passes. A score's `threshold` is its reference, which `value`
+    /// and `bound` say whether it meets.
     pub decides: bool,
     /// The statistic the metric compares, as the source profile holds it, or the real data for a
     /// score against it: A's, in a diff.
@@ -137,7 +138,8 @@ pub struct MetricResult {
     pub observed: Option<f64>,
     /// Why the metric has no value: the source profile states what it compares, and the other
     /// profile holds nothing to compare it with, as a column under `k_min` values holds no
-    /// quantiles.
+    /// quantiles. Or the data was written so as not to hold it, as clean files hold none of the
+    /// source's malformed rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmeasured: Option<String>,
     /// The id of the scenario's perturbation that moves what the metric compares, so the metric
@@ -196,7 +198,8 @@ pub enum ChangeKind {
 pub struct ExpectationResult {
     /// The statistic expected, such as `hot_keys.share`.
     pub metric: String,
-    pub column: String,
+    /// The column measured, or null for a metric of the whole table, such as `malformed.rate`.
+    pub column: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_least: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

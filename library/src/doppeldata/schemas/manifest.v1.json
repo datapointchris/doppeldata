@@ -17,6 +17,19 @@
       "format": "uint64",
       "minimum": 0
     },
+    "faults": {
+      "description": "The faults `_faults.ndjson` lists, counted by kind, or null for a write with no\n`malformed_rows`.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "default": null
+    },
     "files": {
       "description": "Every object written, in path order.",
       "type": "array",

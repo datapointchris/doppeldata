@@ -15,6 +15,7 @@ use crate::format_settings::Output;
 use crate::identity::DatasetIdentity;
 use crate::profile::PartitionStyle;
 use crate::profile::Quantiles;
+use crate::scenario::FaultKind;
 
 /// The manifest format version this engine writes and reads.
 pub const MANIFEST_VERSION: u64 = 1;
@@ -27,6 +28,27 @@ pub const MANIFEST_FILE_NAME: &str = "_manifest.json";
 /// creating it before the first object, and a run that fails or is cancelled leaves its record
 /// here, never under [`MANIFEST_FILE_NAME`].
 pub const PARTIAL_MANIFEST_FILE_NAME: &str = "_manifest.partial.json";
+
+/// The file a write under `malformed_rows` lists every fault it placed in, one JSON object a line,
+/// beside the manifest. Its name starts with `_`, so a reader of the data skips it.
+pub const FAULTS_FILE_NAME: &str = "_faults.ndjson";
+
+/// One fault `malformed_rows` placed, as a line of `_faults.ndjson`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FaultRecord {
+    /// The object's path under the destination, as `files` names it.
+    pub file: String,
+    /// The 1-based line the broken record starts on, a header counted. Null in a JSON array, and
+    /// for a fault of the whole file.
+    pub line: Option<u64>,
+    /// The dataset row the record was generated as. Null for a copy, and for a fault of the whole
+    /// file.
+    pub row: Option<u64>,
+    pub kind: FaultKind,
+    /// The column the fault is in, or null where it breaks the record or the file.
+    pub column: Option<String>,
+    pub detail: serde_json::Map<String, serde_json::Value>,
+}
 
 /// The rows a file holds when neither the call nor the profile sets a size.
 pub const DEFAULT_FILE_ROWS: u64 = 1_000_000;
@@ -51,6 +73,10 @@ pub struct Manifest {
     pub destination: String,
     /// Every object written, in path order.
     pub files: Vec<ManifestFile>,
+    /// The faults `_faults.ndjson` lists, counted by kind, or null for a write with no
+    /// `malformed_rows`.
+    #[serde(default)]
+    pub faults: Option<BTreeMap<FaultKind, u64>>,
     /// True when the run stopped early, so `files` lists only the objects that completed. Such a
     /// manifest is stored as `_manifest.partial.json`, and regenerates nothing.
     pub partial: bool,
@@ -118,6 +144,7 @@ impl Manifest {
             layout,
             destination,
             files: Vec::new(),
+            faults: None,
             partial: false,
             threads: 0,
             tasks: None,

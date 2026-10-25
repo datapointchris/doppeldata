@@ -436,6 +436,25 @@ def partition_share_change(source: Document, observed: Document) -> Iterator[Mea
             yield Measurement(key['name'], max(changes, key=lambda compared: compared.value))
 
 
+def malformed_shares(document: Document) -> dict[str, float] | None:
+    """Each reason a CSV reader rejected rows for, by its share of the rows read, or None for a profile of no CSV or TSV."""
+    csv = (document.get('source') or {}).get('csv')
+    return None if csv is None else dict((csv.get('malformed') or {}).get('by_type') or {})
+
+
+def malformed_rate_change(source: Document, observed: Document) -> Iterator[Measurement]:
+    """The largest change in one reason's share of the rows a CSV reader rejects, relative to the source's."""
+    shares = {reason: share for reason, share in (malformed_shares(source) or {}).items() if share}
+    if not shares:
+        return
+    held = malformed_shares(observed)
+    if held is None:
+        yield Measurement(None, Unmeasured('the other profile records no malformed rows, because it is not of CSV or TSV'))
+        return
+    changes = [Compared(abs(held.get(reason, 0.0) - share) / share, share, held.get(reason, 0.0)) for reason, share in shares.items()]
+    yield Measurement(None, max(changes, key=lambda compared: compared.value))
+
+
 METRICS = (
     Metric(
         'ks',
@@ -500,6 +519,13 @@ METRICS = (
         Bound.AT_MOST,
         0.10,
         partition_share_change,
+    ),
+    Metric(
+        'malformed_rate_delta',
+        "the largest change in one reason's share of the rows a CSV reader rejects, relative to the source's",
+        Bound.AT_MOST,
+        0.20,
+        malformed_rate_change,
     ),
 )
 METRICS_BY_NAME = {metric.name: metric for metric in METRICS}

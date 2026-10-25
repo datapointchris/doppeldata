@@ -1,6 +1,7 @@
 """What each of a scenario's perturbations moves in a check: the metrics it skips, and the column changes it makes pass."""
 
 import dataclasses as dc
+from typing import Any
 
 from doppeldata.profile_comparison.field_changes import FieldChange
 from doppeldata.profile_comparison.metrics import METRICS_BY_NAME
@@ -20,6 +21,10 @@ MOVED_METRICS = {
     'duplicates': registered('distinct_ratio_delta', 'rows_per_file_delta'),
     'small_files': registered('file_count_delta', 'rows_per_file_delta'),
 }
+# Given `kinds`, malformed_rows replaces the rejected rows the profile records, and adds values to the columns it breaks.
+NAMED_MALFORMED_METRICS = registered('malformed_rate_delta', 'distinct_ratio_delta')
+MALFORMED_RATE_DELTA = METRICS_BY_NAME['malformed_rate_delta'].name
+NOT_ASKED = 'no malformed_rows perturbation asked for malformed rows, so the malformed rates were not compared'
 
 
 @dc.dataclass(frozen=True)
@@ -37,8 +42,27 @@ class Move:
 def moves(scenario: Scenario) -> list[Move]:
     plain = scenario.to_plain()
     return [
-        Move(facts.id, frozenset(facts.writes), MOVED_METRICS.get(entry['op'], frozenset()))
+        Move(facts.id, frozenset(facts.writes), moved_metrics(entry))
         for entry, facts in zip(plain.get('perturbations') or [], perturbation_facts(plain), strict=True)
+    ]
+
+
+def moved_metrics(entry: dict[str, Any]) -> frozenset[str]:
+    if entry['op'] == 'malformed_rows':
+        return NAMED_MALFORMED_METRICS if entry.get('kinds') else frozenset()
+    return MOVED_METRICS.get(entry['op'], frozenset())
+
+
+def uncompared_malformed_rates(results: list[MetricResult], scenario: Scenario | None) -> list[MetricResult]:
+    """Each `malformed_rate_delta` row as unmeasured and deciding nothing, where no malformed_rows asked for malformed rows."""
+    entries = (scenario.to_plain().get('perturbations') or []) if scenario is not None else []
+    if any(entry['op'] == 'malformed_rows' for entry in entries):
+        return results
+    return [
+        dc.replace(result, value=None, observed=None, passed=True, unmeasured=NOT_ASKED, decides=False)
+        if result.metric == MALFORMED_RATE_DELTA
+        else result
+        for result in results
     ]
 
 

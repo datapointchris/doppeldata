@@ -99,8 +99,11 @@
           "format": "double"
         },
         "column": {
-          "description": "The column measured.",
-          "type": "string"
+          "description": "The column measured. A metric of the whole table, such as `malformed.rate`, takes none.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "metric": {
           "$ref": "#/$defs/ExpectedMetric"
@@ -108,8 +111,7 @@
       },
       "additionalProperties": false,
       "required": [
-        "metric",
-        "column"
+        "metric"
       ]
     },
     "ExpectedMetric": {
@@ -134,6 +136,111 @@
           "description": "The share of rows whose `column` is null, the profile's own nulls included.",
           "type": "string",
           "const": "missingness.rate"
+        },
+        {
+          "description": "The share of a CSV or TSV dataset's data rows a reader rejects, as a profile's\n`source.csv.malformed.rate` records it. It takes no column.",
+          "type": "string",
+          "const": "malformed.rate"
+        }
+      ]
+    },
+    "FaultKind": {
+      "description": "One way a file is broken. A row kind breaks one record, and a file kind a whole file.",
+      "oneOf": [
+        {
+          "description": "A record ending before its last 1 to n − 1 fields.",
+          "type": "string",
+          "const": "ragged_short"
+        },
+        {
+          "description": "A record carrying 1 or 2 fields past the last.",
+          "type": "string",
+          "const": "ragged_long"
+        },
+        {
+          "description": "A lone quote inside a quoted field.",
+          "type": "string",
+          "const": "unescaped_quote"
+        },
+        {
+          "description": "A line break inside a quoted string field, which is legal CSV.",
+          "type": "string",
+          "const": "embedded_newline"
+        },
+        {
+          "description": "`N/A`, `-`, `?` or a unit suffix in place of a typed value, or text of another type.",
+          "type": "string",
+          "const": "type_invalid"
+        },
+        {
+          "description": "A lone continuation byte or the bytes C3 28 inside a field.",
+          "type": "string",
+          "const": "invalid_utf8"
+        },
+        {
+          "description": "A record past DuckDB's default `max_line_size` of 2,097,152 bytes.",
+          "type": "string",
+          "const": "line_too_long"
+        },
+        {
+          "description": "The file's last record cut mid-field, with no line break, as a cut-off upload leaves it.",
+          "type": "string",
+          "const": "truncated_line"
+        },
+        {
+          "description": "A file starting with the UTF-8 byte order mark.",
+          "type": "string",
+          "const": "bom"
+        },
+        {
+          "description": "A file whose records end in LF, CRLF and CR mixed.",
+          "type": "string",
+          "const": "mixed_line_endings"
+        },
+        {
+          "description": "A file written with another delimiter than the rest.",
+          "type": "string",
+          "const": "wrong_delimiter"
+        },
+        {
+          "description": "A file whose header renames a column or swaps two, its values swapped with it.",
+          "type": "string",
+          "const": "header_drift"
+        },
+        {
+          "description": "A file encoded windows-1252 among UTF-8 ones.",
+          "type": "string",
+          "const": "latin1_file"
+        },
+        {
+          "description": "A JSON array among NDJSON files, or an NDJSON file among JSON arrays.",
+          "type": "string",
+          "const": "json_layout_mix"
+        },
+        {
+          "description": "A record missing its closing brace.",
+          "type": "string",
+          "const": "json_unbalanced"
+        },
+        {
+          "description": "A number or boolean written as a string.",
+          "type": "string",
+          "const": "json_type_flip"
+        },
+        {
+          "description": "A file whose timestamp columns are stored at another unit than the rest.",
+          "type": "string",
+          "const": "parquet_timestamp_unit_drift"
+        },
+        {
+          "description": "A file whose timestamp columns are stored as INT96, as Hive and Impala wrote them.",
+          "type": "string",
+          "const": "parquet_int96"
+        },
+        {
+          "description": "A file whose decimal columns are stored one digit of scale wider than the rest.",
+          "type": "string",
+          "const": "parquet_decimal_scale_drift"
         }
       ]
     },
@@ -685,6 +792,57 @@
             "op",
             "column",
             "shares"
+          ]
+        },
+        {
+          "description": "Bytes a reader rejects or misreads, written into the files and listed in `_faults.ndjson` beside\nthem. With no `rate`, `kinds` or `files_share`, it reproduces the malformed rows, line endings and\ntype mix the profile records of its CSV source. Otherwise `rate` of rows each take one of the row\nkinds named, and `files_share` of files each take one of the file kinds named.",
+          "type": "object",
+          "properties": {
+            "files_share": {
+              "description": "The share of files given a file fault, each kind named equally often.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kinds": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/FaultKind"
+              }
+            },
+            "op": {
+              "type": "string",
+              "const": "malformed_rows"
+            },
+            "rate": {
+              "description": "The share of rows given a row fault, each kind named equally often.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op"
           ]
         }
       ]

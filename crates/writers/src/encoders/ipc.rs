@@ -6,15 +6,16 @@ use arrow_ipc::writer::FileWriter;
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_ipc::writer::StreamWriter;
 use arrow_schema::SchemaRef;
+use doppeldata_core::RowFaults;
 use doppeldata_core::TextCell;
 use doppeldata_core::format_settings::ArrowSettings;
 use doppeldata_core::format_settings::IpcCompression;
 use doppeldata_core::format_settings::IpcFormat;
 
 use super::FileEncoder;
+use super::Finished;
 use crate::WriteError;
 use crate::byte_sink::ByteSink;
-use crate::byte_sink::WrittenObject;
 
 pub(super) enum IpcEncoder {
     File(FileWriter<Box<dyn ByteSink>>),
@@ -37,7 +38,7 @@ impl IpcEncoder {
 }
 
 impl FileEncoder for IpcEncoder {
-    fn write(&mut self, batch: &RecordBatch, _cells: &[Vec<TextCell>]) -> Result<(), WriteError> {
+    fn write(&mut self, batch: &RecordBatch, _cells: &[Vec<TextCell>], _faults: &RowFaults) -> Result<(), WriteError> {
         match self {
             Self::File(writer) => writer.write(batch)?,
             Self::Stream(writer) => writer.write(batch)?,
@@ -45,11 +46,11 @@ impl FileEncoder for IpcEncoder {
         Ok(())
     }
 
-    fn finish(self: Box<Self>) -> Result<WrittenObject, WriteError> {
+    fn finish(self: Box<Self>) -> Result<Finished, WriteError> {
         let sink = match *self {
             Self::File(writer) => writer.into_inner()?,
             Self::Stream(writer) => writer.into_inner()?,
         };
-        sink.finish()
+        Ok(sink.finish()?.into())
     }
 }

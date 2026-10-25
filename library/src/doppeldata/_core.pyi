@@ -57,10 +57,11 @@ class Plan:
         Each top-level column's name, type as a profile's ``physical_type`` spells it, what draws
         its values, and the share of rows drawn null, in schema order.
         """
-    def commit(self, /, options: WriteOptions, destination: str, files_json: str, *, tasks: SupportsIndex, elapsed_ms: SupportsIndex, s3_store: dict |None = None) -> str:
+    def commit(self, /, options: WriteOptions, destination: str, written_json: str, *, tasks: SupportsIndex, elapsed_ms: SupportsIndex, s3_store: dict |None = None) -> str:
         """
-        Stores the manifest of a write ``claim`` claimed, from every record ``write_ranges``
-        returned, given as one JSON list, and returns it as JSON. ``tasks`` is how many the
+        Stores the manifest of a write ``claim`` claimed, and ``_faults.ndjson`` under
+        ``malformed_rows``, from everything ``write_ranges`` returned, given as one JSON object
+        of ``files`` and ``faults``, and returns the manifest as JSON. ``tasks`` is how many the
         ranges were divided among, and ``elapsed_ms`` the time from the claim. A range with no
         record leaves the partial manifest under the claim's name, and raises.
         """
@@ -122,8 +123,9 @@ class Plan:
     def write_ranges(self, /, options: WriteOptions, destination: str, ranges: SupportsGetItem[int, SupportsIndex], *, s3_store: dict |None = None) -> str:
         """
         Writes the objects of the ranges numbered ``ranges`` in the layout ``ranges_json``
-        lists, the bytes ``write`` writes for them, on one thread, and returns their manifest
-        records as a JSON list. It neither claims ``destination`` nor stores a manifest.
+        lists, the bytes ``write`` writes for them, on one thread. It returns their manifest
+        records and the faults ``malformed_rows`` placed in them as one JSON object, ``files``
+        and ``faults``. It neither claims ``destination`` nor stores a manifest.
         """
 
 @final
@@ -194,10 +196,11 @@ def pattern_problem(pattern: str) -> str |None:
     refuses it, or None when it can.
     """
 
-def perturbation_facts(scenario_json: str) -> list[tuple[str, list[str], bool]]:
+def perturbation_facts(scenario_json: str) -> list[tuple[str, list[str], bool, bool]]:
     """
     Each of a valid scenario's perturbations, in list order: its id, the columns it writes, adds,
-    drops or renames, and whether it shapes the files a write makes rather than the rows.
+    drops or renames, whether it shapes the files a write makes rather than the rows, and whether
+    it acts across several files, so a one-file write cannot hold it.
     """
 
 def scenario_ids(scenario_json: str) -> tuple[list[str], tuple[int, str] |None]:

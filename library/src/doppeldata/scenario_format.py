@@ -47,11 +47,14 @@ if TYPE_CHECKING:
     from doppeldata.profile_comparison.reports import ExpectationResult
 
 SCENARIO_EXPECTATIONS_MODULE = 'doppeldata.scenario_expectations'
+# The one expected metric of the whole table, which names no column.
+MALFORMED_RATE = 'malformed.rate'
 
 
 class InvalidScenario(DoppeldataError, ValueError):
-    """A scenario that does not validate, that the profile it applies to or the files written cannot hold, or that is not
-    the scenario the data checked was written under. `refusal` follows `source` on the message's first line."""
+    """A scenario that does not validate, that the profile it applies to or the files written cannot hold, that is not
+    the scenario the data checked was written under, or whose faults a check cannot read back. `refusal` follows `source`
+    on the message's first line, which is the whole message where no issue is listed."""
 
     exit_code = 2
 
@@ -59,7 +62,7 @@ class InvalidScenario(DoppeldataError, ValueError):
         self.source = source
         self.issues = issues
         listed = '\n'.join(f'  {issue.field or "/"}: {issue.message} [{issue.code}]' for issue in issues)
-        super().__init__(f'{source} {refusal}:\n{listed}')
+        super().__init__(f'{source} {refusal}:\n{listed}' if issues else f'{source} {refusal}')
 
 
 @functools.cache
@@ -146,21 +149,24 @@ def unknown_name(code: str, name: str, known: list[str], at: PointerParts, noun:
 
 @dc.dataclass(frozen=True)
 class Facts:
-    """What the engine says of one perturbation: its id, the columns it writes, and whether it shapes files."""
+    """What the engine says of one perturbation: its id, the columns it writes, whether it shapes files, and whether it acts
+    across several."""
 
     id: str
     writes: tuple[str, ...]
     shapes_files: bool
+    spans_files: bool
 
 
 def perturbation_facts(plain: dict[str, Any]) -> list[Facts]:
     """Each of a valid scenario's perturbations, in list order, as the engine's catalog describes it."""
     return [
-        Facts(id, tuple(writes), shapes_files) for id, writes, shapes_files in _core.perturbation_facts(json.dumps(plain, allow_nan=False))
+        Facts(id, tuple(writes), shapes_files, spans_files)
+        for id, writes, shapes_files, spans_files in _core.perturbation_facts(json.dumps(plain, allow_nan=False))
     ]
 
 
-def expected_perturbation(metric: str, column: str, perturbations: list[dict[str, Any]]) -> int | None:
+def expected_perturbation(metric: str, column: str | None, perturbations: list[dict[str, Any]]) -> int | None:
     """The index of the perturbation an expectation measures: the first of the op its metric measures, on its column where the
     op takes one."""
     op = _core.expected_metric_op(metric)
@@ -177,9 +183,16 @@ def expectation_issues(plain: dict[str, Any]) -> Iterator[Issue]:
     patched = ((plain.get('patch') or {}).get('columns')) or {}
     for index, expectation in enumerate(plain.get('expect') or []):
         at = pointer(('expect', index))
-        metric, column = expectation['metric'], expectation['column']
+        metric, column = expectation['metric'], expectation.get('column')
         if expectation.get('at_least') is None and expectation.get('at_most') is None:
             yield Issue('invalid-parameter', at, f'{metric} gives no bound; an expectation takes at_least, at_most or both')
+        if metric == MALFORMED_RATE and column is not None:
+            yield Issue(
+                'invalid-parameter', pointer(('expect', index, 'column')), f'{metric} measures the whole table, so it takes no column'
+            )
+        if metric != MALFORMED_RATE and column is None:
+            yield Issue('invalid-parameter', at, f'{metric} measures one column, so it takes column')
+            continue
         measured = expected_perturbation(metric, column, perturbations)
         if metric == 'missingness.rate' and measured is None and (patched.get(column) or {}).get('null_rate') is not None:
             continue
@@ -388,13 +401,24 @@ def composed(scenario: 'Scenario | Sequence[Scenario] | None') -> Scenario | Non
     raise TypeError(f'scenario takes a Scenario, such as Scenario.load(path), or a list of them, not {type(scenario).__name__}')
 
 
-def refuse_file_shaping(scenario: Scenario, run: str, *, cannot: str = 'writes none') -> None:
-    """Raise InvalidScenario naming each op that shapes the files a write makes, which `run` cannot apply, because it `cannot`."""
+def refuse_file_shaping(
+    scenario: Scenario, run: str, *, cannot: str = 'writes none', write_with: str | None = None, across_files: bool = False
+) -> None:
+    """Raise InvalidScenario naming each op that shapes the files a write makes, which `run` cannot apply, because it `cannot`.
+
+    `across_files` refuses only an op acting across several files, which is all a write to one file cannot apply. `write_with`
+    names the call that applies the rest.
+    """
     plain = scenario.to_plain()
+    instead = f'; write with {write_with}' if write_with else ''
     issues = [
-        Issue('op-needs-files', pointer(('perturbations', index)), f'{entry["op"]} shapes the files a write makes, and {run} {cannot}')
+        Issue(
+            'op-needs-files',
+            pointer(('perturbations', index)),
+            f'{entry["op"]} shapes the files a write makes, and {run} {cannot}{instead}',
+        )
         for index, (entry, facts) in enumerate(zip(plain.get('perturbations') or [], perturbation_facts(plain), strict=True))
-        if facts.shapes_files
+        if (facts.spans_files if across_files else facts.shapes_files)
     ]
     if issues:
         raise InvalidScenario(scenario.source, issues)

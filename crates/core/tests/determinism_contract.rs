@@ -32,9 +32,9 @@ const _: () = assert!(
 /// scenario and with the scenario fixture. A release freezes all three: once released, a change to
 /// any value raises STREAM_VERSION. `crates/check-stream-version-raised.sh` reads these lines and
 /// refuses a new hash at a released version.
-const PINNED_STREAM_VERSION: u32 = 8;
-const PINNED_VALUES: &str = "270cae6e5f44e10953d969221e28dc358068558a5f82c27eb9d242c9ddb3b39e";
-const PINNED_SCENARIO_VALUES: &str = "141eadbb70121fcfa103a0542202c6e6936bc210be949eee51aea9e1784848aa";
+const PINNED_STREAM_VERSION: u32 = 9;
+const PINNED_VALUES: &str = "5b1f0e247a6e63037c68c74370b06d3c9ff321427de3eed57ee6b348fdf14f03";
+const PINNED_SCENARIO_VALUES: &str = "b41a2f0cf005eea2961f4c01edd10cce28762df492da6fc619812bef83daf6e7";
 
 fn document(path: &Path) -> serde_json::Value {
     let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -170,12 +170,12 @@ fn a_dataset_identity_digests_to_its_pinned_value() {
         concat!(
             r#"{"dataset_rows":"10000000","#,
             r#""profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
-            r#""scenario_digest":null,"seed":"18446744073709551615","stream_version":8}"#
+            r#""scenario_digest":null,"seed":"18446744073709551615","stream_version":9}"#
         )
     );
     assert_eq!(
         identity.digest(),
-        "sha256:67909bbb417e32e681ef3f6f2edad72b1e67e64c3897c35bd8dae0989a45e7e7"
+        "sha256:61a833f5d648990c86922d5ad6639673dd10febfc4944d00b036322b4511421d"
     );
     let with_scenario = identity.with_scenario(SCENARIO_DIGEST);
     assert_eq!(
@@ -184,11 +184,11 @@ fn a_dataset_identity_digests_to_its_pinned_value() {
             r#"{"dataset_rows":"10000000","#,
             r#""profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
             r#""scenario_digest":"sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","#,
-            r#""seed":"18446744073709551615","stream_version":8}"#
+            r#""seed":"18446744073709551615","stream_version":9}"#
         )
     );
     assert_eq!(
         with_scenario.digest(),
-        "sha256:2ddc9ade5e46d58d895079b3779ef84eafe6bdbe52752a14e00f7c02d00ead21"
+        "sha256:e8aa84a5d7bfb88cfc9d2b17894b2f174dbc29cef43d131e06d365a093a5b822"
     );
 }

@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use doppeldata_core::manifest::FAULTS_FILE_NAME;
 use doppeldata_core::manifest::MANIFEST_FILE_NAME;
 use doppeldata_core::manifest::Manifest;
 use doppeldata_core::manifest::PARTIAL_MANIFEST_FILE_NAME;
@@ -104,8 +105,9 @@ impl Destination {
     /// `_manifest.partial.json`, which fails when another run claimed it first.
     ///
     /// A destination holding anything is refused unless `replace` is set. With it, every object
-    /// must be a doppeldata manifest at the prefix, or a part named for the dataset one of those
-    /// manifests records, and all of them are deleted. Anything else is refused untouched.
+    /// must be a doppeldata manifest or `_faults.ndjson` at the prefix, or a part named for the
+    /// dataset one of those manifests records, and all of them are deleted. Anything else is
+    /// refused untouched.
     pub(crate) async fn prepare(&self, replace: bool, claim: &Manifest) -> Result<(), WriteError> {
         let objects: Vec<ObjectMeta> = self.store.list(Some(&self.prefix)).try_collect().await?;
         if let Some(first) = objects.first() {
@@ -117,10 +119,13 @@ impl Destination {
                 });
             }
             let parts = self.recorded_parts(&objects).await?;
-            let manifests = [self.object(MANIFEST_FILE_NAME)?, self.object(PARTIAL_MANIFEST_FILE_NAME)?];
-            let ours = |path: &Path| {
-                manifests.contains(path) || path.filename().and_then(part_suffix).is_some_and(|suffix| parts.contains(suffix))
-            };
+            let records = [
+                self.object(MANIFEST_FILE_NAME)?,
+                self.object(PARTIAL_MANIFEST_FILE_NAME)?,
+                self.object(FAULTS_FILE_NAME)?,
+            ];
+            let ours =
+                |path: &Path| records.contains(path) || path.filename().and_then(part_suffix).is_some_and(|suffix| parts.contains(suffix));
             if let Some(foreign) = objects.iter().find(|meta| !ours(&meta.location)) {
                 return Err(WriteError::ForeignObject {
                     url: self.url.clone(),

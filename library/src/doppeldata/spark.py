@@ -108,7 +108,8 @@ class ChunkBatches:
 
 @dc.dataclass(frozen=True)
 class RangeWrites:
-    """What each Spark task runs for `write`: the objects of every range whose number its partition holds, yielding one record each."""
+    """What each Spark task runs for `write`: the objects of every range whose number its partition holds, yielding one row for each
+    object's record and one for each fault `malformed_rows` placed, each in the order written."""
 
     executor_plan: ExecutorPlan
     choices_json: str
@@ -122,11 +123,15 @@ class RangeWrites:
         engine = self.executor_plan.plan()
         options = engine.write_options(self.choices_json)
         try:
-            files = engine.write_ranges(options, self.destination, ranges, s3_store=s3_store_of(self.destination, self.bucket))
+            written = engine.write_ranges(options, self.destination, ranges, s3_store=s3_store_of(self.destination, self.bucket))
         except StoppedWrite as stopped:
             raise RuntimeError(f'{TASK_STOPPED} {json.dumps({"code": stopped.code, "kind": stopped.kind})} {stopped}') from stopped
-        records = [json.dumps(record) for record in json.loads(files)]
-        yield pa.record_batch([pa.array(records, pa.string())], names=['file'])
+        parsed = json.loads(written)
+        files = [json.dumps(record) for record in parsed['files']]
+        faults = [json.dumps(record) for record in parsed['faults']]
+        none = [None] * len(files), [None] * len(faults)
+        columns = [pa.array(files + none[1], pa.string()), pa.array(none[0] + faults, pa.string())]
+        yield pa.record_batch(columns, names=['file', 'fault'])
 
 
 def executor_plan(profile: ProfileSource, rows: int | None, seed: int, scenario: Scenario | None) -> tuple[ExecutorPlan, '_core.Plan']:
@@ -155,7 +160,7 @@ def job_failure(error: Exception, destination: str, commit: Callable[[str], Mani
     it, or `spark-job-failed`. A failure to store the partial manifest is raised in its place."""
     recorded: WriteFailed | None = None
     try:
-        commit('[]')
+        commit('{"files": [], "faults": []}')
     except WriteFailed as stored:
         if stored.code != 'ranges-unrecorded':
             return stored
@@ -217,7 +222,7 @@ def struct_type(profile: ProfileSource, *, scenario: Scenario | Sequence[Scenari
     A timestamp with no time zone is a TimestampNTZType, and one with a zone a TimestampType. A column of a type `spark_holds`
     refuses, which Spark cannot carry with every value kept, raises ValueError naming it.
     """
-    _, engine = executor_plan(profile, 0, 0, rows_only(scenario, 'spark.generate'))
+    _, engine = executor_plan(profile, 0, 0, rows_only(scenario, 'spark.generate', 'doppeldata.spark.write'))
     return arrow_struct_type(engine)
 
 
@@ -236,7 +241,7 @@ def generate(
     None, changes which task makes a row and never its value. Write it with any Spark writer, partitioned as the run needs.
     Every executor must have the driver's doppeldata release installed. `scenario` is taken as `doppeldata.generate` takes it.
     """
-    planned, engine = executor_plan(profile, rows, seed, rows_only(scenario, 'spark.generate'))
+    planned, engine = executor_plan(profile, rows, seed, rows_only(scenario, 'spark.generate', 'doppeldata.spark.write'))
     schema = arrow_struct_type(engine)
     chunks = -(-engine.block_count // CHUNK_BLOCKS)
     numbers = spark.range(chunks, numPartitions=checked_partitions(partitions, chunks))
@@ -286,12 +291,14 @@ def write(
     planned = ExecutorPlan(prepared.arguments, _core.VERSION, _core.STREAM_VERSION)
     writes = RangeWrites(planned, prepared.choices_json, destination, prepared.bucket)
 
-    def commit(files_json: str) -> Manifest:
+    def commit(written_json: str) -> Manifest:
         elapsed_ms = round((time.monotonic() - started) * 1000)
-        return Manifest.from_json(engine.commit(options, destination, files_json, tasks=tasks, elapsed_ms=elapsed_ms, s3_store=store))
+        return Manifest.from_json(engine.commit(options, destination, written_json, tasks=tasks, elapsed_ms=elapsed_ms, s3_store=store))
 
     try:
-        records = spark.range(ranges, numPartitions=tasks).mapInArrow(writes, 'file string').collect()
+        collected = spark.range(ranges, numPartitions=tasks).mapInArrow(writes, 'file string, fault string').collect()
     except Exception as error:
         raise job_failure(error, destination, commit) from error
-    return commit('[' + ','.join(record.file for record in records) + ']')
+    files = ','.join(row.file for row in collected if row.file is not None)
+    faults = ','.join(row.fault for row in collected if row.fault is not None)
+    return commit(f'{{"files": [{files}], "faults": [{faults}]}}')

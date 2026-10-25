@@ -33,6 +33,7 @@ pub use partition::DEFAULT_PARTITION;
 pub use planned_ranges::PlannedRange;
 pub use planned_ranges::planned_ranges;
 pub use size_estimate::estimate_bytes;
+pub use write::RangesWritten;
 pub use write::RunOptions;
 pub use write::SplitRun;
 pub use write::WriteFailure;

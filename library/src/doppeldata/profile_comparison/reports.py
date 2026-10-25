@@ -61,10 +61,10 @@ class MetricResult:
 
 @dc.dataclass(frozen=True)
 class ExpectationResult:
-    """One expectation a scenario declares, and the value the data holds."""
+    """One expectation a scenario declares, and the value the data holds. `column` is None for one of the whole table."""
 
     metric: str
-    column: str
+    column: str | None
     at_least: float | None
     at_most: float | None
     value: float | None
@@ -87,8 +87,9 @@ class ExpectationResult:
         return f'{self.value:g}' if self.value is not None else (self.unmeasured or 'unmeasured')
 
     def named(self) -> str:
-        """`hot_keys.share on customer_id (0.41, expected ≥ 0.55)`."""
-        return f'{self.metric} on {self.column} ({self.measured()}, expected {self.bounds()})'
+        """`hot_keys.share on customer_id (0.41, expected ≥ 0.55)`, or `malformed.rate (0.01, expected ≥ 0.02)`."""
+        where = f' on {self.column}' if self.column is not None else ''
+        return f'{self.metric}{where} ({self.measured()}, expected {self.bounds()})'
 
 
 @dc.dataclass(frozen=True)
@@ -320,7 +321,7 @@ def expected(expectations: list[ExpectationResult]) -> list[str]:
     lines = [f'{failed} of {len(expectations)} expectations failed.', '']
     lines += ['| Expectation | Column | Value | Bounds | Passed |', '| --- | --- | --- | --- | --- |']
     for result in sorted(expectations, key=lambda result: result.passed):
-        lines.append(f'| {result.metric} | {result.column} | {result.measured()} | {result.bounds()} | {verdict(result.passed)} |')
+        lines.append(f'| {result.metric} | {result.column or ""} | {result.measured()} | {result.bounds()} | {verdict(result.passed)} |')
     return [*lines, '']
 
 

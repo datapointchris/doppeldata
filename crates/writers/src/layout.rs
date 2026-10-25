@@ -218,6 +218,22 @@ fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange], ou
             ),
         });
     }
+    if let Some(malformed) = plan.malformed() {
+        let partitioner = crate::partition::Partitioner::new(&plan.schema(), partition_by, PartitionStyle::Hive);
+        for (kind, field) in malformed.kinds() {
+            if let Some((fault, message)) = crate::encoders::fault_refusal(output, partitioner.file_schema(), *kind) {
+                let message = match malformed.reproduces_profile() {
+                    true => format!("{message}; malformed_rows with no rate reproduces what the profile records of its CSV source"),
+                    false => message,
+                };
+                return Err(LayoutError::Scenario {
+                    fault,
+                    field: field.clone(),
+                    message,
+                });
+            }
+        }
+    }
     if let Some((field, reach)) = plan.across_files_reach()
         && let Some(range) = ranges.iter().find(|range| range.rows > reach)
     {

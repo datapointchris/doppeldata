@@ -17,6 +17,11 @@ pub mod scenario;
 mod values_digest;
 
 pub use identity::DatasetIdentity;
+pub use perturbations::FileFault;
+pub use perturbations::LineEnd;
+pub use perturbations::MalformedPlan;
+pub use perturbations::RowFault;
+pub use perturbations::RowFaults;
 pub use perturbations::ScenarioFault;
 pub use perturbations::SchemaDriftPlan;
 pub use physical_type::physical_type_name;

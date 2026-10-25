@@ -13,6 +13,7 @@ use schemars::Schema;
 use schemars::SchemaGenerator;
 use schemars::json_schema;
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 
@@ -86,6 +87,133 @@ pub enum Perturbation {
     SchemaDrift(SchemaDrift),
     SmallFiles(SmallFiles),
     PartitionSkew(PartitionSkew),
+    MalformedRows(MalformedRows),
+}
+
+/// Bytes a reader rejects or misreads, written into the files and listed in `_faults.ndjson` beside
+/// them. With no `rate`, `kinds` or `files_share`, it reproduces the malformed rows, line endings and
+/// type mix the profile records of its CSV source. Otherwise `rate` of rows each take one of the row
+/// kinds named, and `files_share` of files each take one of the file kinds named.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MalformedRows {
+    pub id: Option<String>,
+    /// The share of rows given a row fault, each kind named equally often.
+    pub rate: Option<Rate>,
+    pub kinds: Option<Vec<FaultKind>>,
+    /// The share of files given a file fault, each kind named equally often.
+    pub files_share: Option<Rate>,
+}
+
+/// One way a file is broken. A row kind breaks one record, and a file kind a whole file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FaultKind {
+    /// A record ending before its last 1 to n − 1 fields.
+    RaggedShort,
+    /// A record carrying 1 or 2 fields past the last.
+    RaggedLong,
+    /// A lone quote inside a quoted field.
+    UnescapedQuote,
+    /// A line break inside a quoted string field, which is legal CSV.
+    EmbeddedNewline,
+    /// `N/A`, `-`, `?` or a unit suffix in place of a typed value, or text of another type.
+    TypeInvalid,
+    /// A lone continuation byte or the bytes C3 28 inside a field.
+    InvalidUtf8,
+    /// A record past DuckDB's default `max_line_size` of 2,097,152 bytes.
+    LineTooLong,
+    /// The file's last record cut mid-field, with no line break, as a cut-off upload leaves it.
+    TruncatedLine,
+    /// A file starting with the UTF-8 byte order mark.
+    Bom,
+    /// A file whose records end in LF, CRLF and CR mixed.
+    MixedLineEndings,
+    /// A file written with another delimiter than the rest.
+    WrongDelimiter,
+    /// A file whose header renames a column or swaps two, its values swapped with it.
+    HeaderDrift,
+    /// A file encoded windows-1252 among UTF-8 ones.
+    Latin1File,
+    /// A JSON array among NDJSON files, or an NDJSON file among JSON arrays.
+    JsonLayoutMix,
+    /// A record missing its closing brace.
+    JsonUnbalanced,
+    /// A number or boolean written as a string.
+    JsonTypeFlip,
+    /// A file whose timestamp columns are stored at another unit than the rest.
+    ParquetTimestampUnitDrift,
+    /// A file whose timestamp columns are stored as INT96, as Hive and Impala wrote them.
+    ParquetInt96,
+    /// A file whose decimal columns are stored one digit of scale wider than the rest.
+    ParquetDecimalScaleDrift,
+}
+
+impl FaultKind {
+    /// Every kind, in the order the schema lists them.
+    pub const ALL: [Self; 19] = [
+        Self::RaggedShort,
+        Self::RaggedLong,
+        Self::UnescapedQuote,
+        Self::EmbeddedNewline,
+        Self::TypeInvalid,
+        Self::InvalidUtf8,
+        Self::LineTooLong,
+        Self::TruncatedLine,
+        Self::Bom,
+        Self::MixedLineEndings,
+        Self::WrongDelimiter,
+        Self::HeaderDrift,
+        Self::Latin1File,
+        Self::JsonLayoutMix,
+        Self::JsonUnbalanced,
+        Self::JsonTypeFlip,
+        Self::ParquetTimestampUnitDrift,
+        Self::ParquetInt96,
+        Self::ParquetDecimalScaleDrift,
+    ];
+
+    /// The kind's name, as `kinds` spells it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::RaggedShort => "ragged_short",
+            Self::RaggedLong => "ragged_long",
+            Self::UnescapedQuote => "unescaped_quote",
+            Self::EmbeddedNewline => "embedded_newline",
+            Self::TypeInvalid => "type_invalid",
+            Self::InvalidUtf8 => "invalid_utf8",
+            Self::LineTooLong => "line_too_long",
+            Self::TruncatedLine => "truncated_line",
+            Self::Bom => "bom",
+            Self::MixedLineEndings => "mixed_line_endings",
+            Self::WrongDelimiter => "wrong_delimiter",
+            Self::HeaderDrift => "header_drift",
+            Self::Latin1File => "latin1_file",
+            Self::JsonLayoutMix => "json_layout_mix",
+            Self::JsonUnbalanced => "json_unbalanced",
+            Self::JsonTypeFlip => "json_type_flip",
+            Self::ParquetTimestampUnitDrift => "parquet_timestamp_unit_drift",
+            Self::ParquetInt96 => "parquet_int96",
+            Self::ParquetDecimalScaleDrift => "parquet_decimal_scale_drift",
+        }
+    }
+
+    /// Whether the kind breaks a whole file, so `files_share` places it rather than `rate`.
+    pub fn is_file_kind(self) -> bool {
+        matches!(
+            self,
+            Self::TruncatedLine
+                | Self::Bom
+                | Self::MixedLineEndings
+                | Self::WrongDelimiter
+                | Self::HeaderDrift
+                | Self::Latin1File
+                | Self::JsonLayoutMix
+                | Self::ParquetTimestampUnitDrift
+                | Self::ParquetInt96
+                | Self::ParquetDecimalScaleDrift
+        )
+    }
 }
 
 /// `share` of rows take one of `keys` values: the column's most frequent ones, or values its own
@@ -387,8 +515,8 @@ pub struct PartitionSkew {
 #[serde(deny_unknown_fields)]
 pub struct Expectation {
     pub metric: ExpectedMetric,
-    /// The column measured.
-    pub column: String,
+    /// The column measured. A metric of the whole table, such as `malformed.rate`, takes none.
+    pub column: Option<String>,
     pub at_least: Option<f64>,
     pub at_most: Option<f64>,
 }
@@ -412,6 +540,10 @@ pub enum ExpectedMetric {
     /// The share of rows whose `column` is null, the profile's own nulls included.
     #[serde(rename = "missingness.rate")]
     MissingnessRate,
+    /// The share of a CSV or TSV dataset's data rows a reader rejects, as a profile's
+    /// `source.csv.malformed.rate` records it. It takes no column.
+    #[serde(rename = "malformed.rate")]
+    MalformedRate,
 }
 
 impl ExpectedMetric {
@@ -422,6 +554,7 @@ impl ExpectedMetric {
             Self::DuplicatesRate => "duplicates",
             Self::LateArrivalRate => "late_arrival",
             Self::MissingnessRate => "missingness",
+            Self::MalformedRate => "malformed_rows",
         }
     }
 }
@@ -444,6 +577,7 @@ impl Perturbation {
             Self::SchemaDrift(_) => "schema_drift",
             Self::SmallFiles(_) => "small_files",
             Self::PartitionSkew(_) => "partition_skew",
+            Self::MalformedRows(_) => "malformed_rows",
         }
     }
 
@@ -464,6 +598,7 @@ impl Perturbation {
             Self::SchemaDrift(op) => op.id.as_deref(),
             Self::SmallFiles(op) => op.id.as_deref(),
             Self::PartitionSkew(op) => op.id.as_deref(),
+            Self::MalformedRows(op) => op.id.as_deref(),
         }
     }
 
@@ -481,7 +616,7 @@ impl Perturbation {
             | Self::Outliers(Outliers { column, .. })
             | Self::PartitionSkew(PartitionSkew { column, .. }) => column.clone(),
             Self::SwappedValues(SwappedValues { columns, .. }) => columns.join(","),
-            Self::Duplicates(_) | Self::SchemaDrift(_) | Self::SmallFiles(_) => "table".into(),
+            Self::Duplicates(_) | Self::SchemaDrift(_) | Self::SmallFiles(_) | Self::MalformedRows(_) => "table".into(),
         }
     }
 
@@ -509,15 +644,20 @@ impl Perturbation {
                 .chain(drift.add.iter().map(|added| &added.name))
                 .map(String::as_str)
                 .collect(),
-            Self::Duplicates(_) | Self::SmallFiles(_) => Vec::new(),
+            Self::Duplicates(_) | Self::SmallFiles(_) | Self::MalformedRows(_) => Vec::new(),
         }
+    }
+
+    /// Whether the op acts across several files, so a write to one file cannot apply it.
+    pub fn spans_files(&self) -> bool {
+        matches!(self, Self::SchemaDrift(_) | Self::SmallFiles(_))
     }
 
     /// Whether the op shapes the files a write makes rather than the rows, so a run writing no
     /// files cannot apply it.
     pub fn shapes_files(&self) -> bool {
         match self {
-            Self::SchemaDrift(_) | Self::SmallFiles(_) => true,
+            Self::SchemaDrift(_) | Self::SmallFiles(_) | Self::MalformedRows(_) => true,
             Self::HotKeys(_)
             | Self::Duplicates(_)
             | Self::LateArrival(_)

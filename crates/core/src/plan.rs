@@ -18,8 +18,10 @@ use crate::identity::is_sha256_digest;
 use crate::perturbations;
 use crate::perturbations::Block;
 use crate::perturbations::BlockPerturbation;
+use crate::perturbations::MalformedPlan;
 use crate::perturbations::Planned;
 use crate::perturbations::Planning;
+use crate::perturbations::RowFaults;
 use crate::perturbations::ScenarioFault;
 use crate::perturbations::SchemaDriftPlan;
 use crate::perturbations::plan_perturbation;
@@ -177,6 +179,7 @@ pub struct Plan {
     stages: Vec<PlannedStage>,
     drift: Option<SchemaDriftPlan>,
     file_rows: Option<Quantiles>,
+    malformed: Option<MalformedPlan>,
     /// Each perturbation copying rows from across the dataset: the pointer to the parameter that
     /// sets it, and the fewest dataset rows between a copy's home and its source.
     across_files: Vec<(String, u64)>,
@@ -204,6 +207,8 @@ pub struct PlacedBlock {
     pub batch: RecordBatch,
     /// One list per column, each in row order, empty where the caller asked for none.
     pub text_cells: Vec<Vec<TextCell>>,
+    /// What `malformed_rows` breaks in these rows, empty without it.
+    pub faults: RowFaults,
     homes: Option<Vec<u32>>,
 }
 
@@ -227,9 +232,11 @@ impl PlacedBlock {
                         .collect()
                 })
                 .collect();
+            let faults = one_group(self.faults.placed(1, |row| (start..stop).contains(&row).then(|| (0, row - start))));
             return PlacedBlock {
                 batch,
                 text_cells,
+                faults,
                 homes: None,
             };
         };
@@ -251,6 +258,7 @@ impl PlacedBlock {
                     .collect()
             })
             .collect();
+        let faults = one_group(self.faults.placed(1, |row| placed_at[row as usize].map(|row| (0, row))));
         let homes = homes
             .iter()
             .copied()
@@ -260,9 +268,14 @@ impl PlacedBlock {
         PlacedBlock {
             batch,
             text_cells,
+            faults,
             homes: Some(homes),
         }
     }
+}
+
+fn one_group(mut groups: Vec<RowFaults>) -> RowFaults {
+    groups.pop().expect("one group was asked for")
 }
 
 const _: () = {
@@ -343,6 +356,7 @@ pub fn plan_with_scenario(
         stages: Vec::new(),
         drift: None,
         file_rows: None,
+        malformed: None,
         across_files: Vec::new(),
     };
     if let Some(applied) = scenario {
@@ -424,6 +438,11 @@ impl Plan {
                         return Err(one_only());
                     }
                 }
+                Planned::Malformed(malformed) => {
+                    if self.malformed.replace(malformed).is_some() {
+                        return Err(one_only());
+                    }
+                }
                 Planned::SchemaDrift(_) => unreachable!("a schema drift is planned after the loop"),
             }
         }
@@ -460,6 +479,11 @@ impl Plan {
     /// still overrides them.
     pub fn file_rows(&self) -> Option<&Quantiles> {
         self.file_rows.as_ref()
+    }
+
+    /// What a scenario's `malformed_rows` breaks, where it has one.
+    pub fn malformed(&self) -> Option<&MalformedPlan> {
+        self.malformed.as_ref()
     }
 
     /// Where a perturbation copies rows from across the dataset: the pointer to the parameter
@@ -560,12 +584,18 @@ impl Plan {
 
     /// `block`'s rows as the writers file them, with its text cells where `text_cells` asks.
     pub fn placed_block(&self, block: u64, text_cells: bool) -> Result<PlacedBlock, BlockOutOfRange> {
-        self.position(block)?;
+        let (_, generated) = self.position(block)?;
         let rows = self.block_through(block, self.stages.len(), text_cells);
         let width = rows.batch.num_columns();
+        let faults = self
+            .malformed
+            .as_ref()
+            .map(|malformed| malformed.row_faults(block, generated, rows.batch.num_rows()))
+            .unwrap_or_default();
         Ok(PlacedBlock {
             batch: rows.batch,
             text_cells: rows.cells.unwrap_or_else(|| vec![Vec::new(); width]),
+            faults,
             homes: rows.homes,
         })
     }
@@ -585,6 +615,7 @@ impl Plan {
         PlacedBlock {
             batch: drifted.batch,
             text_cells: drifted.cells.expect("the cells went in"),
+            faults: placed.faults,
             homes: drifted.homes,
         }
     }
