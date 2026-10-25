@@ -7,11 +7,13 @@
 use std::env;
 use std::fs;
 use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
 use arrow_ipc::writer::FileWriter;
+use doppeldata_core::Plan;
 use doppeldata_core::profile::Profile;
 use rayon::prelude::*;
 
@@ -92,17 +94,32 @@ fn run() -> Result<(), String> {
         );
     }
     if let Some(path) = options.ipc {
-        let file = File::create(&path).map_err(|error| format!("{path}: {error}"))?;
-        let mut writer = FileWriter::try_new_buffered(file, &plan.schema()).map_err(|e| e.to_string())?;
-        for block in 0..plan.block_count() {
-            writer
-                .write(&plan.generate_block(block).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
-        }
-        writer.finish().map_err(|e| e.to_string())?;
+        write_ipc(&plan, &path)?;
         println!("wrote {path}");
     }
     Ok(())
+}
+
+/// Writes beside `path` and renames into place, so a failed write leaves nothing at `path`.
+fn write_ipc(plan: &Plan, path: &str) -> Result<(), String> {
+    let partial = format!("{path}.partial");
+    let written = write_batches(plan, &partial).and_then(|()| fs::rename(&partial, path).map_err(|error| format!("{path}: {error}")));
+    if written.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    written
+}
+
+fn write_batches(plan: &Plan, path: &str) -> Result<(), String> {
+    let file = File::create(path).map_err(|error| format!("{path}: {error}"))?;
+    let mut writer = FileWriter::try_new_buffered(file, &plan.schema()).map_err(|e| e.to_string())?;
+    for block in 0..plan.block_count() {
+        writer
+            .write(&plan.generate_block(block).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    }
+    writer.finish().map_err(|e| e.to_string())?;
+    writer.get_mut().flush().map_err(|error| format!("{path}: {error}"))
 }
 
 fn main() -> ExitCode {
