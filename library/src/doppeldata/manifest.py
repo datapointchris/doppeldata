@@ -44,13 +44,18 @@ class Manifest:
 
 
 def written_manifest(data: Any) -> Manifest | None:
-    """The manifest a doppeldata write left at the root `data` names, a directory or an `s3://` prefix. None where `data` is
-    anything else, or the root holds none."""
+    """The manifest a doppeldata write left at the root `data` names, a directory or an `s3://` prefix, or beside the one
+    file `data` names where it records that file alone. None where `data` is anything else, or no such manifest is there."""
     if not isinstance(data, str | os.PathLike):
         return None
     item = os.fspath(data)
     if not item.startswith('s3://'):
-        path = Path(item) / MANIFEST_FILE_NAME
+        local = Path(item)
+        if local.is_file():
+            beside = local.parent / MANIFEST_FILE_NAME
+            recorded = Manifest.from_json(beside.read_text(encoding='utf-8')) if beside.is_file() else None
+            return recorded if recorded is not None and [file['path'] for file in recorded.files] == [local.name] else None
+        path = local / MANIFEST_FILE_NAME
         return Manifest.from_json(path.read_text(encoding='utf-8')) if path.is_file() else None
     # Without boto3 nothing reads S3, and profiling the data refuses it next, naming boto3.
     if importlib.util.find_spec('boto3') is None:

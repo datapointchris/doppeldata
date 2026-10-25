@@ -275,7 +275,7 @@ def write(
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
     prepared = prepared_write(profile, out, rows, seed, choices, scenario)
     if prepared.one_file is not None:
-        message = f'{os.fspath(out)} names one file, which doppeldata.write writes; the executors write a directory, such as "people/"'
+        message = f'{os.fspath(out)} names one file, which doppeldata.write writes; the executors write a directory, so end the path with /'
         raise WriteFailed('one-file-from-executors', message, kind='refused')
     destination = executors_destination(spark, prepared)
     engine, options = prepared.engine, prepared.options

@@ -10,7 +10,6 @@ import json
 import os
 import re
 import shutil
-import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -138,17 +137,18 @@ def destination_of(out: str | os.PathLike[str]) -> tuple[str, str, str | None]:
 
 # The rows a write to one file asks each file to hold, so its layout makes one range of every row.
 EVERY_ROW = 2**63 - 1
+# Ends the name of the directory beside a one-file write's target that the engine writes into.
+STAGING_SUFFIX = '.doppeldata-staging'
 
 
 def one_file_of(out: str | os.PathLike[str]) -> Path | None:
-    """The file `out` names where it is a local path whose suffix is a format's name, and naming no directory, else None."""
+    """The file `out` names where it is a local path whose suffix is a format's name, else None. The path alone decides, and
+    a trailing `/` names a directory whatever its suffix."""
     destination = os.fspath(out)
-    if '://' in destination or COLLAPSED_URL.match(destination) or destination.endswith('/'):
+    if '://' in destination or COLLAPSED_URL.match(destination) or destination.endswith(('/', os.sep)):
         return None
     path = Path(destination)
-    if path.suffix.lower().removeprefix('.') not in output_formats() or path.is_dir():
-        return None
-    return path
+    return path if path.suffix.lower().removeprefix('.') in output_formats() else None
 
 
 def one_file_choices(choices: WriteChoices, target: Path) -> WriteChoices:
@@ -164,6 +164,16 @@ def one_file_choices(choices: WriteChoices, target: Path) -> WriteChoices:
     return dc.replace(choices, format=named, file_rows=EVERY_ROW, partition_by=[])
 
 
+def refuse_other_extension(target: Path, ranges_json: str) -> None:
+    """Refuse writer settings whose file `target`'s suffix does not name, as gzip makes `csv.gz` and an IPC stream `arrows`."""
+    named = target.suffix.lower().removeprefix('.')
+    for planned in json.loads(ranges_json):
+        written = planned['path'].partition('.')[2]
+        if written != named:
+            message = f'{target.name} names a .{named} file, and the writer settings given write .{written}; write to a directory for those'
+            raise WriteFailed('suffix-names-another-format', message, kind='refused')
+
+
 def one_file_scenario(scenario: Scenario | Sequence[Scenario] | None) -> Scenario | None:
     """The scenario `scenario=` names, refused where it shapes the files, which a write to one file cannot."""
     applied = composed(scenario)
@@ -175,25 +185,36 @@ def one_file_scenario(scenario: Scenario | Sequence[Scenario] | None) -> Scenari
 def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, replace: bool, manifest: bool) -> Manifest:
     """Write the dataset as the one file `target`, and `_manifest.json` beside it only where `manifest` asks.
 
-    The engine writes into a directory made beside `target`, and the file is moved into place whole, so a write that stops
-    before the move leaves nothing. A manifest beside `target` recording it alone describes the rows this write replaces, so
-    it goes before the file moves, whether or not `manifest` writes another. One recording other files belongs to them: it is
-    left alone, and refuses `manifest`. The manifest returned names `target`'s directory as its destination, and `target` as
-    its one file. No rows write no file, as they write none in a directory.
+    The engine writes into `.{target.name}.doppeldata-staging` beside `target`, and the file is moved into place whole. A
+    write that fails or that a signal stops removes that directory. One killed outright leaves it, and the next write to
+    `target` holds it as it holds the file: refused, or removed under `replace`. A manifest beside `target` recording it
+    alone describes the rows this write replaces, so it goes before the file moves, whether or not `manifest` writes
+    another. One recording other files makes that directory their dataset, so it refuses the write. The manifest returned
+    names `target`'s directory as its destination, and `target` as its one file. No rows write no file, as they write none
+    in a directory.
     """
+    if target.is_dir():
+        message = f'{target} is a directory; end the path with / to write the dataset into it'
+        raise WriteFailed('destination-is-a-directory', message, kind='refused')
     recorded = target.parent / MANIFEST_FILE_NAME
     listed = [file['path'] for file in Manifest.from_json(recorded.read_text()).files] if recorded.is_file() else None
     others = sorted(set(listed or ()) - {target.name})
-    if manifest and others:
-        message = f'{recorded} records {", ".join(others)}, so it cannot record {target.name} too; write {target.name} to another directory'
+    if others:
+        message = f'{recorded} records {", ".join(others)} as its dataset, so {target.name} cannot join it; write it to another directory'
         raise WriteFailed('manifest-records-another-file', message, kind='refused')
-    stale = listed is not None and not others
-    held = [path for path, holds in ((target, target.exists()), (recorded, stale)) if holds]
-    if held and not replace:
-        raise WriteFailed('destination-not-empty', f'{held[0]} already exists', kind='refused')
+    staging = target.parent / f'.{target.name}{STAGING_SUFFIX}'
+    held = [
+        (f'{target} already exists', target.exists()),
+        (f'{recorded} already exists', listed is not None),
+        (f'{staging} holds a write to {target.name} that was killed or is still running', staging.exists()),
+    ]
+    refusals = [message for message, holds in held if holds]
+    if refusals and not replace:
+        raise WriteFailed('destination-not-empty', refusals[0], kind='refused')
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=f'.{target.name}.', dir=target.parent))
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir()
     except OSError as error:
         raise unwritable(target, error) from error
     try:
@@ -202,7 +223,7 @@ def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, rep
         moved = Manifest({**written.document, 'destination': str(target.parent), 'files': files})
         if manifest:
             (staging / MANIFEST_FILE_NAME).write_text(json.dumps(moved.document, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
-        if stale:
+        if listed is not None:
             recorded.unlink()
         for file in written.files:
             os.replace(staging / file['path'], target)
@@ -321,6 +342,8 @@ def prepared_write(
     engine = arguments.plan()
     choices_json = choices.engine_json(profile, applied)
     options = engine.write_options(choices_json)
+    if one_file is not None:
+        refuse_other_extension(one_file, engine.ranges_json(options))
     return PreparedWrite(destination, scheme, bucket, arguments, engine, choices_json, options, one_file)
 
 
@@ -399,7 +422,7 @@ def plan(
     if target is not None:
         ranges = [dc.replace(planned, path=target.name) for planned in ranges]
     return WritePlan(
-        destination=prepared.destination if target is None else str(target),
+        destination=prepared.destination,
         identity=json.loads(engine.identity_json),
         dataset_digest=engine.dataset_digest,
         format=settings['format'],
@@ -437,12 +460,14 @@ def write(
     no partitions. A destination holding anything is refused unless `replace` is set, which deletes only what an earlier
     write recorded. S3 takes its credentials, region and endpoint from the AWS environment through boto3.
 
-    A local path ending in a format's suffix, such as `people.csv`, is written as that one file in that format. It gets
-    `_manifest.json` beside it only where `manifest` is set, and `replace` writes over either.
+    A local path ending in a format's suffix, such as `people.csv`, is written as that one file in that format, and one
+    ending in `/` as a directory. It gets `_manifest.json` beside it only where `manifest` is set, and `replace` writes over
+    either. A directory holding another dataset's manifest refuses it.
 
     A write that fails raises WriteFailed, and one a signal stops, such as Ctrl-C, raises WriteInterrupted. Both are a
     StoppedWrite. Once a write to a directory has claimed it, either leaves `_manifest.partial.json` listing the files it
-    completed. A write to one file that stops leaves nothing.
+    completed. A write to one file that stops leaves nothing, unless it is killed outright, which leaves its staging
+    directory beside the file for `replace` to remove.
 
     `scenario`, a Scenario or a list composed in order, bends the data: its patch applies to the profile, and its perturbations
     to the rows and the files. The manifest records it, and a layout that cannot hold it raises InvalidScenario. `rows` counts

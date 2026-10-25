@@ -75,8 +75,8 @@ def check(
     metric on what a perturbation moves is listed as skipped by it, and a change on a column one writes passes. Each
     expectation it declares is measured, and the report's `verified` is False when any misses its bounds.
 
-    Where `data` names a directory or prefix a doppeldata write left `_manifest.json` in, InvalidScenario refuses a
-    `scenario` other than the one it records, and no `scenario` where it records one.
+    Where `data` names a directory or prefix a doppeldata write left `_manifest.json` in, or one file a manifest beside it
+    records alone, InvalidScenario refuses a `scenario` other than the one it records, and no `scenario` where it records one.
 
     `against` is the real data, read as `data` is. Each of `SCORES` then scores a seeded sample of `against_sample` rows
     from each side, `DEFAULT_SAMPLE_ROWS` unless given, as SDMetrics defines it. A score decides only where `thresholds`

@@ -60,7 +60,10 @@ from doppeldata.published_schemas import schema_text
 from doppeldata.scenario_format import op_schemas
 from doppeldata.scenario_format import scenario_schema
 from doppeldata.scenario_format import unknown_name
+from doppeldata.short_profiles import COMMAND_LINE_REMEDY
 from doppeldata.short_profiles import file_profile
+from doppeldata.short_profiles import named_column
+from doppeldata.short_profiles import no_fake_message
 from typer.core import TyperGroup
 
 
@@ -371,8 +374,12 @@ def profile_or_columns(profile_name: str | None, columns: str | None) -> Profile
         raise typer.BadParameter(f'give PROFILE or --columns, not {given}', param_hint='PROFILE')
     if profile_name is not None:
         return loaded_profile(profile_name, 'PROFILE')
+    names = [name.strip() for name in (columns or '').split(',') if name.strip()]
+    unmatched = [no_fake_message(name, COMMAND_LINE_REMEDY)[0] for name in names if named_column(name) is None]
+    if unmatched:
+        raise typer.BadParameter('\n'.join(unmatched), param_hint='--columns')
     try:
-        return Profile.expand([name.strip() for name in (columns or '').split(',') if name.strip()])
+        return Profile.expand(names)
     except (InvalidProfile, ValueError) as error:
         raise typer.BadParameter(str(error), param_hint='--columns') from error
 
@@ -559,7 +566,10 @@ def profile_expand(
     if out is None:
         typer.echo(expanded.to_yaml(), nl=False)
         return
-    expanded.save(out)
+    try:
+        expanded.save(out)
+    except OSError as error:
+        raise typer.BadParameter(f'{out} could not be written: {error.strerror or error}', param_hint='--out') from error
 
 
 @profile_app.command('show', no_args_is_help=True)
@@ -722,6 +732,8 @@ def data_plan(
     if partitioned:
         directories = f'one {planned.layout["partition_style"]}-style directory per value of {", ".join(partitioned)}'
         files = f'up to {counted(planned.files_at_most, "file")} from {ranges} to {planned.destination}, under {directories}'
+    elif (one_file := one_file_of(choices.out)) is not None:
+        files = f'1 file, {one_file}'
     else:
         files = f'{counted(planned.files_at_most, "file")} to {planned.destination}'
     lines = [
@@ -767,7 +779,9 @@ def data_generate(
     replace: Annotated[
         bool,
         typer.Option(
-            '--replace', help='Delete what an earlier doppeldata write left at --out first. Anything else there refuses the write.'
+            '--replace',
+            help='Delete what an earlier doppeldata write left at a directory --out first, where anything else refuses the write. '
+            'A one-file --out is written over.',
         ),
     ] = False,
     threads: Annotated[
@@ -784,7 +798,8 @@ def data_generate(
     A directory or S3 --out holds the files and their _manifest.json: doppeldata data generate orders --out orders/. A
     destination holding anything is refused unless --replace is given. A write that stops after claiming a directory, on a
     failure, Ctrl-C or SIGTERM, leaves _manifest.partial.json listing the files it completed. A one-file write that stops leaves
-    nothing. S3 is written with the AWS environment's credentials.
+    nothing, unless it is killed outright, which leaves a staging directory beside the file for --replace to remove. S3 is
+    written with the AWS environment's credentials.
     """
     choices = data_choices(
         profile_name, columns, rows, seed, file_format, out, file_rows, partition_by, no_partitions, partition_style, writer, scenario
