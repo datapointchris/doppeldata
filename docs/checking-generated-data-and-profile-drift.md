@@ -97,11 +97,16 @@ Arrow decimal type telling a decimal from a float.
   outside the edges or value list frozen from A, a CSV dialect setting that changed, and a
   partition key B adds.
 
-## A failed check exits 3, and drift exits 1
+## A failed check exits 3, drift exits 1, and a verb that could not finish exits 3
 
 Nothing in doppeldata changes the data it checked, so a failed check needs a person, and exits 3.
-Drift between two months of one dataset is expected, so `profile diff` exits 1, as `diff` does. A
-missing file, an unreadable profile or a bad thresholds file exits 2.
+Drift between two months of one dataset is expected, so `profile diff` exits 1, as `diff` does.
+
+- **A check or a diff that could not finish exits 3**, from a refused S3 listing to a crash. It
+  needs a person too, and 1 then means drift and nothing else.
+- **No answer from S3 exits 4**, because the next run can succeed with nobody acting.
+- **A missing file, an unreadable profile or a bad thresholds file exits 2.** So does DATA holding
+  `_manifest.partial.json`, because the write there stopped or is still running.
 
 ## The report's shape does not change when a scenario applies
 

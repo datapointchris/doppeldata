@@ -1,9 +1,12 @@
+import contextlib
 import dataclasses as dc
 import importlib.metadata
 import json
 import math
 import signal
+import traceback
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
 from typing import Any
@@ -254,6 +257,21 @@ def loaded_profile(name: str, param_hint: str) -> Profile:
     raise typer.BadParameter(message, param_hint=param_hint)
 
 
+@contextlib.contextmanager
+def failure_exits_3() -> Iterator[None]:
+    """End a check verb on 3 when what it wraps fails, so its 1 means drift and nothing else. A usage error keeps 2, and no answer 4."""
+    try:
+        yield
+    except DoppeldataError as error:
+        if error.exit_code == 1:
+            error.exit_code = 3
+        raise
+    except Exception as error:
+        traceback.print_exc()
+        typer.echo(f'doppeldata: the comparison stopped on {type(error).__name__}, which is a bug in doppeldata', err=True)
+        raise typer.Exit(3) from error
+
+
 def loaded_thresholds(path: Path | None) -> Thresholds | None:
     try:
         return Thresholds.load(path) if path is not None else None
@@ -270,14 +288,17 @@ def profile_diff(
 ) -> None:
     """Report how far B drifted from A, two profiles of one table: doppeldata profile diff march.profile.yaml april.profile.yaml
 
-    Exits 0 when the profiles agree and 1 when a metric misses its threshold or a field changed.
+    Exits 0 when the profiles agree, 1 when a metric misses its threshold or a field changed, and 3 when the diff could not finish.
     """
     earlier, later = loaded_profile(a, 'A'), loaded_profile(b, 'B')
+    chosen = loaded_thresholds(thresholds)
     try:
-        report = diff(earlier, later, thresholds=loaded_thresholds(thresholds))
+        with failure_exits_3():
+            report = diff(earlier, later, thresholds=chosen)
+            shown = report.to_json() if as_json else report.to_markdown()
     except InvalidThresholds as error:
         raise typer.BadParameter(str(error), param_hint='--thresholds') from error
-    typer.echo(report.to_json() if as_json else report.to_markdown(), nl=False)
+    typer.echo(shown, nl=False)
     if report.drifted:
         raise ProfilesDrifted(report)
 
@@ -294,14 +315,15 @@ def data_check(
     """Check generated data against its profile, without the real data: doppeldata data check orders.profile.yaml out/orders/
 
     DATA is profiled with PROFILE's histogram edges and value lists, and each metric compares the two profiles.
-    Exits 0 when every metric and column passes, and 3 when one does not.
+    Exits 0 when every metric and column passes, and 3 when one does not or the check could not finish.
     """
     source = loaded_profile(profile_name, 'PROFILE')
     chosen = loaded_thresholds(thresholds)
     try:
-        with warnings.catch_warnings(record=True) as caught:
+        with failure_exits_3(), warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', ProfilingWarning)
             report = check(source, data, thresholds=chosen)
+            shown = report.to_json() if as_json else report.to_markdown()
     except InvalidThresholds as error:
         raise typer.BadParameter(str(error), param_hint='--thresholds') from error
     except SourceError as error:
@@ -309,7 +331,7 @@ def data_check(
             raise
         raise typer.BadParameter(str(error), param_hint='DATA') from error
     print_notices(caught)
-    typer.echo(report.to_json() if as_json else report.to_markdown(), nl=False)
+    typer.echo(shown, nl=False)
     if not (report.passed and report.verified):
         raise CheckFailed(report)
 
