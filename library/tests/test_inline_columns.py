@@ -1,15 +1,20 @@
-import datetime as dt
+import csv
 import json
+import re
 
 import doppeldata as sd
-import pyarrow as pa
-import pyarrow.compute as pc
 import pytest
 from doppeldata.published_schemas import enum_values
 from doppeldata.published_schemas import schema_text
 from doppeldata.short_profiles import providers
 
-FIVE_DIGITS = r'^\d{5}$'
+
+def written_rows(columns, tmp_path, rows):
+    """The rows `columns` generates at seed 0, read back from one CSV, because the library's tests install no Arrow reader."""
+    out = tmp_path / 'generated.csv'
+    sd.write(columns, out, rows=rows, seed=0)
+    with out.open(newline='') as handle:
+        return list(csv.DictReader(handle))
 
 
 def test_sd_fakes_holds_every_provider_the_profile_schema_names():
@@ -17,35 +22,32 @@ def test_sd_fakes_holds_every_provider_the_profile_schema_names():
     assert sorted(providers()) == sorted(enum_values(schema['$defs']['Provider']))
 
 
-def test_a_dict_of_fakes_and_ranges_generates_each_column_within_what_it_declares():
-    table = pa.table(
-        sd.generate(
-            {
-                'name': sd.fakes.name,
-                'zip': sd.fakes.zip_code,
-                'age': sd.integers(18, 90),
-                'price': sd.decimals(0, 500, places=2),
-                'signed_up': sd.dates('2023-01-01', '2025-12-31'),
-                'plan': sd.choice(['free', 'pro', 'team'], weights=[0.7, 0.25, 0.05]),
-                'score': sd.decimals(0, 1, nulls=0.05),
-            },
-            rows=1000,
-            seed=0,
-        )
+def test_a_dict_of_fakes_and_ranges_generates_each_column_within_what_it_declares(tmp_path):
+    rows = written_rows(
+        {
+            'name': sd.fakes.name,
+            'zip': sd.fakes.zip_code,
+            'age': sd.integers(18, 90),
+            'price': sd.decimals(0, 500, places=2),
+            'signed_up': sd.dates('2023-01-01', '2025-12-31'),
+            'plan': sd.choice(['free', 'pro', 'team'], weights=[0.7, 0.25, 0.05]),
+            'score': sd.decimals(0, 1, nulls=0.05),
+        },
+        tmp_path,
+        1000,
     )
-    assert pc.all(pc.match_substring_regex(table['zip'], FIVE_DIGITS)).as_py()
-    assert pc.min_max(table['age']).as_py() == {'min': 18, 'max': 90}
-    assert all(round(price, 2) == price for price in table['price'].to_pylist())
-    signed_up = pc.min_max(table['signed_up']).as_py()
-    assert dt.date(2023, 1, 1) <= signed_up['min'] and signed_up['max'] <= dt.date(2025, 12, 31)
-    assert set(table['plan'].to_pylist()) == {'free', 'pro', 'team'}
-    assert 20 < table['score'].null_count < 80
+    assert all(re.fullmatch(r'\d{5}', row['zip']) for row in rows)
+    ages = [int(row['age']) for row in rows]
+    assert (min(ages), max(ages)) == (18, 90)
+    assert all(len(row['price'].partition('.')[2]) <= 2 for row in rows)
+    assert all('2023-01-01' <= row['signed_up'] <= '2025-12-31' for row in rows)
+    assert {row['plan'] for row in rows} == {'free', 'pro', 'team'}
+    assert 20 < sum(row['score'] == '' for row in rows) < 80
 
 
-def test_a_list_of_names_takes_each_names_fake_and_a_name_hinting_none_is_refused_naming_the_closest():
-    table = pa.table(sd.generate(['name', 'email', 'city', 'zip'], rows=100, seed=0))
-    assert pc.all(pc.match_substring(table['email'], '@')).as_py()
-    assert pc.all(pc.match_substring_regex(table['zip'], FIVE_DIGITS)).as_py()
+def test_a_list_of_names_takes_each_names_fake_and_a_name_hinting_none_is_refused_naming_the_closest(tmp_path):
+    rows = written_rows(['name', 'email', 'city', 'zip'], tmp_path, 100)
+    assert all('@' in row['email'] and re.fullmatch(r'\d{5}', row['zip']) for row in rows)
 
     with pytest.raises(sd.InvalidProfile) as raised:
         sd.generate(['name', 'zipp'], rows=10)
