@@ -26,6 +26,8 @@ use regex_syntax::hir::HirKind;
 
 use super::inverse_cdf::InverseCdf;
 use crate::profile::CharClass;
+use crate::profile::CheckDigit;
+use crate::profile::Provider;
 use crate::rng::Bernoulli;
 use crate::rng::below;
 use crate::rng::unit;
@@ -78,117 +80,44 @@ fn build_strings<O: OffsetSizeTrait>(rows: usize, nulls: Option<&NullBuffer>, mu
     Arc::new(builder.finish())
 }
 
-/// The providers `semantic.generator_hint.provider` names. The names are doppeldata's, so a change
-/// of faker library breaks no profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Provider {
-    Email,
-    FreeEmail,
-    Username,
-    Ipv4,
-    Ipv6,
-    MacAddress,
-    UserAgent,
-    Name,
-    FirstName,
-    LastName,
-    PhoneNumber,
-    CellNumber,
-    Company,
-    JobTitle,
-    StreetAddress,
-    StreetName,
-    BuildingNumber,
-    City,
-    State,
-    StateAbbr,
-    ZipCode,
-    PostCode,
-    Country,
-    CountryCode,
-    CreditCard,
-    Uuid,
-}
-
-const PROVIDERS: [(&str, Provider); 26] = [
-    ("email", Provider::Email),
-    ("free_email", Provider::FreeEmail),
-    ("username", Provider::Username),
-    ("ipv4", Provider::Ipv4),
-    ("ipv6", Provider::Ipv6),
-    ("mac_address", Provider::MacAddress),
-    ("user_agent", Provider::UserAgent),
-    ("name", Provider::Name),
-    ("first_name", Provider::FirstName),
-    ("last_name", Provider::LastName),
-    ("phone_number", Provider::PhoneNumber),
-    ("cell_number", Provider::CellNumber),
-    ("company", Provider::Company),
-    ("job_title", Provider::JobTitle),
-    ("street_address", Provider::StreetAddress),
-    ("street_name", Provider::StreetName),
-    ("building_number", Provider::BuildingNumber),
-    ("city", Provider::City),
-    ("state", Provider::State),
-    ("state_abbr", Provider::StateAbbr),
-    ("zip_code", Provider::ZipCode),
-    ("post_code", Provider::PostCode),
-    ("country", Provider::Country),
-    ("country_code", Provider::CountryCode),
-    ("credit_card", Provider::CreditCard),
-    ("uuid", Provider::Uuid),
-];
-
-impl Provider {
-    pub(crate) fn from_name(name: &str) -> Result<Self, String> {
-        PROVIDERS
-            .iter()
-            .find(|(known, _)| *known == name)
-            .map(|&(_, provider)| provider)
-            .ok_or_else(|| {
-                let known: Vec<&str> = PROVIDERS.iter().map(|(known, _)| *known).collect();
-                format!("provider `{name}` is not one of {}", known.join(", "))
-            })
-    }
-
-    fn push(self, rng: &mut ChaCha8Rng, out: &mut String) {
-        let value: String = match self {
-            Self::Email => internet::SafeEmail().fake_with_rng(rng),
-            Self::FreeEmail => internet::FreeEmail().fake_with_rng(rng),
-            Self::Username => internet::Username().fake_with_rng(rng),
-            Self::Ipv4 => internet::IPv4().fake_with_rng(rng),
-            Self::Ipv6 => internet::IPv6().fake_with_rng(rng),
-            Self::MacAddress => internet::MACAddress().fake_with_rng(rng),
-            Self::UserAgent => internet::UserAgent().fake_with_rng(rng),
-            Self::Name => name::Name().fake_with_rng(rng),
-            Self::FirstName => name::FirstName().fake_with_rng(rng),
-            Self::LastName => name::LastName().fake_with_rng(rng),
-            Self::PhoneNumber => phone::PhoneNumber().fake_with_rng(rng),
-            Self::CellNumber => phone::CellNumber().fake_with_rng(rng),
-            Self::Company => company::CompanyName().fake_with_rng(rng),
-            Self::JobTitle => job::Title().fake_with_rng(rng),
-            Self::StreetAddress => {
-                let number: String = address::BuildingNumber().fake_with_rng(rng);
-                let street: String = address::StreetName().fake_with_rng(rng);
-                format!("{number} {street}")
-            }
-            Self::StreetName => address::StreetName().fake_with_rng(rng),
-            Self::BuildingNumber => address::BuildingNumber().fake_with_rng(rng),
-            Self::City => address::CityName().fake_with_rng(rng),
-            Self::State => address::StateName().fake_with_rng(rng),
-            Self::StateAbbr => address::StateAbbr().fake_with_rng(rng),
-            Self::ZipCode => address::ZipCode().fake_with_rng(rng),
-            Self::PostCode => address::PostCode().fake_with_rng(rng),
-            Self::Country => address::CountryName().fake_with_rng(rng),
-            Self::CountryCode => address::CountryCode().fake_with_rng(rng),
-            Self::CreditCard => creditcard::CreditCardNumber().fake_with_rng(rng),
-            Self::Uuid => {
-                push_uuid(rng, out);
-                return;
-            }
-        };
-        out.push_str(&value);
-    }
+/// The faker behind each of doppeldata's provider names.
+fn push_provided(provider: Provider, rng: &mut ChaCha8Rng, out: &mut String) {
+    let value: String = match provider {
+        Provider::Email => internet::SafeEmail().fake_with_rng(rng),
+        Provider::FreeEmail => internet::FreeEmail().fake_with_rng(rng),
+        Provider::Username => internet::Username().fake_with_rng(rng),
+        Provider::Ipv4 => internet::IPv4().fake_with_rng(rng),
+        Provider::Ipv6 => internet::IPv6().fake_with_rng(rng),
+        Provider::MacAddress => internet::MACAddress().fake_with_rng(rng),
+        Provider::UserAgent => internet::UserAgent().fake_with_rng(rng),
+        Provider::Name => name::Name().fake_with_rng(rng),
+        Provider::FirstName => name::FirstName().fake_with_rng(rng),
+        Provider::LastName => name::LastName().fake_with_rng(rng),
+        Provider::PhoneNumber => phone::PhoneNumber().fake_with_rng(rng),
+        Provider::CellNumber => phone::CellNumber().fake_with_rng(rng),
+        Provider::Company => company::CompanyName().fake_with_rng(rng),
+        Provider::JobTitle => job::Title().fake_with_rng(rng),
+        Provider::StreetAddress => {
+            let number: String = address::BuildingNumber().fake_with_rng(rng);
+            let street: String = address::StreetName().fake_with_rng(rng);
+            format!("{number} {street}")
+        }
+        Provider::StreetName => address::StreetName().fake_with_rng(rng),
+        Provider::BuildingNumber => address::BuildingNumber().fake_with_rng(rng),
+        Provider::City => address::CityName().fake_with_rng(rng),
+        Provider::State => address::StateName().fake_with_rng(rng),
+        Provider::StateAbbr => address::StateAbbr().fake_with_rng(rng),
+        Provider::ZipCode => address::ZipCode().fake_with_rng(rng),
+        Provider::PostCode => address::PostCode().fake_with_rng(rng),
+        Provider::Country => address::CountryName().fake_with_rng(rng),
+        Provider::CountryCode => address::CountryCode().fake_with_rng(rng),
+        Provider::CreditCard => creditcard::CreditCardNumber().fake_with_rng(rng),
+        Provider::Uuid => {
+            push_uuid(rng, out);
+            return;
+        }
+    };
+    out.push_str(&value);
 }
 
 /// A version 4 UUID in its hyphenated lowercase form.
@@ -296,7 +225,7 @@ pub(crate) enum TextSource {
 impl TextSource {
     pub(crate) fn push(&self, rng: &mut ChaCha8Rng, out: &mut String) {
         match self {
-            Self::Provider(provider) => provider.push(rng, out),
+            Self::Provider(provider) => push_provided(*provider, rng, out),
             Self::Pattern(pattern) => {
                 let value: String = pattern.sample(rng);
                 out.push_str(&value);
@@ -341,18 +270,12 @@ fn luhn_check_digit(payload: impl DoubleEndedIterator<Item = u8>) -> u8 {
 
 /// A check digit written over a value's last digit, wrong on a share of values.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct CheckDigit {
+pub(crate) struct CheckDigitDraw {
+    pub(crate) kind: CheckDigit,
     pub(crate) invalid: Bernoulli,
 }
 
-impl CheckDigit {
-    pub(crate) fn from_name(name: &str) -> Result<(), String> {
-        match name {
-            "luhn" => Ok(()),
-            other => Err(format!("check digit `{other}` is not one of luhn")),
-        }
-    }
-
+impl CheckDigitDraw {
     fn apply(&self, invalid_rng: &mut ChaCha8Rng, value: &mut String) {
         let wrong = self.invalid.draw(invalid_rng);
         let offset = if wrong { 1 + below(invalid_rng, 9) as u8 } else { 0 };
@@ -360,7 +283,10 @@ impl CheckDigit {
             return;
         };
         let payload = value.as_bytes()[..last].iter().filter(|b| b.is_ascii_digit()).map(|b| b - b'0');
-        let digit = (luhn_check_digit(payload) + offset) % 10;
+        let right = match self.kind {
+            CheckDigit::Luhn => luhn_check_digit(payload),
+        };
+        let digit = (right + offset) % 10;
         value.replace_range(last..=last, char::from(b'0' + digit).encode_utf8(&mut [0; 4]));
     }
 }
@@ -368,7 +294,7 @@ impl CheckDigit {
 #[derive(Debug, Clone)]
 pub(crate) struct TextSampler {
     pub(crate) source: TextSource,
-    pub(crate) check_digit: Option<CheckDigit>,
+    pub(crate) check_digit: Option<CheckDigitDraw>,
     pub(crate) output: StringOutput,
 }
 

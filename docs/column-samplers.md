@@ -43,8 +43,8 @@ The generated standard deviation is 46.51, against a stored 43.41.
 1. **`top_values`**: an alias table over the rates. A draw of `other_rate` generates a value from
    the next source down.
 2. **`semantic.generator_hint.provider`**: a named generator, such as `email` or `city`. The names
-   are doppeldata's own, held in one table in `crates/core/src/samplers/text.rs`, so replacing the
-   faker library breaks no profile. An unknown name fails and lists the names it accepts.
+   are doppeldata's own, an enum in the profile model, so the published schema lists them and
+   replacing the faker library breaks no profile. A profile naming another fails validation.
 3. **A pattern**, from `generator_hint.pattern` or `string.pattern`. A line anchor is dropped,
    because a value is the whole line, and `\d` and the other classes are ASCII.
 4. **`shapes`**: a shape is drawn by rate, then each `A` becomes an upper-case letter, each `a` a

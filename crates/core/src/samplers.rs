@@ -32,8 +32,7 @@ use self::numeric::Rounding;
 use self::numeric::SequenceSampler;
 use self::temporal::TemporalOutput;
 use self::temporal::TemporalSampler;
-use self::text::CheckDigit;
-use self::text::Provider;
+use self::text::CheckDigitDraw;
 use self::text::StringOutput;
 use self::text::TextSampler;
 use self::text::TextSource;
@@ -43,6 +42,7 @@ use crate::physical_type;
 use crate::physical_type::Container;
 use crate::physical_type::PhysicalType;
 use crate::profile::Column;
+use crate::profile::GeneratorHint;
 use crate::profile::LogicalType;
 use crate::profile::StringStats;
 use crate::rng::Bernoulli;
@@ -301,16 +301,13 @@ fn value_sampler(context: &PlanContext, column: &Column, path: &str) -> Result<V
             values, other_rate, source, output,
         )?));
     }
-    let check_digit = match hint.and_then(|hint| hint.get("check_digit")) {
-        Some(name) => {
-            CheckDigit::from_name(name.as_str().ok_or("generator_hint.check_digit is not a string")?)?;
-            let invalid_rate = column.quality.as_ref().and_then(|q| q.invalid_rate).map_or(0.0, |r| r.0);
-            Some(CheckDigit {
-                invalid: Bernoulli::new(invalid_rate),
-            })
+    let check_digit = hint.and_then(|hint| hint.check_digit).map(|kind| {
+        let invalid_rate = column.quality.as_ref().and_then(|q| q.invalid_rate).map_or(0.0, |r| r.0);
+        CheckDigitDraw {
+            kind,
+            invalid: Bernoulli::new(invalid_rate),
         }
-        None => None,
-    };
+    });
     Ok(ValueSampler::Text(TextSampler {
         source,
         check_digit,
@@ -324,18 +321,12 @@ fn empty_numeric_stats() -> crate::profile::NumericStats {
 
 /// Where a string column's generated values come from, most specific first: a provider, a
 /// pattern, the shapes, then characters of the profiled classes.
-fn text_source(string: Option<&StringStats>, hint: Option<&crate::profile::OpenObject>) -> Result<TextSource, String> {
-    let hinted = |key: &str| match hint.and_then(|hint| hint.get(key)) {
-        Some(value) => value
-            .as_str()
-            .map(Some)
-            .ok_or_else(|| format!("generator_hint.{key} is not a string")),
-        None => Ok(None),
-    };
-    if let Some(provider) = hinted("provider")? {
-        return Ok(TextSource::Provider(Provider::from_name(provider)?));
+fn text_source(string: Option<&StringStats>, hint: Option<&GeneratorHint>) -> Result<TextSource, String> {
+    if let Some(provider) = hint.and_then(|hint| hint.provider) {
+        return Ok(TextSource::Provider(provider));
     }
-    if let Some(pattern) = hinted("pattern")?.or(string.and_then(|s| s.pattern.as_deref())) {
+    let hinted_pattern = hint.and_then(|hint| hint.pattern.as_deref());
+    if let Some(pattern) = hinted_pattern.or(string.and_then(|s| s.pattern.as_deref())) {
         return Ok(TextSource::Pattern(Box::new(text::compile_pattern(pattern, PATTERN_MAX_REPEAT)?)));
     }
     let shapes = string.and_then(|s| s.shapes.as_ref()).filter(|shapes| !shapes.is_empty());
