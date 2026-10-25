@@ -23,4 +23,11 @@ mod _core {
             .map(|schema| (schema.name, schema.file_name))
             .collect()
     }
+
+    /// The anchored regular expression grex generalizes the values to, with each digit as a digit
+    /// class, or None when it would hold a literal or a character class only some values have.
+    #[pyfunction]
+    fn generalize_pattern(values: Vec<String>) -> Option<String> {
+        doppeldata_core::generalized_pattern::generalize(&values)
+    }
 }
