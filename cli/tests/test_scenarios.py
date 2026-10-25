@@ -20,7 +20,7 @@ def test_the_hot_key_example_gives_five_customers_its_share_and_a_check_verifies
 
     report = sd.check(orders, table, scenario=hot_key)
     jsonschema.validate(report.to_plain(), json.loads(schema_text('check')))
-    assert report.verified
+    assert report.passed and report.verified
     assert {result.skipped_by for result in report.metrics if result.column == 'customer_id'} == {'hot_keys:customer_id:0'}
 
 
