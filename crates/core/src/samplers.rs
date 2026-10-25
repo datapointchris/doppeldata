@@ -93,6 +93,7 @@ impl Refusal {
 pub(crate) struct ColumnSite {
     path: String,
     pointer: String,
+    nested: bool,
 }
 
 impl ColumnSite {
@@ -101,6 +102,7 @@ impl ColumnSite {
         Self {
             path: column.path.clone().unwrap_or_else(|| column.name.clone()),
             pointer: format!("/columns/{index}"),
+            nested: false,
         }
     }
 
@@ -109,6 +111,7 @@ impl ColumnSite {
         Self {
             path: child.path.clone().unwrap_or_else(|| format!("{}.{}", self.path, child.name)),
             pointer: format!("{}{below}", self.pointer),
+            nested: true,
         }
     }
 
@@ -265,11 +268,27 @@ pub(crate) fn column_plan(context: &PlanContext, column: &Column, site: &ColumnS
 fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite, presence: f64) -> Result<ColumnPlan, PlanError> {
     let keys = StreamKeys::new(context.table, &site.path);
     let values = value_sampler(context, column, site, &keys)?;
-    let text_only = TextOnlyValues::new(column.type_mix.as_ref(), column.missing_tokens.as_ref())
-        .map_err(site.refuse_as(ColumnFault::UnusableRates, "/missing_tokens"))?;
     let may_be_null = column.nullable != Some(false);
     let null_rate = column.null_rate.map_or(0.0, |r| r.0);
-    let null_share = if may_be_null { 1.0 - presence * (1.0 - null_rate) } else { 0.0 };
+    let null_share = if may_be_null {
+        null_rate + (1.0 - presence) * (1.0 - null_rate)
+    } else {
+        0.0
+    };
+    let string_column = matches!(values.data_type(), DataType::Utf8 | DataType::LargeUtf8);
+    let text_only = TextOnlyValues::new(column.type_mix.as_ref(), column.missing_tokens.as_ref(), null_share, string_column)
+        .map_err(site.refuse("/missing_tokens"))?;
+    if site.nested
+        && let Some(text_only) = &text_only
+    {
+        let field = if text_only.has_foreign_values() {
+            "/type_mix"
+        } else {
+            "/missing_tokens"
+        };
+        let message = "a text cell names no nested field, so a nested field's text-only values are not generated yet".to_string();
+        return Err(site.refuse_as(ColumnFault::NotGeneratedYet, field)(message));
+    }
     let nulls = Some(Bernoulli::new(null_share)).filter(|null| !null.never());
     let nullable = may_be_null || text_only.as_ref().is_some_and(TextOnlyValues::has_foreign_values);
     Ok(ColumnPlan {

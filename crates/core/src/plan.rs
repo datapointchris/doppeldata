@@ -57,6 +57,8 @@ pub enum ColumnFault {
     /// A temporal extreme that does not parse as the column's type.
     InvalidExtreme,
     StructWithoutFields,
+    /// `missing_tokens` whose rates, each a share of rows, sum above the column's null rate.
+    TokensExceedNullRate,
 }
 
 impl ColumnFault {
@@ -71,6 +73,7 @@ impl ColumnFault {
             Self::UnusableRates => "unusable-rates",
             Self::InvalidExtreme => "invalid-extreme",
             Self::StructWithoutFields => "struct-without-fields",
+            Self::TokensExceedNullRate => "tokens-exceed-null-rate",
         }
     }
 }

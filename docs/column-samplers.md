@@ -71,4 +71,11 @@ an extreme.
 
 A `type_mix` share such as 0.1% `string` in an integer column cannot be an Arrow value. The batch
 holds a null there, and `Plan::text_cells` returns the text a CSV or JSON writer prints in its place.
-A null row in a column with `missing_tokens` gets one of the tokens, by rate, the same way.
+
+- **A string column's `type_mix` adds nothing.** A string holds any raw value as itself, and the
+  column's string statistics were taken over all of them, the ones parsing as numbers included.
+- **Each `missing_tokens` rate is a share of all rows.** A null row prints a token by those rates,
+  and prints nothing in the share of rows the tokens leave uncovered. Tokens whose rates sum above
+  the null rate are refused.
+- **A nested field's `type_mix` and `missing_tokens` are refused.** A text cell names a row of a
+  top-level column, so it has nowhere to put a value inside a list or struct.
