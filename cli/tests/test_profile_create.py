@@ -136,14 +136,18 @@ def test_a_directory_whose_folders_share_a_schema_is_one_table_and_one_whose_fol
     for year in (2023, 2024):
         (tmp_path / 'hive' / f'year={year}').mkdir(parents=True)
         orders.write_parquet(tmp_path / 'hive' / f'year={year}' / 'part.parquet')
+        # Hive folders of CSV, whose keys a text read must type from their text.
+        (tmp_path / 'hive-csv' / f'year={year}').mkdir(parents=True)
+        orders.write_csv(tmp_path / 'hive-csv' / f'year={year}' / 'part.csv')
     for name, table in (('orders', orders), ('customers', customers)):
         (tmp_path / 'mixed' / name).mkdir(parents=True)
         table.write_parquet(tmp_path / 'mixed' / name / 'part.parquet')
 
-    for tree in ('hive', 'mixed'):
+    for tree in ('hive', 'hive-csv', 'mixed'):
         result = CliRunner().invoke(app, ['profile', 'create', str(tmp_path / tree), '--out', str(tmp_path / f'{tree}.yaml')])
         assert result.exit_code == 0, result.output
 
-    hive = Profile.load(tmp_path / 'hive.yaml').to_plain()
-    assert [key['name'] for key in hive['source']['layout']['partitioning']['keys']] == ['year']
+    for tree in ('hive', 'hive-csv'):
+        hive = Profile.load(tmp_path / f'{tree}.yaml').to_plain()
+        assert [key['name'] for key in hive['source']['layout']['partitioning']['keys']] == ['year']
     assert Bundle.load(tmp_path / 'mixed.yaml').tables.keys() == {'customers', 'orders'}

@@ -445,7 +445,7 @@ def read_delimited(source: Source) -> SourceRead:
     query = (
         'select * from read_csv($paths, auto_detect = false, columns = $columns, delim = $delimiter, quote = $quote, '
         'escape = $escape, header = $header, encoding = $encoding, allow_quoted_nulls = false, strict_mode = true, store_rejects = true, '
-        'filename = $file_column, hive_partitioning = $hive)'
+        'filename = $file_column, hive_partitioning = $hive, hive_types_autocast = false)'
     )
     parameters = {
         'paths': [file.path for file in source.files],
