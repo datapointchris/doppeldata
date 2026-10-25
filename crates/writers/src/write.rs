@@ -102,11 +102,17 @@ pub fn write(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination:
 /// [`write_ranges`], and one calls [`commit`] with every range's records.
 pub fn claim(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination: &Destination) -> Result<(), WriteFailure> {
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
-    let mut manifest = new_manifest(plan, options, destination);
-    encoders::check(&manifest.output, partitioner(plan, &layout).file_schema())?;
+    let manifest = claimed(plan, &layout, new_manifest(plan, options, destination))?;
+    on_upload_runtime(run, |runtime| Ok(runtime.block_on(destination.prepare(run.replace, &manifest))?))
+}
+
+/// The record a claim stores as `_manifest.partial.json`, once the output's format can encode the
+/// files `layout` makes.
+fn claimed(plan: &Plan, layout: &FileLayout, mut manifest: Manifest) -> Result<Manifest, WriteError> {
+    encoders::check(&manifest.output, partitioner(plan, layout).file_schema())?;
     manifest.partial = true;
     manifest.written_at = now_rfc3339();
-    on_upload_runtime(run, |runtime| Ok(runtime.block_on(destination.prepare(run.replace, &manifest))?))
+    Ok(manifest)
 }
 
 /// Writes the objects of the ranges numbered `ranges` in the layout [`write`] makes, and returns
@@ -144,6 +150,8 @@ pub fn write_ranges(
 pub struct SplitRun {
     /// The tasks the ranges were divided among.
     pub tasks: u32,
+    /// The threads each task wrote on.
+    pub threads: u32,
     /// From the claim to the commit.
     pub elapsed_ms: u64,
 }
@@ -161,25 +169,12 @@ pub fn commit(
 ) -> Result<Manifest, WriteFailure> {
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
     let files: BTreeMap<String, ManifestFile> = files.into_iter().map(|file| (file.path.clone(), file)).collect();
-    let recorded: BTreeSet<u32> = files.values().map(|file| file.range).collect();
-    let missing: Vec<u32> = layout
-        .ranges
-        .iter()
-        .map(|range| range.index)
-        .filter(|index| !recorded.contains(index))
-        .collect();
     let mut manifest = new_manifest(plan, options, destination);
     manifest.files = files.into_values().collect();
-    manifest.partial = !missing.is_empty();
-    manifest.threads = split.tasks;
+    manifest.threads = split.threads;
+    manifest.tasks = Some(split.tasks);
     manifest.elapsed_ms = split.elapsed_ms;
-    manifest.written_at = now_rfc3339();
-    let error = missing.first().map(|&first| WriteError::RangesUnrecorded {
-        missing: missing.len(),
-        ranges: layout.ranges.len(),
-        first,
-    });
-    on_upload_runtime(run, |runtime| record(runtime, destination, manifest, error))
+    on_upload_runtime(run, |runtime| finish(runtime, destination, &layout, manifest, None))
 }
 
 fn new_manifest(plan: &Plan, options: &WriteOptions, destination: &Destination) -> Manifest {
@@ -468,24 +463,48 @@ fn write_ranges_on(
 fn execute(
     plan: &Plan,
     layout: &FileLayout,
-    mut manifest: Manifest,
+    manifest: Manifest,
     run: &RunOptions,
     destination: &Destination,
 ) -> Result<Manifest, WriteFailure> {
     let started = Instant::now();
-    encoders::check(&manifest.output, partitioner(plan, layout).file_schema())?;
+    let mut manifest = claimed(plan, layout, manifest)?;
     manifest.threads = worker_threads(run.threads) as u32;
-    manifest.partial = true;
-    manifest.written_at = now_rfc3339();
     on_upload_runtime(run, |runtime| {
         runtime.block_on(destination.prepare(run.replace, &manifest))?;
         let written = write_ranges_on(plan, layout, &layout.ranges, &manifest.output, run, destination, runtime);
         manifest.files = written.files;
-        manifest.partial = written.error.is_some();
         manifest.elapsed_ms = started.elapsed().as_millis() as u64;
-        manifest.written_at = now_rfc3339();
-        record(runtime, destination, manifest, written.error)
+        finish(runtime, destination, layout, manifest, written.error)
     })
+}
+
+/// Stores the record of a run that wrote `manifest.files`. It is partial, and the run fails, when
+/// `error` stopped the run or a range of `layout` has no object recorded.
+fn finish(
+    runtime: &Handle,
+    destination: &Destination,
+    layout: &FileLayout,
+    mut manifest: Manifest,
+    error: Option<WriteError>,
+) -> Result<Manifest, WriteFailure> {
+    let recorded: BTreeSet<u32> = manifest.files.iter().map(|file| file.range).collect();
+    let missing: Vec<u32> = layout
+        .ranges
+        .iter()
+        .map(|range| range.index)
+        .filter(|index| !recorded.contains(index))
+        .collect();
+    let error = error.or_else(|| {
+        missing.first().map(|&first| WriteError::RangesUnrecorded {
+            missing: missing.len(),
+            ranges: layout.ranges.len(),
+            first,
+        })
+    });
+    manifest.partial = error.is_some();
+    manifest.written_at = now_rfc3339();
+    record(runtime, destination, manifest, error)
 }
 
 /// Stores the finished run's manifest: as `_manifest.json` once every object is whole, replacing the

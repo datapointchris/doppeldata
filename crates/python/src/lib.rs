@@ -298,20 +298,19 @@ mod _core {
         }
 
         /// Writes the objects of the ranges numbered ``ranges`` in the layout ``ranges_json``
-        /// lists, the bytes ``write`` writes for them, and returns their manifest records as a
-        /// JSON list. It neither claims ``destination`` nor stores a manifest.
-        #[pyo3(signature = (options, destination, ranges, *, threads, s3_store=None))]
+        /// lists, the bytes ``write`` writes for them, on one thread, and returns their manifest
+        /// records as a JSON list. It neither claims ``destination`` nor stores a manifest.
+        #[pyo3(signature = (options, destination, ranges, *, s3_store=None))]
         fn write_ranges(
             &self,
             py: Python<'_>,
             options: PyRef<'_, WriteOptions>,
             destination: &str,
             ranges: Vec<u32>,
-            threads: usize,
             s3_store: Option<Bound<'_, PyDict>>,
         ) -> PyResult<String> {
             let destination = destination_at(py, destination, s3_store)?;
-            let (run, cancel) = run_options(threads, false);
+            let (run, cancel) = run_options(SPLIT_TASK_THREADS, false);
             let (plan, options) = (&*self.plan, &options.options);
             let files = settled(py, &cancel, || {
                 doppeldata_writers::write_ranges(plan, options, &ranges, &run, &destination)
@@ -339,13 +338,21 @@ mod _core {
             let destination = destination_at(py, destination, s3_store)?;
             let (run, cancel) = run_options(1, false);
             let (plan, options) = (&*self.plan, &options.options);
-            let split = SplitRun { tasks, elapsed_ms };
+            let split = SplitRun {
+                tasks,
+                threads: SPLIT_TASK_THREADS as u32,
+                elapsed_ms,
+            };
             let manifest = settled(py, &cancel, || {
                 doppeldata_writers::commit(plan, options, files, split, &run, &destination)
             })?;
             Ok(serde_json::to_string(&manifest).expect("a manifest always serializes"))
         }
     }
+
+    /// The threads ``write_ranges`` writes on. A task scheduler such as Spark already gives each
+    /// task a core, so a task's ranges are written in turn.
+    const SPLIT_TASK_THREADS: usize = 1;
 
     /// The destination ``url`` names, with an S3 URL's store built from ``s3_store``.
     fn destination_at(py: Python<'_>, url: &str, s3_store: Option<Bound<'_, PyDict>>) -> PyResult<Destination> {

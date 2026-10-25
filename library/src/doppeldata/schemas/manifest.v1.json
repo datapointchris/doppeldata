@@ -51,8 +51,18 @@
         }
       ]
     },
+    "tasks": {
+      "description": "The tasks a write split across processes divided its ranges among, such as a Spark job's,\nor null for a write in one process.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "default": null,
+      "minimum": 0
+    },
     "threads": {
-      "description": "The threads that generated and encoded. The count never changes a byte.",
+      "description": "The threads that generated and encoded in each process that wrote. The count never changes\na byte.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0

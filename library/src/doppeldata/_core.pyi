@@ -107,11 +107,11 @@ class Plan:
         is a JSON object holding any of ``format``, ``writer``, ``file_rows``, ``partition_by``,
         ``partition_style`` and ``profile_path``.
         """
-    def write_ranges(self, /, options: WriteOptions, destination: str, ranges: SupportsGetItem[int, SupportsIndex], *, threads: SupportsIndex, s3_store: dict |None = None) -> str:
+    def write_ranges(self, /, options: WriteOptions, destination: str, ranges: SupportsGetItem[int, SupportsIndex], *, s3_store: dict |None = None) -> str:
         """
         Writes the objects of the ranges numbered ``ranges`` in the layout ``ranges_json``
-        lists, the bytes ``write`` writes for them, and returns their manifest records as a
-        JSON list. It neither claims ``destination`` nor stores a manifest.
+        lists, the bytes ``write`` writes for them, on one thread, and returns their manifest
+        records as a JSON list. It neither claims ``destination`` nor stores a manifest.
         """
 
 @final

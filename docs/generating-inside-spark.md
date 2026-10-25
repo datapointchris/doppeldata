@@ -14,21 +14,23 @@ manifest = sd.spark.write(spark, profile, 's3://bucket/orders/', rows=10**9, see
 ## Each task generates whole chunks of engine blocks, so the partition count moves no value
 
 `generate` numbers the dataset's chunks with `spark.range` and maps each partition's numbers to
-batches through `mapInArrow`. A chunk is `CHUNK_BLOCKS` whole engine blocks, 16 of 65,536 rows, and
-chunk *n* is blocks 16*n* to 16*n* + 15. A task streams them from the engine's `Plan.stream_blocks`,
+batches through `mapInArrow`. A chunk is `CHUNK_BLOCKS` whole engine blocks, and chunk *n* starts
+at block *n* × `CHUNK_BLOCKS`. The block is the one
+[determinism-contract.md](determinism-contract.md) fixes. A task streams them from the engine's `Plan.stream_blocks`,
 which makes each block the pure function `generate_block` that every local run calls. So the rows
 a task yields are the rows `sd.generate` yields for those blocks, and `partitions` changes only
 which task makes them.
 
 - **Each executor builds the engine's plan from what the driver resolved**: the profile's JSON, its
   digest, the seed and the row count. It builds it once per Python worker process.
-- **An executor running another doppeldata release than the driver refuses the task.** A dataset's
-  bytes are the release's that writes them, so a mixed cluster would write a manifest that names
-  one release over files from two.
+- **An executor running another doppeldata release or stream version than the driver refuses the
+  task.** A dataset's bytes are the build's that writes them, so a mixed cluster would write a
+  manifest that names one build over files from two. Every unstamped build reports version 0.0.0,
+  so two of them differ to this check only by stream version.
 - **The driver builds the plan first**, so an ungenerable profile is refused before a task runs.
-- **PySpark's `mapInArrow` needs pandas and pyarrow on the driver and every executor.** Spark 3.5
-  asks for pandas 1.0.5 or later and Spark 4 for 2.2.0. The library declares neither, and
-  `doppeldata.spark` imports pyarrow and pyspark only when it is first used.
+- **PySpark's `mapInArrow` needs pandas and pyarrow on the driver and every executor**, at the
+  versions PySpark itself requires. The library declares neither, and `doppeldata.spark` imports
+  pyarrow and pyspark only when it is first used.
 - *Rejected:* Spark's own `rand(seed)`. Its values are deterministic only for a fixed partitioning,
   so a changed partition count changes the dataset.
 
@@ -48,14 +50,23 @@ tasks    write_ranges(0) write_ranges(1) ... write_ranges(n)   one record per ob
 driver   commit ─── _manifest.json, claim removed
 ```
 
-- **`partitions` is one per planned range unless given.** A partition holding several ranges
-  writes them in turn on one thread, because Spark already gives each task a core.
+- **`partitions` is at most one per planned range, and one per range unless given.** A partition
+  holding several ranges writes them in turn on one thread, because Spark already gives each task
+  a core. So the manifest records the task count in `tasks`, and `threads` is 1.
+- **The destination must be one store the driver and every executor see**: an S3 URL, or
+  `memory://`, which keeps nothing. A local directory is refused with code `destination-not-shared`
+  unless the session is classic with a `local` master. That refuses a cluster whose executors share
+  a POSIX mount too, and a Spark Connect client, whose disk is never the cluster's. Write to
+  `s3://` there.
 - **A retried or speculative task writes the same names with the same bytes.** An object is
   either whole or absent, because an unfinished upload is aborted.
-- **A failed Spark job leaves the claim as a partial manifest recording no file**, and raises
-  `WriteFailed` with code `ranges-unrecorded` from the Spark error. `replace` then deletes every
-  part the run stored, because each part's name carries the dataset's `identity8`.
-- **The manifest's `threads` records the task count.**
+- **A failed Spark job stores a partial manifest recording no object.** The driver learns of a
+  task's objects only when the whole job returns. `replace` then deletes every part the run stored,
+  because each part's name carries the dataset's `identity8`.
+- **A failed job raises `WriteFailed` with the code and kind of the task's own `StoppedWrite`**,
+  such as `no-credentials`. A task's error reaches the driver inside Spark's, as a marked line the
+  driver reads. Any other failure, such as an executor on another build, is `spark-job-failed`. The
+  message names the cause and ends by saying to rerun with `replace=True`.
 - *Rejected:* one `write(mode=...)` for both ways. Writing the DataFrame takes Spark's writer
   options, such as Delta, Iceberg or a `partitionBy`. Writing the files takes doppeldata's format and
   layout settings. One call would take two disjoint sets of arguments, and Spark names its own
@@ -64,9 +75,11 @@ driver   commit ─── _manifest.json, claim removed
 ## Spark refuses unsigned integers, `date64`, times, timestamps not in microseconds, and `large_list`
 
 `struct_type(profile)` gives the DataFrame's schema, and refuses a column Spark cannot carry with
-every value kept. A timestamp with no zone becomes a `TimestampNTZType`. Each column of the
-determinism fixture, `crates/core/tests/every-column-kind.profile.yaml`, went through `mapInArrow`
-in Spark 3.5.9 and 4.2.0 and was collected back. Both versions agree:
+every value kept. `spark_holds` decides which. A timestamp with no zone becomes a
+`TimestampNTZType`. The parity check below sends each column of the determinism fixture,
+`crates/core/tests/every-column-kind.profile.yaml`, through `mapInArrow` alone and collects it
+back. It fails in any image that carries a column otherwise than `spark_holds` says. In Spark 3.5.9
+and 4.2.0, each refused type fails this way:
 
 | Arrow type | What Spark does |
 | --- | --- |
@@ -89,23 +102,24 @@ integer.
 the `eight-columns` example through `generate` with 7 and with 40 partitions, collects them as
 Arrow, and compares every value with `sd.stream`, each float by its bits. It then writes them through
 `write` with each partition count, and compares every file's SHA-256 with a `doppeldata data
-generate` of the same arguments run on the host. Build the wheel, then run it:
+generate` of the same arguments run on the host. Last, it checks `spark_holds` against how the image
+carries each fixture column. Build the wheel, then run it over the images it names by default:
 
 ```bash
 cd library && uv run --with ziglang maturin build --release --zig --compatibility manylinux2014 --out ../dist && cd ..
-spark-parity/check-spark-parity.sh dist/doppeldata-*-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
-  apache/spark:3.5.9-python3 apache/spark:4.1.3-python3 apache/spark:4.2.0-python3 public.ecr.aws/glue/aws-glue-libs:5
+spark-parity/check-spark-parity.sh dist/doppeldata-*-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 ```
 
-| Image | Spark | Python, pyarrow | `generate`, 7 and 40 partitions | `write`, 7 and 40 partitions |
-| --- | --- | --- | --- | --- |
-| `apache/spark:3.5.9-python3` | 3.5.9 | 3.11.17, 26.0.0 | identical | 10 of 10 files match |
-| `apache/spark:4.1.3-python3` | 4.1.3 | 3.11.17, 26.0.0 | identical | 10 of 10 files match |
-| `apache/spark:4.2.0-python3` | 4.2.0 | 3.11.17, 26.0.0 | identical | 10 of 10 files match |
-| `public.ecr.aws/glue/aws-glue-libs:5` | 3.5.4 | 3.11.15, 17.0.0 | identical | 10 of 10 files match |
+| Image | Spark | Python, pyarrow | `generate`, 7 and 40 partitions | `write`, 7 and 40 partitions | Fixture columns |
+| --- | --- | --- | --- | --- | --- |
+| `apache/spark:3.5.9-python3` | 3.5.9 | 3.11.17, 26.0.0 | identical | 10 of 10 files match | as `spark_holds` says |
+| `apache/spark:4.1.3-python3` | 4.1.3 | 3.11.17, 26.0.0 | identical | 10 of 10 files match | as `spark_holds` says |
+| `apache/spark:4.2.0-python3` | 4.2.0 | 3.11.17, 26.0.0 | identical | 10 of 10 files match | as `spark_holds` says |
+| `public.ecr.aws/glue/aws-glue-libs:5` | 3.5.4 | 3.11.15, 17.0.0 | identical | 10 of 10 files match | as `spark_holds` says |
 
 - **The Apache images ship Python 3.10 with no pyarrow**, below the library's floor. So the check
-  mounts uv into each container, which installs CPython 3.11, pyarrow and pandas there.
+  mounts uv into each container, which installs CPython 3.11 there, and the pyarrow and pandas
+  `inside-spark-image.sh` pins.
 - **The Glue image is Glue 5.0's runtime**: Spark 3.5.4 and pyarrow 17.0.0. The check keeps its
   own Python and pyarrow, and installs the wheel beside them.
 - **Each container runs as the caller's uid, with that uid added to the image's `/etc/passwd`.**
@@ -113,8 +127,9 @@ spark-parity/check-spark-parity.sh dist/doppeldata-*-cp311-abi3-manylinux_2_17_x
 
 ## On Glue 5.1, a billion rows written from the executors match a local run file for file
 
-A Glue 5.1 job wrote 1B rows of `eight-columns`, seed 42, 1M rows a file, through `write`. It ran
-1,000 tasks on nine executors. Its manifest records the same path, row count, size and SHA-256 for
+One run of a Glue 5.1 job wrote 1B rows of `eight-columns`, seed 42, 1M rows a file, through
+`write`. [performance.md](performance.md) shows the job's body. It ran 1,000 tasks on nine
+executors. Its manifest records the same path, row count, size and SHA-256 for
 all 1,000 files as a local `doppeldata data generate` with the same arguments. Both record the same
 `dataset_digest`. Ten of its objects, sampled from S3 and hashed, hash as the manifest records.
 [performance.md](performance.md) holds the run's throughput and the job's configuration.
@@ -132,23 +147,22 @@ local `doppeldata data generate` records.
   `<Url>:443/;use_ssl=true;x-aws-proxy-auth=<AuthToken>`, the token URL-quoted.
 - **The client runs `pyspark[connect]` 3.5.6, the session's Spark.** pyarrow 26 refuses the numpy
   below 2 that it pins, so the client ran pyarrow 22.0.0, Glue 5.1's own.
-- **With reattachable execution on, the client's default, a result stream ended in `Stream removed
-  (Data frame with END_STREAM flag received)`.** It did so once collecting all 10M rows in one
-  query. It did so again two minutes into a 72.6 MB query, after three such queries had arrived. With
-  `spark.client.disable_reattachable_execute()`, every query in the run completed. Why reattaching
-  fails through the session's endpoint is not established.
+- **A result stream can end in `Stream removed (Data frame with END_STREAM flag received)` while
+  the client's reattachable execution, its default, is on.** A long stream, such as all 10M rows in
+  one query, can end that way. With `spark.client.disable_reattachable_execute()` before the first
+  query, every query completed. Why reattaching fails through the session's endpoint is not
+  established.
 - **Over Connect, `write` claims and commits from the client process, with the client's
   credentials.** The tasks still write with the session's role.
-- **Each session took 3 to 4.5 minutes after Glue reported it `READY` before its first query
-  returned.**
+- **A session answered its first query 3 to 4.5 minutes after Glue reported it `READY`.**
 
 ## Executors write to S3 with their own credentials, which Glue 5.1 resolves from the job's role
 
 Each write task builds its own S3 store through boto3 on its executor. The driver's store cannot
 travel to a task. Its credential provider holds a boto3 session, which cannot be pickled.
 
-On Glue 5.1, boto3 resolved `iam-role` in the driver and in all 36 diagnostic tasks of each run.
-That is the instance metadata of the job's IAM role. The executors' environment holds no
+On Glue 5.1, boto3 resolved `iam-role` in the driver and in a task on every executor core. That is
+the instance metadata of the job's IAM role. The executors' environment holds no
 credential. Its only AWS variables are `AWS_DEFAULT_REGION`, `AWS_METADATA_SERVICE_NUM_ATTEMPTS` and
 `AWS_STS_REGIONAL_ENDPOINTS`. So the job's role is what needs the bucket's permissions, and no
 credential travels with a task.
@@ -162,13 +176,13 @@ The role held `AWSGlueServiceRole` and these on the bucket, which sufficed:
 ## A task's batches reach pyarrow with no copy, and Spark copies them once
 
 A task imports the engine's batches through the Arrow C stream. On Glue 5.1, importing one
-72,613,888-byte chunk grew pyarrow's memory pool by 0 bytes, in all 36 diagnostic tasks of each run.
+72,613,888-byte chunk grew pyarrow's memory pool by 0 bytes, in a task on every executor core.
 The worker's resident set grew 9 to 72 MiB, at most the chunk itself. That growth is the engine's
 own buffers, which pyarrow wraps. Spark copies each batch once after that, because `mapInArrow`
 sends it to the JVM as an Arrow stream over a socket.
 
-- **Each diagnostic pass ran one task per executor core.** It read `pyarrow.total_allocated_bytes()`
-  and `/proc/self/statm` before and after holding the chunk.
+- **Each task read `pyarrow.total_allocated_bytes()` and `/proc/self/statm` before and after
+  holding the chunk**, one task per executor core, in each of the two runs.
 - **A Python worker's peak resident set after a run was 359 to 503 MiB writing directly**, and 185
   to 236 MiB handing batches to Spark's writer. Writing directly, the worker also encodes and
   uploads each file.

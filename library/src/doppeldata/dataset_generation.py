@@ -153,6 +153,37 @@ def engine_plan(profile: Profile, rows: int | None, seed: int) -> '_core.Plan':
     return engine_arguments(profile, rows, seed).plan()
 
 
+@dc.dataclass(frozen=True)
+class PreparedWrite:
+    """A write's destination and the engine's options for it, resolved from the arguments `plan` and `write` take."""
+
+    destination: str
+    scheme: str
+    bucket: str | None
+    arguments: EngineArguments
+    engine: '_core.Plan'
+    choices_json: str
+    options: '_core.WriteOptions'
+
+
+def prepared_write(profile: Profile, out: str | os.PathLike[str], rows: int | None, seed: int, choices: WriteChoices) -> PreparedWrite:
+    """What a write of `rows` rows of `profile` from `seed` to `out` with `choices` runs on, refusing what the engine would refuse."""
+    destination, scheme, bucket = destination_of(out)
+    arguments = engine_arguments(profile, rows, seed)
+    engine = arguments.plan()
+    choices_json = choices.engine_json(profile)
+    return PreparedWrite(destination, scheme, bucket, arguments, engine, choices_json, engine.write_options(choices_json))
+
+
+def s3_store_of(destination: str, bucket: str | None) -> dict[str, Any] | None:
+    """The S3 store's settings for `destination`, from boto3's chain in this process, or None for a destination not on S3."""
+    if bucket is None:
+        return None
+    from doppeldata.s3_access import s3_store_settings
+
+    return s3_store_settings(destination, bucket)
+
+
 def generate(profile: Profile, *, rows: int | None = None, seed: int = 0, threads: int = 0) -> ArrowStreamExportable:
     """Every row of the dataset, as one Arrow table in memory. `threads` of zero takes one per core.
 
@@ -189,14 +220,12 @@ def plan(
 
     It reads nothing at `out`, and refuses what `write` would refuse from its arguments alone.
     """
-    destination, _, _ = destination_of(out)
-    choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
-    engine = engine_plan(profile, rows, seed)
-    options = engine.write_options(choices.engine_json(profile))
+    prepared = prepared_write(profile, out, rows, seed, WriteChoices(format, file_rows, partition_by, partition_style, writer))
+    engine, options = prepared.engine, prepared.options
     settings = json.loads(options.settings_json)
     ranges = [PlannedRange(**planned) for planned in json.loads(engine.ranges_json(options))]
     return WritePlan(
-        destination=destination,
+        destination=prepared.destination,
         identity=json.loads(engine.identity_json),
         dataset_digest=engine.dataset_digest,
         format=settings['format'],
@@ -233,13 +262,7 @@ def write(
     A write that fails raises WriteFailed, and one a signal stops, such as Ctrl-C, raises WriteInterrupted. Both are a
     StoppedWrite. Once the write has claimed its destination, either leaves `_manifest.partial.json` listing the files it completed.
     """
-    destination, scheme, bucket = destination_of(out)
-    choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
-    engine = engine_plan(profile, rows, seed)
-    options = engine.write_options(choices.engine_json(profile))
-    s3_store = None
-    if scheme == 's3' and bucket is not None:
-        from doppeldata.s3_access import s3_store_settings
-
-        s3_store = s3_store_settings(destination, bucket)
-    return Manifest.from_json(engine.write(options, destination, threads=threads, replace=replace, s3_store=s3_store))
+    prepared = prepared_write(profile, out, rows, seed, WriteChoices(format, file_rows, partition_by, partition_style, writer))
+    s3_store = s3_store_of(prepared.destination, prepared.bucket)
+    written = prepared.engine.write(prepared.options, prepared.destination, threads=threads, replace=replace, s3_store=s3_store)
+    return Manifest.from_json(written)

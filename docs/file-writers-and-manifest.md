@@ -83,6 +83,11 @@ thread only waits for them.
 - **A failed or cancelled run leaves its record under the claim's name.** It carries
   `"partial": true` and lists every object that completed. A reader waiting for `_manifest.json`, as
   a Hadoop job waits for `_SUCCESS`, never takes a partial run for a whole one.
+- **A write split across processes is three calls: `claim`, `write_ranges` and `commit`.** `claim`
+  stores the claim. Each process's `write_ranges` writes whole ranges and returns their records.
+  `commit` stores the manifest from the records it is handed, partial when a range has none. So a
+  split write's partial manifest lists only the objects whose records reached `commit`.
+  [generating-inside-spark.md](generating-inside-spark.md) says how `doppeldata.spark` splits one.
 - **A failed write says whether its record was stored.** `WriteFailure` carries the manifest,
   `manifest_stored`, and the error from storing it.
 - **A run that stored `_manifest.json` and then could not delete its claim fails with
