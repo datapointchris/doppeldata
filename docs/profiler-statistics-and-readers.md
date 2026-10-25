@@ -236,6 +236,11 @@ endpoint and the setting that chose it. `profile create` exits 4 when no answer 
 answered and refused. A key with a format's suffix that holds no object is listed as a prefix,
 because Spark writes a table as a `name.parquet/` directory.
 
+Hadoop's `s3a://` and `s3n://` are written as `s3://` before anything is listed, so grouping, the
+listing and the profile see one form. Spark then reads `s3://`, which Glue and EMR read natively.
+A Spark outside them needs `spark.hadoop.fs.s3.impl` set to S3A's
+`org.apache.hadoop.fs.s3a.S3AFileSystem`.
+
 A file or directory whose name starts with `.` or `_` is skipped, such as Spark's `_SUCCESS`. A
 directory or prefix holding `_manifest.partial.json` is refused, because a doppeldata write there
 stopped or is still running. A `key=value` directory below the root that was named is read as a Hive partition, so its key becomes

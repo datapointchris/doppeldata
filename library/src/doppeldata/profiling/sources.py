@@ -28,6 +28,8 @@ from doppeldata.s3_access import s3_session
 SUFFIX_FORMATS = {suffix: source_format for source_format, traits in FORMAT_TRAITS.items() for suffix in traits.suffixes}
 # The format of a text file compressed with one of these is the suffix before it.
 COMPRESSION_SUFFIXES = tuple(TEXT_CODEC_SUFFIXES)
+# Hadoop's names for S3, which a Spark user writes.
+HADOOP_S3_SCHEMES = ('s3a://', 's3n://')
 # A doppeldata write claims its destination with this file, and removes it once every file is written.
 UNFINISHED_WRITE = PurePosixPath('_manifest.partial.json')
 
@@ -36,7 +38,7 @@ def resolve(data: Any) -> Source:
     """The source behind `data`: a path, an `s3://` URL, a list of them, an Arrow-exporting table or a Spark DataFrame."""
     if hasattr(data, '__arrow_c_stream__') or is_spark_frame(data):
         return Source(format=None, table=data)
-    items = [os.fspath(data)] if isinstance(data, str | os.PathLike) else [os.fspath(item) for item in data]
+    items = [s3_url(os.fspath(item)) for item in ([data] if isinstance(data, str | os.PathLike) else data)]
     if not items:
         raise SourceError('no data was named; name a file, a directory or an s3:// prefix')
     files = tuple(file for item in items for file in (s3_files(item) if item.startswith('s3://') else local_files(Path(item))))
@@ -47,6 +49,14 @@ def resolve(data: Any) -> Source:
     if source_format is None:
         raise SourceError(f'{files[0].path} is not a format doppeldata reads; name a file ending in one of {", ".join(SUFFIX_FORMATS)}')
     return Source(format=source_format, files=files, name=name_of(items[0]), roots=tuple(items))
+
+
+def s3_url(item: str) -> str:
+    """`item` with Hadoop's `s3a://` or `s3n://` written as `s3://`, the scheme boto3 lists and Glue and EMR read."""
+    for scheme in HADOOP_S3_SCHEMES:
+        if item.startswith(scheme):
+            return 's3://' + item.removeprefix(scheme)
+    return item
 
 
 def is_spark_frame(data: Any) -> bool:
