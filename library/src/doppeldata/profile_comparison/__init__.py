@@ -11,7 +11,6 @@ from typing import Any
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import PoorFits
-from doppeldata.privacy_policy import DEFAULT_K_MIN
 from doppeldata.privacy_policy import Policy
 from doppeldata.profile_comparison.field_changes import column_changes
 from doppeldata.profile_comparison.field_changes import overflow_changes
@@ -45,8 +44,8 @@ def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) 
     thresholds.check_columns(source)
     # The data is profiled under the profile's own policy, so each field it writes is one the profile could hold.
     privacy = source.get('privacy') or {}
-    policy = privacy.get('policy') or Policy.DEFAULT
-    k_min = None if policy == Policy.NONE else privacy.get('k_min') or DEFAULT_K_MIN
+    policy = Policy(privacy.get('policy') or Policy.DEFAULT)
+    k_min = policy.k_min(privacy.get('k_min'))
     # The data is typed with the packs the profile was, so a type one of them declares can be confirmed.
     packs = enabled_packs((source.get('generated') or {}).get('detector_packs') or ())
     with warnings.catch_warnings():

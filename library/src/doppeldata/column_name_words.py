@@ -1,9 +1,11 @@
-"""A column name's words, and whether a name hint runs in them, which the detector packs and the privacy policy both read."""
+"""A column name's words, whether a name hint runs in them, and the hints the detector packs and the privacy policy both read."""
 
 import re
 
 # An upper-case run before a capitalized word, a capitalized or lower-case word, or a run of digits.
 NAME_WORD = re.compile(r'[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+')
+# What a ZIP column's name ends in. The general pack types a column by them, and `healthcare` treats one as a ZIP code.
+ZIP_HINTS = ('zip', 'zipcode', 'zip_code', 'postal', 'postal_code', 'postcode')
 
 
 def name_words(name: str) -> tuple[str, ...]:

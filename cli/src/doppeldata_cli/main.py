@@ -33,12 +33,12 @@ from doppeldata.dataset_generation import WriteChoices
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_resource
 from doppeldata.example_profiles import example_text
+from doppeldata.privacy_policy import APPLIED_POLICIES
 from doppeldata.privacy_policy import DEFAULT_K_MIN
 from doppeldata.privacy_policy import ProfileFileCheck
 from doppeldata.privacy_policy import TableCheck
 from doppeldata.privacy_policy import file_checks
 from doppeldata.profile_comparison.metrics import METRICS
-from doppeldata.profiling import APPLIED_POLICIES
 from doppeldata.profiling import applied_policy
 from doppeldata.published_schemas import output_formats
 from doppeldata.published_schemas import partition_styles
@@ -386,14 +386,17 @@ def profile_check(profile_name: ProfileArgument, as_json: JsonOption = False) ->
     literal must be listed in privacy.audit and meet its rule, counted as a rate of the rows the profile describes.
     """
     path = Path(profile_name)
-    if path.is_file():
-        report = ProfileFileCheck(profile_name, file_checks(path))
-    elif profile_name in example_names():
-        with importlib.resources.as_file(example_resource(profile_name)) as example:
-            report = ProfileFileCheck(profile_name, file_checks(example))
-    else:
-        message = f'{profile_name!r} is neither a profile file nor an example; name a file, or one of {", ".join(example_names())}'
-        raise typer.BadParameter(message, param_hint='PROFILE')
+    try:
+        if path.is_file():
+            report = ProfileFileCheck.of(profile_name, file_checks(path))
+        elif profile_name in example_names():
+            with importlib.resources.as_file(example_resource(profile_name)) as example:
+                report = ProfileFileCheck.of(profile_name, file_checks(example))
+        else:
+            message = f'{profile_name!r} is neither a profile file nor an example; name a file, or one of {", ".join(example_names())}'
+            raise typer.BadParameter(message, param_hint='PROFILE')
+    except OSError as error:
+        raise typer.BadParameter(f'{profile_name} cannot be read: {error.strerror}', param_hint='PROFILE') from error
     if as_json:
         typer.echo(json.dumps(dc.asdict(report), indent=2))
     else:
@@ -409,7 +412,8 @@ def checked_table_line(check: TableCheck) -> str:
     """One table's line in profile check: its name, policy and literal fields, and how many violations follow."""
     if check.policy is None:
         return f'{check.table}: {counted(len(check.violations), "schema violation")}'
-    audited = f'{counted(check.literal_fields, "literal field")} under {check.policy}, k_min {check.k_min}'
+    floor = f', k_min {check.k_min}' if check.k_min is not None else ''
+    audited = f'{counted(check.literal_fields, "literal field")} under {check.policy}{floor}'
     return f'{check.table}: {audited}, {counted(len(check.violations), "violation")}'
 
 

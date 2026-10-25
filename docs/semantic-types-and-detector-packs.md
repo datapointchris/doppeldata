@@ -93,7 +93,7 @@ value:
 | `person_name` | `name` would put full names in a first-name column | `first_name`, `last_name` or `name` |
 
 These hold for the fake version `crates/core/Cargo.toml` pins.
-`cli/tests/test_general_detector_pack.py` generates from every general-pack hint and fails
+`cli/tests/test_detector_pack_hints.py` generates from every shipped pack's hints and fails
 naming each whose values stop passing its own validator, as a bump of fake or `rand_regex` could
 make them. `us_ssn`'s pattern spells out each
 excluded area, group and serial, because `rand_regex` has no lookaround. `url` draws from the
@@ -123,8 +123,9 @@ under any policy, and `--policy healthcare` enables it without being named.
 - **An NPI and a DEA number are typed by their check digits.** A 10-digit number starting 1 or 2
   passes an NPI's shape, and one in ten passes its check digit, so a column of other numbers stays
   untyped.
-- **An ICD-10-CM or HCPCS Level II code is typed by membership** in the code list the pack ships, so
-  a product code of the same shape is not. `healthcare-policy.md` names each list's edition.
+- **An ICD-10-CM or HCPCS Level II code is typed by membership** in a code list the engine ships, so
+  a product code of the same shape is not. Its generator hint is the `icd10cm` or `hcpcs_level2`
+  provider, which draws from the same list. `healthcare-policy.md` says where each list comes from.
 - **An NDC or CPT code is typed by its shape alone**, and a CPT code, or an NDC without hyphens,
   only where the name hints it. Five digits is a ZIP code's shape too.
 - **A member, medical record or claim number has no published format.** It is typed by its name

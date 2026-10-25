@@ -7,20 +7,21 @@ privacy:
   policy: default
   k_min: 11
   audit:
-    - {field: /columns/0/numeric/extremes, column: id, values: 2, rule: "trimmed_k", min_count: 11}
-    - {field: /columns/0/numeric/sequence, column: id, values: 1, rule: "follows the trimmed extreme"}
-    - {field: /columns/1/numeric/extremes, column: amount, values: 2, rule: "trimmed_k", min_count: 11}
-    - {field: /columns/1/numeric/quantiles, column: amount, values: 7, rule: "k_min rows from each end", min_count: 100001}
-    - {field: /columns/1/numeric/fit, column: amount, values: 3, rule: "fitted within the trimmed extremes"}
-    - {field: /columns/2/numeric/extremes, column: qty, values: 2, rule: "trimmed_k", min_count: 11}
-    - {field: /columns/2/numeric/quantiles, column: qty, values: 6, rule: "k_min rows from each end", min_count: 100001}
-    - {field: /columns/2/numeric/fit, column: qty, values: 1, rule: "fitted within the trimmed extremes"}
-    - {field: /columns/3/string/top_values, column: category, values: 50, rule: "count >= k_min", min_count: 35000}
-    - {field: /columns/4/temporal/extremes, column: ts, values: 2, rule: "trimmed_k", min_count: 11}
-    - {field: /columns/6/numeric/extremes, column: score, values: 2, rule: "trimmed_k", min_count: 11}
-    - {field: /columns/6/numeric/quantiles, column: score, values: 7, rule: "k_min rows from each end", min_count: 95001}
-    - {field: /columns/6/numeric/fit, column: score, values: 2, rule: "fitted within the trimmed extremes"}
-    - {field: /columns/7/string/pattern, column: code, values: 1, rule: "generalized"}
+    - {column: id, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: id, field: /numeric/sequence, values: 1, rule: "follows the trimmed extreme"}
+    - {column: amount, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: amount, field: /numeric/quantiles, values: 7, rule: "k_min rows from each end", min_count: 100001}
+    - {column: amount, field: /numeric/fit, values: 3, rule: "fitted within the trimmed extremes"}
+    - {column: qty, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: qty, field: /numeric/quantiles, values: 6, rule: "k_min rows from each end", min_count: 100001}
+    - {column: qty, field: /numeric/fit, values: 1, rule: "fitted within the trimmed extremes"}
+    - {column: category, field: /string/top_values, values: 50, rule: "count >= k_min", min_count: 35000}
+    - {column: ts, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: flag, field: /boolean, values: 2, rule: "cell >= k_min", min_count: 3000000}
+    - {column: score, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: score, field: /numeric/quantiles, values: 7, rule: "k_min rows from each end", min_count: 95001}
+    - {column: score, field: /numeric/fit, values: 2, rule: "fitted within the trimmed extremes"}
+    - {column: code, field: /string/pattern, values: 1, rule: "generalized"}
 source:
   format: parquet
   compression: zstd

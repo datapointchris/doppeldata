@@ -58,12 +58,12 @@ sd.spark.write(spark, profile, 's3://bucket/orders/', rows=1_000_000_000, seed=7
 AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files.
 
 A profile is written under a privacy policy, `default` unless `--policy` names another. No data value
-it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows, 11 unless given. A
+it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. A
 column typed as an identifier keeps its format and no value, free text keeps its lengths, and
 `privacy.audit` lists every literal the file keeps with the rule that admits it. `strict` treats
 quasi-identifiers as identifiers. `healthcare` adds HIPAA Safe Harbor and the healthcare detector
-pack: ZIP codes keep three-digit prefixes, ages over 89 share one bin, and a person's dates keep their
-years. `none` keeps every value, for data that is already synthetic or public. `profile check` reads a
+pack: ZIP codes keep three-digit prefixes, ages over 89 share one bin, places below a state keep no
+value, and every date keeps only its years. `none` keeps every value, for data that is already synthetic or public. `profile check` reads a
 profile file alone, recomputes each rule from the rates and row counts it states, and exits 3 on a
 violation, so CI can run it on every committed profile.
 

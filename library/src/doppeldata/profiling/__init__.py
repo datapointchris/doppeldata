@@ -12,8 +12,7 @@ from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import ProfilingEnginesMissing
 from doppeldata.errors import ProfilingWarning
-from doppeldata.privacy_policy import CHECKED_POLICIES
-from doppeldata.privacy_policy import DEFAULT_K_MIN
+from doppeldata.privacy_policy import APPLIED_POLICIES
 from doppeldata.privacy_policy import Policy
 from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import InvalidProfile
@@ -23,8 +22,6 @@ from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.detector_packs import HEALTHCARE
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
-
-APPLIED_POLICIES = (*CHECKED_POLICIES, Policy.NONE)
 
 
 @dc.dataclass(frozen=True)
@@ -83,8 +80,8 @@ def profile(
 
     `data` is a path, an `s3://` URL, a list of them, or a pyarrow, Polars or pandas table. `sample`
     profiles a seeded random sample of that many rows. Under `default`, `strict` and `healthcare`, no stored
-    literal rests on fewer than `k_min` rows, 11 unless given, and `privacy.audit` lists each one. `none` keeps
-    every value, and takes no `k_min`. `healthcare` also enables the healthcare detector pack.
+    literal rests on fewer than `k_min` rows, `DEFAULT_K_MIN` unless given, and `privacy.audit` lists each one.
+    `none` keeps every value, and takes and states no `k_min`. `healthcare` also enables the healthcare detector pack.
 
     Each string column, and each integer column whose name hints a type a validator confirms, is typed by
     the detector packs named in `packs` and the general pack, which every run enables. A pack the library does not ship is
@@ -104,7 +101,9 @@ def profile(
     if sample is not None and sample < 1:
         raise ValueError(f'sample must be a positive number of rows, not {sample}')
     applied = applied_policy(policy, k_min)
-    k_min = 1 if applied is Policy.NONE else DEFAULT_K_MIN if k_min is None else k_min
+    stated = applied.k_min(k_min)
+    # `none` holds no floor, so every statistic is computed over every row.
+    floor = stated or 1
     chosen = ENGINES[engine]
     missing = uninstalled([package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
     if missing:
@@ -122,7 +121,7 @@ def profile(
     readers = {package.distribution: importlib.metadata.version(package.distribution) for package in reading}
     if edges_from is not None:
         changed = what_changed(
-            edges_from, source.fingerprint, engine=engine, sample=sample, policy=applied, k_min=k_min, packs=enabled, readers=readers
+            edges_from, source.fingerprint, engine=engine, sample=sample, policy=applied, k_min=stated, packs=enabled, readers=readers
         )
         if changed is None:
             return edges_from
@@ -130,7 +129,7 @@ def profile(
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
     profiled = Profile(
         table_profile.profile_table(
-            backend, source, sample=sample, k_min=k_min, policy=applied, packs=enabled, readers=readers, frozen=frozen
+            backend, source, sample=sample, k_min=floor, policy=applied, packs=enabled, readers=readers, frozen=frozen
         )
     )
     sources.check_unchanged(source)
@@ -153,7 +152,7 @@ def applied_policy(policy: str, k_min: int | None) -> Policy:
     """The policy named, refused with a `ValueError` where the profiler cannot apply it or `k_min` does not fit it."""
     choices = ', '.join(applied.value for applied in APPLIED_POLICIES)
     if policy == Policy.DP:
-        raise ValueError(f'policy dp is differential privacy, which doppeldata does not apply yet; choose from {choices}')
+        raise ValueError(f'policy dp is reserved for differential privacy, which doppeldata does not apply; choose from {choices}')
     if policy not in APPLIED_POLICIES:
         raise ValueError(f'{policy!r} is not a privacy policy; choose from {choices}')
     if policy == Policy.NONE and k_min is not None:
@@ -174,7 +173,7 @@ def what_changed(
     engine: str,
     sample: int | None,
     policy: Policy,
-    k_min: int,
+    k_min: int | None,
     packs: list[EnabledPack],
     readers: dict[str, str],
 ) -> str | None:

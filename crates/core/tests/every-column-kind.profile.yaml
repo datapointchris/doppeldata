@@ -171,9 +171,10 @@ columns:
   - name: top_prefixes_with_suffix
     distinct: {ratio: 0.02}
     string:
-      top_values: [{value: "021", rate: 0.5}, {value: "000", rate: 0.3}]
-      other_rate: 0.2
-      top_value_suffix: '\d{2}'
+      prefixes:
+        values: [{value: "021", rate: 0.5}, {value: "000", rate: 0.3}]
+        other_rate: 0.2
+        suffix: '\d{2}'
       shapes: [{shape: "99999", rate: 1.0}]
   - name: shapes
     string: {shapes: [{shape: AAA-9999, rate: 0.7}, {shape: aa99, rate: 0.3}]}
@@ -242,6 +243,12 @@ columns:
   - {name: provider_mac_address, semantic: {generator_hint: {provider: mac_address}}}
   - {name: provider_user_agent, semantic: {generator_hint: {provider: user_agent}}}
   - {name: provider_name, semantic: {generator_hint: {provider: name}}}
+  - {name: provider_icd10cm, semantic: {generator_hint: {provider: icd10cm}}}
+  - name: provider_icd10cm_dotted
+    distinct: {ratio: 0.01}
+    string: {shapes: [{shape: A99.9, rate: 0.7}, {shape: A99, rate: 0.3}]}
+    semantic: {generator_hint: {provider: icd10cm}}
+  - {name: provider_hcpcs_level2, semantic: {generator_hint: {provider: hcpcs_level2}}}
   - {name: provider_first_name, semantic: {generator_hint: {provider: first_name}}}
   - {name: provider_last_name, semantic: {generator_hint: {provider: last_name}}}
   - {name: provider_phone_number, semantic: {generator_hint: {provider: phone_number}}}

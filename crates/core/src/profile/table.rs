@@ -124,7 +124,7 @@ pub enum SuppressionReason {
     /// An age under `healthcare`, which collapses every age over 89 into one bin at 90.
     #[serde(rename = "age_over_89")]
     AgeOver89,
-    /// A date tied to a person under `healthcare`, whose extremes keep only their years.
+    /// A date or timestamp under `healthcare`, whose extremes keep only their years.
     DateToYear,
 }
 
@@ -623,11 +623,25 @@ pub struct StringStats {
     pub top_values: Option<Vec<TopValue>>,
     /// The share of rows holding a value outside `top_values`.
     pub other_rate: Option<Rate>,
-    /// A regular expression drawn after each top value, so `top_values` hold prefixes, such as a
-    /// ZIP code's first three digits.
-    pub top_value_suffix: Option<String>,
+    /// The values' leading characters, counted in place of `top_values`, as a policy keeps a ZIP
+    /// code's first three digits.
+    pub prefixes: Option<Prefixes>,
     /// Written when the value list was frozen from an earlier profile.
     pub overflow: Option<ValueOverflow>,
+}
+
+/// A column's values counted by their leading characters, each generated value a prefix followed
+/// by a value of `suffix`. An engine that ignores this field draws whole values from the column's
+/// other statistics, so it generates no value of the wrong length.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct Prefixes {
+    /// Each prefix at least `k_min` rows begin with, and its share of the column's values.
+    pub values: Vec<TopValue>,
+    /// The share of values beginning with a prefix `values` does not list.
+    pub other_rate: Option<Rate>,
+    /// A regular expression drawn after each prefix, such as `\d{2}` after a ZIP code's first three
+    /// digits.
+    pub suffix: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
@@ -790,6 +804,10 @@ pub enum Provider {
     CountryCode,
     CreditCard,
     Uuid,
+    /// A code of the ICD-10-CM list the engine ships, drawn uniformly.
+    Icd10cm,
+    /// A code of the HCPCS Level II list the engine ships, drawn uniformly.
+    HcpcsLevel2,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]

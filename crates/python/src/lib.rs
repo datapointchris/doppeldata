@@ -97,6 +97,13 @@ mod _core {
         doppeldata_core::generalized_pattern::is_generalized(pattern)
     }
 
+    /// The release a shipped code list's first line names, and its codes without their dots. None
+    /// when the engine ships no list of that name.
+    #[pyfunction]
+    fn code_list(name: &str) -> Option<(&'static str, Vec<&'static str>)> {
+        doppeldata_core::code_lists::code_list(name).map(|list| (list.release, list.codes.clone()))
+    }
+
     /// The value's shape, as a profile stores it: each ASCII upper-case letter as A, lower-case
     /// letter as a and digit as 9, and every other character as itself.
     #[pyfunction]

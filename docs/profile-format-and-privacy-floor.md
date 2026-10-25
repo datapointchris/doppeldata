@@ -6,10 +6,13 @@ The profile is the file between a real dataset and every synthetic copy, and it 
 the committed form, because a reviewer reads it, diffs it and comments on it in a pull request. JSON
 is accepted on input. One JSON Schema validates both.
 
-- **`profile_version` changes only on a breaking format change.** An added field keeps it. The tool
-  records its own version separately, under `generated.tool`. A breaking change must ship with
-  `profile upgrade`, which rewrites an older file in place. A profile newer than the installed
-  library refuses to load and names its version.
+- **`profile_version` changes only when an older engine would misread a file.** A field an older
+  engine ignores must leave that engine's reading of the file valid, and keeps the version. A field
+  that changes how an existing field reads raises `profile_version`. So a ZIP column's three-digit
+  prefixes are a field of their own, `string.prefixes`: written as `top_values`, they would be read
+  as whole values. The tool records its own version separately, under `generated.tool`. A breaking
+  change must ship with `profile upgrade`, which rewrites an older file in place. A profile newer
+  than the installed library refuses to load and names its version.
 - **Every section is optional.** A profile imported from a data catalog or a data contract has types
   and no statistics, and the generator falls back to defaults for what is missing.
 - **Every section of a profile accepts a key it does not know.** A job pinned to an earlier library
@@ -106,10 +109,10 @@ The `default` policy:
 
 `strict` also treats quasi-identifiers as identifiers, and drops every lookup and conditional table
 involving one. `healthcare` adds HIPAA Safe Harbor, as `healthcare-policy.md` describes. `none`
-writes everything, with exact extremes. It exists for data that is already synthetic or public, and
-`profile check` always reports a `none` profile. `dp` is reserved in the format for a
-differential-privacy policy. `profile create --policy dp` is a usage error until one is built, and
-`profile check` reports a `dp` profile as a policy it cannot check.
+writes everything, with exact extremes and no `k_min`. It exists for data that is already synthetic
+or public, and `profile check` always reports a `none` profile. `dp` is reserved in the format for
+a differential-privacy policy, which doppeldata does not apply. `profile create --policy dp` is a
+usage error, and `profile check` reports a `dp` profile as a policy it cannot check.
 
 ## The policy is a pass over the computed profile, so every backend inherits it
 
@@ -118,9 +121,13 @@ fields, decides each column's rule from its kind, its semantic type and sensitiv
 then removes what that rule withholds. It drops any literal left that fails its floor, then lists
 every literal kept. A Spark backend therefore needs no policy code of its own.
 
-Two healthcare rules need data, so the statistics pass computes them where the policy asks: a ZIP
-column's prefix counts, and a person's dates to the year. Typing runs before binning for that
-reason, since an age's histogram is binned to its cap.
+The pass then holds what it wrote to `profile check`'s rules, and raises where one fails. Both read
+each rule from `privacy_policy/treatment_rules.py`, so the writer cannot write a file the check
+refuses.
+
+Three healthcare rules need data, so the statistics pass computes them where the policy asks: a ZIP
+column's prefix counts, a date's gap rate over whole years, and an age's histogram binned to its
+cap. Typing runs before binning for that reason.
 
 ## Every literal in the file is listed with the rule that admitted it
 
@@ -134,19 +141,20 @@ privacy:
   suppressed:
     - {column: customer_email, reason: identifier, semantic: email}
   audit:
-    - {field: /columns/4/string/top_values, column: status, values: 5, rule: "count >= k_min", min_count: 7910}
+    - {column: status, field: /string/top_values, values: 5, rule: "count >= k_min", min_count: 7910}
 ```
 
-`field` is the field's RFC 6901 pointer, `values` counts the literals it holds, and `min_count` is
-the fewest rows any of them or any cell of it rests on. A suppression's `reason` is one of
-`identifier`, `quasi_identifier`, `free_text`, `zip_prefix`, `age_over_89` and `date_to_year`.
+`field` is the field's RFC 6901 pointer within its column, so reordering the columns or adding one
+leaves every other entry true. `values` counts the literals it holds, and `min_count` is the fewest
+rows any of them or any cell of it rests on. A suppression's `reason` is one of the
+`SuppressionReason` values `doppeldata schemas show profile` prints.
 
 Each kind of field is admitted by one rule:
 
 | Field | Rule | What `profile check` recomputes |
 | --- | --- | --- |
-| top values, shapes, missing-value tokens | `count >= k_min` | each rate times the rows holding a value, the remainder allowed to be 0 |
-| histogram bins and overflow, calendar shares | `cell >= k_min` | each cell, which may be 0 |
+| top values, ZIP prefixes, shapes, missing-value tokens | `count >= k_min` | each rate times the rows holding a value, the remainder allowed to be 0 |
+| histogram bins and overflow, calendar shares, a boolean's true and false counts | `cell >= k_min` | each cell, which may be 0 |
 | numeric and temporal extremes | `trimmed_k` | `method: trimmed_k`, over at least `2 · k_min − 1` values |
 | quantiles | `k_min rows from each end` | the rows between each quantile and the nearer end, its own counted |
 | a pattern | `generalized` | no alternation, optional part, or class narrower than whole digit and letter ranges |
@@ -160,11 +168,15 @@ An integer identifier's digit bounds hold no data value, so they are not a liter
 `profile check PROFILE` takes a file or an example name, and reads no data. It validates the schema
 first, then the policy. The rows a rate is taken of are `generated.sample.rows_read`, or else
 `dataset.row_count`, less the column's null rate. Every literal field must have an audit entry
-whose rule, column and value count match it, and must meet that rule. A column the policy withholds
-from must hold nothing withheld, and an audit entry naming no literal field is reported too. A
-bundle is checked table by table, each table held in its own file read as that file.
+whose column, pointer, rule and value count match it, and must meet that rule. A column the policy
+withholds from must hold nothing withheld, and an audit entry naming no literal field is reported
+too. A bundle is checked table by table, each table held in its own file read as that file. A
+member file that is a bundle, names itself other than its key, or cannot be read is a violation at
+`/tables/<name>`, and the other tables are still checked.
 
-It exits 0 when clean and 3 on a violation, because a violation needs a person. Each violation prints
-as the field it is at, what was found and what was expected, and `--json` prints each as
-`{code, field, rule, detail}`, with `field` an RFC 6901 pointer. So a CI job can run it on every
-committed profile. The examples doppeldata ships each pass it.
+It exits 0 when clean and 3 on a violation, because a violation needs a person. A file it cannot
+read is a usage error, exit 2. Each violation prints as the field it is at, what was found and what
+was expected. `--json` prints `passed` and each violation as `{code, field, rule, treatment,
+detail}`. `field` is an RFC 6901 pointer, `rule` is the audit rule the field is held to, and
+`treatment` is the column's suppression reason, each null where none applies. So a CI job can run
+it on every committed profile.

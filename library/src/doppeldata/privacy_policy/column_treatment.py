@@ -1,7 +1,8 @@
 """Which rule of a privacy policy governs each column, read from what a profile states about it.
 
 The profiler decides from a column's kind and typing before it writes, and `profile check` decides from the written
-column, so both reach the same treatment through `column_treatment`.
+column, so both reach the same treatment through `column_treatment`. Under `healthcare` it fails closed: every date
+keeps only its years, and a name that could hold an age, a ZIP code or a place smaller than a state is taken to.
 """
 
 import dataclasses as dc
@@ -10,34 +11,36 @@ import importlib.resources
 from functools import cache
 from typing import Any
 
+from doppeldata.column_name_words import ZIP_HINTS
 from doppeldata.column_name_words import hint_runs_in
 from doppeldata.column_name_words import name_words
+from doppeldata.published_schemas import published_enum
 
 # A cell from 1 to 10 rows is what the CMS cell-size suppression policy forbids reporting.
 DEFAULT_K_MIN = 11
 # Safe Harbor's single category for every age over 89.
 OLDEST_AGE = 90
-# Words a name ends in when the column holds an age in years.
+# Words a name holds anywhere when the column holds an age in years.
 AGE_HINTS = ('age', 'age_years', 'age_in_years', 'age_yrs')
-# Words a name holds anywhere when the column holds a date tied to a person, as Safe Harbor names them.
-PERSON_DATE_HINTS = (
-    'dob',
-    'birth',
-    'birthdate',
-    'dod',
-    'death',
-    'deceased',
-    'service',
-    'admit',
-    'admission',
-    'admitted',
-    'discharge',
-    'discharged',
-    'visit',
-    'encounter',
+# Words a name holds anywhere when the column holds a place smaller than a state, which Safe Harbor removes.
+GEOGRAPHY_HINTS = (
+    'address',
+    'addr',
+    'street',
+    'city',
+    'town',
+    'county',
+    'parish',
+    'precinct',
+    'geocode',
+    'latitude',
+    'longitude',
+    'lat',
+    'lon',
+    'lng',
 )
-# The semantic types in Safe Harbor's 18 identifier categories, each an identifier under `healthcare`
-# whatever its pack calls it. A ZIP code has its own rule.
+# The semantic types Safe Harbor names, each an identifier under `healthcare` whatever sensitivity the profile gives
+# it. A ZIP code, a date and a place below a state each have their own rule.
 SAFE_HARBOR_TYPES = frozenset(
     {
         'person_name',
@@ -72,9 +75,19 @@ class Policy(enum.StrEnum):
     DP = 'dp'
     NONE = 'none'
 
+    @property
+    def applied(self) -> bool:
+        """Whether a profiler writes a profile under it. `dp` is reserved, and none applies it."""
+        return self is not Policy.DP
 
-# The policies `profile check` checks, and a profiler applies.
-CHECKED_POLICIES = (Policy.DEFAULT, Policy.STRICT, Policy.HEALTHCARE)
+    @property
+    def checked(self) -> bool:
+        """Whether `profile check` checks a profile under it. A `none` profile withholds nothing, so it fails as such."""
+        return self in (Policy.DEFAULT, Policy.STRICT, Policy.HEALTHCARE)
+
+    def k_min(self, given: int | None) -> int | None:
+        """The `k_min` a profile under it states: none under `none`, which holds no floor, and otherwise `given` or 11."""
+        return None if self is Policy.NONE else given or DEFAULT_K_MIN
 
 
 class Treatment(enum.Enum):
@@ -86,7 +99,7 @@ class Treatment(enum.Enum):
     FREE_TEXT = 'free_text'
     ZIP_PREFIX = 'zip_prefix'
     AGE = 'age_over_89'
-    PERSON_DATE = 'date_to_year'
+    DATE_TO_YEAR = 'date_to_year'
 
     @property
     def keeps_no_value(self) -> bool:
@@ -138,14 +151,18 @@ def column_treatment(facts: ColumnFacts, policy: Policy) -> Treatment:
         return Treatment.FREE_TEXT
     if policy is Policy.HEALTHCARE:
         words = name_words(facts.name)
-        if facts.semantic_type == ZIP_TYPE:
+        # A ZIP column read as a number, or not typed, is still a ZIP column, so its name decides as its type does.
+        if facts.semantic_type == ZIP_TYPE or any(hint_runs_in(words, hint, at_end=True) for hint in ZIP_HINTS):
             return Treatment.ZIP_PREFIX if facts.kind is ValueFamily.STRING else Treatment.IDENTIFIER
-        if facts.semantic_type in SAFE_HARBOR_TYPES:
+        if facts.semantic_type in SAFE_HARBOR_TYPES or any(hint_runs_in(words, hint) for hint in GEOGRAPHY_HINTS):
             return Treatment.IDENTIFIER
-        if facts.kind is ValueFamily.NUMERIC and any(hint_runs_in(words, hint, at_end=True) for hint in AGE_HINTS):
+        if facts.kind is ValueFamily.TEMPORAL:
+            return Treatment.DATE_TO_YEAR
+        # A year, month or day of birth held as a number is an element of a date that no age cap reaches.
+        if facts.kind is ValueFamily.NUMERIC and is_birth_date(facts.name):
+            return Treatment.IDENTIFIER
+        if any(hint_runs_in(words, hint) for hint in AGE_HINTS):
             return Treatment.AGE
-        if facts.kind is ValueFamily.TEMPORAL and any(hint_runs_in(words, hint) for hint in PERSON_DATE_HINTS):
-            return Treatment.PERSON_DATE
     if facts.sensitivity == 'identifier':
         return Treatment.IDENTIFIER
     if policy is Policy.STRICT and facts.sensitivity == 'quasi_identifier':
@@ -153,8 +170,34 @@ def column_treatment(facts: ColumnFacts, policy: Policy) -> Treatment:
     return Treatment.AT_K_MIN
 
 
+def is_birth_date(name: str) -> bool:
+    """Whether a column's name says it holds a date of birth, as `dob`, `birth_date`, `BIRTHDATE` or `year_of_birth`."""
+    return 'birth' in name.lower() or any(word.endswith('dob') for word in name_words(name))
+
+
+def oldest_birth_year(table: dict[str, Any]) -> int | None:
+    """The earliest birth year `healthcare` keeps: the year the profile was made, less 90. None where it states no date."""
+    made = (table.get('generated') or {}).get('at')
+    if not isinstance(made, str) or not made[:4].isdigit():
+        return None
+    return int(made[:4]) - OLDEST_AGE
+
+
 @cache
 def restricted_zip_prefixes() -> frozenset[str]:
     """The three-digit ZIP prefixes whose population is 20,000 or fewer, which `healthcare` writes as `000`."""
     text = importlib.resources.files(__package__).joinpath(RESTRICTED_ZIP_PREFIXES_FILE).read_text()
     return frozenset(line.strip() for line in text.splitlines() if line.strip() and not line.startswith('#'))
+
+
+CHECKED_POLICIES = tuple(policy for policy in Policy if policy.checked)
+APPLIED_POLICIES = tuple(policy for policy in Policy if policy.applied)
+
+for definition, spelled in (
+    ('PrivacyPolicy', {policy.value for policy in Policy}),
+    ('SuppressionReason', {treatment.value for treatment in Treatment if treatment.value}),
+):
+    if spelled != set(published_enum(definition)):
+        raise RuntimeError(
+            f'the privacy policy spells {definition} as {sorted(spelled)}; the profile format has {published_enum(definition)}'
+        )

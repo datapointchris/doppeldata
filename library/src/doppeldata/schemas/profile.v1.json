@@ -1968,6 +1968,38 @@
         }
       }
     },
+    "Prefixes": {
+      "description": "A column's values counted by their leading characters, each generated value a prefix followed\nby a value of `suffix`. An engine that ignores this field draws whole values from the column's\nother statistics, so it generates no value of the wrong length.",
+      "type": "object",
+      "properties": {
+        "other_rate": {
+          "description": "The share of values beginning with a prefix `values` does not list.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suffix": {
+          "description": "A regular expression drawn after each prefix, such as `\\d{2}` after a ZIP code's first three\ndigits.",
+          "type": "string"
+        },
+        "values": {
+          "description": "Each prefix at least `k_min` rows begin with, and its share of the column's values.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TopValue"
+          }
+        }
+      },
+      "required": [
+        "values",
+        "suffix"
+      ]
+    },
     "Privacy": {
       "description": "The privacy policy the profile was written under, and every literal it kept or withheld.",
       "type": "object",
@@ -2039,34 +2071,48 @@
     },
     "Provider": {
       "description": "A source of realistic values. The names are doppeldata's, so a change of faker breaks no profile.",
-      "type": "string",
-      "enum": [
-        "email",
-        "free_email",
-        "username",
-        "ipv4",
-        "ipv6",
-        "mac_address",
-        "user_agent",
-        "name",
-        "first_name",
-        "last_name",
-        "phone_number",
-        "cell_number",
-        "company",
-        "job_title",
-        "street_address",
-        "street_name",
-        "building_number",
-        "city",
-        "state",
-        "state_abbr",
-        "zip_code",
-        "post_code",
-        "country",
-        "country_code",
-        "credit_card",
-        "uuid"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "email",
+            "free_email",
+            "username",
+            "ipv4",
+            "ipv6",
+            "mac_address",
+            "user_agent",
+            "name",
+            "first_name",
+            "last_name",
+            "phone_number",
+            "cell_number",
+            "company",
+            "job_title",
+            "street_address",
+            "street_name",
+            "building_number",
+            "city",
+            "state",
+            "state_abbr",
+            "zip_code",
+            "post_code",
+            "country",
+            "country_code",
+            "credit_card",
+            "uuid"
+          ]
+        },
+        {
+          "description": "A code of the ICD-10-CM list the engine ships, drawn uniformly.",
+          "type": "string",
+          "const": "icd10cm"
+        },
+        {
+          "description": "A code of the HCPCS Level II list the engine ships, drawn uniformly.",
+          "type": "string",
+          "const": "hcpcs_level2"
+        }
       ]
     },
     "Quality": {
@@ -2539,6 +2585,17 @@
             "null"
           ]
         },
+        "prefixes": {
+          "description": "The values' leading characters, counted in place of `top_values`, as a policy keeps a ZIP\ncode's first three digits.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Prefixes"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "shapes": {
           "type": [
             "array",
@@ -2547,13 +2604,6 @@
           "items": {
             "$ref": "#/$defs/Shape"
           }
-        },
-        "top_value_suffix": {
-          "description": "A regular expression drawn after each top value, so `top_values` hold prefixes, such as a\nZIP code's first three digits.",
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "top_values": {
           "description": "Values at least `k_min` rows hold, in a column that is not an identifier.",
@@ -2652,7 +2702,7 @@
           "const": "age_over_89"
         },
         {
-          "description": "A date tied to a person under `healthcare`, whose extremes keep only their years.",
+          "description": "A date or timestamp under `healthcare`, whose extremes keep only their years.",
           "type": "string",
           "const": "date_to_year"
         }

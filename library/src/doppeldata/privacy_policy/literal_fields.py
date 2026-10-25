@@ -1,9 +1,10 @@
 """Every field of a table profile that holds literals, the rule that admits them, and the rows each of its cells rests on.
 
-A literal is a data value, or a count of rows finer than the column: a top value, a shape, a missing-value token, a
-pattern, an extreme, a quantile, a histogram's edges and bins, a calendar share, a fit's parameters, a sequence's start.
-An integer identifier's digit bounds hold no data value, so they are not one. The rows are recomputed from the file
-alone: a rate times the rows the profile describes, less the column's nulls.
+A literal is a data value, or a count of rows finer than the column: a top value, a prefix, a shape, a missing-value
+token, a pattern, an extreme, a quantile, a histogram's edges and bins, a calendar share, a boolean's true and false
+counts, a fit's parameters, a sequence's start. An integer identifier's digit bounds hold no data value, so they are
+not one. The rows are recomputed from the file alone: a rate times the rows the profile describes, less the column's
+nulls.
 """
 
 import dataclasses as dc
@@ -15,9 +16,13 @@ from doppeldata import _core
 from doppeldata.profile_format import PointerParts
 from doppeldata.profile_format import pointer
 from doppeldata.profile_format import quantile_level
+from doppeldata.published_schemas import published_enum
+from doppeldata.published_schemas import published_fields
 
 CALENDAR_SHARES = ('by_month', 'by_dow', 'by_hour')
+TRIMMED_K = 'trimmed_k'
 DIGIT_BOUNDS = 'digit_bounds'
+EXACT = 'exact'
 ROWS_EXPECTED = 'expected dataset.row_count, or generated.sample.rows_read'
 
 
@@ -28,6 +33,8 @@ class FieldKind(enum.Enum):
     """
 
     TOP_VALUES = ('top_values', 'count >= k_min', 'top values')
+    PREFIXES = ('prefixes', 'count >= k_min', 'prefixes')
+    BOOLEAN = ('boolean', 'cell >= k_min', 'true and false counts')
     SHAPES = ('shapes', 'count >= k_min', 'shapes')
     MISSING_TOKENS = ('missing_tokens', 'count >= k_min', 'missing-value tokens')
     HISTOGRAM = ('histogram', 'cell >= k_min', 'histogram')
@@ -46,6 +53,54 @@ class FieldKind(enum.Enum):
     @property
     def label(self) -> str:
         return self.value[2]
+
+
+# Every field of a column and of each statistics section in it, with the kind of literal it holds, or None where it
+# holds no data value and no count finer than the column. `literal_fields` reads each field named here with a kind.
+FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
+    'Column': dict.fromkeys(
+        (
+            'boolean',
+            'distinct',
+            'list',
+            'logical_type',
+            'name',
+            'null_rate',
+            'nullable',
+            'numeric',
+            'path',
+            'physical_type',
+            'quality',
+            'semantic',
+            'string',
+            'struct',
+            'temporal',
+            'type_mix',
+        )
+    )
+    | {'missing_tokens': FieldKind.MISSING_TOKENS},
+    'BooleanStats': {'true_rate': FieldKind.BOOLEAN},
+    'NumericStats': dict.fromkeys(
+        ('integral', 'kurtosis', 'mean', 'monotonic', 'negative_rate', 'precision', 'scale', 'skew', 'std', 'zero_rate')
+    )
+    | {
+        'extremes': FieldKind.NUMERIC_EXTREMES,
+        'quantiles': FieldKind.QUANTILES,
+        'histogram': FieldKind.HISTOGRAM,
+        'fit': FieldKind.FIT,
+        'sequence': FieldKind.SEQUENCE,
+    },
+    # `other_rate` and `overflow` count what a top-value list leaves out, so they are read as part of it.
+    'StringStats': dict.fromkeys(('case', 'charset', 'length', 'other_rate', 'overflow', 'whitespace_edge_rate'))
+    | {'top_values': FieldKind.TOP_VALUES, 'prefixes': FieldKind.PREFIXES, 'shapes': FieldKind.SHAPES, 'pattern': FieldKind.PATTERN},
+    'TemporalStats': dict.fromkeys(('format', 'gap_rate', 'timezone'))
+    | {
+        'extremes': FieldKind.TEMPORAL_EXTREMES,
+        'by_month': FieldKind.CALENDAR_SHARES,
+        'by_dow': FieldKind.CALENDAR_SHARES,
+        'by_hour': FieldKind.CALENDAR_SHARES,
+    },
+}
 
 
 @dc.dataclass(frozen=True)
@@ -86,6 +141,10 @@ class ColumnLiterals:
     @property
     def name(self) -> str:
         return str(self.column.get('path') or self.column.get('name') or pointer(self.path))
+
+    def within(self, field: LiteralField) -> str:
+        """The field's pointer inside the column, which `privacy.audit` names it by beside the column's name."""
+        return pointer(field.path[len(self.path) :])
 
 
 @dc.dataclass(frozen=True)
@@ -134,6 +193,11 @@ def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None,
     if tokens:
         cells = tuple(Cell((*at, 'missing_tokens', token), share(rate, rows)) for token, rate in tokens.items())
         yield LiteralField((*at, 'missing_tokens'), FieldKind.MISSING_TOKENS, len(cells), cells)
+    true_rate = (column.get('boolean') or {}).get('true_rate')
+    if isinstance(true_rate, int | float):
+        at_rate = (*at, 'boolean', 'true_rate')
+        cells = (Cell(at_rate, share(true_rate, held), True), Cell(at_rate, share(1 - true_rate, held), True))
+        yield LiteralField((*at, 'boolean'), FieldKind.BOOLEAN, 2, cells)
     numeric = column.get('numeric') or {}
     extremes = numeric.get('extremes') or {}
     stored = [end for end in ('low', 'high') if extremes.get(end) is not None]
@@ -161,6 +225,15 @@ def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None,
         if 'other_rate' in string:
             cells += (Cell((*at, 'string', 'other_rate'), share(string['other_rate'], held), True),)
         yield LiteralField((*at, 'string', 'top_values'), FieldKind.TOP_VALUES, len(string['top_values']), cells)
+    prefixes = string.get('prefixes') or {}
+    if prefixes.get('values'):
+        listed = prefixes['values']
+        cells = tuple(
+            Cell((*at, 'string', 'prefixes', 'values', index), share(entry.get('rate'), held)) for index, entry in enumerate(listed)
+        )
+        if 'other_rate' in prefixes:
+            cells += (Cell((*at, 'string', 'prefixes', 'other_rate'), share(prefixes['other_rate'], held), True),)
+        yield LiteralField((*at, 'string', 'prefixes'), FieldKind.PREFIXES, len(listed), cells)
     if string.get('shapes'):
         cells = tuple(
             Cell((*at, 'string', 'shapes', index), share(entry.get('rate'), held)) for index, entry in enumerate(string['shapes'])
@@ -215,7 +288,7 @@ def faults(field: LiteralField, column: ColumnLiterals, k_min: int) -> list[Faul
     if kind in (FieldKind.NUMERIC_EXTREMES, FieldKind.TEMPORAL_EXTREMES):
         found = []
         method = ((column.column.get('numeric') or {}).get('extremes') or {}).get('method')
-        if kind is FieldKind.NUMERIC_EXTREMES and method != 'trimmed_k':
+        if kind is FieldKind.NUMERIC_EXTREMES and method != TRIMMED_K:
             found.append(Fault('extremes-not-trimmed', (*field.path, 'method'), f'method is {method or "absent"}; expected trimmed_k'))
         if column.held is None:
             found.append(
@@ -225,7 +298,7 @@ def faults(field: LiteralField, column: ColumnLiterals, k_min: int) -> list[Faul
             found.append(Fault('below-k-min', field.path, f'rest on {round(column.held)} values; expected at least {2 * k_min - 1}'))
         return found
     numeric = column.column.get('numeric') or {}
-    trimmed = (numeric.get('extremes') or {}).get('method') == 'trimmed_k'
+    trimmed = (numeric.get('extremes') or {}).get('method') == TRIMMED_K
     if kind is FieldKind.PATTERN:
         pattern = (column.column.get('string') or {}).get('pattern')
         if not isinstance(pattern, str) or not _core.pattern_is_generalized(pattern):
@@ -257,3 +330,14 @@ def min_count(field: LiteralField, k_min: int) -> int | None:
         return k_min
     counts = [round(cell.rows) for cell in field.cells if cell.rows is not None and round(cell.rows) > 0]
     return min(counts) if counts else None
+
+
+# A field the profile format gains is unclassified until it is named above, so the floor cannot pass it unread.
+for definition, classified in FIELD_KINDS.items():
+    published = set(published_fields(definition))
+    if published != set(classified):
+        unread, gone = sorted(published - set(classified)), sorted(set(classified) - published)
+        raise RuntimeError(f'privacy_policy has not classified the {definition} fields {unread}, and classifies {gone}, which it lacks')
+for definition, spelled in (('AuditRule', {kind.rule for kind in FieldKind}), ('ExtremesMethod', {TRIMMED_K, DIGIT_BOUNDS, EXACT})):
+    if spelled != set(published_enum(definition)):
+        raise RuntimeError(f'privacy_policy spells {definition} as {sorted(spelled)}; the profile format has {published_enum(definition)}')

@@ -29,7 +29,7 @@ const _: () = assert!(
 /// freezes the pair: once released, a change to any value raises STREAM_VERSION.
 /// `crates/check-stream-version-raised.sh` reads both lines and refuses a new hash at a released version.
 const PINNED_STREAM_VERSION: u32 = 5;
-const PINNED_VALUES: &str = "de0a0537ccd6cc12e2e879a60516527621ec3091ccdc77da8047ac90c24e0b1c";
+const PINNED_VALUES: &str = "64be54a8780e819650b59f3cd6b371cb3d567d4963159c068ad68537af0c254a";
 
 fn document(path: &Path) -> serde_json::Value {
     let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));

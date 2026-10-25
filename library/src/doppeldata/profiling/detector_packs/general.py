@@ -10,6 +10,7 @@ from collections.abc import Callable
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from doppeldata.column_name_words import ZIP_HINTS
 from doppeldata.profiling.detector_packs import Detector
 from doppeldata.profiling.detector_packs import DetectorPack
 from doppeldata.profiling.detector_packs import Validator
@@ -115,7 +116,6 @@ PERSON_NAME = r"^\pL[\pL' .-]*$"
 USPS_STATES = 'ALAKAZARCACOCTDEFLGAHIIDILINIAKSKYLAMEMDMAMIMNMSMOMTNENVNHNJNMNYNCNDOHOKORPARISCSDTNTXUTVTVAWAWVWIWYDCPRVIGUASMPAAAEAP'
 STATE_CODES = pa.array([USPS_STATES[at : at + 2] for at in range(0, len(USPS_STATES), 2)])
 SSN_HINTS = ('ssn', 'social', 'social_security')
-ZIP_HINTS = ('zip', 'zipcode', 'zip_code', 'postal', 'postal_code', 'postcode')
 
 PACK = DetectorPack(
     'general',

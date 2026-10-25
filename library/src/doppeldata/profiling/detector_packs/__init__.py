@@ -23,6 +23,7 @@ from typing import Any
 from doppeldata import _core
 from doppeldata.column_name_words import name_words
 from doppeldata.errors import DetectorPackError
+from doppeldata.privacy_policy.column_treatment import SAFE_HARBOR_TYPES
 from doppeldata.published_schemas import published_enum
 from doppeldata.published_schemas import published_fields
 
@@ -185,3 +186,13 @@ def checked(name: str, pack: Any) -> DetectorPack:
         if (first.sensitivity, first.glue_type) != (detector.sensitivity, detector.glue_type):
             raise refuse(f'gives {kind} two sensitivities or Glue types; the detectors of one type agree on both')
     return pack
+
+
+def shipped_types() -> frozenset[str]:
+    """Every semantic type a pack the library ships declares."""
+    return frozenset(detector.type for name in BUILT_IN for detector in load(name).pack.detectors)
+
+
+# A Safe Harbor type is matched by name, so one no shipped pack declares would promote no column.
+if undeclared := SAFE_HARBOR_TYPES - shipped_types():
+    raise RuntimeError(f'SAFE_HARBOR_TYPES names types no shipped detector pack declares: {", ".join(sorted(undeclared))}')

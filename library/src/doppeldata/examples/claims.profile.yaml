@@ -1,8 +1,11 @@
 # Hand-written: a medical claims table under the healthcare policy, which adds HIPAA Safe Harbor to
-# the default floor. No data was read, so it holds no real value and has no `generated` block.
+# the default floor. No data was read, so it holds no real value. `generated.at` alone is stated,
+# because the oldest birth year the policy admits is 90 years before it.
 profile_version: 1
 kind: table
 name: claims
+generated:
+  at: '2026-10-01T00:00:00Z'
 privacy:
   policy: healthcare
   k_min: 11
@@ -16,28 +19,28 @@ privacy:
     - {column: service_date, reason: date_to_year}
   # Every field holding a literal, the rule that admits it, and the fewest rows any of its values or cells rests on.
   audit:
-    - {field: /columns/0/string/shapes, column: claim_id, values: 1, rule: "count >= k_min", min_count: 250000}
-    - {field: /columns/0/string/pattern, column: claim_id, values: 1, rule: "generalized"}
-    - {field: /columns/2/temporal/extremes, column: member_dob, values: 2, rule: "trimmed_k", min_count: 11}
-    - {field: /columns/2/temporal/by_month, column: member_dob, values: 12, rule: "cell >= k_min", min_count: 19200}
-    - {field: /columns/2/temporal/by_dow, column: member_dob, values: 7, rule: "cell >= k_min", min_count: 35625}
-    - {field: /columns/3/numeric/extremes, column: member_age, values: 2, rule: "trimmed_k", min_count: 11}
-    - {field: /columns/3/numeric/quantiles, column: member_age, values: 7, rule: "k_min rows from each end", min_count: 2501}
-    - {field: /columns/3/numeric/histogram, column: member_age, values: 8, rule: "cell >= k_min", min_count: 7000}
-    - {field: /columns/4/string/top_values, column: member_zip, values: 11, rule: "count >= k_min", min_count: 3000}
-    - {field: /columns/4/string/shapes, column: member_zip, values: 1, rule: "count >= k_min", min_count: 250000}
-    - {field: /columns/5/string/shapes, column: rendering_npi, values: 1, rule: "count >= k_min", min_count: 250000}
-    - {field: /columns/6/temporal/extremes, column: service_date, values: 2, rule: "trimmed_k", min_count: 11}
-    - {field: /columns/6/temporal/by_month, column: service_date, values: 12, rule: "cell >= k_min", min_count: 19475}
-    - {field: /columns/6/temporal/by_dow, column: service_date, values: 7, rule: "cell >= k_min", min_count: 10000}
-    - {field: /columns/7/string/top_values, column: diagnosis_code, values: 8, rule: "count >= k_min", min_count: 5000}
-    - {field: /columns/7/string/shapes, column: diagnosis_code, values: 3, rule: "count >= k_min", min_count: 35000}
-    - {field: /columns/8/string/top_values, column: procedure_code, values: 6, rule: "count >= k_min", min_count: 5000}
-    - {field: /columns/8/string/shapes, column: procedure_code, values: 1, rule: "count >= k_min", min_count: 250000}
-    - {field: /columns/9/numeric/extremes, column: paid_amount, values: 2, rule: "trimmed_k", min_count: 11}
-    - {field: /columns/9/numeric/quantiles, column: paid_amount, values: 7, rule: "k_min rows from each end", min_count: 2501}
-    - {field: /columns/9/numeric/fit, column: paid_amount, values: 3, rule: "fitted within the trimmed extremes"}
-    - {field: /columns/10/string/top_values, column: claim_status, values: 4, rule: "count >= k_min", min_count: 10000}
+    - {column: claim_id, field: /string/shapes, values: 1, rule: "count >= k_min", min_count: 250000}
+    - {column: claim_id, field: /string/pattern, values: 1, rule: "generalized"}
+    - {column: member_dob, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: member_dob, field: /temporal/by_month, values: 12, rule: "cell >= k_min", min_count: 19200}
+    - {column: member_dob, field: /temporal/by_dow, values: 7, rule: "cell >= k_min", min_count: 35625}
+    - {column: member_age, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: member_age, field: /numeric/quantiles, values: 7, rule: "k_min rows from each end", min_count: 2501}
+    - {column: member_age, field: /numeric/histogram, values: 8, rule: "cell >= k_min", min_count: 7000}
+    - {column: member_zip, field: /string/prefixes, values: 11, rule: "count >= k_min", min_count: 3000}
+    - {column: member_zip, field: /string/shapes, values: 1, rule: "count >= k_min", min_count: 250000}
+    - {column: rendering_npi, field: /string/shapes, values: 1, rule: "count >= k_min", min_count: 250000}
+    - {column: service_date, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: service_date, field: /temporal/by_month, values: 12, rule: "cell >= k_min", min_count: 19475}
+    - {column: service_date, field: /temporal/by_dow, values: 7, rule: "cell >= k_min", min_count: 10000}
+    - {column: diagnosis_code, field: /string/top_values, values: 8, rule: "count >= k_min", min_count: 5000}
+    - {column: diagnosis_code, field: /string/shapes, values: 3, rule: "count >= k_min", min_count: 35000}
+    - {column: procedure_code, field: /string/top_values, values: 6, rule: "count >= k_min", min_count: 5000}
+    - {column: procedure_code, field: /string/shapes, values: 1, rule: "count >= k_min", min_count: 250000}
+    - {column: paid_amount, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: paid_amount, field: /numeric/quantiles, values: 7, rule: "k_min rows from each end", min_count: 2501}
+    - {column: paid_amount, field: /numeric/fit, values: 3, rule: "fitted within the trimmed extremes"}
+    - {column: claim_status, field: /string/top_values, values: 4, rule: "count >= k_min", min_count: 10000}
 source:
   format: parquet
   compression: zstd
@@ -73,7 +76,8 @@ columns:
       extremes: {low: 10000000, high: 99999999, method: digit_bounds}
       monotonic: none
     semantic: {type: health_plan_beneficiary_number, pack: healthcare, confidence: 0.96, detectors: [validator, name_hint], sensitivity: identifier}
-  # A date tied to a person keeps the years of its extremes.
+  # Every date keeps the years of its extremes, and a birth year more than 90 years back is written
+  # as that year.
   - name: member_dob
     physical_type: date32[day]
     logical_type: date
@@ -81,7 +85,7 @@ columns:
     null_rate: 0.0
     distinct: {approx: 24500, ratio: 0.098}
     temporal:
-      extremes: {low: '1934-01-01', high: '2008-12-31', granularity: day}
+      extremes: {low: '1936-01-01', high: '2008-12-31', granularity: day}
       by_month: [0.0841, 0.0768, 0.0849, 0.0815, 0.0843, 0.0824, 0.0862, 0.0868, 0.0841, 0.0829, 0.0792, 0.0868]
       by_dow: [0.1431, 0.1425, 0.1428, 0.1426, 0.1430, 0.1432, 0.1428]
       gap_rate: 0.1056
@@ -108,30 +112,33 @@ columns:
         counts: [30000, 28000, 32000, 40000, 45000, 40000, 28000, 7000]
       monotonic: none
   # A ZIP code keeps three-digit prefixes, and a prefix of 20,000 or fewer people is written as 000.
+  # The plan's members live in ten metro areas, and the few elsewhere fall in prefixes of fewer than
+  # k_min members each, which `other_rate` holds. Its distinct count is of its prefixes.
   - name: member_zip
     physical_type: string
     logical_type: string
     nullable: false
     null_rate: 0.0
-    distinct: {approx: 9000, ratio: 0.036}
+    distinct: {approx: 411, ratio: 0.001644}
     string:
       length: {min: 5, max: 5, mean: 5, quantiles: {p50: 5}}
       whitespace_edge_rate: 0.0
       shapes: [{shape: '99999', rate: 1.0}]
-      top_values:
-        - {value: '100', rate: 0.06}
-        - {value: '021', rate: 0.05}
-        - {value: '606', rate: 0.045}
-        - {value: '941', rate: 0.04}
-        - {value: '770', rate: 0.04}
-        - {value: '303', rate: 0.035}
-        - {value: '191', rate: 0.035}
-        - {value: '850', rate: 0.03}
-        - {value: '980', rate: 0.03}
-        - {value: '331', rate: 0.03}
-        - {value: '000', rate: 0.012}
-      other_rate: 0.593
-      top_value_suffix: '\d{2}'
+      prefixes:
+        values:
+          - {value: '100', rate: 0.146}
+          - {value: '021', rate: 0.121}
+          - {value: '606', rate: 0.109}
+          - {value: '941', rate: 0.097}
+          - {value: '770', rate: 0.097}
+          - {value: '303', rate: 0.085}
+          - {value: '191', rate: 0.085}
+          - {value: '850', rate: 0.073}
+          - {value: '980', rate: 0.073}
+          - {value: '331', rate: 0.073}
+          - {value: '000', rate: 0.029}
+        other_rate: 0.012
+        suffix: '\d{2}'
     semantic: {type: us_zip, pack: general, confidence: 1.0, detectors: [pattern, name_hint], sensitivity: quasi_identifier}
     quality: {invalid_rate: 0.0}
   - name: rendering_npi
@@ -192,7 +199,7 @@ columns:
       confidence: 1.0
       detectors: [validator, name_hint]
       sensitivity: sensitive
-      generator_hint: {pattern: '[A-Z]\d{2}(?:\.\d{1,2})?'}
+      generator_hint: {provider: icd10cm}
     quality: {invalid_rate: 0.0}
   - name: procedure_code
     physical_type: string
@@ -218,7 +225,7 @@ columns:
       confidence: 1.0
       detectors: [validator, name_hint]
       sensitivity: sensitive
-      generator_hint: {pattern: '[A-V]\d{4}'}
+      generator_hint: {provider: hcpcs_level2}
     quality: {invalid_rate: 0.0}
   - name: paid_amount
     physical_type: "decimal128(10, 2)"

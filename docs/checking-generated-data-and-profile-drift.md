@@ -82,7 +82,9 @@ other profile's histogram.
 
 ## `distinct_ratio_delta` measures a column against the range both readings of its profile allow
 
-The ratio is a column's distinct count over the rows it was counted over. One profile cannot show
+The ratio is a column's distinct count over the rows it was counted over. A ZIP column written as
+`string.prefixes` counts its distinct prefixes, and the generated data is profiled under the
+source's policy, so both readings count prefixes. One profile cannot show
 whether a column keeps that ratio at another size or keeps its count. So the generator holds the
 ratio, and the check accepts either. With N source rows holding D distinct values, and n rows
 checked:

@@ -6,7 +6,6 @@ import datetime as dt
 import importlib
 import math
 import random
-import re
 import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -26,6 +25,7 @@ from doppeldata.privacy_policy import restricted_zip_prefixes
 from doppeldata.privacy_policy import withheld
 from doppeldata.privacy_policy.column_treatment import OLDEST_AGE
 from doppeldata.privacy_policy.column_treatment import ValueFamily
+from doppeldata.privacy_policy.treatment_rules import ZIP_PREFIX
 from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
 from doppeldata.profiling import file_traits
@@ -111,7 +111,6 @@ VALUE_FAMILIES = {
 }
 # Every three-digit prefix there is, so none is left uncounted.
 ZIP_PREFIXES_COUNTED = 1000
-ZIP_PREFIX = re.compile(r'\d{3}')
 RESTRICTED_ZIP_PREFIX = '000'
 ZIP_SUFFIX = r'\d{2}'
 ZIP_PLUS_FOUR_SUFFIX = r'\d{2}-\d{4}'
@@ -482,8 +481,8 @@ def column_entry(
 ) -> dict[str, Any]:
     """One column's entry. `distinct` holds each column's distinct count and the rows it was counted over.
 
-    `treatment` decides what the statistics pass computes differently: a ZIP code's prefixes, and a person's dates to
-    the year. What it withholds from the computed entry is left to `withheld`.
+    `treatment` decides what the statistics pass computes differently: a ZIP code's prefixes, and a date's extremes and
+    gap rate to the year. What it withholds from the computed entry is left to `withheld`.
     """
     entry: dict[str, Any] = {'name': spec.name, 'physical_type': spec.physical_type}
     logical = LOGICAL_TYPES.get(spec.kind) or CONTAINER_LOGICAL_TYPES.get(spec.physical_type.split('<')[0])
@@ -502,6 +501,11 @@ def column_entry(
         return entry
     values = described - stat('null_count')
     count, counted_over = distinct[spec.name]
+    prefixes = None
+    if treatment is Treatment.ZIP_PREFIX and spec.kind is ColumnKind.STRING:
+        prefixes = zip_prefix_counts(backend.top_k(table, spec.name, ZIP_PREFIXES_COUNTED, FrequencyKey.ZIP_PREFIX))
+        # The column describes its prefixes, so its distinct count is theirs, and the generator holds that.
+        count = len(prefixes)
     if counted_over:
         entry['distinct'] = {'approx': count, 'ratio': significant(min(1.0, count / counted_over), RATE_DIGITS)}
     # A statistic of fewer than k_min values can give one of them away, as the mean of one value does.
@@ -510,12 +514,11 @@ def column_entry(
     if spec.kind in NUMERIC:
         entry['numeric'] = numeric_section(spec, stat, values, layout, k_min)
     elif spec.kind is ColumnKind.STRING:
-        prefixes = treatment is Treatment.ZIP_PREFIX
         entry['string'] = string_section(
-            backend, table, spec, stat, values, shapes[spec.name], patterns.get(spec.name), layout.listed, k_min, zip_prefixes=prefixes
+            backend, table, spec, stat, values, shapes[spec.name], patterns.get(spec.name), layout.listed, k_min, prefixes=prefixes
         )
     elif spec.kind in (ColumnKind.DATE, ColumnKind.DATETIME):
-        entry['temporal'] = temporal_section(spec, stat, values, text, k_min, year_level=treatment is Treatment.PERSON_DATE)
+        entry['temporal'] = temporal_section(spec, stat, values, text, k_min, year_level=treatment is Treatment.DATE_TO_YEAR)
     elif spec.kind is ColumnKind.BOOLEAN:
         entry['boolean'] = {'true_rate': significant(stat('true_rate'), RATE_DIGITS)}
     if typing:
@@ -595,7 +598,10 @@ def histogram_binning(
         return None
     if spec.name in layout.histograms:
         kind, edges = layout.histograms[spec.name]
-        return Binning(kind, edges, frozen=True, capped=capped)
+        # An earlier profile's edges may part ages over 89, so they give way to the one bin above 89.5 as fresh ones do.
+        if capped and edges[-1] > AGE_BIN_EDGES[0]:
+            edges = (*(edge for edge in edges if edge < AGE_BIN_EDGES[0]), *AGE_BIN_EDGES)
+        return Binning(kind, tuple(edges), frozen=True, capped=capped)
     values = described - stat('null_count')
     if not has_trimmed_extremes(values, k_min):
         return None
@@ -657,11 +663,11 @@ def string_section(
     listed: FrozenValues | None,
     k_min: int,
     *,
-    zip_prefixes: bool = False,
+    prefixes: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """A string column's section. `listed` is an earlier profile's value list, which its top values are counted against.
 
-    With `zip_prefixes`, the top values are the column's three-digit ZIP prefixes.
+    With `prefixes`, a ZIP column's counted prefixes, the section holds them in place of its top values.
     """
     length: dict[str, Any] = {}
     if has_trimmed_extremes(values, k_min):
@@ -683,28 +689,35 @@ def string_section(
         # list count too, so a listed value that fell under k_min reveals no count of its own.
         beyond = other - round(listed.baseline_other_rate * values)
         section['overflow'] = {'new_value_rows': beyond if beyond >= k_min else 0}
-    elif zip_prefixes:
-        section |= zip_prefix_values(backend.top_k(table, spec.name, ZIP_PREFIXES_COUNTED, FrequencyKey.ZIP_PREFIX), shapes, values, k_min)
+    elif prefixes is not None:
+        section |= zip_prefixes_section(prefixes, shapes, values, k_min)
     elif stat('distinct_count') <= TOP_VALUES_THRESHOLD:
         section |= top_values(*kept_values(backend.top_k(table, spec.name, TOP_VALUES_THRESHOLD), values, k_min), values)
     return section
 
 
-def zip_prefix_values(counted: list[tuple[Any, int]], shapes: list[tuple[str, int]], values: int, k_min: int) -> dict[str, Any]:
-    """A ZIP column's top values as the prefixes `counted` holds, each restricted one counted as `000`, and the digits
-    the generator appends to each. A prefix that is not three digits is counted in `other_rate`."""
+def zip_prefix_counts(counted: list[tuple[Any, int]]) -> dict[str, int]:
+    """Each value's first three characters and the rows holding them, a restricted prefix counted as `000`."""
     restricted = restricted_zip_prefixes()
     merged: dict[str, int] = {}
     for prefix, count in counted:
-        if isinstance(prefix, str) and ZIP_PREFIX.fullmatch(prefix):
-            key = RESTRICTED_ZIP_PREFIX if prefix in restricted else prefix
-            merged[key] = merged.get(key, 0) + count
-    ordered = sorted(merged.items(), key=lambda item: (-item[1], item[0]))
-    section = top_values(*kept_values(ordered, values, k_min), values)
-    if section:
-        plus_four = bool(shapes) and shapes[0][0] == ZIP_PLUS_FOUR_SHAPE
-        section['top_value_suffix'] = ZIP_PLUS_FOUR_SUFFIX if plus_four else ZIP_SUFFIX
-    return section
+        key = RESTRICTED_ZIP_PREFIX if prefix in restricted else str(prefix)
+        merged[key] = merged.get(key, 0) + count
+    return merged
+
+
+def zip_prefixes_section(merged: dict[str, int], shapes: list[tuple[str, int]], values: int, k_min: int) -> dict[str, Any]:
+    """A ZIP column's three-digit prefixes held by k_min rows, and the digits the generator appends to each. A prefix
+    that is not three digits is counted in `other_rate`."""
+    ordered = sorted(
+        ((prefix, count) for prefix, count in merged.items() if ZIP_PREFIX.fullmatch(prefix)), key=lambda item: (-item[1], item[0])
+    )
+    kept, other = kept_values(ordered, values, k_min)
+    if not kept:
+        return {}
+    plus_four = bool(shapes) and shapes[0][0] == ZIP_PLUS_FOUR_SHAPE
+    listed = [{'value': prefix, 'rate': rate(count, values)} for prefix, count in kept]
+    return {'prefixes': {'values': listed, 'other_rate': rate(other, values), 'suffix': ZIP_PLUS_FOUR_SUFFIX if plus_four else ZIP_SUFFIX}}
 
 
 def top_values(kept: list[tuple[Any, int]], other: int, values: int) -> dict[str, Any]:

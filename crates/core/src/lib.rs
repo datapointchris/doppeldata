@@ -1,6 +1,7 @@
 //! doppeldata's generation engine. It knows nothing of Python, and leaves where
 //! output goes to its caller.
 
+pub mod code_lists;
 pub mod format_settings;
 pub mod generalized_pattern;
 mod identity;

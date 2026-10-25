@@ -1,12 +1,11 @@
 """The healthcare pack: the US identifiers and code sets a medical claim holds, which `policy: healthcare` enables.
 
-An ICD-10-CM or HCPCS Level II code is checked against the code list the pack ships, both US government data. CPT is
-copyrighted and the NDC directory is large, so their codes are typed by shape and name hint alone. Every pattern here
-is fixed, and comes from no data.
+An ICD-10-CM or HCPCS Level II code is checked against the code list the engine ships, both US government data, and
+generated from it. CPT is copyrighted and the NDC directory is large, so their codes are typed by shape and name hint
+alone. Every pattern here is fixed, and comes from no data.
 """
 
 import collections
-import importlib.resources
 from functools import cache
 
 import pyarrow as pa
@@ -18,10 +17,8 @@ from doppeldata.profiling.detector_packs import DetectorPack
 from doppeldata.profiling.detector_packs import Validator
 from doppeldata.profiling.detector_packs.general import matching
 
-PACKAGE = 'doppeldata.profiling.detector_packs'
-CODE_LISTS = 'healthcare_code_lists'
-ICD10CM_CODES = 'icd10cm.txt'
-HCPCS_LEVEL2_CODES = 'hcpcs_level2.txt'
+ICD10CM = 'icd10cm'
+HCPCS_LEVEL2 = 'hcpcs_level2'
 # The letters an MBI holds: A to Z but S, L, O, I, B and Z, which read as digits.
 MBI_LETTER = '[AC-HJKMNP-RT-Y]'
 MBI_EITHER = '[AC-HJKMNP-RT-Y0-9]'
@@ -29,7 +26,7 @@ MBI = f'[1-9]{MBI_LETTER}{MBI_EITHER}[0-9]{MBI_LETTER}{MBI_EITHER}[0-9]{MBI_LETT
 MBI_DASHED = f'[1-9]{MBI_LETTER}{MBI_EITHER}[0-9]-?{MBI_LETTER}{MBI_EITHER}[0-9]-?{MBI_LETTER}{{2}}[0-9]{{2}}'
 # The FDA's three 10-digit segmentations, and HIPAA's 11-digit 5-4-2.
 NDC_SEGMENTED = r'^(?:\d{4}-\d{4}-\d{2}|\d{5}-\d{3}-\d{2}|\d{5}-\d{4}-\d{1,2})$'
-# A category is a letter and two alphanumerics, and FY2027 added categories whose second character is a letter.
+# A category is a letter and two letters or digits: a category's second character may be a letter.
 ICD10CM_SHAPE = r'^[A-Za-z][0-9A-Za-z][0-9A-Za-z](?:\.?[0-9A-Za-z]{1,4})?$'
 HCPCS_LEVEL2_SHAPE = r'^[A-Va-v]\d{4}$'
 # A registrant type, the first letter of the registrant's name or a 9, six digits, then the check digit.
@@ -63,9 +60,11 @@ DIGIT_SHAPE = '9'
 
 @cache
 def code_list(name: str) -> pa.Array:
-    """The codes of the list the pack ships as `name`, each without its dot."""
-    text = importlib.resources.files(PACKAGE).joinpath(CODE_LISTS).joinpath(name).read_text()
-    return pa.array([line for line in text.splitlines() if line and not line.startswith('#')], pa.string())
+    """The codes of the list the engine ships as `name`, each without its dot, read from the extension once a process."""
+    shipped = _core.code_list(name)
+    if shipped is None:
+        raise ValueError(f'the engine ships no code list named {name!r}')
+    return pa.array(shipped[1], pa.string())
 
 
 def listed(shape: str, codes: str) -> Validator:
@@ -137,15 +136,15 @@ PACK = DetectorPack(
             'icd10cm',
             'sensitive',
             ('icd', 'diagnosis', 'diag', 'dx'),
-            {'pattern': r'[A-Z]\d{2}(?:\.\d{1,2})?'},
-            listed(ICD10CM_SHAPE, ICD10CM_CODES),
+            {'provider': ICD10CM},
+            listed(ICD10CM_SHAPE, ICD10CM),
         ),
         Detector(
             'hcpcs_level2',
             'sensitive',
             ('hcpcs', 'procedure', 'proc', 'px'),
-            {'pattern': r'[A-V]\d{4}'},
-            listed(HCPCS_LEVEL2_SHAPE, HCPCS_LEVEL2_CODES),
+            {'provider': HCPCS_LEVEL2},
+            listed(HCPCS_LEVEL2_SHAPE, HCPCS_LEVEL2),
             glue_type='USA_HCPCS_CODE',
         ),
         # Five digits is a ZIP code's shape too, so a CPT code is typed only where the name hints it.
