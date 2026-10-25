@@ -12,12 +12,12 @@ use std::path::Path as FilePath;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use doppeldata_core::manifest::FileRows;
 use doppeldata_core::manifest::Manifest;
 use doppeldata_core::profile::Profile;
 use doppeldata_core::profile::SourceFormat;
 use doppeldata_writers::Destination;
 use doppeldata_writers::RunOptions;
+use doppeldata_writers::WriteChoices;
 use doppeldata_writers::WriteOptions;
 use object_store::aws::AmazonS3Builder;
 use object_store::memory::InMemory;
@@ -140,23 +140,26 @@ fn run() -> Result<(), String> {
         }
         None => {
             let plan = doppeldata_core::plan(&profile, &digest, options.seed, options.rows).map_err(|error| error.to_string())?;
-            let format = options.format.as_deref().map(source_format).transpose()?;
-            let mut write = WriteOptions::from_profile(&profile, format).map_err(|error| error.to_string())?;
-            write.profile_path = Some(format!("{}.profile.yaml", options.example));
-            if let Some(writer) = &options.writer {
-                let overrides = serde_json::from_str(writer).map_err(|error| format!("--writer: {error}"))?;
-                write.override_writer(overrides).map_err(|error| error.to_string())?;
-            }
-            if let Some(file_rows) = options.file_rows {
-                write.layout.file_rows = FileRows::Fixed(file_rows);
-            }
-            if !options.partition_by.is_empty() {
-                write.partition_by(&profile, options.partition_by.clone());
-            }
-            if let Some(style) = &options.partition_style {
-                write.layout.partition_style = serde_json::from_value(serde_json::Value::from(style.as_str()))
-                    .map_err(|_| format!("{style:?} is not hive or directory"))?;
-            }
+            let choices = WriteChoices {
+                format: options.format.as_deref().map(source_format).transpose()?,
+                writer: options
+                    .writer
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|error| format!("--writer: {error}"))?,
+                file_rows: options.file_rows,
+                partition_by: Some(options.partition_by.clone()).filter(|keys| !keys.is_empty()),
+                partition_style: options
+                    .partition_style
+                    .as_deref()
+                    .map(|style| {
+                        serde_json::from_value(serde_json::Value::from(style)).map_err(|_| format!("{style:?} is not hive or directory"))
+                    })
+                    .transpose()?,
+                profile_path: Some(format!("{}.profile.yaml", options.example)),
+            };
+            let write = WriteOptions::chosen(&profile, choices).map_err(|error| error.to_string())?;
             doppeldata_writers::write(&plan, &write, &run, &destination)
         }
     };

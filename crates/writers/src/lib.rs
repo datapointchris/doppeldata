@@ -9,6 +9,7 @@ mod destination;
 mod encoders;
 mod layout;
 mod partition;
+mod size_estimate;
 mod write;
 mod write_options;
 
@@ -26,10 +27,12 @@ pub use layout::PART_PREFIX;
 pub use layout::layout;
 pub use layout::layout_from_manifest;
 pub use partition::DEFAULT_PARTITION;
+pub use size_estimate::estimate_bytes;
 pub use write::RunOptions;
 pub use write::WriteFailure;
 pub use write::regenerate;
 pub use write::write;
+pub use write_options::WriteChoices;
 pub use write_options::WriteOptions;
 
 #[derive(Debug, thiserror::Error)]
