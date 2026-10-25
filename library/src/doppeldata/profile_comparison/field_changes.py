@@ -8,11 +8,11 @@ from typing import Any
 from doppeldata.profile_comparison.metrics import Column
 from doppeldata.profile_comparison.metrics import Document
 from doppeldata.profile_format import pointer
+from doppeldata.profiling.statistic_catalog import ColumnKind
+from doppeldata.profiling.table_profile import LOGICAL_TYPES
 
 # A diff reports a column when more than this share of its values falls outside the edges or value list frozen from A.
 OVERFLOW_SHARE = 0.05
-# The profiler's column kind for each logical type but `number`, which an Arrow decimal type splits into two.
-KINDS_BY_LOGICAL_TYPE = {'integer': 'integer', 'string': 'string', 'boolean': 'boolean', 'date': 'date', 'timestamp': 'datetime'}
 
 
 class ChangeKind(enum.Enum):
@@ -43,11 +43,15 @@ class FieldChange:
 
 
 def column_kind(column: Column) -> str:
-    """The profiler's kind for the column: integer, float, decimal, string, boolean, date, datetime or other."""
-    logical = column.get('logical_type') or ''
-    if logical == 'number':
-        return 'decimal' if (column.get('physical_type') or '').startswith('decimal') else 'float'
-    return KINDS_BY_LOGICAL_TYPE.get(logical, 'other')
+    """The profiler's `ColumnKind` the column was profiled as, read back from the logical type it wrote.
+
+    Float and decimal share the logical type `number`, so an Arrow decimal type tells them apart.
+    """
+    kinds = [kind for kind, logical in LOGICAL_TYPES.items() if logical == column.get('logical_type')]
+    if len(kinds) > 1:
+        decimal = (column.get('physical_type') or '').startswith('decimal')
+        kinds = [kind for kind in kinds if (kind is ColumnKind.DECIMAL) == decimal]
+    return kinds[0].value if kinds else ColumnKind.OTHER.value
 
 
 def column_changes(source: Document, observed: Document, *, physical_type_drifts: bool) -> list[FieldChange]:
@@ -91,7 +95,8 @@ def retyped(source: Column, observed: Column, index: int, *, physical_type_drift
         yield FieldChange(ChangeKind.PHYSICAL_TYPE_CHANGED, name, at, *types, not physical_type_drifts, message)
     semantic = (source.get('semantic') or {}).get('type'), (observed.get('semantic') or {}).get('type')
     if semantic[0] != semantic[1]:
-        message = f'{name} is detected as {semantic[0]} in the source profile and as {semantic[1]} in the other'
+        source_type, observed_type = (f'as {kind}' if kind is not None else 'as no semantic type' for kind in semantic)
+        message = f'{name} is detected {source_type} in the source profile and {observed_type} in the other'
         at = pointer(('columns', index, 'semantic', 'type'))
         yield FieldChange(ChangeKind.SEMANTIC_TYPE_CHANGED, name, at, *semantic, False, message)
 
