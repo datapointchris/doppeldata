@@ -36,6 +36,8 @@ def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) 
     or the data drops, adds or changes the kind of a column.
     """
     source = profile.to_plain()
+    thresholds = thresholds or Thresholds()
+    thresholds.check_columns(source)
     k_min = (source.get('privacy') or {}).get('k_min') or DEFAULT_K_MIN
     with warnings.catch_warnings():
         # The report states both in its own terms: a fit's looseness through `ks`, and a missing column as a change.
@@ -43,8 +45,6 @@ def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) 
         warnings.simplefilter('ignore', ColumnsNotFrozen)
         checked = profile_data(data, k_min=k_min, edges_from=profile)
     observed = checked.to_plain()
-    thresholds = thresholds or Thresholds()
-    thresholds.check_columns(source, observed)
     return CheckReport(
         profile=reported(profile),
         data=CheckedData(
@@ -64,7 +64,7 @@ def diff(a: Profile, b: Profile, *, thresholds: Thresholds | None = None) -> Dif
     """
     earlier, later = a.to_plain(), b.to_plain()
     thresholds = thresholds or Thresholds()
-    thresholds.check_columns(earlier, later)
+    thresholds.check_columns(earlier)
     changes = column_changes(earlier, later, physical_type_drifts=True) + overflow_changes(earlier, later) + source_changes(earlier, later)
     return DiffReport(reported(a), reported(b), measured(earlier, later, thresholds), changes)
 

@@ -59,12 +59,12 @@ class Thresholds:
         by_column = self.columns.get(column, {}) if column is not None else {}
         return by_column.get(metric.name, self.defaults.get(metric.name, metric.threshold))
 
-    def check_columns(self, *documents: Document) -> None:
-        """Refuse a column no profile holds, which a misspelled name would be."""
-        held = {column['name'] for document in documents for column in document.get('columns') or []}
+    def check_columns(self, source: Document) -> None:
+        """Refuse a column the source profile does not hold, which a misspelled name would be. Each metric measures the source's columns."""
+        held = {column['name'] for column in source.get('columns') or []}
         unknown = sorted(name for name in self.columns if name not in held)
         if unknown:
-            raise InvalidThresholds(f'the thresholds name columns neither profile holds: {", ".join(unknown)}')
+            raise InvalidThresholds(f'the thresholds name columns the source profile does not hold: {", ".join(unknown)}')
 
 
 def metric_faults(metrics: Any, at: str) -> list[str]:
