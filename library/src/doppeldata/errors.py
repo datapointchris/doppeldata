@@ -1,10 +1,19 @@
 """The errors doppeldata raises for a caller to report, each with the exit status a command ends on, and the warnings it issues."""
 
+from typing import TYPE_CHECKING
+
 from doppeldata.manifest import Manifest
+
+if TYPE_CHECKING:
+    from doppeldata.profile_comparison.reports import CheckReport
+    from doppeldata.profile_comparison.reports import DiffReport
 
 
 class DoppeldataError(Exception):
-    """A failure the caller can act on. `exit_code` is 1 for a failure, 2 for a usage error, and 4 when no answer came."""
+    """A failure the caller can act on.
+
+    `exit_code` is 1 for a failure or a drift, 2 for a usage error, 3 for a check the data failed, and 4 when no answer came.
+    """
 
     exit_code = 1
 
@@ -74,6 +83,34 @@ class InvalidThresholds(DoppeldataError, ValueError):
     """A thresholds file names a metric no check measures, a column the source profile lacks, or a value that is not a number."""
 
     exit_code = 2
+
+
+class CheckFailed(DoppeldataError):
+    """Generated data missed its profile on a metric or a column. `report` is the check, naming each one."""
+
+    exit_code = 3
+
+    def __init__(self, report: 'CheckReport') -> None:
+        self.report = report
+        super().__init__(f'the data missed its profile on {missed(report)}')
+
+
+class ProfilesDrifted(DoppeldataError):
+    """The later of two profiles drifted from the earlier on a metric or a field. `report` is the diff, naming each one."""
+
+    exit_code = 1
+
+    def __init__(self, report: 'DiffReport') -> None:
+        self.report = report
+        super().__init__(f'{report.b.path or report.b.name} drifted from {report.a.path or report.a.name} on {missed(report)}')
+
+
+def missed(report: 'CheckReport | DiffReport') -> str:
+    """`2 of 15 metrics and 1 of 1 field changes: ks on amount, tvd on status, column_added fee`."""
+    metrics = [f'{result.metric} on {result.column}' if result.column else result.metric for result in report.metrics if not result.passed]
+    changes = [f'{change.change.value} {change.column or ""}'.rstrip() for change in report.changes if not change.passed]
+    counts = f'{len(metrics)} of {len(report.metrics)} metrics and {len(changes)} of {len(report.changes)} field changes'
+    return f'{counts}: {", ".join(metrics + changes)}'
 
 
 class ProfilingWarning(UserWarning):

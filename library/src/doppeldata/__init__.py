@@ -7,12 +7,14 @@ from doppeldata.dataset_generation import generate
 from doppeldata.dataset_generation import plan
 from doppeldata.dataset_generation import stream
 from doppeldata.dataset_generation import write
+from doppeldata.errors import CheckFailed
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import DetectorPackError
 from doppeldata.errors import DoppeldataError
 from doppeldata.errors import FitsSkipped
 from doppeldata.errors import InvalidThresholds
 from doppeldata.errors import PoorFits
+from doppeldata.errors import ProfilesDrifted
 from doppeldata.errors import ProfilingEnginesMissing
 from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
@@ -34,6 +36,7 @@ from doppeldata.profiling import profile
 
 __all__ = [
     'Bundle',
+    'CheckFailed',
     'CheckReport',
     'ColumnSampler',
     'ColumnsNotFrozen',
@@ -48,6 +51,7 @@ __all__ = [
     'PlannedRange',
     'PoorFits',
     'Profile',
+    'ProfilesDrifted',
     'ProfilingEnginesMissing',
     'ProfilingWarning',
     'SourceError',
