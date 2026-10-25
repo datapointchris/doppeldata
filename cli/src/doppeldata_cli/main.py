@@ -7,9 +7,9 @@ from typing import Annotated
 
 import typer
 from doppeldata import DoppeldataError
-from doppeldata import FitsSkipped
 from doppeldata import InvalidProfile
 from doppeldata import Profile
+from doppeldata import ProfilingWarning
 from doppeldata import SourceError
 from doppeldata import profile
 from doppeldata.example_profiles import example_names
@@ -62,7 +62,8 @@ def profile_create(
             metavar='FILE',
             help=(
                 "Count each column against FILE's histogram edges and value list, writing the rows outside them as overflow. "
-                'FILE is returned unchanged when the files and settings match the ones it was made from.'
+                'FILE is returned unchanged when the files, the settings, and the doppeldata and scipy versions '
+                'match the ones it was made with.'
             ),
         ),
     ] = None,
@@ -79,7 +80,7 @@ def profile_create(
         raise typer.BadParameter(str(error), param_hint='--edges-from') from error
     try:
         with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter('always', FitsSkipped)
+            warnings.simplefilter('always', ProfilingWarning)
             profiled = profile(data, sample=sample, k_min=k_min, edges_from=earlier)
     except DoppeldataError as error:
         if isinstance(error, SourceError) and error.exit_code == 2:
@@ -89,10 +90,12 @@ def profile_create(
         typer.echo(f'doppeldata: {error}', err=True)
         raise typer.Exit(error.exit_code) from error
     for notice in caught:
-        if issubclass(notice.category, FitsSkipped):
+        if issubclass(notice.category, ProfilingWarning):
             typer.echo(f'doppeldata: {notice.message}', err=True)
         else:
             warnings.showwarning(notice.message, notice.category, notice.filename, notice.lineno)
+    if earlier is not None and profiled is earlier:
+        typer.echo(f'doppeldata: {edges_from} was made from these files with these settings, so it is written unchanged', err=True)
     if out is None:
         typer.echo(profiled.to_yaml(), nl=False)
         return
