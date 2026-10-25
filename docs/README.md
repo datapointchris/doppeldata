@@ -10,6 +10,7 @@ and says what was weighed and rejected.
 | [profiler-statistics-and-readers.md](profiler-statistics-and-readers.md) | how the profiler computes a table's statistics through one catalog, why Polars computes and DuckDB only reads, why S3 lists through boto3, and how every literal is held to `k_min` rows |
 | [determinism-contract.md](determinism-contract.md) | what identifies a generated dataset, and why its values never change with thread count, batch size, column order or platform |
 | [column-samplers.md](column-samplers.md) | how each column kind is drawn from its profile, why a numeric tail comes from the fitted family, and how a string column holds its distinct ratio |
+| [file-writers-and-manifest.md](file-writers-and-manifest.md) | how blocks become Parquet, Arrow, CSV and JSON files on any object store, what the manifest records to regenerate them, what was rejected, and how fast it writes |
 | [prior-art-and-licenses.md](prior-art-and-licenses.md) | which existing generators and checkers doppeldata borrows ideas from, and why none of them is a dependency |
 | [aws-glue-support.md](aws-glue-support.md) | which AWS Glue versions run the library, and why Glue 4.0 does not |
 
