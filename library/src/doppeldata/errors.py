@@ -79,6 +79,8 @@ class DetectorPackError(DoppeldataError):
         super().__init__(message)
         self.kind = kind
         self.exit_code = EXIT_CODES[kind]
+
+
 class InvalidThresholds(DoppeldataError, ValueError):
     """A thresholds file names a metric no check measures, a column the source profile lacks, or a value that is not a number."""
 
@@ -133,6 +135,17 @@ class FitsSkipped(ProfilingWarning):
         super().__init__(
             f'no distribution family was fitted, because scipy did not import ({reason}); '
             'run `pip install scipy`, or install doppeldata-cli, which declares it'
+        )
+
+
+class EarlierProfileNotReused(ProfilingWarning):
+    """`edges_from` was profiled again rather than returned, because `changed` says what differs from the run that made it."""
+
+    def __init__(self, changed: str) -> None:
+        self.changed = changed
+        super().__init__(
+            f'the earlier profile is not returned unchanged, because {changed}; '
+            'each column it holds histogram edges or a value list for is counted against them'
         )
 
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from doppeldata.errors import ColumnsNotFrozen
+from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import PoorFits
 from doppeldata.profile_comparison.field_changes import column_changes
 from doppeldata.profile_comparison.field_changes import overflow_changes
@@ -43,6 +44,8 @@ def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) 
         # The report states both in its own terms: a fit's looseness through `ks`, and a missing column as a change.
         warnings.simplefilter('ignore', PoorFits)
         warnings.simplefilter('ignore', ColumnsNotFrozen)
+        # Generated data is never the data the profile was made from, so the profile is always made again.
+        warnings.simplefilter('ignore', EarlierProfileNotReused)
         checked = profile_data(data, k_min=k_min, edges_from=profile)
     observed = checked.to_plain()
     return CheckReport(

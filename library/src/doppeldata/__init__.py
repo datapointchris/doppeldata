@@ -11,6 +11,7 @@ from doppeldata.errors import CheckFailed
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import DetectorPackError
 from doppeldata.errors import DoppeldataError
+from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import FitsSkipped
 from doppeldata.errors import InvalidThresholds
 from doppeldata.errors import PoorFits
@@ -43,6 +44,7 @@ __all__ = [
     'DetectorPackError',
     'DiffReport',
     'DoppeldataError',
+    'EarlierProfileNotReused',
     'FitsSkipped',
     'InvalidProfile',
     'InvalidThresholds',
