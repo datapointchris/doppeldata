@@ -1,0 +1,683 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "doppeldata manifest v1",
+  "description": "The record of a generated dataset, which with its profile regenerates every file byte for byte.",
+  "type": "object",
+  "properties": {
+    "destination": {
+      "description": "Where the files were written, as the caller named it, such as `s3://bucket/orders/`.",
+      "type": "string"
+    },
+    "elapsed_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "files": {
+      "description": "Every object written, in path order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ManifestFile"
+      }
+    },
+    "identity": {
+      "description": "The dataset identity's digest, `sha256:` and 64 lowercase hex digits.",
+      "type": "string"
+    },
+    "layout": {
+      "$ref": "#/$defs/LayoutSettings"
+    },
+    "manifest_version": {
+      "$ref": "#/$defs/ManifestVersion"
+    },
+    "partial": {
+      "description": "True when the run stopped early, so `files` lists only the objects that completed.",
+      "type": "boolean"
+    },
+    "profile": {
+      "$ref": "#/$defs/ManifestProfile"
+    },
+    "rows": {
+      "description": "The dataset's row count, in decimal.",
+      "$ref": "#/$defs/Decimal"
+    },
+    "scenario": {
+      "description": "The scenario applied, or null for none.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ManifestScenario"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "seed": {
+      "description": "The seed, in decimal.",
+      "$ref": "#/$defs/Decimal"
+    },
+    "stream_version": {
+      "description": "The engine's stream version, from the dataset identity.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "threads": {
+      "description": "The threads that generated and encoded. The count never changes a byte.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "tool": {
+      "description": "The tool that wrote the files, as `doppeldata <version>`.",
+      "type": "string"
+    },
+    "written_at": {
+      "description": "When the write finished, in RFC 3339.",
+      "type": "string"
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "const": "parquet"
+        },
+        "writer": {
+          "$ref": "#/$defs/ParquetSettings"
+        }
+      },
+      "required": [
+        "format",
+        "writer"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "const": "arrow"
+        },
+        "writer": {
+          "$ref": "#/$defs/ArrowSettings"
+        }
+      },
+      "required": [
+        "format",
+        "writer"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "const": "csv"
+        },
+        "writer": {
+          "$ref": "#/$defs/DelimitedSettings"
+        }
+      },
+      "required": [
+        "format",
+        "writer"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "const": "tsv"
+        },
+        "writer": {
+          "$ref": "#/$defs/DelimitedSettings"
+        }
+      },
+      "required": [
+        "format",
+        "writer"
+      ]
+    },
+    {
+      "description": "One JSON array of objects per file.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "const": "json"
+        },
+        "writer": {
+          "$ref": "#/$defs/JsonSettings"
+        }
+      },
+      "required": [
+        "format",
+        "writer"
+      ]
+    },
+    {
+      "description": "One JSON object per line.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "const": "ndjson"
+        },
+        "writer": {
+          "$ref": "#/$defs/JsonSettings"
+        }
+      },
+      "required": [
+        "format",
+        "writer"
+      ]
+    }
+  ],
+  "required": [
+    "manifest_version",
+    "tool",
+    "stream_version",
+    "identity",
+    "profile",
+    "seed",
+    "rows",
+    "layout",
+    "destination",
+    "files",
+    "partial",
+    "threads",
+    "elapsed_ms",
+    "written_at"
+  ],
+  "$defs": {
+    "ArrowSettings": {
+      "type": "object",
+      "properties": {
+        "compression": {
+          "$ref": "#/$defs/IpcCompression",
+          "default": "none"
+        },
+        "ipc": {
+          "$ref": "#/$defs/IpcFormat",
+          "default": "file"
+        }
+      }
+    },
+    "Decimal": {
+      "description": "A 64-bit unsigned integer in decimal, because a JSON number is exact only to 2^53.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "DelimitedSettings": {
+      "description": "A CSV or TSV dialect. Every character must be ASCII.",
+      "type": "object",
+      "properties": {
+        "bom": {
+          "description": "Whether the file starts with a UTF-8 byte order mark.",
+          "type": "boolean",
+          "default": false
+        },
+        "compression": {
+          "$ref": "#/$defs/TextCompression",
+          "default": "none"
+        },
+        "compression_level": {
+          "description": "The codec's level: 1 to 22 for zstd, 0 to 9 for gzip. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        },
+        "date_format": {
+          "description": "A chrono format for date columns. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "delimiter": {
+          "description": "Null takes the format's own: `,` for CSV, a tab for TSV.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "encoding": {
+          "$ref": "#/$defs/TextEncoding",
+          "default": "utf8"
+        },
+        "escape": {
+          "description": "The character that escapes a quote inside a quoted field. Null doubles the quote instead.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "header": {
+          "description": "Whether the first line names the columns.",
+          "type": "boolean",
+          "default": true
+        },
+        "line_terminator": {
+          "$ref": "#/$defs/LineTerminator",
+          "default": "lf"
+        },
+        "null": {
+          "description": "What a null prints where the column's profile gives no missing token for it.",
+          "type": "string",
+          "default": ""
+        },
+        "quote": {
+          "type": "string",
+          "default": "\"",
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "quoting": {
+          "$ref": "#/$defs/Quoting",
+          "default": "necessary"
+        },
+        "time_format": {
+          "description": "A chrono format for time columns. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timestamp_format": {
+          "description": "A chrono format for timestamp columns without a time zone. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timestamp_tz_format": {
+          "description": "A chrono format for timestamp columns with a time zone. Null writes ISO 8601 with the offset.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "FileRows": {
+      "description": "The rows each file's range holds.",
+      "anyOf": [
+        {
+          "description": "The same count in every range but the last.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        {
+          "description": "Each range's count drawn from these quantiles, from a stream keyed by the seed, so the\nsplit is the same on every run.",
+          "$ref": "#/$defs/Quantiles"
+        }
+      ]
+    },
+    "IpcCompression": {
+      "type": "string",
+      "enum": [
+        "none",
+        "lz4",
+        "zstd"
+      ]
+    },
+    "IpcFormat": {
+      "oneOf": [
+        {
+          "description": "The random-access file format, `.arrow`.",
+          "type": "string",
+          "const": "file"
+        },
+        {
+          "description": "The streaming format, `.arrows`.",
+          "type": "string",
+          "const": "stream"
+        }
+      ]
+    },
+    "JsonSettings": {
+      "type": "object",
+      "properties": {
+        "compression": {
+          "$ref": "#/$defs/TextCompression",
+          "default": "none"
+        },
+        "compression_level": {
+          "description": "The codec's level: 1 to 22 for zstd, 0 to 9 for gzip. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        },
+        "explicit_nulls": {
+          "description": "Whether a null field is written as `null` rather than left out.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "LayoutSettings": {
+      "description": "How rows are split into files and directories.",
+      "type": "object",
+      "properties": {
+        "file_rows": {
+          "$ref": "#/$defs/FileRows",
+          "default": 1000000
+        },
+        "partition_by": {
+          "description": "The columns whose values name each object's directories, outermost first. A partition\ncolumn is left out of the files, because its value is in the path.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "partition_style": {
+          "$ref": "#/$defs/PartitionStyle",
+          "default": "hive"
+        }
+      }
+    },
+    "LineTerminator": {
+      "type": "string",
+      "enum": [
+        "lf",
+        "crlf"
+      ]
+    },
+    "ManifestFile": {
+      "description": "One object the run wrote.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "first_row": {
+          "description": "The dataset row the object's range starts at. Every object a partitioned range splits into\ncarries the range's first row.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "partition": {
+          "description": "Each partition key's value in the object's path, null for a null value. Absent when the\ndataset is not partitioned.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "path": {
+          "description": "The object's path under the destination, `/`-separated.",
+          "type": "string"
+        },
+        "rows": {
+          "description": "The rows in this object.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sha256": {
+          "description": "`sha256:` and the hex SHA-256 of the object's bytes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "first_row",
+        "rows",
+        "bytes",
+        "sha256"
+      ]
+    },
+    "ManifestProfile": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "description": "The profile's digest, `sha256:` and the hex SHA-256 of its RFC 8785 canonical JSON.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The profile's `name`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The profile's path as the caller gave it, or null when it came from memory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "The profile format version it was read as.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "digest"
+      ]
+    },
+    "ManifestScenario": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "digest"
+      ]
+    },
+    "ManifestVersion": {
+      "description": "The manifest format version, which changes only on a breaking format change.",
+      "const": 1
+    },
+    "ParquetCompression": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none",
+            "snappy",
+            "gzip",
+            "zstd"
+          ]
+        },
+        {
+          "description": "LZ4_RAW, the LZ4 codec current readers expect.",
+          "type": "string",
+          "const": "lz4"
+        }
+      ]
+    },
+    "ParquetSettings": {
+      "type": "object",
+      "properties": {
+        "compression": {
+          "$ref": "#/$defs/ParquetCompression",
+          "default": "zstd"
+        },
+        "compression_level": {
+          "description": "The codec's level: 1 to 22 for zstd, 0 to 10 for gzip. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        },
+        "dictionary_columns": {
+          "description": "The columns written with a dictionary. Null gives every column one.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "row_group_rows": {
+          "description": "The most rows a row group holds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1048576,
+          "minimum": 0
+        },
+        "statistics": {
+          "$ref": "#/$defs/ParquetStatistics",
+          "default": "page"
+        },
+        "timestamp_unit": {
+          "description": "The unit every timestamp column is cast to. Null keeps each column's own. parquet 59\ncannot write INT96, so no unit reproduces it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimestampUnit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
+    },
+    "ParquetStatistics": {
+      "description": "How much of the min, max and null count each column chunk records.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "description": "Per column chunk.",
+          "type": "string",
+          "const": "chunk"
+        },
+        {
+          "description": "Per page too, with the page index.",
+          "type": "string",
+          "const": "page"
+        }
+      ]
+    },
+    "PartitionStyle": {
+      "oneOf": [
+        {
+          "description": "`key=value` directories.",
+          "type": "string",
+          "const": "hive"
+        },
+        {
+          "description": "Bare value directories, one level per key.",
+          "type": "string",
+          "const": "directory"
+        }
+      ]
+    },
+    "Quantiles": {
+      "description": "Values at named quantiles: p05 is the 5th percentile, p50 the median, p999 the 99.9th. The digits after p are the level's decimal digits, at least two and never ending in 0 past the second.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      },
+      "propertyNames": {
+        "pattern": "^p[0-9]{2}([0-9]*[1-9])?$"
+      }
+    },
+    "Quoting": {
+      "description": "Which fields are quoted.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "always"
+          ]
+        },
+        {
+          "description": "Only a field holding the delimiter, the quote or a line break.",
+          "type": "string",
+          "const": "necessary"
+        },
+        {
+          "description": "Every field that does not parse as a number.",
+          "type": "string",
+          "const": "non_numeric"
+        },
+        {
+          "description": "None, even where a field needs it.",
+          "type": "string",
+          "const": "never"
+        }
+      ]
+    },
+    "TextCompression": {
+      "type": "string",
+      "enum": [
+        "none",
+        "gzip",
+        "zstd"
+      ]
+    },
+    "TextEncoding": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "utf8"
+          ]
+        },
+        {
+          "description": "windows-1252, the superset of ISO-8859-1 every decoder applies to a `latin1` label.",
+          "type": "string",
+          "const": "latin1"
+        }
+      ]
+    },
+    "TimestampUnit": {
+      "type": "string",
+      "enum": [
+        "s",
+        "ms",
+        "us",
+        "ns"
+      ]
+    }
+  }
+}

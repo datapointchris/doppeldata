@@ -169,10 +169,11 @@ pub struct Partitioning {
     pub keys: Option<Vec<PartitionKey>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, serde::Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PartitionStyle {
     /// `key=value` directories.
+    #[default]
     Hive,
     /// Bare value directories, one level per key.
     Directory,

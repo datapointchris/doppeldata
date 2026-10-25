@@ -3,6 +3,7 @@
 
 pub mod generalized_pattern;
 mod identity;
+pub mod manifest;
 mod physical_type;
 mod plan;
 pub mod profile;

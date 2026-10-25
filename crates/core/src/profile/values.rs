@@ -76,7 +76,7 @@ impl JsonSchema for Rate {
 
 /// Values at named quantiles: `p05` is the 5th percentile, `p50` the median, `p999` the 99.9th. A
 /// name's digits after `p` are the level's decimal digits, so `p5` and `p100` are refused.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(transparent)]
 pub struct Quantiles(pub BTreeMap<String, f64>);
 
