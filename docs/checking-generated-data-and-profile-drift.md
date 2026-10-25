@@ -102,6 +102,20 @@ Every kind of column is measured. A float column whose source holds cents, gener
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.
 
+## `layout` measures the files against the source's, scaled to the rows checked
+
+A source profile with a `source.layout` gets a `layout` row for the table and one per Hive key with
+value shares. Each value is a relative change, as `distinct_ratio_delta`'s is.
+
+- **The table's row is the larger of two changes.** One is the file count, against the source's
+  scaled to the rows checked and never under one file. The other is the median rows per file,
+  against the source's or the rows checked where those are fewer. So a check at the profile's row
+  count holds the source's file count, and one at a tenth of it holds a tenth.
+- **A Hive key's row is the largest change in one value's share of rows**, over the values the
+  source lists. A value the data lacks has a share of 0, so its change is 1.
+- **Data whose profile records no layout leaves the table's row unmeasured**, as a table in memory
+  does. A source profile with no layout, as a hand-written one may be, gets no `layout` row.
+
 ## A metric the other profile cannot supply is a row with no value
 
 Where the source states what a metric compares and the other profile holds nothing to compare it
@@ -133,8 +147,9 @@ Arrow decimal type telling a decimal from a float.
   that does not.
 - **A diff fails on every other changed field.** That covers a changed Arrow type or kind, which
   there means the source itself changed. It also covers a column with more than `OVERFLOW_SHARE`
-  of its values outside the edges or value list frozen from A, a CSV dialect setting that changed,
-  and a partition key B adds. The tool versions and packs a profile records are how it was made,
+  of its values outside the edges or value list frozen from A, a CSV dialect setting a writer takes
+  that changed, and a partition key B adds. The rest of `source.csv`, such as the malformed rows
+  and the sniffers' confidence, records a run and is not compared. The tool versions and packs a profile records are how it was made,
   so a diff compares none of them.
 
 ## A failed check exits 3, drift exits 1, and a verb that could not finish exits 3

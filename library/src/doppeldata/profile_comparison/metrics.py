@@ -259,6 +259,56 @@ def boundary_adherence(source: Column, observed: Column) -> Compared | Unmeasure
     return Compared(1 - outside / total) if total else Unmeasured('the other profile counts no values for the column')
 
 
+def relative_change(expected: float, observed: float | None, missing: str) -> Compared | Unmeasured:
+    if observed is None:
+        return Unmeasured(missing, expected)
+    return Compared(abs(observed - expected) / expected, expected, observed)
+
+
+def layout_change(source: Document, observed: Document) -> Iterator[Measurement]:
+    """How far the files fall from the source's layout, relative to it.
+
+    The table's row takes the larger of the file count's change and the median rows per file's. The count expected is the
+    source's scaled to the rows checked, and the median is at most those rows. Each Hive key's row takes the largest change
+    in a value's share of rows, over the values the source lists.
+    """
+    ours = (source.get('source') or {}).get('layout') or {}
+    theirs = (observed.get('source') or {}).get('layout') or {}
+    if not ours:
+        return
+    if not theirs:
+        yield Measurement(None, Unmeasured('the other profile records no file layout, as a profile of a table in memory does'))
+        return
+    source_rows, rows = ((document.get('dataset') or {}).get('row_count') for document in (source, observed))
+    scale = rows / source_rows if source_rows and rows is not None else 1.0
+    table: list[Compared | Unmeasured] = []
+    if count := (ours.get('files') or {}).get('count'):
+        table.append(
+            relative_change(max(1.0, count * scale), (theirs.get('files') or {}).get('count'), 'the other profile counts no files')
+        )
+    if median := (ours.get('rows_per_file') or {}).get('p50'):
+        expected = min(median, rows) if rows else median
+        table.append(relative_change(expected, (theirs.get('rows_per_file') or {}).get('p50'), 'the other profile counts no rows per file'))
+    if table:
+        unmeasured = [compared for compared in table if isinstance(compared, Unmeasured)]
+        measured = [compared for compared in table if isinstance(compared, Compared)]
+        yield Measurement(None, unmeasured[0] if unmeasured else max(measured, key=lambda compared: compared.value))
+    keys = {key['name']: key for key in (theirs.get('partitioning') or {}).get('keys') or []}
+    for key in (ours.get('partitioning') or {}).get('keys') or []:
+        shares = (key.get('values') or {}).get('shares')
+        if not shares:
+            continue
+        held = ((keys.get(key['name']) or {}).get('values') or {}).get('shares')
+        if held is None:
+            yield Measurement(key['name'], Unmeasured(f"the other profile's files hold no shares of {key['name']}'s values"))
+            continue
+        changes = [
+            Compared(abs(held.get(value, 0.0) - share) / share, share, held.get(value, 0.0)) for value, share in shares.items() if share
+        ]
+        if changes:
+            yield Measurement(key['name'], max(changes, key=lambda compared: compared.value))
+
+
 METRICS = (
     Metric(
         'ks',
@@ -295,6 +345,13 @@ METRICS = (
         Bound.AT_LEAST,
         0.99,
         per_column(boundary_adherence),
+    ),
+    Metric(
+        'layout',
+        "the largest change in the file count, the median rows per file or a Hive key's value shares, relative to the source's",
+        Bound.AT_MOST,
+        0.10,
+        layout_change,
     ),
 )
 METRICS_BY_NAME = {metric.name: metric for metric in METRICS}
