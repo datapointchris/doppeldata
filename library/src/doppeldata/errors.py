@@ -94,7 +94,7 @@ class CheckFailed(DoppeldataError):
 
     def __init__(self, report: 'CheckReport') -> None:
         self.report = report
-        super().__init__(f'the data missed its profile on {missed(report)}')
+        super().__init__(f'the data missed its profile on {report.failures().summary()}')
 
 
 class ProfilesDrifted(DoppeldataError):
@@ -104,23 +104,7 @@ class ProfilesDrifted(DoppeldataError):
 
     def __init__(self, report: 'DiffReport') -> None:
         self.report = report
-        super().__init__(f'{report.b.path or report.b.name} drifted from {report.a.path or report.a.name} on {missed(report)}')
-
-
-def missed(report: 'CheckReport | DiffReport') -> str:
-    """`2 of 15 metrics and 1 of 1 field changes: ks on amount, null_rate_delta on status (0.01 to 0.05), column_added fee`."""
-    metrics = [
-        ' '.join(
-            [result.metric]
-            + ([f'on {result.column}'] if result.column else [])
-            + ([f'({result.source:g} to {result.observed:g})'] if result.source is not None and result.observed is not None else [])
-        )
-        for result in report.metrics
-        if not result.passed
-    ]
-    changes = [f'{change.change.value} {change.column or ""}'.rstrip() for change in report.changes if not change.passed]
-    counts = f'{len(metrics)} of {len(report.metrics)} metrics and {len(changes)} of {len(report.changes)} field changes'
-    return f'{counts}: {", ".join(metrics + changes)}'
+        super().__init__(f'{report.b.path or report.b.name} drifted from {report.a.path or report.a.name} on {report.failures().summary()}')
 
 
 class ProfilingWarning(UserWarning):

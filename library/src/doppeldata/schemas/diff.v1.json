@@ -24,7 +24,7 @@
       "minimum": 0
     },
     "drifted": {
-      "description": "Whether any metric failed or any field changed.",
+      "description": "Whether any metric failed or any field changed. A metric B cannot supply is listed and\npasses, because a diff reports what changed between two profiles, and B binned afresh\ncarries no overflow.",
       "type": "boolean"
     },
     "metrics": {
@@ -100,6 +100,9 @@
             "null"
           ]
         },
+        "expected": {
+          "description": "The field's value in the source profile, or A, and null where it holds none."
+        },
         "field": {
           "description": "An RFC 6901 pointer to the field: in the source profile, or A, for a dropped column, and in\nthe other profile for every other change.",
           "type": "string"
@@ -113,9 +116,6 @@
         "passed": {
           "description": "False when the change fails the check or counts as drift.",
           "type": "boolean"
-        },
-        "source": {
-          "description": "The field's value in the source profile, or A, and null where it holds none."
         }
       },
       "required": [
@@ -139,6 +139,14 @@
             "null"
           ]
         },
+        "expected": {
+          "description": "The statistic the metric compares, as the source profile holds it: A's, in a diff.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
         "metric": {
           "description": "The metric's name, such as `ks`, as `--thresholds` keys it.",
           "type": "string"
@@ -154,26 +162,28 @@
         "passed": {
           "type": "boolean"
         },
-        "source": {
-          "description": "The statistic the metric compares, as the source profile holds it: A's, in a diff.",
+        "threshold": {
+          "type": "number",
+          "format": "double"
+        },
+        "unmeasured": {
+          "description": "Why the metric has no value: the source profile states what it compares, and the other\nprofile holds nothing to compare it with, as a column under `k_min` values holds no\nquantiles.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "The metric's value, or null where `unmeasured` says why the other profile cannot supply it.",
           "type": [
             "number",
             "null"
           ],
           "format": "double"
-        },
-        "threshold": {
-          "type": "number",
-          "format": "double"
-        },
-        "value": {
-          "type": "number",
-          "format": "double"
         }
       },
       "required": [
         "metric",
-        "value",
         "threshold",
         "bound",
         "passed"

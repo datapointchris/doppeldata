@@ -16,6 +16,7 @@ from doppeldata.profile_comparison.field_changes import overflow_changes
 from doppeldata.profile_comparison.field_changes import source_changes
 from doppeldata.profile_comparison.metrics import METRICS
 from doppeldata.profile_comparison.metrics import Document
+from doppeldata.profile_comparison.metrics import Unmeasured
 from doppeldata.profile_comparison.reports import CheckedData
 from doppeldata.profile_comparison.reports import CheckReport
 from doppeldata.profile_comparison.reports import DiffReport
@@ -35,8 +36,8 @@ REPORT_DIGITS = 6
 def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) -> CheckReport:
     """Profile `data` with `profile`'s edges and value lists frozen, and measure every metric and column change against `profile`.
 
-    `data` is anything `doppeldata.profile` reads. The report's `passed` is False when any metric misses its threshold,
-    or the data drops, adds or changes the kind of a column.
+    `data` is anything `doppeldata.profile` reads. The report's `passed` is False when any metric misses its threshold or
+    cannot be measured, or `column_changes` finds a change that fails.
     """
     source = profile.to_plain()
     thresholds = thresholds or Thresholds()
@@ -59,7 +60,8 @@ def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) 
             (observed.get('dataset') or {}).get('row_count') or 0,
             (observed.get('generated') or {}).get('source_fingerprint'),
         ),
-        metrics=measured(source, observed, thresholds),
+        # A check vouches for the data, so a statistic the profile states and the data cannot supply fails.
+        metrics=measured(source, observed, thresholds, unmeasured_passes=False),
         changes=column_changes(source, observed, writer_changes_pass=True, declaring=declared_types(packs)),
     )
 
@@ -74,29 +76,39 @@ def diff(a: Profile, b: Profile, *, thresholds: Thresholds | None = None) -> Dif
     thresholds.check_columns(earlier)
     changes = column_changes(earlier, later, writer_changes_pass=False, declaring={})
     changes += overflow_changes(earlier, later) + source_changes(earlier, later)
-    return DiffReport(reported(a), reported(b), measured(earlier, later, thresholds), changes)
+    # A diff reports what changed between two profiles, and B binned afresh supplies no overflow, so an unmeasured metric passes.
+    return DiffReport(reported(a), reported(b), measured(earlier, later, thresholds, unmeasured_passes=True), changes)
 
 
-def measured(source: Document, observed: Document, thresholds: Thresholds) -> list[MetricResult]:
-    """Every registered metric's value for each column it applies to, with its threshold and verdict."""
+def measured(source: Document, observed: Document, thresholds: Thresholds, *, unmeasured_passes: bool) -> list[MetricResult]:
+    """Every registered metric's value for each column it applies to, with its threshold and verdict.
+
+    A metric the source states and the other profile cannot supply has a row with no value, passing as `unmeasured_passes`.
+    """
     results = []
     for metric in METRICS:
         for measurement in metric.measure(source, observed):
-            value, source_stat, observed_stat = measurement.compared
-            written = significant(value)
             threshold = thresholds.threshold(metric, measurement.column)
-            results.append(
-                MetricResult(
+            outcome = measurement.compared
+            if isinstance(outcome, Unmeasured):
+                result = MetricResult(
                     metric.name,
                     measurement.column,
-                    written,
+                    None,
                     threshold,
                     metric.bound,
-                    metric.passes(written, threshold),
-                    source_stat,
-                    observed_stat,
+                    unmeasured_passes,
+                    outcome.expected,
+                    None,
+                    outcome.reason,
                 )
-            )
+            else:
+                written = significant(outcome.value)
+                passed = metric.passes(written, threshold)
+                result = MetricResult(
+                    metric.name, measurement.column, written, threshold, metric.bound, passed, outcome.expected, outcome.observed
+                )
+            results.append(result)
     return results
 
 

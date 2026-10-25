@@ -299,6 +299,10 @@ def profile_diff(
     except InvalidThresholds as error:
         raise typer.BadParameter(str(error), param_hint='--thresholds') from error
     typer.echo(shown, nl=False)
+    unmeasured = sum(result.unmeasured is not None for result in report.metrics)
+    if unmeasured:
+        message = f'{counted(unmeasured, "metric")} unmeasured and passed, because B holds nothing to compare them with'
+        typer.echo(f'doppeldata: {message}; a B profiled with --edges-from A carries the overflow boundary_adherence reads', err=True)
     if report.drifted:
         raise ProfilesDrifted(report)
 

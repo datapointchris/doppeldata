@@ -36,7 +36,7 @@ class FieldChange:
     change: ChangeKind
     column: str | None
     field: str
-    source: Any
+    expected: Any
     observed: Any
     passed: bool
     message: str

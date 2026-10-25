@@ -21,7 +21,8 @@ pub struct CheckReport {
     /// The scenario applied to the profile, or null for none.
     pub scenario: Option<ReportedScenario>,
     pub data: CheckedData,
-    /// Whether every metric and every column change passed.
+    /// Whether every metric and every column change passed. A metric the profile states and the
+    /// data cannot supply fails, because a check vouches for the data.
     pub passed: bool,
     /// Whether every declared expectation held. True when no scenario declares any.
     pub verified: bool,
@@ -44,7 +45,9 @@ pub struct DiffReport {
     /// The earlier profile, which each metric measures the other against.
     pub a: ReportedProfile,
     pub b: ReportedProfile,
-    /// Whether any metric failed or any field changed.
+    /// Whether any metric failed or any field changed. A metric B cannot supply is listed and
+    /// passes, because a diff reports what changed between two profiles, and B binned afresh
+    /// carries no overflow.
     pub drifted: bool,
     pub metrics: Vec<MetricResult>,
     pub changes: Vec<FieldChange>,
@@ -84,17 +87,23 @@ pub struct MetricResult {
     /// The metric's name, such as `ks`, as `--thresholds` keys it.
     pub metric: String,
     pub column: Option<String>,
-    pub value: f64,
+    /// The metric's value, or null where `unmeasured` says why the other profile cannot supply it.
+    pub value: Option<f64>,
     pub threshold: f64,
     /// Whether `value` passes at or below `threshold`, or at or above it.
     pub bound: Bound,
     pub passed: bool,
     /// The statistic the metric compares, as the source profile holds it: A's, in a diff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<f64>,
+    pub expected: Option<f64>,
     /// The same statistic in the profile of the data checked: B's, in a diff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed: Option<f64>,
+    /// Why the metric has no value: the source profile states what it compares, and the other
+    /// profile holds nothing to compare it with, as a column under `k_min` values holds no
+    /// quantiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmeasured: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -117,7 +126,7 @@ pub struct FieldChange {
     /// the other profile for every other change.
     pub field: String,
     /// The field's value in the source profile, or A, and null where it holds none.
-    pub source: Option<serde_json::Value>,
+    pub expected: Option<serde_json::Value>,
     /// The field's value in the profile of the data checked, or B, and null where it holds none.
     pub observed: Option<serde_json::Value>,
     /// False when the change fails the check or counts as drift.

@@ -27,19 +27,26 @@ class Bound(enum.Enum):
 
 
 class Compared(NamedTuple):
-    """One column's value, and the statistic it compares where it compares one: the source's and the observed profile's."""
+    """One column's value, and the statistic it compares where it compares one: the source profile's and the other's."""
 
     value: float
-    source: float | None = None
+    expected: float | None = None
     observed: float | None = None
+
+
+class Unmeasured(NamedTuple):
+    """Why a metric has no value where the source profile states what it compares: the other profile cannot supply it."""
+
+    reason: str
+    expected: float | None = None
 
 
 @dc.dataclass(frozen=True)
 class Measurement:
-    """One value a metric measured, for one column, or for the table where `column` is None."""
+    """One metric's outcome for one column, or for the table where `column` is None."""
 
     column: str | None
-    compared: Compared
+    compared: Compared | Unmeasured
 
 
 @dc.dataclass(frozen=True)
@@ -54,8 +61,13 @@ class Metric:
         return value <= threshold if self.bound is Bound.AT_MOST else value >= threshold
 
 
-def per_column(measure_column: Callable[[Column, Column], Compared | None]) -> Callable[[Document, Document], Iterator[Measurement]]:
-    """A table metric measuring each top-level column both profiles hold, in the source profile's order."""
+def per_column(
+    measure_column: Callable[[Column, Column], Compared | Unmeasured | None],
+) -> Callable[[Document, Document], Iterator[Measurement]]:
+    """A table metric measuring each top-level column both profiles hold, in the source profile's order.
+
+    `measure_column` returns None where the source states nothing the metric compares, so the metric does not apply.
+    """
 
     def measure(source: Document, observed: Document) -> Iterator[Measurement]:
         theirs = {column['name']: column for column in observed.get('columns') or []}
@@ -121,7 +133,7 @@ def apart(a: Shares, b: Shares) -> float:
     return max(0.0, b[0] - a[1], a[0] - b[1])
 
 
-def kolmogorov_smirnov(source: Column, observed: Column) -> Compared | None:
+def kolmogorov_smirnov(source: Column, observed: Column) -> Compared | Unmeasured | None:
     """The largest gap between two numeric columns' CDFs that their profiles force, at the points the source states.
 
     At each point, each side's share below it and through it is the range its own stated points allow, with nothing
@@ -129,11 +141,13 @@ def kolmogorov_smirnov(source: Column, observed: Column) -> Compared | None:
     """
     a, b = source.get('numeric'), observed.get('numeric')
     # A sequence draws nothing, so it holds its start and step at any row count rather than a distribution.
-    if not a or not b or a.get('sequence'):
+    if not a or a.get('sequence'):
         return None
-    mine, theirs = stated_points(a), stated_points(b)
-    if not mine or not theirs:
+    mine, theirs = stated_points(a), stated_points(b or {})
+    if not mine:
         return None
+    if not theirs:
+        return Unmeasured('the other profile states no quantile, histogram edge or zero share for the column')
     gaps = []
     for x in {point.value for point in mine}:
         (below_mine, through_mine), (below_theirs, through_theirs) = allowed(mine, x), allowed(theirs, x)
@@ -158,37 +172,44 @@ def share_distance(p: Mapping[Any, float], q: Mapping[Any, float]) -> float:
     return (sum(abs(p[category] - listed[category]) for category in p) + abs(other_p - other_q)) / 2
 
 
-def total_variation(source: Column, observed: Column) -> Compared | None:
+def total_variation(source: Column, observed: Column) -> Compared | Unmeasured | None:
     """The share distance over a categorical column's values, or the largest over a date or timestamp's month, weekday and hour."""
     a, b = source.get('temporal') or {}, observed.get('temporal') or {}
-    if a and b:
+    if any(a.get(shares) for shares in TEMPORAL_SHARES):
         distances = [
             share_distance(dict(enumerate(a[shares])), dict(enumerate(b[shares])))
             for shares in TEMPORAL_SHARES
             if a.get(shares) and b.get(shares)
         ]
-        return Compared(max(distances)) if distances else None
+        return Compared(max(distances)) if distances else Unmeasured('the other profile holds none of the month, weekday or hour shares')
     p, q = category_shares(source), category_shares(observed)
-    if p is None or q is None:
+    if p is None:
         return None
+    if q is None:
+        return Unmeasured('the other profile lists no top values or true rate for the column')
     return Compared(share_distance(p, q))
 
 
-def null_rate_change(source: Column, observed: Column) -> Compared | None:
+def null_rate_change(source: Column, observed: Column) -> Compared | Unmeasured | None:
     a, b = source.get('null_rate'), observed.get('null_rate')
-    if a is None or b is None:
-        return None
-    return Compared(abs(b - a), a, b)
+    return rate_change(a, b, 'the other profile holds no null rate for the column')
 
 
-def zero_rate_change(source: Column, observed: Column) -> Compared | None:
+def zero_rate_change(source: Column, observed: Column) -> Compared | Unmeasured | None:
     a, b = ((column.get('numeric') or {}).get('zero_rate') for column in (source, observed))
-    if a is None or b is None:
+    return rate_change(a, b, 'the other profile holds no zero rate for the column, which it writes from k_min values')
+
+
+def rate_change(a: float | None, b: float | None, missing: str) -> Compared | Unmeasured | None:
+    """The absolute difference of two rates, Unmeasured with `missing` where only the source holds one."""
+    if a is None:
         return None
+    if b is None:
+        return Unmeasured(missing, a)
     return Compared(abs(b - a), a, b)
 
 
-def distinct_ratio_change(source: Column, observed: Column) -> Compared | None:
+def distinct_ratio_change(source: Column, observed: Column) -> Compared | Unmeasured | None:
     """How far the observed distinct ratio falls outside the range `distinct_ratio_range` allows, relative to its nearer end.
 
     At the source's own row count the range is the source's ratio, so the value is the relative change in ratio. A source
@@ -196,8 +217,10 @@ def distinct_ratio_change(source: Column, observed: Column) -> Compared | None:
     """
     ours, theirs = ((column.get('distinct') or {}) for column in (source, observed))
     a, b = ours.get('ratio'), theirs.get('ratio')
-    if not a or b is None:
+    if not a:
         return None
+    if b is None:
+        return Unmeasured('the other profile counts no distinct values for the column, because it holds none', a)
     if not ours.get('approx') or not theirs.get('approx'):
         return Compared(abs(b - a) / a, a, b)
     low, high = distinct_ratio_range(ours['approx'], a, theirs['approx'] / b)
@@ -219,21 +242,21 @@ def distinct_ratio_range(count: int, ratio: float, rows: float) -> tuple[float, 
     return ratio, sampled / rows
 
 
-def boundary_adherence(source: Column, observed: Column) -> Compared | None:
+def boundary_adherence(source: Column, observed: Column) -> Compared | Unmeasured | None:
     """The share of observed values inside the source's outer histogram edges, from the rows counted outside them.
 
     The outer edges are the source's trimmed extremes, or half a unit beyond them in an integral column. Only a
-    histogram counted against the source's edges carries `overflow`, so a profile binned afresh is not measured.
+    histogram counted against the source's edges carries `overflow`, so a profile binned afresh is Unmeasured.
     """
     numeric = source.get('numeric') or {}
     edges, counted = numeric.get('histogram'), (observed.get('numeric') or {}).get('histogram')
-    if not edges or not counted or 'overflow' not in counted or numeric.get('sequence'):
+    if not edges or numeric.get('sequence'):
         return None
-    if (counted['edges'][0], counted['edges'][-1]) != (edges['edges'][0], edges['edges'][-1]):
-        return None
+    if not counted or 'overflow' not in counted or (counted['edges'][0], counted['edges'][-1]) != (edges['edges'][0], edges['edges'][-1]):
+        return Unmeasured("the other profile was not counted against the source's histogram edges")
     outside = counted['overflow']['below'] + counted['overflow']['above']
     total = outside + sum(counted['counts'])
-    return Compared(1 - outside / total) if total else None
+    return Compared(1 - outside / total) if total else Unmeasured('the other profile counts no values for the column')
 
 
 METRICS = (

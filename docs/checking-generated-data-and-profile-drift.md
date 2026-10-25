@@ -10,7 +10,7 @@ be confirmed.
 
 `profile diff A B` measures B against A with the same metrics. B profiled with `--edges-from A`
 carries overflow counts, so its boundary adherence and overflow can be measured. A B binned
-afresh is measured by every other metric.
+afresh leaves `boundary_adherence` unmeasured, and every other metric measures it.
 
 ## A metric is a function from two profiles to values, and the registry is data
 
@@ -75,7 +75,7 @@ other profile's histogram.
 - An overflow of 1 to `k_min − 1` rows is written as 0, so adherence overstates by at most
   `2 · (k_min − 1)` rows.
 - A histogram not counted against the source's outer edges carries no `overflow` that
-  measures them, so the column has no `boundary_adherence`.
+  measures them, so the column's `boundary_adherence` is unmeasured.
 
 ## `distinct_ratio_delta` measures a column against the range both readings of its profile allow
 
@@ -99,6 +99,21 @@ anywhere from 0.1 to 5 values. `tvd` is what checks its values there.
 Every kind of column is measured. A float column whose source holds cents, generated as continuous
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.
+
+## A metric the other profile cannot supply is a row with no value
+
+Where the source states what a metric compares and the other profile holds nothing to compare it
+with, the report holds the metric with a null `value` and the reason in `unmeasured`. A column
+under `k_min` values holds no quantiles, so a check of 10 rows leaves `ks` unmeasured. A check of
+an empty file leaves nearly every metric unmeasured.
+
+- **A check fails the row.** A check vouches for the data, so a statistic the data cannot supply
+  is one it cannot vouch for. Zero rows and 10 rows both exit 3.
+- **A diff lists the row and passes it.** A diff reports what changed between two profiles. A B
+  binned afresh carries no overflow, so its `boundary_adherence` is unmeasured, and `profile diff`
+  prints one notice naming `--edges-from A`.
+
+*Rejected:* a separate list of skipped metrics. A reader would join two lists to see one column.
 
 ## A check fails on a column the data adds, drops or retypes, and a diff on any changed field
 
