@@ -123,8 +123,9 @@ columns:
       quantiles: {p50: 3.0, p99: 9.0}
       extremes: {low: 0.0, high: 30.0}
       fit: {family: gamma, params: {a: 3.0}}
-  # Value 3 held under k_min rows and folded into other. The source's six values are one more than
-  # its listed values and the integers between its extremes hold, so one is drawn beyond them.
+  # Value 3 folded into other because the value beyond the extremes held under k_min rows alone.
+  # The source's six values are one more than its listed values and the integers between its
+  # extremes hold, so one is drawn beyond them.
   - name: top_values_with_one_beyond_the_extremes
     physical_type: int64
     distinct: {approx: 6, ratio: 0.0001}
