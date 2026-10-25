@@ -7,6 +7,7 @@ added to `METRICS` reaches the reports, `--thresholds` and the CLI's help with n
 import dataclasses as dc
 import enum
 import itertools
+import math
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
@@ -269,8 +270,9 @@ def layout_change(source: Document, observed: Document) -> Iterator[Measurement]
     """How far the files fall from the source's layout, relative to it.
 
     The table's row takes the larger of the file count's change and the median rows per file's. The count expected is the
-    source's scaled to the rows checked, and the median is at most those rows. Each Hive key's row takes the largest change
-    in a value's share of rows, over the values the source lists.
+    source's scaled to the rows checked, and at least one file for each combination of the partition keys' values the rows
+    can fill. The median expected is at most the rows over that count. Each Hive key's row takes the largest change in a
+    value's share of rows, over the values the source lists.
     """
     ours = (source.get('source') or {}).get('layout') or {}
     theirs = (observed.get('source') or {}).get('layout') or {}
@@ -281,20 +283,22 @@ def layout_change(source: Document, observed: Document) -> Iterator[Measurement]
         return
     source_rows, rows = ((document.get('dataset') or {}).get('row_count') for document in (source, observed))
     scale = rows / source_rows if source_rows and rows is not None else 1.0
+    partition_keys = (ours.get('partitioning') or {}).get('keys') or []
+    combinations = math.prod((key.get('values') or {}).get('count') or 1 for key in partition_keys)
+    count = (ours.get('files') or {}).get('count')
+    files = max(1.0, (count or 1) * scale, min(combinations, rows) if rows is not None else combinations)
     table: list[Compared | Unmeasured] = []
-    if count := (ours.get('files') or {}).get('count'):
-        table.append(
-            relative_change(max(1.0, count * scale), (theirs.get('files') or {}).get('count'), 'the other profile counts no files')
-        )
+    if count:
+        table.append(relative_change(files, (theirs.get('files') or {}).get('count'), 'the other profile counts no files'))
     if median := (ours.get('rows_per_file') or {}).get('p50'):
-        expected = min(median, rows) if rows else median
+        expected = min(median, rows / files) if rows else median
         table.append(relative_change(expected, (theirs.get('rows_per_file') or {}).get('p50'), 'the other profile counts no rows per file'))
     if table:
         unmeasured = [compared for compared in table if isinstance(compared, Unmeasured)]
         measured = [compared for compared in table if isinstance(compared, Compared)]
         yield Measurement(None, unmeasured[0] if unmeasured else max(measured, key=lambda compared: compared.value))
     keys = {key['name']: key for key in (theirs.get('partitioning') or {}).get('keys') or []}
-    for key in (ours.get('partitioning') or {}).get('keys') or []:
+    for key in partition_keys:
         shares = (key.get('values') or {}).get('shares')
         if not shares:
             continue

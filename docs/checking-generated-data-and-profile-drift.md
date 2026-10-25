@@ -108,9 +108,12 @@ A source profile with a `source.layout` gets a `layout` row for the table and on
 value shares. Each value is a relative change, as `distinct_ratio_delta`'s is.
 
 - **The table's row is the larger of two changes.** One is the file count, against the source's
-  scaled to the rows checked and never under one file. The other is the median rows per file,
-  against the source's or the rows checked where those are fewer. So a check at the profile's row
-  count holds the source's file count, and one at a tenth of it holds a tenth.
+  scaled to the rows checked. So a check at the profile's row count holds the source's file count,
+  and one at a tenth of it holds a tenth. The other is the median rows per file, against the
+  source's or the rows checked over the files expected, where that is fewer.
+- **The file count expected is never under one file for each partition the rows can fill.** A
+  partitioned writer writes a file for every combination of the keys' values. So the count is at
+  least the product of each key's value count, or the rows checked where those are fewer.
 - **A Hive key's row is the largest change in one value's share of rows**, over the values the
   source lists. A value the data lacks has a share of 0, so its change is 1.
 - **Data whose profile records no layout leaves the table's row unmeasured**, as a table in memory
