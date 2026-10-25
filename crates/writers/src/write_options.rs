@@ -11,6 +11,7 @@ use doppeldata_core::format_settings::TextCompression;
 use doppeldata_core::manifest::FileRows;
 use doppeldata_core::manifest::LayoutSettings;
 use doppeldata_core::profile::Compression;
+use doppeldata_core::profile::PartitionStyle;
 use doppeldata_core::profile::Profile;
 use doppeldata_core::profile::SourceFormat;
 use doppeldata_core::profile::TableProfile;
@@ -26,7 +27,42 @@ pub struct WriteOptions {
     pub profile_path: Option<String>,
 }
 
+/// What a caller chooses over a profile's recorded settings. A field left `None` keeps what the
+/// profile records. It reads from JSON, so a binding passes every choice as one object.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WriteChoices {
+    pub format: Option<SourceFormat>,
+    /// Keys of the format's settings, as the manifest's `writer` holds them.
+    pub writer: Option<serde_json::Map<String, serde_json::Value>>,
+    pub file_rows: Option<u64>,
+    /// The partition keys. An empty list writes no partitions, whatever the profile records.
+    pub partition_by: Option<Vec<String>>,
+    pub partition_style: Option<PartitionStyle>,
+    pub profile_path: Option<String>,
+}
+
 impl WriteOptions {
+    /// The options `profile` records, with `choices` laid over them in the order the manifest's
+    /// fields depend on: the format, its settings, the file size, then the partitions.
+    pub fn chosen(profile: &Profile, choices: WriteChoices) -> Result<Self, WriteError> {
+        let mut options = Self::from_profile(profile, choices.format)?;
+        options.profile_path = choices.profile_path;
+        if let Some(writer) = choices.writer {
+            options.override_writer(writer)?;
+        }
+        if let Some(file_rows) = choices.file_rows {
+            options.layout.file_rows = FileRows::Fixed(file_rows);
+        }
+        if let Some(keys) = choices.partition_by {
+            options.partition_by(profile, keys);
+        }
+        if let Some(style) = choices.partition_style {
+            options.layout.partition_style = style;
+        }
+        Ok(options)
+    }
+
     /// The options `profile`'s `source` records. `format` overrides the recorded format, and with
     /// neither the output is Parquet.
     ///

@@ -42,7 +42,7 @@ const TAIL_KNOTS: i32 = 80;
 /// close in on the extreme geometrically and the last leaves about a millionth of it.
 const TAIL_GRID_STEP: f64 = 0.25;
 /// The range a numeric column with no quantiles, histogram, fit or extremes is drawn from.
-const DEFAULT_RANGE: (f64, f64) = (0.0, 1000.0);
+pub(crate) const DEFAULT_RANGE: (f64, f64) = (0.0, 1000.0);
 
 /// The level a quantile's name stands for: `p05` is 0.05, `p999` is 0.999.
 pub(crate) fn quantile_level(name: &str) -> Option<f64> {

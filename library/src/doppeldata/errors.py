@@ -1,5 +1,7 @@
 """The errors doppeldata raises for a caller to report, each with the exit status a command ends on, and the warnings it issues."""
 
+from doppeldata.manifest import Manifest
+
 
 class DoppeldataError(Exception):
     """A failure the caller can act on. `exit_code` is 1 for a failure, 2 for a usage error, and 4 when no answer came."""
@@ -13,6 +15,37 @@ class SourceError(DoppeldataError, ValueError):
     def __init__(self, message: str, *, exit_code: int = 2) -> None:
         super().__init__(message)
         self.exit_code = exit_code
+
+
+# Each kind of stopped write, and the exit status a command ends on for it.
+EXIT_CODES = {'failed': 1, 'refused': 2, 'unanswered': 4}
+
+
+class StoppedWrite(BaseException):
+    """A write that did not finish, the base of WriteFailed and WriteInterrupted. `code` names why, such as `cancelled`.
+
+    `kind` is `refused` when the call must change and nothing was written, `unanswered` when the store never answered, and
+    `failed` otherwise. `manifest` is the record of what a run that claimed its destination wrote, marked partial when it
+    stopped early, and None for a refusal before the claim. `manifest_stored` says whether that record is in the store.
+    """
+
+    def __init__(
+        self, code: str, message: str, *, kind: str = 'failed', manifest_json: str | None = None, manifest_stored: bool = False
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.kind = kind
+        self.exit_code = EXIT_CODES[kind]
+        self.manifest = Manifest.from_json(manifest_json) if manifest_json is not None else None
+        self.manifest_stored = manifest_stored
+
+
+class WriteFailed(StoppedWrite, DoppeldataError):
+    """A write that was refused or failed."""
+
+
+class WriteInterrupted(StoppedWrite, KeyboardInterrupt):
+    """A write a signal stopped, such as Ctrl-C. It is a KeyboardInterrupt, so `except Exception` never swallows it."""
 
 
 class ProfilingEnginesMissing(DoppeldataError, ImportError):

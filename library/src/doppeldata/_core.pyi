@@ -3,17 +3,116 @@ doppeldata's engine, compiled.
 """
 
 from _typeshed import SupportsGetItem
-from typing import Final
+from typing import Any, Final, SupportsIndex, final
+
+BLOCK_ROWS: Final[int]
+"""
+The rows in each batch the engine generates, every one but the last.
+"""
+
+DEFAULT_FILE_ROWS: Final[int]
+"""
+The rows in each file a write makes when neither the caller nor the profile sizes them.
+"""
 
 FORMAT_VERSION: Final[int]
 """
 The profile format version the engine reads.
 """
 
+STREAM_VERSION: Final[int]
+"""
+The version of the draws the engine makes, part of every dataset's identity.
+"""
+
 VERSION: Final[str]
 """
 The engine's release, which is the tag the wheel was built from.
 """
+
+@final
+class Plan:
+    """
+    A table profile resolved for generation: ``rows`` rows from ``seed``. ``source`` names the
+    profile in an error.
+    """
+    def __new__(cls, /, profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, source: str) -> Plan: ...
+    @property
+    def block_count(self, /) -> int: ...
+    def column_samplers(self, /) -> list[tuple[str, str, str, float]]:
+        """
+        Each top-level column's name, type as a profile's ``physical_type`` spells it, what draws
+        its values, and the share of rows drawn null, in schema order.
+        """
+    @property
+    def dataset_digest(self, /) -> str:
+        """
+        ``sha256:`` and the hex SHA-256 of the identity's canonical JSON.
+        """
+    def estimate_bytes(self, /, options: WriteOptions) -> int:
+        """
+        The bytes the write would store, its manifest left out, from its first blocks encoded
+        with its settings.
+        """
+    def generate(self, /, *, threads: SupportsIndex) -> Any:
+        """
+        Every row, as one table holding a batch per block, generated on ``threads`` threads,
+        zero taking one per core. An interrupt stops it and is raised.
+        """
+    @property
+    def identity_json(self, /) -> str:
+        """
+        The dataset identity's RFC 8785 canonical JSON: the five values its rows are a pure
+        function of.
+        """
+    def ranges_json(self, /, options: WriteOptions) -> str:
+        """
+        Each row range the write would make, as a JSON list of objects keyed as the manifest
+        keys its files: ``path``, ``range``, ``first_row`` and ``range_rows``, with
+        ``objects_at_most``. A partitioned range's path holds ``*`` for each partition value.
+        """
+    def stream(self, /, *, threads: SupportsIndex) -> Any:
+        """
+        The blocks in order, as a reader. ``threads`` threads, zero taking one per core, each
+        make the blocks ahead of the reader, and each holds at most two.
+        """
+    def write(self, /, options: WriteOptions, destination: str, *, threads: SupportsIndex, replace: bool, s3_store: dict |None = None) -> str:
+        """
+        Writes the dataset to ``destination``, a URL ``destination_scheme`` accepts, and returns
+        the manifest as JSON. An S3 URL's store is built from ``s3_store``: the keyword arguments
+        pyo3-object_store's ``S3Store`` takes, such as ``config`` and ``credential_provider``. An
+        interrupt cancels the write, which leaves a partial manifest and raises.
+        """
+    def write_options(self, /, choices_json: str) -> WriteOptions:
+        """
+        What to write: the profile's recorded settings, with ``choices_json`` laid over them. It
+        is a JSON object holding any of ``format``, ``writer``, ``file_rows``, ``partition_by``,
+        ``partition_style`` and ``profile_path``.
+        """
+
+@final
+class WriteOptions:
+    """
+    The settings a write takes, from ``Plan.write_options``.
+    """
+    @property
+    def settings_json(self, /) -> str:
+        """
+        The format, every setting it writes with, and the layout, as the manifest records them.
+        """
+
+def destination_scheme(url: str) -> tuple[str, str |None]:
+    """
+    What ``url`` names as a write's destination: ``("local", None)``, ``("s3", bucket)`` or
+    ``("memory", None)``. Any other scheme raises the library's ``WriteFailed``.
+    """
+
+def determinism_values_digest(profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, *, threads: SupportsIndex) -> str:
+    """
+    The determinism contract's SHA-256 over every value and text cell generated from a profile,
+    made on ``threads`` threads the way ``Plan.generate`` makes its blocks. A wheel's build
+    compares it with the hash the contract pins.
+    """
 
 def fitted_families() -> dict[str, bool]:
     """

@@ -15,6 +15,9 @@ are serde and schemars types with no I/O.
   then the profile's recorded one, then Parquet. A recorded codec applies only when the format is the
   recorded one. `override_writer` lays a caller's keys over the result, and `partition_by` sets the
   keys.
+- **`WriteOptions::chosen` lays a caller's `WriteChoices` over a profile in that order.** Every
+  caller goes through it, so a flag means the same thing in each. `WriteChoices` deserializes from
+  JSON and refuses an unknown key.
 
 ## A layout fixes every file's rows before anything is generated
 
@@ -26,6 +29,9 @@ print the files a run will write before a byte is written.
   samplers use. Its stream is keyed by the seed alone, so the split is the same on every run.
 - **The split never moves a value.** Blocks are a fixed `BLOCK_ROWS`, so a range cut mid-block takes
   a slice of the block. Two neighboring ranges each generate the block they share.
+- **`planned_ranges` gives each range with the path its files take.** A partitioned range becomes
+  one object per partition value it holds. So its path has `*` for each partition directory, and
+  `objects_at_most` bounds its objects. The size estimate counts objects from the same list.
 - **A name is `part-{range:05}-{identity8}.{ext}`.** `identity8` is the first eight hex digits of the
   dataset identity, so a run with a changed input never mixes its files with an earlier run's.
 
@@ -47,6 +53,9 @@ same type.
 - **The writers build no store.** The caller passes an `Arc<dyn ObjectStore>`, so credentials
   follow the caller's AWS setup. `Destination::local` is a `LocalFileSystem`, which writes each
   object to a temporary name and renames it into place.
+- **`DestinationUrl::parse` is the one reading of a destination URL.** It gives a local path, an
+  `s3://` or `s3a://` bucket and prefix, or `memory://`, and refuses any other scheme. Every caller
+  builds its store from it.
 
 ## The writers block only on threads they spawn
 
@@ -75,6 +84,12 @@ thread only waits for them.
   a Hadoop job waits for `_SUCCESS`, never takes a partial run for a whole one.
 - **A failed write says whether its record was stored.** `WriteFailure` carries the manifest,
   `manifest_stored`, and the error from storing it.
+- **A run that stored `_manifest.json` and then could not delete its claim fails with
+  `ClaimNotRemoved`.** Its manifest is whole, so a caller tells it from a partial run without
+  reading the store. An S3 policy that grants puts but not deletes reaches it.
+- **Each `WriteError` names its code and kind through `code()`.** The kind is `Refused` when the
+  call must change and nothing was written, and `Failed` otherwise. A caller maps the kind to its
+  own exit status.
 - **A destination holding anything is refused unless `replace` is set.** With `replace`, every
   object must be a manifest at the prefix, or a part whose name ends with the `identity8` and
   extension one of those manifests records. Anything else, such as Spark's `_SUCCESS` or pyarrow's

@@ -80,6 +80,18 @@ impl Partitioner {
         directory
     }
 
+    /// The directories every object sits under, with each value as `*`, such as `status=*/`, or
+    /// nothing unpartitioned.
+    pub(crate) fn directory_pattern(&self) -> String {
+        self.keys
+            .iter()
+            .map(|(key, _)| match self.style {
+                PartitionStyle::Hive => format!("{}=*/", escape_path_name(key)),
+                PartitionStyle::Directory => "*/".to_string(),
+            })
+            .collect()
+    }
+
     /// The manifest's record of `values`, by key, or None unpartitioned.
     pub(crate) fn record(&self, values: PartitionValues) -> Option<BTreeMap<String, Option<String>>> {
         (!self.keys.is_empty()).then(|| self.keys.iter().map(|(key, _)| key.clone()).zip(values).collect())

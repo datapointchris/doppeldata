@@ -9,6 +9,8 @@ mod destination;
 mod encoders;
 mod layout;
 mod partition;
+mod planned_ranges;
+mod size_estimate;
 mod write;
 mod write_options;
 
@@ -19,6 +21,7 @@ use doppeldata_core::BlockOutOfRange;
 pub use byte_sink::ByteSink;
 pub use byte_sink::WrittenObject;
 pub use destination::Destination;
+pub use destination::DestinationUrl;
 pub use layout::FileLayout;
 pub use layout::FileRange;
 pub use layout::LayoutError;
@@ -26,10 +29,14 @@ pub use layout::PART_PREFIX;
 pub use layout::layout;
 pub use layout::layout_from_manifest;
 pub use partition::DEFAULT_PARTITION;
+pub use planned_ranges::PlannedRange;
+pub use planned_ranges::planned_ranges;
+pub use size_estimate::estimate_bytes;
 pub use write::RunOptions;
 pub use write::WriteFailure;
 pub use write::regenerate;
 pub use write::write;
+pub use write_options::WriteChoices;
 pub use write_options::WriteOptions;
 
 #[derive(Debug, thiserror::Error)]
@@ -44,7 +51,9 @@ pub enum WriteError {
         data_type: DataType,
         format: &'static str,
     },
-    #[error("{url} already holds {objects} objects, such as {example}; replace deletes the ones this tool wrote")]
+    #[error(
+        "{url} already holds {objects} objects, such as {example}; a write with replace set deletes the objects an earlier doppeldata write recorded"
+    )]
     DestinationNotEmpty { url: String, objects: usize, example: String },
     #[error("{url} holds {object}, which no doppeldata manifest there accounts for, so replace leaves the destination as it is")]
     ForeignObject { url: String, object: String },
@@ -80,4 +89,48 @@ pub enum WriteError {
     Parquet(#[from] parquet::errors::ParquetError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// The write finished and stored `_manifest.json`, then could not delete its claim.
+    #[error("{url}/_manifest.json records every file, but the claim _manifest.partial.json could not be removed: {error}")]
+    ClaimNotRemoved { url: String, error: Box<WriteError> },
+}
+
+/// What a failed write tells its caller to do about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    /// The arguments cannot be written as given, so the call must change. Nothing was written.
+    Refused,
+    /// The write was attempted and failed.
+    Failed,
+}
+
+impl WriteError {
+    /// The kebab-case code a caller branches on, and what kind of failure it is.
+    pub fn code(&self) -> (&'static str, FailureKind) {
+        use FailureKind::Failed;
+        use FailureKind::Refused;
+        match self {
+            Self::Layout(_) => ("invalid-layout", Refused),
+            Self::Settings(_) => ("invalid-settings", Refused),
+            Self::UnsupportedColumn { .. } => ("unsupported-column", Refused),
+            Self::DestinationNotEmpty { .. } => ("destination-not-empty", Refused),
+            Self::ForeignObject { .. } => ("foreign-object", Refused),
+            Self::Unclaimable { .. } => ("unclaimable", Refused),
+            Self::ObjectName { .. } => ("invalid-object-name", Refused),
+            Self::DestinationClaimed { .. } => ("destination-claimed", Failed),
+            Self::CurrentThreadRuntime => ("current-thread-runtime", Failed),
+            Self::IdentityMismatch { .. } => ("identity-mismatch", Failed),
+            Self::PartialManifest => ("partial-manifest", Failed),
+            Self::RegeneratedFilesDiffer { .. } => ("regenerated-files-differ", Failed),
+            Self::Cancelled => ("cancelled", Failed),
+            Self::Format { .. } => ("unformattable-value", Failed),
+            Self::Block(_) => ("block-out-of-range", Failed),
+            Self::Store(object_store::Error::Unauthenticated { .. }) => ("no-credentials", Failed),
+            Self::Store(object_store::Error::PermissionDenied { .. }) => ("store-refused", Failed),
+            Self::Store(_) => ("store", Failed),
+            Self::Arrow(_) => ("arrow", Failed),
+            Self::Parquet(_) => ("parquet", Failed),
+            Self::Io(_) => ("io", Failed),
+            Self::ClaimNotRemoved { .. } => ("claim-not-removed", Failed),
+        }
+    }
 }

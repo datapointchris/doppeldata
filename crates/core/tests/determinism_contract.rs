@@ -5,21 +5,25 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use arrow_array::Array;
 use arrow_array::RecordBatch;
-use arrow_data::ArrayData;
 use doppeldata_core::BLOCK_ROWS;
 use doppeldata_core::DatasetIdentity;
 use doppeldata_core::STREAM_VERSION;
 use doppeldata_core::TextCell;
 use doppeldata_core::profile::Profile;
+use doppeldata_core::values_digest;
 use rayon::prelude::*;
-use sha2::Digest;
-use sha2::Sha256;
 
+// `crates/check-pinned-values-through-wheel.py` reads PROFILE_DIGEST, SEED, ROWS,
+// PINNED_STREAM_VERSION and PINNED_VALUES from this file, and generates the fixture through the
+// built wheel, so each stays a literal on one line.
 const PROFILE_DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const SEED: u64 = 20_251_025;
-const ROWS: u64 = 2 * BLOCK_ROWS + 4_321;
+const ROWS: u64 = 135_393;
+const _: () = assert!(
+    2 * BLOCK_ROWS < ROWS && ROWS < 3 * BLOCK_ROWS,
+    "two whole blocks and part of a third"
+);
 
 /// The stream version the fixture's values were generated under, and a SHA-256 over them. A release
 /// freezes the pair: once released, a change to any value raises STREAM_VERSION.
@@ -50,30 +54,6 @@ fn generate(document: &serde_json::Value, threads: usize) -> Vec<Block> {
     })
 }
 
-fn hash_data(hash: &mut Sha256, data: &ArrayData) {
-    hash.update(format!("{}:{}:{}", data.data_type(), data.len(), data.offset()));
-    if let Some(nulls) = data.nulls() {
-        for valid in nulls.iter() {
-            hash.update([u8::from(valid)]);
-        }
-    }
-    for buffer in data.buffers() {
-        hash.update(buffer.as_slice());
-    }
-    for child in data.child_data() {
-        hash_data(hash, child);
-    }
-}
-
-fn hash_cells(hash: &mut Sha256, cells: &[TextCell]) {
-    hash.update((cells.len() as u64).to_le_bytes());
-    for cell in cells {
-        hash.update(cell.row.to_le_bytes());
-        hash.update((cell.text.len() as u64).to_le_bytes());
-        hash.update(cell.text.as_bytes());
-    }
-}
-
 #[test]
 fn values_depend_on_no_thread_count_and_no_other_column() {
     let document = fixture();
@@ -98,16 +78,8 @@ fn values_depend_on_no_thread_count_and_no_other_column() {
         }
     }
 
-    let mut hash = Sha256::new();
-    for (batch, cells) in &one_thread {
-        for (column, cells) in batch.columns().iter().zip(cells) {
-            hash_data(&mut hash, &column.to_data());
-            hash_cells(&mut hash, cells);
-        }
-    }
-    let values: String = hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
     assert_eq!(
-        (STREAM_VERSION, values.as_str()),
+        (STREAM_VERSION, values_digest(&one_thread).as_str()),
         (PINNED_STREAM_VERSION, PINNED_VALUES),
         "the values changed; a change to a released stream version's draws raises STREAM_VERSION"
     );

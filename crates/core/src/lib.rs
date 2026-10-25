@@ -11,10 +11,13 @@ pub mod profile;
 pub mod published_schemas;
 mod rng;
 mod samplers;
+mod values_digest;
 
 pub use identity::DatasetIdentity;
+pub use physical_type::physical_type_name;
 pub use plan::BlockOutOfRange;
 pub use plan::ColumnFault;
+pub use plan::ColumnSampler;
 pub use plan::Plan;
 pub use plan::PlanError;
 pub use plan::plan;
@@ -25,6 +28,7 @@ pub use samplers::FittedFamilyKind;
 pub use samplers::TextCell;
 pub use samplers::file_rows_draws;
 pub use samplers::shape_of;
+pub use values_digest::values_digest;
 
 /// The engine's release, which is the tag the wheel was built from.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

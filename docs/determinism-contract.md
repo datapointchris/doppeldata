@@ -107,6 +107,8 @@ could differ in its last bit on another machine, and "reproduce anywhere" would 
   feature cannot force libm, because features unify across the build.
 
 CI runs the pinned-value test on every platform with a wheel, in the library's wheel build, and on
-the platforms `determinism-contract.yml` adds. A failure on one runner is a platform difference, and
-never a reason to loosen the pin. The same workflow refuses a pinned hash that changed since the last
+the platforms `determinism-contract.yml` adds. The wheel build then installs the wheel it built into
+Python 3.11 and generates the fixture through it. `crates/check-pinned-values-through-wheel.py`
+reads the pinned hash and the test's inputs from the test's source, so the pin has one home. A
+failure on one runner is a platform difference, and never a reason to loosen the pin. The same workflow refuses a pinned hash that changed since the last
 release while the pinned stream version stayed level.

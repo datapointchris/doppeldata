@@ -17,5 +17,20 @@ crate-type = ["cdylib"]
 # extension-module and abi3-py311 are switched on by maturin, from the
 # library's pyproject.toml, so `cargo test` here still links libpython.
 [dependencies]
+arrow-array = "59"
+arrow-schema = "59"
 doppeldata-core = { path = "../core" }
-pyo3 = { version = "0.30", features = ["experimental-inspect"] }
+doppeldata-writers = { path = "../writers" }
+# cloud-base exports the HTTP error a store's retries end on, which tells a store that stopped
+# answering from one that answered with a failure.
+object_store = { version = "0.14.2", features = ["cloud-base"] }
+pyo3 ={ version = "0.30", features = ["experimental-inspect"] }
+# Tables and readers cross into Python as pyo3-arrow's own classes, which carry the Arrow PyCapsule
+# interface, so the library needs no Arrow package installed. Its major must build on the arrow the
+# engine pins. Its default buffer_protocol feature stays on, because the crate does not build without it.
+pyo3-arrow = "0.20.0"
+# Builds the S3 store, and calls a Python credential provider for it, so S3 credentials come from
+# boto3's chain. Its default feature only warns about stores from other extensions, which the
+# library never takes.
+pyo3-object_store = { version = "0.13.0", default-features = false }
+serde_json = "1.0.154"

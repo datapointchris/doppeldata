@@ -8,8 +8,6 @@ from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
-import boto3
-import botocore.config
 import botocore.exceptions
 
 from doppeldata.errors import SourceError
@@ -18,26 +16,16 @@ from doppeldata.profiling.backend import TEXT_FORMATS
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFile
 from doppeldata.profiling.backend import SourceFormat
+from doppeldata.s3_access import CREDENTIAL_ADVICE
+from doppeldata.s3_access import CREDENTIAL_ERRORS
+from doppeldata.s3_access import S3_ATTEMPTS
+from doppeldata.s3_access import UNANSWERED_ERRORS
+from doppeldata.s3_access import endpoint_named
+from doppeldata.s3_access import s3_session
 
 SUFFIX_FORMATS = {suffix: source_format for source_format, traits in FORMAT_TRAITS.items() for suffix in traits.suffixes}
 # DuckDB reads a text file through any of these, so the format is the suffix before it.
 COMPRESSION_SUFFIXES = ('.gz', '.zst', '.bz2')
-# A listing gives up rather than hang on an endpoint that never answers, after as many attempts as the AWS CLI's standard mode makes.
-S3_ATTEMPTS = 3
-S3_CLIENT_CONFIG = botocore.config.Config(connect_timeout=5, read_timeout=20, retries={'max_attempts': S3_ATTEMPTS, 'mode': 'standard'})
-CREDENTIAL_ERRORS = (
-    botocore.exceptions.NoCredentialsError,
-    botocore.exceptions.PartialCredentialsError,
-    botocore.exceptions.CredentialRetrievalError,
-    botocore.exceptions.SSOError,
-    botocore.exceptions.TokenRetrievalError,
-)
-UNANSWERED_ERRORS = (
-    botocore.exceptions.EndpointConnectionError,
-    botocore.exceptions.ConnectTimeoutError,
-    botocore.exceptions.ReadTimeoutError,
-    botocore.exceptions.ConnectionClosedError,
-)
 
 
 def resolve(data: Any) -> Source:
@@ -118,7 +106,7 @@ def s3_errors(url: str, endpoint: str) -> Iterator[None]:
             raise SourceError(f'no answer from {endpoint}: S3 answered {answer} on every attempt', exit_code=4) from error
         raise SourceError(f'{url} could not be listed: {endpoint} answered {answer}', exit_code=1) from error
     except CREDENTIAL_ERRORS as error:
-        message = f'{url} could not be listed: {error}; run `aws sso login`, or set AWS_PROFILE to a profile with credentials'
+        message = f'{url} could not be listed: {error}; {CREDENTIAL_ADVICE}'
         raise SourceError(message, exit_code=1) from error
     except UNANSWERED_ERRORS as error:
         raise SourceError(f'no answer from {endpoint}: {error}, {S3_ATTEMPTS} attempts', exit_code=4) from error
@@ -126,22 +114,14 @@ def s3_errors(url: str, endpoint: str) -> Iterator[None]:
         raise SourceError(f'{url} could not be listed through {endpoint}: {error}', exit_code=1) from error
 
 
-def endpoint_named(client: Any) -> str:
-    """The S3 endpoint the client calls, and the setting that chose it, which a failure names."""
-    endpoint = client.meta.endpoint_url
-    chosen_by = next((variable for variable in ('AWS_ENDPOINT_URL_S3', 'AWS_ENDPOINT_URL') if os.environ.get(variable)), None)
-    if chosen_by:
-        return f'{endpoint} (from {chosen_by})'
-    if endpoint.endswith('amazonaws.com'):
-        return f'{endpoint} (the AWS endpoint for region {client.meta.region_name})'
-    return f'{endpoint} (from AWS profile {os.environ.get("AWS_PROFILE", "default")})'
-
-
 def s3_files(url: str) -> list[SourceFile]:
     """The objects at an `s3://` URL, listed with the credentials and endpoint boto3 resolves from the environment."""
     parsed = urlparse(url)
     bucket, key = parsed.netloc, parsed.path.lstrip('/')
-    client = boto3.client('s3', config=S3_CLIENT_CONFIG)
+    try:
+        _, client = s3_session()
+    except ValueError as error:
+        raise SourceError(f'{url} could not be listed: {error}', exit_code=2) from error
     with s3_errors(url, endpoint_named(client)):
         # Spark writes a table as a `name.parquet/` directory, so a key with a suffix may still be a prefix.
         if format_of(key) and not key.endswith('/') and (head := object_head(client, bucket, key)):

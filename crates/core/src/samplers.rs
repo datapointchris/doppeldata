@@ -229,6 +229,10 @@ impl ValueSampler {
 #[derive(Debug, Clone)]
 pub(crate) struct ColumnPlan {
     pub(crate) field: FieldRef,
+    /// What draws the values, as a plan reports it: `sequence from 1 by 1`.
+    pub(crate) sampler: String,
+    /// The share of rows the null mask draws as null.
+    pub(crate) null_share: f64,
     keys: StreamKeys,
     values: ValueSampler,
     nulls: Option<Bernoulli>,
@@ -305,13 +309,113 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
     }
     let nulls = Some(Bernoulli::new(null_share)).filter(|null| !null.never());
     let nullable = may_be_null || text_only.as_ref().is_some_and(TextOnlyValues::has_foreign_values);
+    let mut sampler = describe(column, &values);
+    if column.type_mix.as_ref().is_some_and(|mix| !mix.is_empty()) {
+        sampler.push_str(", with values of other types as text");
+    }
+    if column.missing_tokens.as_ref().is_some_and(|tokens| !tokens.is_empty()) {
+        sampler.push_str(", with missing-value tokens as text");
+    }
     Ok(ColumnPlan {
         field: Arc::new(Field::new(&column.name, values.data_type(), nullable)),
+        sampler,
+        null_share: nulls.map_or(0.0, |_| null_share),
         keys,
         values,
         nulls,
         text_only,
     })
+}
+
+/// What draws `column`'s values through `values`, in a few words a plan prints.
+fn describe(column: &Column, values: &ValueSampler) -> String {
+    match values {
+        ValueSampler::Sequence(sequence) => format!("sequence from {} by {}", sequence.start, sequence.step),
+        ValueSampler::Numeric(_) => {
+            let numeric = column.numeric.as_ref();
+            let fit = numeric
+                .and_then(|n| n.fit.as_ref())
+                .filter(|fit| FittedFamily::from_fit(fit).is_ok_and(|family| family.is_some()));
+            let body = if numeric.and_then(|n| n.quantiles.as_ref()).is_some_and(|q| !q.0.is_empty()) {
+                "quantiles".to_string()
+            } else if numeric.and_then(|n| n.histogram.as_ref()).is_some() {
+                "histogram".to_string()
+            } else if let Some(fit) = fit {
+                return format!("fitted {}", fit.family);
+            } else if numeric.and_then(|n| n.extremes.as_ref()).is_some() {
+                return "uniform between the extremes".to_string();
+            } else {
+                return format!("uniform from {} to {}", numeric::DEFAULT_RANGE.0, numeric::DEFAULT_RANGE.1);
+            };
+            match fit {
+                Some(fit) => format!("{body} with fitted {} tails", fit.family),
+                None => format!("{body} with linear tails"),
+            }
+        }
+        ValueSampler::Categorical(categorical) => {
+            let other = column.string.as_ref().and_then(|s| s.other_rate).is_some_and(|r| r.0 > 0.0);
+            match other {
+                true => format!(
+                    "{} top values, the rest from {}",
+                    categorical.values.len(),
+                    describe_source(&categorical.other)
+                ),
+                false => format!("{} top values", categorical.values.len()),
+            }
+        }
+        ValueSampler::Temporal(_) => {
+            let temporal = column.temporal.as_ref();
+            let weights: Vec<&str> = [
+                ("month", temporal.and_then(|t| t.by_month.as_ref()).is_some()),
+                ("weekday", temporal.and_then(|t| t.by_dow.as_ref()).is_some()),
+                ("hour", temporal.and_then(|t| t.by_hour.as_ref()).is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(name, weighted)| weighted.then_some(name))
+            .collect();
+            match weights.is_empty() {
+                true => "uniform between the extremes".to_string(),
+                false => format!("between the extremes, weighted by {}", weights.join(", ")),
+            }
+        }
+        ValueSampler::Boolean(_) => {
+            let true_rate = column.boolean.as_ref().and_then(|b| b.true_rate).map_or(0.5, |r| r.0);
+            format!("true in {true_rate} of rows")
+        }
+        ValueSampler::Text(text) => {
+            let mut description = describe_source(&text.source);
+            if text.index.is_some() {
+                description.push_str(", at the profiled distinct ratio");
+            }
+            if let Some(check_digit) = &text.check_digit {
+                description.push_str(&format!(", with a {:?} check digit", check_digit.kind).to_lowercase());
+            }
+            description
+        }
+        ValueSampler::List(list) => format!("list of {}", list.element.sampler),
+        ValueSampler::Struct(structure) => format!("struct of {} fields", structure.fields.len()),
+    }
+}
+
+fn describe_source(source: &TextSource) -> String {
+    match source {
+        TextSource::Provider(provider) => format!("the {} provider", snake_case(&format!("{provider:?}"))),
+        TextSource::Pattern(_) => "a pattern".to_string(),
+        TextSource::Shapes { shapes, .. } => format!("{} shapes", shapes.len()),
+        TextSource::Characters { .. } => "characters of the profiled classes".to_string(),
+    }
+}
+
+/// `FreeEmail` as the profile names it, `free_email`.
+fn snake_case(name: &str) -> String {
+    let mut snake = String::with_capacity(name.len() + 4);
+    for (index, character) in name.chars().enumerate() {
+        if character.is_ascii_uppercase() && index > 0 {
+            snake.push('_');
+        }
+        snake.push(character.to_ascii_lowercase());
+    }
+    snake
 }
 
 /// The column's Arrow type: its `physical_type` where given, otherwise one its statistics and
