@@ -72,8 +72,10 @@ An upgrade to the Arrow or Parquet writer that changes encoder output, or any ch
 draw order, raises the stream version. The stream version is part of a dataset's identity, so a
 dataset generated before the change is still named exactly.
 
-A test pins a SHA-256 over the values the bundled example profiles generate, beside the stream
-version, as one pair. A change that moves a value fails it until both are updated together.
+A test pins a SHA-256 beside the stream version, as one pair. The hash covers the values and text
+cells of a fixture holding one column of every kind, fitted family and provider. A change that moves
+a value fails it until both are updated together. The fixture is the test's own, so editing a
+bundled example moves no pin.
 
 ## Every exp, log and pow that feeds a value is libm's, so values match on every platform
 
@@ -83,7 +85,8 @@ could differ in its last bit on another machine, and "reproduce anywhere" would 
 
 - **Arithmetic, `sqrt` and rounding to an integer are exact under IEEE 754**, and need nothing.
 - **Every other function goes through the `libm` crate**, called directly. That covers the
-  inverse CDFs a fitted tail is tabulated from at plan time.
+  inverse CDFs a fitted tail is tabulated from at plan time. Clippy refuses std's transcendentals
+  in the workspace's own code.
 - **A fitted family is used only where its CDF and inverse are closed forms over libm.**
   `FittedFamily::from_fit` in `crates/core/src/samplers/fitted_family.rs` names them. `norm` uses
   Wichura's AS 241, which needs only `log` and `sqrt`. A family with no closed form, such as `gamma`

@@ -12,3 +12,9 @@ rust-version = "1.97"
 license = "MIT"
 repository = "https://github.com/datapointchris/doppeldata"
 publish = false
+
+# Dependencies build optimized in a dev build, while the workspace's own crates
+# stay debuggable. fake, rand and arrow run several times slower unoptimized,
+# and the determinism contract test generates every column kind across blocks.
+[profile.dev.package."*"]
+opt-level = 2

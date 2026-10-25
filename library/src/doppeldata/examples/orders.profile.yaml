@@ -1,4 +1,4 @@
-# Hand-written: an order table holding one of each column kind the generator samples.
+# Hand-written: an order table with the columns an order export typically holds.
 # No data was read, so it has no `generated` block.
 profile_version: 1
 kind: table
