@@ -45,6 +45,7 @@ class FieldKind(enum.Enum):
     PATTERN = ('pattern', 'generalized', 'pattern')
     FIT = ('fit', 'fitted within the trimmed extremes', 'fitted family')
     SEQUENCE = ('sequence', 'follows the trimmed extreme', 'sequence start')
+    CONDITIONAL = ('conditional', 'cell >= k_min', 'conditional table')
 
     @property
     def rule(self) -> str:
@@ -114,6 +115,9 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
         'by_dow': FieldKind.CALENDAR_SHARES,
         'by_hour': FieldKind.CALENDAR_SHARES,
     },
+    # A key, a correlation and a dependency name columns, and a repeated row's share is written as 0 under k_min rows.
+    'Dataset': dict.fromkeys(('row_count', 'duplicate_row_rate', 'keys', 'correlations', 'dependencies'))
+    | {'conditionals': FieldKind.CONDITIONAL},
 }
 
 
@@ -272,6 +276,30 @@ def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None,
         if temporal.get(name):
             cells = tuple(Cell((*at, 'temporal', name, index), share(rate, held), True) for index, rate in enumerate(temporal[name]))
             yield LiteralField((*at, 'temporal', name), FieldKind.CALENDAR_SHARES, sum(1 for rate in temporal[name] if rate), cells)
+
+
+def conditional_literals(table: dict[str, Any]) -> Iterator[tuple[str, LiteralField]]:
+    """Each conditional table as one field, beside the column it distributes, which `privacy.audit` names it by.
+
+    A cell's share is of the rows whose child value the table distributes, which the file does not count, so its rows
+    are not recomputed from the file and `min_count` in the audit is what states them.
+    """
+    for index, conditional in enumerate((table.get('dataset') or {}).get('conditionals') or []):
+        if isinstance(conditional, dict):
+            rows = [*(conditional.get('table') or {}).values(), conditional.get('other') or {}]
+            cells = sum(len(row) for row in rows if isinstance(row, dict))
+            yield str(conditional.get('column')), LiteralField(('dataset', 'conditionals', index), FieldKind.CONDITIONAL, cells)
+
+
+def listed_values(column: dict[str, Any]) -> list[str] | None:
+    """The values a column lists, written as text as a conditional table's keys are, or None where it lists none."""
+    if (column.get('boolean') or {}).get('true_rate') is not None:
+        return ['true', 'false']
+    for section in ('string', 'numeric'):
+        listed = (column.get(section) or {}).get('top_values')
+        if listed:
+            return [str(item['value']) for item in listed]
+    return None
 
 
 def quantile_field(at: PointerParts, quantiles: dict[str, Any], held: float | None) -> LiteralField:

@@ -442,6 +442,16 @@
         "given": {
           "type": "string"
         },
+        "other": {
+          "description": "The distribution of `column` over every value of `given` that `table` does not list. It sums to 1.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
+        },
         "table": {
           "type": "object",
           "additionalProperties": {
@@ -462,9 +472,11 @@
       "type": "object",
       "properties": {
         "a": {
+          "description": "Under `correlation_ratio`, the numeric column.",
           "type": "string"
         },
         "b": {
+          "description": "Under `correlation_ratio`, the categorical column whose values explain `a`.",
           "type": "string"
         },
         "method": {
@@ -483,12 +495,25 @@
       ]
     },
     "CorrelationMethod": {
-      "type": "string",
-      "enum": [
-        "pearson",
-        "spearman",
-        "kendall",
-        "cramers_v"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "pearson",
+            "spearman",
+            "kendall"
+          ]
+        },
+        {
+          "description": "Bias-corrected Cramér's V between two categorical columns.",
+          "type": "string",
+          "const": "cramers_v"
+        },
+        {
+          "description": "η, the square root of the share of a numeric column's variance that a categorical column's values explain.",
+          "type": "string",
+          "const": "correlation_ratio"
+        }
       ]
     },
     "CsvSource": {
@@ -677,6 +702,7 @@
           }
         },
         "duplicate_row_rate": {
+          "description": "The share of rows repeating an earlier row in every column, written as 0 where fewer than `k_min` rows do.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -722,6 +748,7 @@
           "type": "string"
         },
         "violation_rate": {
+          "description": "The share of rows whose `lhs` value holds more than one `rhs` value, of the rows whose `lhs` value at least\n`k_min` rows hold.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -931,6 +958,7 @@
       "type": "object",
       "properties": {
         "quantiles": {
+          "description": "The child rows each of `to`'s values is held by, counting the values no child row holds.",
           "anyOf": [
             {
               "$ref": "#/$defs/Quantiles"
@@ -951,7 +979,7 @@
           }
         },
         "zipf_s": {
-          "description": "The exponent of a Zipf fit to children per parent.",
+          "description": "The exponent of a Zipf law fitted by maximum likelihood to the parents' child counts, busiest first.",
           "type": [
             "number",
             "null"
@@ -2247,7 +2275,7 @@
           ]
         },
         "containment": {
-          "description": "An estimate of the share of `from`'s distinct values that `to` holds.",
+          "description": "The share of `from`'s distinct values that `to` holds.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -2273,6 +2301,7 @@
           "pattern": "^[^.]+\\..+$"
         },
         "orphan_rate": {
+          "description": "The share of `from`'s rows holding a value that `to` does not hold, of those holding a value.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"

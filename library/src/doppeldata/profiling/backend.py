@@ -281,3 +281,27 @@ class Backend(Protocol):
     def parse(self, table: Table, types: dict[str, ParsedType]) -> Table:
         """The text table with each named column parsed as its type. A value that does not parse becomes null."""
         ...
+
+    def rank_correlations(self, table: Table, pairs: list[tuple[str, str]]) -> list[float | None]:
+        """Each pair's Spearman correlation over the rows holding both, each column ranked once over its own values with
+        ties at their mean rank. None where either is constant over those rows."""
+        ...
+
+    def cross_counts(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[str, str, int]]]:
+        """Each pair's rows by its two values written as text, over the rows holding both."""
+        ...
+
+    def group_moments(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
+        """For each pair of a numeric column and a categorical one, each categorical value's rows holding a numeric value,
+        their mean and their population variance."""
+        ...
+
+    def dependency_counts(self, table: Table, lhs: str, rhs: list[str], k_min: int) -> list[tuple[int, int, int]]:
+        """For each column of `rhs`, the rows holding it and `lhs`, those of them whose `lhs` value at least k_min such
+        rows hold, and those of these whose `lhs` value holds more than one `rhs` value."""
+        ...
+
+    def foreign_key_counts(self, child: Table, child_column: str, parent: Table, parent_column: str) -> list[tuple[bool, int, int]]:
+        """The values of both columns, counted as `(in_parent, child_rows, values)`: how many values the parent holds or
+        not that `child_rows` child rows hold. A parent value no child row holds is counted at 0 child rows."""
+        ...

@@ -151,12 +151,25 @@
       ]
     },
     "CorrelationMethod": {
-      "type": "string",
-      "enum": [
-        "pearson",
-        "spearman",
-        "kendall",
-        "cramers_v"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "pearson",
+            "spearman",
+            "kendall"
+          ]
+        },
+        {
+          "description": "Bias-corrected Cramér's V between two categorical columns.",
+          "type": "string",
+          "const": "cramers_v"
+        },
+        {
+          "description": "η, the square root of the share of a numeric column's variance that a categorical column's values explain.",
+          "type": "string",
+          "const": "correlation_ratio"
+        }
       ]
     },
     "ExpectationResult": {

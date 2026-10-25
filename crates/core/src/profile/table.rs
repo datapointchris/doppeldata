@@ -398,6 +398,7 @@ pub struct ValueCount {
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Dataset {
     pub row_count: Option<u64>,
+    /// The share of rows repeating an earlier row in every column, written as 0 where fewer than `k_min` rows do.
     pub duplicate_row_rate: Option<Rate>,
     pub keys: Option<Keys>,
     pub correlations: Option<Vec<Correlation>>,
@@ -420,7 +421,9 @@ pub struct Key {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Correlation {
+    /// Under `correlation_ratio`, the numeric column.
     pub a: String,
+    /// Under `correlation_ratio`, the categorical column whose values explain `a`.
     pub b: String,
     pub method: CorrelationMethod,
     pub value: f64,
@@ -432,7 +435,10 @@ pub enum CorrelationMethod {
     Pearson,
     Spearman,
     Kendall,
+    /// Bias-corrected Cramér's V between two categorical columns.
     CramersV,
+    /// η, the square root of the share of a numeric column's variance that a categorical column's values explain.
+    CorrelationRatio,
 }
 
 /// The distribution of `column` within each value of `given`. Each row of `table` sums to 1.
@@ -441,6 +447,8 @@ pub struct Conditional {
     pub given: String,
     pub column: String,
     pub table: BTreeMap<String, BTreeMap<String, Rate>>,
+    /// The distribution of `column` over every value of `given` that `table` does not list. It sums to 1.
+    pub other: Option<BTreeMap<String, Rate>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
@@ -448,6 +456,8 @@ pub struct Dependency {
     pub kind: DependencyKind,
     pub lhs: Vec<String>,
     pub rhs: String,
+    /// The share of rows whose `lhs` value holds more than one `rhs` value, of the rows whose `lhs` value at least
+    /// `k_min` rows hold.
     pub violation_rate: Option<Rate>,
 }
 

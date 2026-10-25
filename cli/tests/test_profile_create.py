@@ -130,6 +130,72 @@ def test_no_histogram_bin_less_the_listed_values_in_it_leaves_a_cell_under_k_min
     assert not 0 < round(numeric['zero_rate'] * len(values)) < 11
 
 
+def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_and_a_gapped_id_as_a_sequence():
+    draw, rows = random.Random(3), 4000
+    amounts = [round(draw.lognormvariate(3, 1), 2) for _ in range(rows)]
+    regions = [('north', 'south', 'east')[i % 3] for i in range(rows)]
+    channels = [
+        {'north': 'web', 'south': 'store', 'east': 'phone'}[region] if draw.random() < 0.8 else draw.choice(['web', 'store', 'phone'])
+        for region in regions
+    ]
+    # Six north rows and twenty south rows on fax: the north cell is under k_min, and fax's rows outside the kept cells name it.
+    fax = {*range(0, 18, 3), *range(1, 61, 3)}
+    channels = ['fax' if index in fax else channel for index, channel in enumerate(channels)]
+    frame = pl.DataFrame(
+        {
+            # Ids left after a fifth of them were rejected, still rising.
+            'order_id': sorted(draw.sample(range(1, rows * 5 // 4 + 1), rows)),
+            'amount': amounts,
+            'fee': [round(amount / 20 + draw.uniform(0, 0.5), 2) for amount in amounts],
+            'plan': [f'p{i % 40:02d}' for i in range(rows)],
+            'tier': [('bronze', 'silver', 'gold', 'platinum')[i % 40 // 10] for i in range(rows)],
+            'region': regions,
+            'channel': channels,
+        }
+    )
+    profiled = profile(frame).to_plain()
+    dataset = profiled['dataset']
+
+    assert dataset['keys']['primary']['columns'] == ['order_id']
+    pairs = {(entry['a'], entry['b']): entry for entry in dataset['correlations']}
+    assert pairs['amount', 'fee']['method'] == 'spearman'
+    assert pairs['amount', 'fee']['value'] > 0.9
+    assert {'kind': 'functional', 'lhs': ['plan'], 'rhs': 'tier', 'violation_rate': 0.0} in dataset['dependencies']
+    conditionals = {(entry['given'], entry['column']): entry for entry in dataset['conditionals']}
+    assert {('tier', 'plan'), ('region', 'channel')} <= conditionals.keys()
+    for (given, child), entry in conditionals.items():
+        counted = {(row[given], row[child]): row['len'] for row in frame.group_by(given, child).len().iter_rows(named=True)}
+        assert all(counted[value, written] >= 11 for value, row in entry['table'].items() for written in row)
+    assert not any('fax' in row for row in conditionals['region', 'channel']['table'].values())
+    order_id = next(column for column in profiled['columns'] if column['name'] == 'order_id')
+    assert order_id['numeric']['sequence'] == {'start': frame['order_id'][10] - 10, 'step': 1}
+
+
+def test_two_folders_named_with_tables_are_two_tables_and_a_column_naming_the_other_s_key_is_a_foreign_key(tmp_path):
+    customers = pl.DataFrame({'customer_id': range(1, 201), 'segment': [('retail', 'online')[i % 2] for i in range(200)]})
+    # One order in twenty names one of seven customers the table lacks.
+    orders = pl.DataFrame({'order_id': range(1, 2001), 'customer_id': [1 + i % 200 if i % 20 else 201 + i % 7 for i in range(2000)]})
+    for name, table in (('customers', customers), ('orders', orders)):
+        (tmp_path / name).mkdir()
+        table.write_parquet(tmp_path / name / 'part.parquet')
+    out = tmp_path / 'shop.yaml'
+    named = [str(tmp_path / 'customers'), str(tmp_path / 'orders')]
+    result = CliRunner().invoke(app, ['profile', 'create', *named, '--tables', '--out', str(out)])
+    assert result.exit_code == 0, result.output
+
+    bundle = Bundle.load(out).to_plain()
+    keys = {name: table['dataset']['keys']['primary']['columns'] for name, table in bundle['tables'].items()}
+    assert keys == {'customers': ['customer_id'], 'orders': ['order_id']}
+    [relationship] = bundle['relationships']
+    assert {field: relationship[field] for field in ('from', 'to', 'cardinality', 'orphan_rate')} == {
+        'from': 'orders.customer_id',
+        'to': 'customers.customer_id',
+        'cardinality': 'many_to_one',
+        'orphan_rate': 0.05,
+    }
+    assert relationship['containment'] == pytest.approx(190 / 197, rel=1e-3)
+
+
 def test_drifted_hive_folders_are_one_table_and_unlike_folders_are_refused_unless_tables_writes_a_bundle(tmp_path):
     orders = pl.DataFrame({'order_id': range(60), 'amount': [i * 1.5 for i in range(60)]})
     customers = pl.DataFrame({'customer_id': range(60), 'region': [('north', 'south')[i % 2] for i in range(60)]})

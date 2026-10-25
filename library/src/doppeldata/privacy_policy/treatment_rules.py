@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from doppeldata.privacy_policy.column_treatment import OLDEST_AGE
+from doppeldata.privacy_policy.column_treatment import Policy
 from doppeldata.privacy_policy.column_treatment import Treatment
 from doppeldata.privacy_policy.column_treatment import is_birth_date
 from doppeldata.privacy_policy.column_treatment import restricted_zip_prefixes
@@ -18,6 +19,7 @@ from doppeldata.privacy_policy.literal_fields import ColumnLiterals
 from doppeldata.privacy_policy.literal_fields import Fault
 from doppeldata.privacy_policy.literal_fields import FieldKind
 from doppeldata.privacy_policy.literal_fields import LiteralField
+from doppeldata.privacy_policy.literal_fields import listed_values
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
 
 ZIP_PREFIX = re.compile(r'\d{3}')
@@ -127,6 +129,36 @@ def treatment_faults(column: ColumnLiterals, treatment: Treatment, oldest_birth_
                 if stated[:4].isdigit() and oldest_birth_year is not None and int(stated[:4]) < oldest_birth_year:
                     detail = f'{end} is {stated}; expected {oldest_birth_year} or later, 90 years before generated.at'
                     found.append(Fault('age-over-89', (*at, 'temporal', 'extremes', end), detail))
+    return found
+
+
+def conditional_faults(table: dict[str, Any], index: int, policy: Policy) -> list[Fault]:
+    """Where the table's conditional at `index` names a column that lists no values, a value its column does not list,
+    or under `strict` and `healthcare` a quasi-identifier. A column whose list the policy withheld lists none."""
+    conditional = table['dataset']['conditionals'][index]
+    at = ('dataset', 'conditionals', index)
+    columns = {column.get('name'): column for column in table.get('columns') or [] if isinstance(column, dict)}
+    rows = conditional.get('table') or {}
+    held = {'given': set(rows), 'column': {value for row in [*rows.values(), conditional.get('other') or {}] for value in row}}
+    found = []
+    for role, values in held.items():
+        name = conditional.get(role)
+        column = columns.get(name) or {}
+        listed = listed_values(column)
+        if listed is None:
+            found.append(
+                Fault(
+                    'conditional-column-unlisted', (*at, role), f'{name} lists no values; expected a column whose values the profile lists'
+                )
+            )
+            continue
+        if policy in (Policy.STRICT, Policy.HEALTHCARE) and (column.get('semantic') or {}).get('sensitivity') == 'quasi_identifier':
+            detail = f'{name} is a quasi-identifier under {policy.value}; expected no conditional table naming it'
+            found.append(Fault('conditional-quasi-identifier', (*at, role), detail))
+        unlisted = sorted(values - set(listed))
+        if unlisted:
+            detail = f'{name} holds {", ".join(map(repr, unlisted[:3]))}, which it does not list; expected only its listed values'
+            found.append(Fault('conditional-value-unlisted', (*at, role), detail))
     return found
 
 
