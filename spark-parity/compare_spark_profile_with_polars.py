@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 from doppeldata import Profile
 
 # The bar the Spark backend's Greenwald-Khanna accuracy of 10,000 stays far inside.
@@ -66,9 +68,21 @@ def leaves(value: Any, path: str = '') -> Iterator[tuple[str, Any]]:
 
 
 def scanned(data: Path) -> pl.LazyFrame:
-    files = sorted(path for path in data.rglob('*') if path.is_file()) if data.is_dir() else [data]
+    """The data's rows. Files whose names start with `_` or `.`, such as a write's manifest, are not data, as the listing
+    skips them. Parquet files holding different schemas are scanned at their union, as the Polars backend reads them."""
+    files = sorted(path for path in data.rglob('*') if path.is_file() and not path.name.startswith(('_', '.'))) if data.is_dir() else [data]
     if all(path.suffix == '.parquet' for path in files):
-        return pl.scan_parquet(files)
+        schemas = [pq.read_schema(path) for path in files]
+        if all(schema.equals(schemas[0]) for schema in schemas):
+            return pl.scan_parquet(files)
+        union = pa.unify_schemas(schemas, promote_options='permissive')
+        return pl.scan_parquet(
+            files,
+            schema=pl.DataFrame(union.empty_table()).schema,
+            missing_columns='insert',
+            extra_columns='ignore',
+            cast_options=pl.ScanCastOptions(integer_cast='upcast', float_cast='upcast'),
+        )
     return pl.scan_csv(files, infer_schema=False, separator='\t' if files[0].suffix == '.tsv' else ',')
 
 
