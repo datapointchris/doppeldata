@@ -93,7 +93,7 @@ value:
 | `person_name` | `name` would put full names in a first-name column | `first_name`, `last_name` or `name` |
 
 These hold for the fake version `crates/core/Cargo.toml` pins.
-`library/tests/test_general_detector_pack.py` generates from every general-pack hint and fails
+`cli/tests/test_general_detector_pack.py` generates from every general-pack hint and fails
 naming each whose values stop passing its own validator, as a bump of fake or `rand_regex` could
 make them. `us_ssn`'s pattern spells out each
 excluded area, group and serial, because `rand_regex` has no lookaround. `url` draws from the
