@@ -286,7 +286,11 @@ A footer's min and max are single rows' values, so no column statistic comes fro
 statistic is taken from the rows, under the floor below.
 
 - **At most `FOOTERS_READ` footers are read**, a sample seeded by `FOOTER_SEED` beyond that, on
-  `FOOTER_THREADS` threads. An S3 footer is read with boto3's credentials, in the bucket's region.
+  `FOOTER_THREADS` threads.
+- **An S3 footer is read through the boto3 client that lists the source.** One ranged read of the
+  last `TAIL_BYTES` holds most footers, and a longer one takes a second. So the listing's
+  timeouts, retries and region redirects apply, and a failure exits as a listing's does, with 4
+  where no answer came.
 - **`source.parquet` holds the settings that reproduce the files**: the commonest codec, the
   largest row group as `row_group_rows`, page or chunk `statistics`, and `dictionary_columns`. The
   last is null where every column carries a dictionary.

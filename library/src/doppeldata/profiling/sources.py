@@ -106,8 +106,10 @@ def local_file(path: Path, relative: PurePosixPath) -> SourceFile:
 
 
 @contextlib.contextmanager
-def s3_errors(url: str, endpoint: str) -> Iterator[None]:
-    """Each boto3 failure under `url` as a SourceError naming the endpoint, and exiting 4 when no answer came."""
+def s3_errors(url: str, endpoint: str, *, doing: str = 'listed') -> Iterator[None]:
+    """Each boto3 failure under `url` as a SourceError naming the endpoint, and exiting 4 when no answer came. `doing` says
+    what could not be done to `url`, such as `read`.
+    """
     try:
         yield
     except botocore.exceptions.ClientError as error:
@@ -116,14 +118,14 @@ def s3_errors(url: str, endpoint: str) -> Iterator[None]:
         answer = f'{reported.get("Code")}, {reported.get("Message")}'
         if status == 429 or status >= 500:
             raise SourceError(f'no answer from {endpoint}: S3 answered {answer} on every attempt', exit_code=4) from error
-        raise SourceError(f'{url} could not be listed: {endpoint} answered {answer}', exit_code=1) from error
+        raise SourceError(f'{url} could not be {doing}: {endpoint} answered {answer}', exit_code=1) from error
     except CREDENTIAL_ERRORS as error:
-        message = f'{url} could not be listed: {error}; {CREDENTIAL_ADVICE}'
+        message = f'{url} could not be {doing}: {error}; {CREDENTIAL_ADVICE}'
         raise SourceError(message, exit_code=1) from error
     except UNANSWERED_ERRORS as error:
         raise SourceError(f'no answer from {endpoint}: {error}, {S3_ATTEMPTS} attempts', exit_code=4) from error
     except botocore.exceptions.BotoCoreError as error:
-        raise SourceError(f'{url} could not be listed through {endpoint}: {error}', exit_code=1) from error
+        raise SourceError(f'{url} could not be {doing} through {endpoint}: {error}', exit_code=1) from error
 
 
 def s3_files(url: str) -> list[SourceFile]:

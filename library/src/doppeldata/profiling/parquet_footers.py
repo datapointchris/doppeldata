@@ -6,57 +6,68 @@ import json
 import random
 from typing import Any
 
-import pyarrow.fs
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from doppeldata.errors import SourceError
 from doppeldata.profiling.backend import ParquetFooter
 from doppeldata.profiling.backend import SourceFile
-from doppeldata.s3_access import S3_CLIENT_CONFIG
+from doppeldata.profiling.sources import s3_errors
+from doppeldata.s3_access import endpoint_named
 from doppeldata.s3_access import s3_session
 
 # The most footers read, from a seeded sample of the files beyond that, because each footer on S3 is a remote read.
 FOOTERS_READ = 512
 FOOTER_THREADS = 16
 FOOTER_SEED = 0
+# One ranged read of a file's last bytes holds most footers. A longer footer takes a second read of the rest.
+TAIL_BYTES = 64 * 1024
+# A Parquet file ends in its footer's length, four bytes little-endian, then this.
+PARQUET_MAGIC = b'PAR1'
 SPARK_VERSION_KEY = b'org.apache.spark.version'
 TIME_UNITS = {'milliseconds': 'ms', 'microseconds': 'us', 'nanoseconds': 'ns'}
 
 
 def read_footers(files: tuple[SourceFile, ...]) -> tuple[ParquetFooter, ...]:
+    """Each chosen file's footer. On S3, through the boto3 client that lists the source, so its timeouts, retries and
+    region redirects apply, and its failures map as a listing's do.
+    """
     chosen = (
         list(files)
         if len(files) <= FOOTERS_READ
         else sorted(random.Random(FOOTER_SEED).sample(list(files), FOOTERS_READ), key=lambda file: file.path)
     )
-    filesystem = s3_filesystem(chosen[0].path) if chosen and chosen[0].path.startswith('s3://') else None
-    with concurrent.futures.ThreadPoolExecutor(FOOTER_THREADS) as pool:
-        return tuple(pool.map(lambda file: footer_of(metadata_of(file.path, filesystem)), chosen))
+    if not chosen or not chosen[0].path.startswith('s3://'):
+        with concurrent.futures.ThreadPoolExecutor(FOOTER_THREADS) as pool:
+            return tuple(pool.map(lambda file: footer_of(parsed(file.path, file.path)), chosen))
+    _, client = s3_session()
+    with s3_errors(chosen[0].path, endpoint_named(client), doing='read'), concurrent.futures.ThreadPoolExecutor(FOOTER_THREADS) as pool:
+        return tuple(pool.map(lambda file: footer_of(parsed(pa.BufferReader(tail_of(client, file)), file.path)), chosen))
 
 
-def metadata_of(path: str, filesystem: pyarrow.fs.FileSystem | None) -> pq.FileMetaData:
+def tail_of(client: Any, file: SourceFile) -> bytes:
+    """An S3 object's footer, its length and the magic that ends it, in one ranged read, or two for a long footer."""
+    bucket, key = file.path.removeprefix('s3://').split('/', 1)
+    tail = ranged(client, bucket, key, max(0, file.size - TAIL_BYTES), file.size) if file.size >= 8 else b''
+    if len(tail) < 8 or tail[-4:] != PARQUET_MAGIC:
+        raise SourceError(f'the footer of {file.path} could not be read: the file does not end in {PARQUET_MAGIC.decode()}', exit_code=1)
+    length = int.from_bytes(tail[-8:-4], 'little')
+    if length + 8 > len(tail) and length + 8 <= file.size:
+        tail = ranged(client, bucket, key, file.size - length - 8, file.size - len(tail)) + tail
+    return tail
+
+
+def ranged(client: Any, bucket: str, key: str, start: int, end: int) -> bytes:
+    """The object's bytes from `start` up to `end`."""
+    body: bytes = client.get_object(Bucket=bucket, Key=key, Range=f'bytes={start}-{end - 1}')['Body'].read()
+    return body
+
+
+def parsed(source: str | pa.BufferReader, path: str) -> pq.FileMetaData:
     try:
-        if filesystem is not None:
-            return pq.read_metadata(path.removeprefix('s3://'), filesystem=filesystem)
-        return pq.read_metadata(path)
-    except (OSError, pyarrow.ArrowException) as error:
+        return pq.read_metadata(source)
+    except (OSError, pa.ArrowException) as error:
         raise SourceError(f'the footer of {path} could not be read: {error}', exit_code=1) from error
-
-
-def s3_filesystem(url: str) -> pyarrow.fs.S3FileSystem:
-    """An S3 filesystem with the credentials boto3 resolves, calling the endpoint boto3 resolves for the bucket's region."""
-    session, client = s3_session()
-    credentials = session.get_credentials()
-    bucket = url.removeprefix('s3://').split('/', 1)[0]
-    head = client.head_bucket(Bucket=bucket)
-    region = head['ResponseMetadata']['HTTPHeaders'].get('x-amz-bucket-region') or client.meta.region_name
-    endpoint = session.client('s3', region_name=region, config=S3_CLIENT_CONFIG).meta.endpoint_url
-    if credentials is None:
-        return pyarrow.fs.S3FileSystem(anonymous=True, region=region, endpoint_override=endpoint)
-    frozen = credentials.get_frozen_credentials()
-    return pyarrow.fs.S3FileSystem(
-        access_key=frozen.access_key, secret_key=frozen.secret_key, session_token=frozen.token, region=region, endpoint_override=endpoint
-    )
 
 
 def footer_of(metadata: pq.FileMetaData) -> ParquetFooter:
