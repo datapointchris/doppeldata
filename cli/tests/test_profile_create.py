@@ -6,6 +6,7 @@ import uuid
 import polars as pl
 import pytest
 from doppeldata import Profile
+from doppeldata import profile
 from doppeldata_cli.main import app
 from typer.testing import CliRunner
 
@@ -114,3 +115,15 @@ def test_a_log_uniform_column_is_fitted_as_the_loguniform_the_generator_reads(tm
     fit = Profile.load(out).to_plain()['columns'][0]['numeric']['fit']
     assert fit['family'] == 'loguniform'
     assert fit['ks'] < 0.02
+
+
+def test_no_histogram_bin_less_the_listed_values_in_it_leaves_a_cell_under_k_min_rows():
+    """Rare values beside listed ones in an outer bin, as 5 zeros below 1,000 ones, are not recovered by subtracting the list."""
+    values = [0] * 5 + [1] * 1000 + [2] * 1000 + [3] * 11 + [9] * 6
+    numeric = profile(pl.DataFrame({'v': values})).to_plain()['columns'][0]['numeric']
+    listed = {entry['value']: round(entry['rate'] * len(values)) for entry in numeric['top_values']}
+    histogram = numeric['histogram']
+    for low, high, count in zip(histogram['edges'], histogram['edges'][1:], histogram['counts'], strict=False):
+        outside = count - sum(rows for value, rows in listed.items() if low <= value <= high)
+        assert not 0 < outside < 11
+    assert not 0 < round(numeric['zero_rate'] * len(values)) < 11

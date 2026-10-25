@@ -72,6 +72,8 @@ INTEGER_FORMAT_RANGES = {
     'uint64': (0, 2**64 - 1),
 }
 TEMPORAL_RATE_SETS = ('by_month', 'by_dow', 'by_hour')
+# Each column section that can list values, as `top_values` and `other_rate`.
+LISTING_SECTIONS = ('string', 'numeric')
 
 PointerParts = tuple[str | int, ...]
 
@@ -323,6 +325,22 @@ def column_ordering_issues(column: dict[str, Any], at: PointerParts) -> Iterator
 def quantile_level(name: str) -> float:
     """The level a quantile name stands for: p05 is 0.05, p50 is 0.5 and p999 is 0.999."""
     return float('0.' + name[1:])
+
+
+def listed_section(column: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """The name of the section holding a profile column's `top_values`, with the section, or None where it lists none."""
+    for name in LISTING_SECTIONS:
+        section = column.get(name) or {}
+        if section.get('top_values'):
+            return name, section
+    return None
+
+
+def described_rows(document: dict[str, Any]) -> int | None:
+    """The rows a profile's rates are shares of: those its sample read, or else every row."""
+    sample = (document.get('generated') or {}).get('sample') or {}
+    rows: int | None = sample.get('rows_read') or (document.get('dataset') or {}).get('row_count')
+    return rows
 
 
 def quantile_issues(quantiles: dict[str, float] | None, at: PointerParts) -> Iterator[Issue]:

@@ -1713,6 +1713,17 @@
             }
           ]
         },
+        "overflow": {
+          "description": "Written when the value list was frozen from an earlier profile.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValueOverflow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "precision": {
           "type": [
             "integer",
@@ -1732,7 +1743,7 @@
           ]
         },
         "scale": {
-          "description": "Decimal places: a decimal type's scale, or the most places any value of a float column holds.",
+          "description": "Decimal places: a decimal type's scale, or the fewest places every value of a float column\nequals itself rounded to, where the profiler finds one.",
           "type": [
             "integer",
             "null"

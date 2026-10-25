@@ -8,6 +8,8 @@ from typing import Any
 
 from doppeldata.profile_comparison.metrics import Column
 from doppeldata.profile_comparison.metrics import Document
+from doppeldata.profile_format import LISTING_SECTIONS
+from doppeldata.profile_format import described_rows
 from doppeldata.profile_format import pointer
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.table_profile import profiled_kind
@@ -155,7 +157,7 @@ def retyped(source: Column, observed: Column, index: int, writer_changes_pass: b
 def overflow_changes(source: Document, observed: Document) -> list[FieldChange]:
     """Each column with more than `OVERFLOW_SHARE` of its values outside the histogram edges or value list frozen from the source."""
     ours = {column['name']: column for column in source.get('columns') or []}
-    rows = (observed.get('dataset') or {}).get('row_count')
+    rows = described_rows(observed)
     changes = []
     for index, column in enumerate(observed.get('columns') or []):
         name = column['name']
@@ -170,15 +172,17 @@ def overflow_changes(source: Document, observed: Document) -> list[FieldChange]:
             if share > OVERFLOW_SHARE:
                 message = f'{share:.1%} of {name} values fall outside the histogram edges frozen from the source profile'
                 changes.append(FieldChange(ChangeKind.OVERFLOW, name, at, None, round(share, 6), False, message))
-        new_rows = ((column.get('string') or {}).get('overflow') or {}).get('new_value_rows')
         values = rows * (1 - (column.get('null_rate') or 0.0)) if rows else 0
-        if new_rows and values and new_rows / values > OVERFLOW_SHARE:
-            share = new_rows / values
-            at = pointer(('columns', index, 'string', 'overflow', 'new_value_rows'))
-            message = (
-                f'{share:.1%} of {name} values are outside the value list frozen from the source profile, beyond the share it started with'
-            )
-            changes.append(FieldChange(ChangeKind.OVERFLOW, name, at, None, round(share, 6), False, message))
+        for section in LISTING_SECTIONS:
+            new_rows = ((column.get(section) or {}).get('overflow') or {}).get('new_value_rows')
+            if new_rows and values and new_rows / values > OVERFLOW_SHARE:
+                share = new_rows / values
+                at = pointer(('columns', index, section, 'overflow', 'new_value_rows'))
+                message = (
+                    f'{share:.1%} of {name} values are outside the value list frozen from the source profile, '
+                    'beyond the share it started with'
+                )
+                changes.append(FieldChange(ChangeKind.OVERFLOW, name, at, None, round(share, 6), False, message))
     return changes
 
 

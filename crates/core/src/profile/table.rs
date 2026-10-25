@@ -522,7 +522,8 @@ pub struct Distinct {
 pub struct NumericStats {
     pub integral: Option<bool>,
     pub precision: Option<u32>,
-    /// Decimal places: a decimal type's scale, or the most places any value of a float column holds.
+    /// Decimal places: a decimal type's scale, or the fewest places every value of a float column
+    /// equals itself rounded to, where the profiler finds one.
     pub scale: Option<i32>,
     pub extremes: Option<NumericExtremes>,
     pub mean: Option<f64>,
@@ -541,6 +542,8 @@ pub struct NumericStats {
     pub top_values: Option<Vec<NumericTopValue>>,
     /// The share of values outside `top_values`.
     pub other_rate: Option<Rate>,
+    /// Written when the value list was frozen from an earlier profile.
+    pub overflow: Option<ValueOverflow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]

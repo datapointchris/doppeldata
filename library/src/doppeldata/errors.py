@@ -146,16 +146,21 @@ class EarlierProfileNotReused(ProfilingWarning):
 
 
 class ColumnsNotFrozen(ProfilingWarning):
-    """A re-profile's table and its earlier profile do not hold the same columns, so some were not counted against it."""
+    """A re-profile's table and its earlier profile do not hold the same columns, or a column changed kind, so some
+    were not counted against it.
+    """
 
-    def __init__(self, undescribed: list[str], missing: list[str]) -> None:
+    def __init__(self, undescribed: list[str], missing: list[str], relisted: list[str]) -> None:
         self.undescribed = undescribed
         self.missing = missing
+        self.relisted = relisted
         parts = []
         if undescribed:
             parts.append(f'columns the earlier profile does not describe, binned afresh: {", ".join(undescribed)}')
         if missing:
             parts.append(f'columns the earlier profile describes that this table lacks: {", ".join(missing)}')
+        if relisted:
+            parts.append(f'columns whose values the earlier profile lists as another kind, profiled afresh: {", ".join(relisted)}')
         super().__init__('; '.join(parts))
 
 

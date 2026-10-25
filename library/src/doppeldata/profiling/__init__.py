@@ -169,8 +169,9 @@ def profile(
     if edges_from is not None:
         earlier, now = (column_names(document.to_plain()) for document in (edges_from, profiled))
         undescribed, missing = [name for name in now if name not in earlier], [name for name in earlier if name not in now]
-        if undescribed or missing:
-            warnings.warn(ColumnsNotFrozen(undescribed, missing), stacklevel=2)
+        relisted = table_profile.relisted_columns(edges_from.to_plain(), profiled.to_plain())
+        if undescribed or missing or relisted:
+            warnings.warn(ColumnsNotFrozen(undescribed, missing, relisted), stacklevel=2)
     return profiled
 
 
