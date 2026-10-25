@@ -75,12 +75,14 @@ fn run() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     for _ in 0..options.repeat {
         let started = Instant::now();
-        let rows: usize = pool.install(|| {
-            (0..plan.block_count())
-                .into_par_iter()
-                .map(|block| plan.generate_block(block).num_rows())
-                .sum()
-        });
+        let rows = pool
+            .install(|| {
+                (0..plan.block_count())
+                    .into_par_iter()
+                    .map(|block| plan.generate_block(block).map(|batch| batch.num_rows()))
+                    .sum::<Result<usize, _>>()
+            })
+            .map_err(|error| error.to_string())?;
         let seconds = started.elapsed().as_secs_f64();
         println!(
             "{} rows on {} threads in {seconds:.3} s: {:.2}M rows/s",
@@ -93,7 +95,9 @@ fn run() -> Result<(), String> {
         let file = File::create(&path).map_err(|error| format!("{path}: {error}"))?;
         let mut writer = FileWriter::try_new_buffered(file, &plan.schema()).map_err(|e| e.to_string())?;
         for block in 0..plan.block_count() {
-            writer.write(&plan.generate_block(block)).map_err(|e| e.to_string())?;
+            writer
+                .write(&plan.generate_block(block).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
         }
         writer.finish().map_err(|e| e.to_string())?;
         println!("wrote {path}");

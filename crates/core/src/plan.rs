@@ -36,6 +36,13 @@ pub enum PlanError {
     Column { column: String, reason: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("block {block} is past the plan's {block_count} blocks")]
+pub struct BlockOutOfRange {
+    pub block: u64,
+    pub block_count: u64,
+}
+
 /// A profile resolved for generation. `generate_block` takes `&self` and the plan is `Send + Sync`,
 /// so any thread can produce any block.
 #[derive(Debug)]
@@ -89,9 +96,9 @@ pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Re
     let metadata = HashMap::from([
         (provenance::PROFILE_NAME.to_string(), table.name.clone()),
         (provenance::PROFILE_VERSION.to_string(), FORMAT_VERSION.to_string()),
-        (provenance::PROFILE_DIGEST.to_string(), identity.profile_digest.clone()),
+        (provenance::PROFILE_DIGEST.to_string(), profile_digest.to_string()),
         (provenance::SEED.to_string(), seed.to_string()),
-        (provenance::STREAM_VERSION.to_string(), identity.stream_version.to_string()),
+        (provenance::STREAM_VERSION.to_string(), identity.stream_version().to_string()),
         (provenance::DATASET_ROWS.to_string(), rows.to_string()),
         (provenance::DATASET_DIGEST.to_string(), identity.digest()),
     ]);
@@ -118,42 +125,35 @@ impl Plan {
         self.block_count
     }
 
-    fn position(&self, block: u64) -> (BlockPosition, usize) {
-        assert!(
-            block < self.block_count,
-            "block {block} is past the plan's {} blocks",
-            self.block_count
-        );
+    fn position(&self, block: u64) -> Result<(BlockPosition, usize), BlockOutOfRange> {
+        if block >= self.block_count {
+            return Err(BlockOutOfRange {
+                block,
+                block_count: self.block_count,
+            });
+        }
         let first_row = block * BLOCK_ROWS;
-        let rows = (self.identity.rows - first_row).min(BLOCK_ROWS) as usize;
+        let rows = (self.identity.rows() - first_row).min(BLOCK_ROWS) as usize;
         let position = BlockPosition {
-            seed: self.identity.seed,
+            seed: self.identity.seed(),
             block,
             first_row,
         };
-        (position, rows)
+        Ok((position, rows))
     }
 
     /// The rows of `block`, a pure function of the plan and the block number.
-    ///
-    /// # Panics
-    ///
-    /// When `block` is not below [`Plan::block_count`].
-    pub fn generate_block(&self, block: u64) -> RecordBatch {
-        let (position, rows) = self.position(block);
+    pub fn generate_block(&self, block: u64) -> Result<RecordBatch, BlockOutOfRange> {
+        let (position, rows) = self.position(block)?;
         let arrays = self.columns.iter().map(|column| column.generate(&position, rows)).collect();
         let options = RecordBatchOptions::new().with_row_count(Some(rows));
-        RecordBatch::try_new_with_options(self.schema.clone(), arrays, &options).expect("every column's array matches its field")
+        Ok(RecordBatch::try_new_with_options(self.schema.clone(), arrays, &options).expect("every column's array matches its field"))
     }
 
     /// The cells of `block` only a text format can carry, one list per column in schema order,
     /// each in row order. The batch [`Plan::generate_block`] returns holds a null at each.
-    ///
-    /// # Panics
-    ///
-    /// When `block` is not below [`Plan::block_count`].
-    pub fn text_cells(&self, block: u64) -> Vec<Vec<TextCell>> {
-        let (position, rows) = self.position(block);
-        self.columns.iter().map(|column| column.text_cells(&position, rows)).collect()
+    pub fn text_cells(&self, block: u64) -> Result<Vec<Vec<TextCell>>, BlockOutOfRange> {
+        let (position, rows) = self.position(block)?;
+        Ok(self.columns.iter().map(|column| column.text_cells(&position, rows)).collect())
     }
 }

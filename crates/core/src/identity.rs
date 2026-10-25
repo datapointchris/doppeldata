@@ -6,16 +6,14 @@ use sha2::Sha256;
 
 use crate::rng::STREAM_VERSION;
 
-/// A dataset's identity. The library computes the profile and scenario digests and passes them in,
-/// each as `sha256:` and 64 lowercase hex digits.
+/// A dataset's identity. The library computes the profile digest and passes it in, as `sha256:`
+/// and 64 lowercase hex digits. This engine applies no scenario, so the scenario digest is null.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatasetIdentity {
-    pub stream_version: u32,
-    pub profile_digest: String,
-    /// `None` when no scenario applies.
-    pub scenario_digest: Option<String>,
-    pub seed: u64,
-    pub rows: u64,
+    stream_version: u32,
+    profile_digest: String,
+    seed: u64,
+    rows: u64,
 }
 
 /// The identity's RFC 8785 form. Fields are declared in key order, and the 64-bit integers are
@@ -30,15 +28,30 @@ struct Canonical<'a> {
 }
 
 impl DatasetIdentity {
-    /// The identity of a dataset this engine generates with no scenario.
+    /// The identity of a dataset this engine generates.
     pub fn new(profile_digest: impl Into<String>, seed: u64, rows: u64) -> Self {
         Self {
             stream_version: STREAM_VERSION,
             profile_digest: profile_digest.into(),
-            scenario_digest: None,
             seed,
             rows,
         }
+    }
+
+    pub fn stream_version(&self) -> u32 {
+        self.stream_version
+    }
+
+    pub fn profile_digest(&self) -> &str {
+        &self.profile_digest
+    }
+
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    pub fn rows(&self) -> u64 {
+        self.rows
     }
 
     /// The five values as RFC 8785 canonical JSON, the bytes [`Self::digest`] hashes.
@@ -46,7 +59,7 @@ impl DatasetIdentity {
         let canonical = Canonical {
             profile_digest: &self.profile_digest,
             rows: self.rows.to_string(),
-            scenario_digest: self.scenario_digest.as_deref(),
+            scenario_digest: None,
             seed: self.seed.to_string(),
             stream_version: self.stream_version,
         };

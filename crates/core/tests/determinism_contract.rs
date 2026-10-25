@@ -7,10 +7,10 @@ use std::path::Path;
 use arrow_array::Array;
 use arrow_array::RecordBatch;
 use arrow_data::ArrayData;
+use doppeldata_core::BLOCK_ROWS;
 use doppeldata_core::DatasetIdentity;
+use doppeldata_core::STREAM_VERSION;
 use doppeldata_core::profile::Profile;
-use doppeldata_core::rng::BLOCK_ROWS;
-use doppeldata_core::rng::STREAM_VERSION;
 use rayon::prelude::*;
 use sha2::Digest;
 use sha2::Sha256;
@@ -33,7 +33,7 @@ fn generate(document: &serde_json::Value, threads: usize) -> Vec<RecordBatch> {
     pool.install(|| {
         (0..plan.block_count())
             .into_par_iter()
-            .map(|block| plan.generate_block(block))
+            .map(|block| plan.generate_block(block).unwrap())
             .collect()
     })
 }

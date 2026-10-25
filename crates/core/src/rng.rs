@@ -34,7 +34,7 @@ fn splitmix(mut x: u64) -> u64 {
 }
 
 /// FNV-1a over `table\0path\0draw`, so a stream is named, never numbered.
-pub fn stream_key(table: &str, path: &str, draw: &str) -> u64 {
+pub(crate) fn stream_key(table: &str, path: &str, draw: &str) -> u64 {
     const OFFSET_BASIS: u64 = 0xCBF2_9CE4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01B3;
     let mut hash = OFFSET_BASIS;
@@ -48,7 +48,7 @@ pub fn stream_key(table: &str, path: &str, draw: &str) -> u64 {
 }
 
 /// The stream named by `key`, positioned at the start of `block`.
-pub fn rng_for(seed: u64, key: u64, block: u64) -> ChaCha8Rng {
+pub(crate) fn rng_for(seed: u64, key: u64, block: u64) -> ChaCha8Rng {
     let mut rng = ChaCha8Rng::seed_from_u64(splitmix(seed ^ splitmix(key)));
     rng.set_stream(block);
     rng
