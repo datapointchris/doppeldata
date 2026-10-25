@@ -21,8 +21,8 @@ and `profile diff` read the registry. So a metric added there reaches all three 
 change, and that help is where each metric's summary and default threshold are listed. The
 sections below give the reason behind each measurement that needs one.
 
-The names follow SDMetrics where one exists. Its `KSComplement` is 1 − `ks`, and its `TVComplement`
-is 1 − `tvd`.
+The names follow SDMetrics where one exists. Its `KSComplement` is one minus the KS distance,
+which `ks` bounds from below, and its `TVComplement` is one minus a categorical column's `tvd`.
 
 ## `ks` is the largest gap at the points the source profile states, a lower bound on the KS distance
 
@@ -42,8 +42,10 @@ there, and interpolates nothing.
   source left empty pass `ks`. Where the source's values are few, `distinct_ratio_delta` fails them.
 - **The outer edges are left out.** A profile made without overflow folds the rows beyond its
   trimmed extremes into its outer bins. `boundary_adherence` measures those rows instead.
-- **Every interior edge is exact on both sides.** The other profile is counted against the source's
-  edges, and every rate and count is a share of the non-null values.
+- **An interior edge is exact on the other side when that side was counted against the source's
+  edges.** A check always counts it that way, and a diff does when B was profiled with
+  `--edges-from A`. Otherwise the other side's share at the edge is the range its own points allow.
+  Every rate and count is a share of the non-null values.
 
 A sequence column draws nothing, so it holds its start and step at any row count and has no `ks`.
 A date or timestamp column states no point on its CDF, so `tvd` measures its shares instead.
