@@ -354,12 +354,23 @@ pub enum ExtremesMethod {
     TrimmedK,
 }
 
-/// Bin edges and the rows in each bin. `counts` has one entry fewer than `edges`.
+/// Bin edges and the rows in each bin. `counts` has one entry fewer than `edges`. Each bin holds
+/// the rows from its lower edge up to its upper one, and the last bin holds its upper edge too.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Histogram {
     pub kind: HistogramKind,
     pub edges: Vec<f64>,
     pub counts: Vec<u64>,
+    /// The rows outside the edges, written when the edges were frozen from an earlier profile.
+    pub overflow: Option<HistogramOverflow>,
+}
+
+/// Rows below the first edge and above the last. A count of fewer than `k_min` rows is written as
+/// 0, and its rows are counted in the outermost bin on their side.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct HistogramOverflow {
+    pub below: u64,
+    pub above: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -379,6 +390,12 @@ pub struct Fit {
     pub aic: Option<f64>,
     /// The rows the fit was made on.
     pub sample: Option<u64>,
+    /// The share of the fitting sample's values that were zero and were left out of the fit, so
+    /// the column is the family mixed with this share of zeros.
+    pub zero_inflation: Option<Rate>,
+    /// Whether the KS statistic is above 0.1, so a scenario must set `allow_poor_fit` to reshape a
+    /// tail through it.
+    pub poor: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -410,6 +427,15 @@ pub struct StringStats {
     pub top_values: Option<Vec<TopValue>>,
     /// The share of rows holding a value outside `top_values`.
     pub other_rate: Option<Rate>,
+    /// The rows holding a value outside the value list, written when the list was frozen from an
+    /// earlier profile.
+    pub overflow: Option<ValueOverflow>,
+}
+
+/// A count of fewer than `k_min` rows is written as 0, and its rows stay in `other_rate`.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct ValueOverflow {
+    pub new_values: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
