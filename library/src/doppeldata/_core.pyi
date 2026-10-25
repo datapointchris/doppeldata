@@ -39,10 +39,23 @@ class Plan:
     def __new__(cls, /, profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, source: str) -> Plan: ...
     @property
     def block_count(self, /) -> int: ...
+    def claim(self, /, options: WriteOptions, destination: str, *, replace: bool, s3_store: dict |None = None) -> None:
+        """
+        Claims ``destination`` for the dataset ``write`` would write there, as ``write`` does
+        before its first object. Any process then writes ranges with ``write_ranges``, and one
+        calls ``commit``.
+        """
     def column_samplers(self, /) -> list[tuple[str, str, str, float]]:
         """
         Each top-level column's name, type as a profile's ``physical_type`` spells it, what draws
         its values, and the share of rows drawn null, in schema order.
+        """
+    def commit(self, /, options: WriteOptions, destination: str, files_json: str, *, tasks: SupportsIndex, elapsed_ms: SupportsIndex, s3_store: dict |None = None) -> str:
+        """
+        Stores the manifest of a write ``claim`` claimed, from every record ``write_ranges``
+        returned, given as one JSON list, and returns it as JSON. ``tasks`` is how many the
+        ranges were divided among, and ``elapsed_ms`` the time from the claim. A range with no
+        record leaves the partial manifest under the claim's name, and raises.
         """
     @property
     def dataset_digest(self, /) -> str:
@@ -76,6 +89,11 @@ class Plan:
         The blocks in order, as a reader. ``threads`` threads, zero taking one per core, each
         make the blocks ahead of the reader, and each holds at most two.
         """
+    def stream_blocks(self, /, start: SupportsIndex, stop: SupportsIndex, *, threads: SupportsIndex) -> Any:
+        """
+        Blocks ``start`` up to ``stop`` in order, as a reader made the way ``stream`` makes
+        every block, so they are the batches ``stream`` yields for those blocks.
+        """
     def write(self, /, options: WriteOptions, destination: str, *, threads: SupportsIndex, replace: bool, s3_store: dict |None = None) -> str:
         """
         Writes the dataset to ``destination``, a URL ``destination_scheme`` accepts, and returns
@@ -88,6 +106,12 @@ class Plan:
         What to write: the profile's recorded settings, with ``choices_json`` laid over them. It
         is a JSON object holding any of ``format``, ``writer``, ``file_rows``, ``partition_by``,
         ``partition_style`` and ``profile_path``.
+        """
+    def write_ranges(self, /, options: WriteOptions, destination: str, ranges: SupportsGetItem[int, SupportsIndex], *, threads: SupportsIndex, s3_store: dict |None = None) -> str:
+        """
+        Writes the objects of the ranges numbered ``ranges`` in the layout ``ranges_json``
+        lists, the bytes ``write`` writes for them, and returns their manifest records as a
+        JSON list. It neither claims ``destination`` nor stores a manifest.
         """
 
 @final

@@ -1,5 +1,8 @@
 """Profile a dataset into a reviewable file holding no rows, then generate synthetic data from it."""
 
+import importlib
+from types import ModuleType
+
 from doppeldata.dataset_generation import ColumnSampler
 from doppeldata.dataset_generation import PlannedRange
 from doppeldata.dataset_generation import WritePlan
@@ -53,3 +56,10 @@ __all__ = [
     'stream',
     'write',
 ]
+
+
+def __getattr__(name: str) -> ModuleType:
+    """`doppeldata.spark` on first use, so importing doppeldata never imports pyspark."""
+    if name == 'spark':
+        return importlib.import_module('doppeldata.spark')
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

@@ -117,8 +117,22 @@ def destination_of(out: str | os.PathLike[str]) -> tuple[str, str, str | None]:
     return destination, scheme, bucket
 
 
-def engine_plan(profile: Profile, rows: int | None, seed: int) -> '_core.Plan':
-    """The engine's plan for `rows` rows of `profile` from `seed`. No `rows` takes the row count the profile records."""
+@dc.dataclass(frozen=True)
+class EngineArguments:
+    """Everything the engine's plan is built from, so a process holding only these, such as a Spark executor, builds the same plan."""
+
+    profile_json: str
+    profile_digest: str
+    seed: int
+    rows: int
+    source: str
+
+    def plan(self) -> '_core.Plan':
+        return _core.Plan(self.profile_json, self.profile_digest, self.seed, self.rows, self.source)
+
+
+def engine_arguments(profile: Profile, rows: int | None, seed: int) -> EngineArguments:
+    """The engine's arguments for `rows` rows of `profile` from `seed`. No `rows` takes the row count the profile records."""
     if not isinstance(profile, Profile):
         raise TypeError(f'generation takes a Profile, such as Profile.load(path), not {type(profile).__name__}')
     source = str(profile.path) if profile.path else f'profile {profile.document.get("name")!r}'
@@ -131,7 +145,12 @@ def engine_plan(profile: Profile, rows: int | None, seed: int) -> '_core.Plan':
         raise ValueError(f'rows must be zero or more, not {rows}')
     if not 0 <= seed <= LARGEST_SEED:
         raise ValueError(f'seed must be between 0 and 2^64 - 1, not {seed}')
-    return _core.Plan(json.dumps(profile.to_plain(), allow_nan=False), profile.digest, seed, rows, source)
+    return EngineArguments(json.dumps(profile.to_plain(), allow_nan=False), profile.digest, seed, rows, source)
+
+
+def engine_plan(profile: Profile, rows: int | None, seed: int) -> '_core.Plan':
+    """The engine's plan for `rows` rows of `profile` from `seed`. No `rows` takes the row count the profile records."""
+    return engine_arguments(profile, rows, seed).plan()
 
 
 def generate(profile: Profile, *, rows: int | None = None, seed: int = 0, threads: int = 0) -> ArrowStreamExportable:
