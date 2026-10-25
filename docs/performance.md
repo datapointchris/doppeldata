@@ -113,7 +113,7 @@ average ran from 4.2 to 5.7.
 
 ## On Glue 5.1, nine executors write 1B rows in 64 s through `sd.spark.write`, and in 97 s through Spark's writer
 
-Each mode ran once, as its own run of one Glue job:
+One run of each mode, each its own run of the Glue job below:
 
 | Mode | Timed work | Seconds | Rows/s | Per executor | Written | Run billed | DPU-hours |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -122,12 +122,13 @@ Each mode ran once, as its own run of one Glue job:
 
 - **Writing directly is 1.5 times as fast.** Spark's files also hold 22% more bytes. Its Parquet
   writer defaults to Snappy, and doppeldata's to ZSTD level 1.
-- **Spark mode ran 954 tasks, one per 1,048,576-row chunk.** Spark wrote one file per task.
+- **Spark mode ran 954 tasks, one per chunk of `CHUNK_BLOCKS` engine blocks.** Spark wrote one
+  file per task.
 - **Each executor core wrote about 436k rows/s**, against 3.2M on one local thread. The run did not
   split a task's time between generating, encoding, uploading and Spark's own overhead, so the gap
   is not attributed.
 - **A billed run is longer than its timed work.** It also holds start-up, installing the wheel, and
-  the job script's diagnostic passes before and after. How those split was not measured.
+  the job's diagnostic tasks before and after the timed call. How those split was not measured.
 - **A DPU-hour's price depends on the region**, and is on <https://aws.amazon.com/glue/pricing/>.
 
 The job and how it was timed:
@@ -137,12 +138,28 @@ The job and how it was timed:
 - **Ten G.1X workers**: one driver, and nine executors of 4 cores and 10g each. Dynamic allocation
   is off. The execution class is STANDARD, with a 60-minute timeout and no retries.
 - **`--additional-python-modules` names the library's cp311-abi3 manylinux2014 x86_64 wheel on
-  S3**, and nothing else. The wheel was built from the source that added `doppeldata.spark`, before a
-  release stamped it, so it reports version 0.0.0.
+  S3**, and nothing else. It was an unstamped build, which reports version 0.0.0.
 - **The population is the bundled `eight-columns` profile, 1B rows, seed 42, 1M rows a file**,
   written to a bucket in the job's region.
-- **The job script times each mode's call on the driver with `time.monotonic`.** Rows/s divides 1B
-  by that time, and per executor divides it by the nine executors registered after the call. The
-  direct manifest's `elapsed_ms` is 63,606, which agrees.
+- **The job times each mode's call on the driver with `time.monotonic`.** Rows/s divides 1B by that
+  time, and per executor divides it by the nine executors registered after the call. The direct
+  manifest's `elapsed_ms` is 63,606, which agrees.
+- **Before and after the timed call, the job ran one diagnostic task per executor core.** Each
+  resolved boto3's credentials and imported one chunk, which
+  [generating-inside-spark.md](generating-inside-spark.md) reports.
+
+The timed part of the job, with `mode` and `out` its job arguments:
+
+```python
+spark = SparkSession.builder.getOrCreate()
+profile = sd.Profile.example('eight-columns')
+started = time.monotonic()
+if mode == 'direct':
+    manifest = sd.spark.write(spark, profile, out, rows=10**9, seed=42, file_rows=1_000_000)
+else:
+    sd.spark.generate(spark, profile, rows=10**9, seed=42).write.mode('errorifexists').parquet(out)
+seconds = time.monotonic() - started
+```
+
 - **Billed time and DPU-hours are the job run's `ExecutionTime` and `DPUSeconds`**, as Glue reports
   them.

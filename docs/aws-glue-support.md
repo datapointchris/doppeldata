@@ -17,8 +17,7 @@ Glue 4.0 is out for two reasons:
 ## A Glue job adds only the wheel, because Glue installs the pandas and pyarrow `doppeldata.spark` needs
 
 PySpark's `mapInArrow` needs pandas and pyarrow beside Spark, and every supported Glue preinstalls
-both. Glue 5.0 provides pandas 2.2.2, and Glue 5.1 and 6.0 provide 2.3.3, which clears Spark 4's
-floor of 2.2.0. AWS lists each version's modules in
+both. Glue 5.0 provides pandas 2.2.2, and Glue 5.1 and 6.0 provide 2.3.3. AWS lists each version's modules in
 <https://docs.aws.amazon.com/glue/latest/dg/aws-glue-programming-python-libraries.html#glue-modules-provided>.
 Glue 5.1 ran `sd.spark.generate` and `sd.spark.write` at 1B rows with
 `--additional-python-modules` naming the library's wheel alone. A Glue 5.1 Spark Connect session
