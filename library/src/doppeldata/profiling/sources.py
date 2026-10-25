@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import botocore.exceptions
 
 from doppeldata.errors import SourceError
+from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import Manifest
 from doppeldata.profiling.backend import FORMAT_TRAITS
 from doppeldata.profiling.backend import TEXT_CODEC_SUFFIXES
@@ -30,7 +31,6 @@ SUFFIX_FORMATS = {suffix: source_format for source_format, traits in FORMAT_TRAI
 COMPRESSION_SUFFIXES = tuple(TEXT_CODEC_SUFFIXES)
 # A doppeldata write claims its destination with this file, and removes it once every file is written.
 UNFINISHED_WRITE = PurePosixPath('_manifest.partial.json')
-WRITTEN_MANIFEST = '_manifest.json'
 
 
 def resolve(data: Any) -> Source:
@@ -149,23 +149,16 @@ def s3_files(url: str) -> list[SourceFile]:
     return found
 
 
-def written_manifest(data: Any) -> Manifest | None:
-    """The manifest a doppeldata write left at the root `data` names, a directory or an `s3://` prefix. None where `data` is
-    anything else or the root holds none."""
-    if not isinstance(data, str | os.PathLike):
-        return None
-    item = os.fspath(data)
-    if not item.startswith('s3://'):
-        path = Path(item) / WRITTEN_MANIFEST
-        return Manifest.from_json(path.read_text(encoding='utf-8')) if path.is_file() else None
-    parsed = urlparse(item)
+def s3_manifest(url: str) -> Manifest | None:
+    """The manifest a doppeldata write left under the `s3://` prefix `url`, or None where it holds none."""
+    parsed = urlparse(url)
     prefix = parsed.path.strip('/')
-    key = f'{prefix}/{WRITTEN_MANIFEST}' if prefix else WRITTEN_MANIFEST
+    key = f'{prefix}/{MANIFEST_FILE_NAME}' if prefix else MANIFEST_FILE_NAME
     try:
         _, client = s3_session()
     except ValueError as error:
-        raise SourceError(f'{item} could not be read: {error}', exit_code=2) from error
-    with s3_errors(item, endpoint_named(client), doing='read'):
+        raise SourceError(f'{url} could not be read: {error}', exit_code=2) from error
+    with s3_errors(url, endpoint_named(client), doing='read'):
         try:
             body: bytes = client.get_object(Bucket=parsed.netloc, Key=key)['Body'].read()
         except botocore.exceptions.ClientError as error:

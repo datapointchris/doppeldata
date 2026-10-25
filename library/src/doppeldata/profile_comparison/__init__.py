@@ -12,6 +12,7 @@ from typing import Any
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import PoorFits
+from doppeldata.manifest import written_manifest
 from doppeldata.privacy_policy import Policy
 from doppeldata.profile_comparison.field_changes import column_changes
 from doppeldata.profile_comparison.field_changes import overflow_changes
@@ -31,7 +32,6 @@ from doppeldata.profile_comparison.scenario_moves import skipped
 from doppeldata.profile_comparison.thresholds import Thresholds
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import profile as profile_data
-from doppeldata.profiling import sources
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
 from doppeldata.scenario_format import Scenario
@@ -62,7 +62,7 @@ def check(
     `scenario` other than the one it records, and no `scenario` where it records one.
     """
     applied = composed(scenario)
-    written = sources.written_manifest(data)
+    written = written_manifest(data)
     if written is not None:
         refuse_other_scenario(applied, written, data_named(data))
     effective = applied.apply(profile) if applied is not None else profile
