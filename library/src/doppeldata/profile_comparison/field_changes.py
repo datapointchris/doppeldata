@@ -11,11 +11,14 @@ from doppeldata.profile_comparison.metrics import Document
 from doppeldata.profile_format import pointer
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.table_profile import profiled_kind
+from doppeldata.published_schemas import writer_fields
 
 # Text formats hold no decimal type, so a decimal column written as CSV or JSON reads back as a float.
 TEXT_READ_KINDS = {ColumnKind.DECIMAL.value, ColumnKind.FLOAT.value}
 # A diff reports a column when more than this share of its values falls outside the edges or value list frozen from A.
 OVERFLOW_SHARE = 0.05
+# The `source.csv` keys a writer takes. The rest record what the profiler saw, such as the malformed rows, and move each run.
+DIALECT_KEYS = frozenset(writer_fields('DelimitedSettings'))
 
 
 class ChangeKind(enum.Enum):
@@ -151,12 +154,12 @@ def overflow_changes(source: Document, observed: Document) -> list[FieldChange]:
 
 
 def source_changes(source: Document, observed: Document) -> list[FieldChange]:
-    """A CSV dialect setting that changed, and each partition key the other profile adds."""
+    """A CSV dialect setting a writer takes that changed, and each partition key the other profile adds."""
     changes = []
     dialects = (((document.get('source') or {}).get('csv')) for document in (source, observed))
     ours, theirs = (dialect or {} for dialect in dialects)
     if ours and theirs:
-        for key in sorted({*ours, *theirs}):
+        for key in sorted({*ours, *theirs} & DIALECT_KEYS):
             if ours.get(key) != theirs.get(key):
                 message = f'the CSV {key} is {ours.get(key)!r} in the source profile and {theirs.get(key)!r} in the other'
                 changes.append(
