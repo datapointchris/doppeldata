@@ -196,8 +196,8 @@ columns:
     semantic:
       type: icd10cm
       pack: healthcare
-      confidence: 1.0
-      detectors: [validator, name_hint]
+      confidence: 0.6
+      detectors: [pattern, name_hint]
       sensitivity: sensitive
       generator_hint: {provider: icd10cm}
     quality: {invalid_rate: 0.0}
@@ -222,8 +222,8 @@ columns:
     semantic:
       type: hcpcs_level2
       pack: healthcare
-      confidence: 1.0
-      detectors: [validator, name_hint]
+      confidence: 0.6
+      detectors: [pattern, name_hint]
       sensitivity: sensitive
       generator_hint: {provider: hcpcs_level2}
     quality: {invalid_rate: 0.0}

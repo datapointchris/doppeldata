@@ -1,13 +1,12 @@
 """The healthcare pack: the US identifiers and code sets a medical claim holds, which `policy: healthcare` enables.
 
-An ICD-10-CM or HCPCS Level II code is checked against the code list the engine ships, and generated from it. CPT is
-copyrighted and the NDC directory is large, so neither ships. A CPT code is typed by shape and name hint alone, and an
-NDC by those and the `ndc` list, where the caller supplies one. Every pattern here is fixed, and comes from no data.
+No code set ships. An ICD-10-CM, HCPCS Level II or CPT code is typed by its shape and a name hint, and generated in that
+shape. An ICD-10-CM, HCPCS Level II or NDC code is also checked against the list of its name, where the caller supplies
+one. Every pattern here is fixed, and comes from no data.
 """
 
 import collections
 import functools
-from functools import cache
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -16,7 +15,6 @@ from doppeldata import _core
 from doppeldata.profiling.detector_packs import Detector
 from doppeldata.profiling.detector_packs import DetectorPack
 from doppeldata.profiling.detector_packs import ListValidator
-from doppeldata.profiling.detector_packs import Validator
 from doppeldata.profiling.detector_packs.general import matching
 
 ICD10CM = 'icd10cm'
@@ -40,6 +38,8 @@ DEA_NUMBER = r'^[A-Z][A-Z9]\d{7}$'
 NPI_HINTS = ('npi', 'national_provider_identifier', 'national_provider_id')
 NDC_HINTS = ('ndc', 'national_drug_code', 'drug_code')
 CPT_HINTS = ('cpt', 'cpt_code', 'procedure_code', 'proc_code')
+ICD10CM_HINTS = ('icd', 'icd_code', 'icd10', 'icd10_code', 'icd10cm', 'diagnosis', 'diagnosis_code', 'diag', 'diag_code', 'dx', 'dx_code')
+HCPCS_LEVEL2_HINTS = ('hcpcs', 'hcpcs_code', 'procedure', 'procedure_code', 'proc', 'proc_code', 'px', 'px_code')
 MEMBER_HINTS = (
     'member_id',
     'member_number',
@@ -64,23 +64,21 @@ CLAIM_HINTS = ('claim', 'claim_id', 'claim_number', 'claim_no')
 DIGIT_SHAPE = '9'
 
 
-@cache
-def code_list(name: str) -> pa.Array:
-    """The codes of the list the engine ships as `name`, each without its dot, read from the extension once a process."""
-    shipped = _core.code_list(name)
-    if shipped is None:
-        raise ValueError(f'the engine ships no code list named {name!r}')
-    return pa.array(shipped[1], pa.string())
+def coded(shape: str) -> ListValidator:
+    """Whether each value matches the RE2 `shape` and, where a list is supplied, is one of its codes, both read undotted."""
 
-
-def listed(shape: str, codes: str) -> Validator:
-    """Whether each value matches the RE2 `shape` and, without its dots and in capitals, is a code of the list `codes`."""
-
-    def validate(values: pa.Array) -> pa.BooleanArray:
-        bare = pc.utf8_upper(pc.replace_substring(values, '.', ''))
-        return pc.and_(pc.match_substring_regex(values, shape), pc.is_in(bare, value_set=code_list(codes)))
+    def validate(values: pa.Array, codes: pa.Array | None) -> pa.BooleanArray:
+        matched = pc.match_substring_regex(values, shape)
+        if codes is None:
+            return matched
+        return pc.and_(matched, pc.is_in(undotted(values), value_set=undotted(codes).unique()))
 
     return validate
+
+
+def undotted(codes: pa.Array) -> pa.Array:
+    """Each code without its dots, in capitals, as ICD-10-CM's order file writes it."""
+    return pc.utf8_upper(pc.replace_substring(codes, '.', ''))
 
 
 def ndc_matching(shape: str) -> ListValidator:
@@ -171,20 +169,27 @@ PACK = DetectorPack(
             glue_type='USA_NATIONAL_DRUG_CODE',
             code_list=NDC_LIST,
         ),
+        # Most short words pass ICD-10-CM's shape, and a product code HCPCS's, so each is typed only where the name hints it.
         Detector(
             'icd10cm',
             'sensitive',
-            ('icd', 'diagnosis', 'diag', 'dx'),
+            ICD10CM_HINTS,
             {'provider': ICD10CM},
-            listed(ICD10CM_SHAPE, ICD10CM),
+            coded(ICD10CM_SHAPE),
+            'pattern',
+            hint_required=True,
+            code_list=ICD10CM,
         ),
         Detector(
             'hcpcs_level2',
             'sensitive',
-            ('hcpcs', 'procedure', 'proc', 'px'),
+            HCPCS_LEVEL2_HINTS,
             {'provider': HCPCS_LEVEL2},
-            listed(HCPCS_LEVEL2_SHAPE, HCPCS_LEVEL2),
+            coded(HCPCS_LEVEL2_SHAPE),
+            'pattern',
+            hint_required=True,
             glue_type='USA_HCPCS_CODE',
+            code_list=HCPCS_LEVEL2,
         ),
         # Five digits is a ZIP code's shape too, so a CPT code is typed only where the name hints it.
         Detector(

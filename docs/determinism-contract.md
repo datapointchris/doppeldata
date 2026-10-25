@@ -78,8 +78,7 @@ The guarantees, strongest first:
 
 Any change to a sampler's draw order raises the stream version. So does the engine starting to read
 a profile field it ignored before, because a profile that carries the field then generates
-different values. So does a change to a code list the engine ships, because a drawn code is the
-list's entry at a drawn index. The stream version is part of a dataset's identity, so a dataset generated
+different values. The stream version is part of a dataset's identity, so a dataset generated
 before the change is still named exactly. An encoder upgrade or a change to the file-size draw
 moves bytes and leaves every value alone. The manifest's `tool` names the version that wrote the
 bytes. `regenerate()` compares every file it writes with the

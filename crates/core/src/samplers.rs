@@ -50,7 +50,6 @@ use self::text::TextSource;
 pub use self::text::shape_of;
 pub use self::text_cells::TextCell;
 use self::text_cells::TextOnlyValues;
-use crate::code_lists::provider_list;
 use crate::physical_type;
 use crate::physical_type::Container;
 use crate::physical_type::PhysicalType;
@@ -72,9 +71,6 @@ const DEFAULT_STRING_LENGTH: (f64, f64) = (8.0, 16.0);
 const DEFAULT_LIST_LENGTH: (f64, f64) = (0.0, 4.0);
 /// The most extra repeats a pattern's `*`, `+` or `{n,}` generates.
 const PATTERN_MAX_REPEAT: u32 = 16;
-/// An ICD-10-CM code longer than its category is written with a dot after the category's three
-/// characters.
-const ICD10CM_DOT_AFTER: usize = 3;
 
 pub use text::check_digit_holds;
 
@@ -453,10 +449,8 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
 fn describe_source(source: &TextSource) -> String {
     match source {
         TextSource::Provider(provider) => format!("the {} provider", snake_case(&format!("{provider:?}"))),
-        TextSource::CodeList { list, dot_after } => match dot_after {
-            Some(at) => format!("the {} list, dotted after {at} characters", list.name),
-            None => format!("the {} list", list.name),
-        },
+        TextSource::Icd10cm { dotted: true } => "the icd10cm provider, dotted after the category".to_string(),
+        TextSource::Icd10cm { dotted: false } => "the icd10cm provider".to_string(),
         TextSource::Pattern(_) => "a pattern".to_string(),
         TextSource::Shapes { shapes, .. } => format!("{} shapes", shapes.len()),
         TextSource::Characters { .. } => "characters of the profiled classes".to_string(),
@@ -643,10 +637,9 @@ fn empty_numeric_stats() -> crate::profile::NumericStats {
 /// pattern, the shapes, then characters of the profiled classes.
 fn text_source(string: Option<&StringStats>, hint: Option<&GeneratorHint>, site: &ColumnSite) -> Result<TextSource, PlanError> {
     if let Some(provider) = hint.and_then(|hint| hint.provider) {
-        if let Some(list) = provider_list(provider) {
-            return Ok(TextSource::CodeList {
-                list,
-                dot_after: (provider == Provider::Icd10cm && dominant_shape_is_dotted(string)).then_some(ICD10CM_DOT_AFTER),
+        if provider == Provider::Icd10cm {
+            return Ok(TextSource::Icd10cm {
+                dotted: dominant_shape_is_dotted(string),
             });
         }
         return Ok(TextSource::Provider(provider));

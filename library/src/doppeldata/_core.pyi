@@ -136,12 +136,6 @@ def check_digits_hold(kind: str, values: SupportsGetItem[int, str]) -> list[bool
     writes one: its last digit, computed from the digits before it.
     """
 
-def code_list(name: str) -> tuple[str, list[str]] |None:
-    """
-    The release a shipped code list's first line names, and its codes without their dots. None
-    when the engine ships no list of that name.
-    """
-
 def destination_scheme(url: str) -> tuple[str, str |None]:
     """
     What ``url`` names as a write's destination: ``("local", None)``, ``("s3", bucket)`` or

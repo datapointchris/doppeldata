@@ -123,9 +123,12 @@ under any policy, and `--policy healthcare` enables it without being named.
 - **An NPI and a DEA number are typed by their check digits.** A 10-digit number starting 1 or 2
   passes an NPI's shape, and one in ten passes its check digit, so a column of other numbers stays
   untyped.
-- **An ICD-10-CM or HCPCS Level II code is typed by membership** in a code list the engine ships, so
-  a product code of the same shape is not. Its generator hint is the `icd10cm` or `hcpcs_level2`
-  provider, which draws from the same list. `healthcare-policy.md` says where each list comes from.
+- **An ICD-10-CM or HCPCS Level II code is typed by its shape where the name hints it, and by
+  membership where the caller supplies an `icd10cm` or `hcpcs_level2` list.** Most short words pass
+  ICD-10-CM's shape, and a product code HCPCS's. The hint must end the name, so `diagnosis_code`
+  and `px` hint a code, and `diagnosis_date` hints none. Its generator hint is the `icd10cm` or
+  `hcpcs_level2` provider, which draws a code in the same shape. `healthcare-policy.md` says how
+  each list is written from its publisher's file.
 - **A CPT code is typed by its shape alone**, and only where the name hints it. Five digits is a ZIP
   code's shape too.
 - **An NDC is typed by its shape, and by membership where the caller supplies an `ndc` list.** An
@@ -135,7 +138,7 @@ under any policy, and `--policy healthcare` enables it without being named.
 
 ## A detector may read a code list the caller supplies, recorded by its sha256
 
-A `Detector` whose `code_list` names a list, such as `ndc`, reads the file a run supplies under
+A `Detector` whose `code_list` names a list, such as `ndc` or `icd10cm`, reads the file a run supplies under
 that name: `profile create --code-list ndc=FILE`, or `profile(..., code_lists={'ndc': path})`.
 FILE holds one code a line. The detector's `validate` takes the list's lines as a second argument,
 or None where the run supplied none, so the type falls back to what it decides without one.

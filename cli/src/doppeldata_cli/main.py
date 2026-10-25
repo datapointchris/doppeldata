@@ -231,7 +231,8 @@ def profile_create(
             metavar='NAME=FILE',
             help=(
                 'Hand the detectors that read the code list NAME the codes in FILE, one a line; repeat it for more than one. '
-                'With ndc=FILE, the healthcare pack types an NDC only where FILE holds it. The profile records its sha256, not its path.'
+                'With ndc=FILE, icd10cm=FILE or hcpcs_level2=FILE, the healthcare pack types such a code only where FILE holds it. '
+                'The profile records its sha256, not its path.'
             ),
         ),
     ] = None,

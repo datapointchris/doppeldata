@@ -45,4 +45,4 @@ def test_an_ndc_list_types_only_listed_codes_records_its_sha256_and_leaves_a_che
 
     unread = runner.invoke(app, ['profile', 'create', str(data), '--code-list', f'ndc={listed}'])
     assert unread.exit_code == 2
-    assert 'the healthcare pack reads ndc' in unread.output
+    assert 'the healthcare pack reads' in unread.output

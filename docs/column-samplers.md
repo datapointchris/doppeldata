@@ -119,8 +119,8 @@ doppeldata data check taxi.profile.yaml taxi-generated/
 2. **`semantic.generator_hint.provider`**: a named generator, such as `email` or `city`. The names
    are doppeldata's own, an enum in the profile model, so the published schema lists them and
    replacing the faker library breaks no profile. A profile naming another fails validation.
-   `icd10cm` and `hcpcs_level2` draw a code uniformly from the list the engine ships, which the
-   healthcare pack's validator types the column by.
+   `icd10cm` and `hcpcs_level2` draw a code in the shape the healthcare pack types the column by.
+   The code may name nothing in the code set, and `healthcare-policy.md` says how each is drawn.
 3. **A pattern**, from `generator_hint.pattern` or `string.pattern`. A line anchor is dropped,
    because a value is the whole line, and `\d` and the other classes are ASCII.
 4. **`shapes`**: a shape is drawn by rate, then each `A` becomes an upper-case letter, each `a` a
@@ -159,8 +159,8 @@ function of its index, no pool of values is held, and any block still generates 
   drawn into `S` equally likely strings give `S · (1 − e^(−m/S))` distinct strings, so the index
   target is raised to meet the value target. A pattern is counted from its syntax, as if every
   string were equally likely. A shape is counted per character at its rate. `email`, `city`, and
-  the providers drawing one entry of one list are counted from fake's lists, and the code-list
-  providers from their lists. Characters and every other provider are uncounted, and each
+  the providers drawing one entry of one list are counted from fake's lists. `icd10cm` and
+  `hcpcs_level2` are counted from their shapes, ICD-10-CM's at the share of each length it draws. Characters and every other provider are uncounted, and each
   distinct index is taken as a distinct string.
 - **Where fresh draws reach no more than the target, the column draws fresh**, with no index. A
   ratio of 1 is always that case. So is a source whose variety sits below the target, which caps

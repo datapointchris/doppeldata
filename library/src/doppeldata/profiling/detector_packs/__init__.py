@@ -166,8 +166,11 @@ def list_readers(readers: Mapping[str, list[str]]) -> str:
     """The code lists the enabled detectors read, or the shipped packs that read one where no enabled detector does."""
     if readers:
         return 'the enabled detectors read ' + '; '.join(f'{name}, by {", ".join(by)}' for name, by in sorted(readers.items()))
-    shipped = sorted({(detector.code_list, name) for name in BUILT_IN for detector in load(name).pack.detectors if detector.code_list})
-    return 'no enabled detector reads one; ' + '; '.join(f'the {pack} pack reads {listed}' for listed, pack in shipped)
+    shipped: dict[str, set[str]] = {}
+    for name in BUILT_IN:
+        shipped[name] = {detector.code_list for detector in load(name).pack.detectors if detector.code_list}
+    reading = [f'the {pack} pack reads {", ".join(sorted(lists))}' for pack, lists in sorted(shipped.items()) if lists]
+    return 'no enabled detector reads one; ' + '; '.join(reading)
 
 
 def load(name: str) -> EnabledPack:

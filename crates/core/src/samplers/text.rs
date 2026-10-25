@@ -34,8 +34,6 @@ use super::distinct_values::Stratum;
 use super::distinct_values::ValueIndex;
 use super::distinct_values::Variety;
 use super::inverse_cdf::InverseCdf;
-use crate::code_lists::CodeList;
-use crate::code_lists::provider_list;
 use crate::profile::CharClass;
 use crate::profile::CheckDigit;
 use crate::profile::Provider;
@@ -131,28 +129,81 @@ fn push_provided(provider: Provider, rng: &mut ChaCha8Rng, out: &mut String) {
             push_uuid(rng, out);
             return;
         }
-        Provider::Icd10cm | Provider::HcpcsLevel2 => {
-            if let Some(list) = provider_list(provider) {
-                push_code(list, None, rng, out);
-            }
+        Provider::Icd10cm => {
+            push_icd10cm(false, rng, out);
+            return;
+        }
+        Provider::HcpcsLevel2 => {
+            push_hcpcs_level2(rng, out);
             return;
         }
     };
     out.push_str(&value);
 }
 
-/// A list's code at a uniform index, with a dot after its first `dot_after` characters where it is
-/// longer, as ICD-10-CM codes are written.
-fn push_code(list: &CodeList, dot_after: Option<usize>, rng: &mut ChaCha8Rng, out: &mut String) {
-    let code = list.codes[below(rng, list.codes.len() as u32) as usize];
-    match dot_after {
-        Some(at) if code.len() > at => {
-            out.push_str(&code[..at]);
-            out.push('.');
-            out.push_str(&code[at..]);
-        }
-        _ => out.push_str(code),
+/// The share, per mille, of ICD-10-CM's codes holding 0 to 4 characters after their three-character
+/// category.
+const ICD10CM_EXTENSION_PER_MILLE: [u32; 5] = [19, 103, 149, 205, 524];
+/// The extension's characters are digits, but for its fourth, a code's seventh character, which is
+/// a letter.
+const ICD10CM_EXTENSION_LETTER_AT: usize = 3;
+/// An HCPCS Level II code's letter is one of A to V.
+const HCPCS_LEVEL2_LETTERS: u32 = 22;
+
+fn push_upper(rng: &mut ChaCha8Rng, letters: u32, out: &mut String) {
+    out.push(char::from(UPPER[below(rng, letters) as usize]));
+}
+
+fn push_digits(rng: &mut ChaCha8Rng, digits: usize, out: &mut String) {
+    for _ in 0..digits {
+        out.push(char::from(DIGITS[below(rng, 10) as usize]));
     }
+}
+
+/// An ICD-10-CM code by its format, not from the code set: a letter and two digits, then an
+/// extension at the code set's share of each length, after a dot where `dotted`.
+fn push_icd10cm(dotted: bool, rng: &mut ChaCha8Rng, out: &mut String) {
+    push_upper(rng, 26, out);
+    push_digits(rng, 2, out);
+    let (mut drawn, mut extension) = (below(rng, 1000), 0);
+    while drawn >= ICD10CM_EXTENSION_PER_MILLE[extension] {
+        drawn -= ICD10CM_EXTENSION_PER_MILLE[extension];
+        extension += 1;
+    }
+    if dotted && extension > 0 {
+        out.push('.');
+    }
+    for at in 0..extension {
+        if at == ICD10CM_EXTENSION_LETTER_AT {
+            push_upper(rng, 26, out);
+        } else {
+            push_digits(rng, 1, out);
+        }
+    }
+}
+
+/// The ICD-10-CM codes of each extension length, and the share drawn at that length. A category is
+/// one of 26 letters and 100 digit pairs, and each extension character one of 10 digits or 26
+/// letters.
+fn icd10cm_variety() -> Variety {
+    let strata = ICD10CM_EXTENSION_PER_MILLE
+        .iter()
+        .enumerate()
+        .map(|(extension, &per_mille)| Stratum {
+            values: (0..extension)
+                .map(|at| if at == ICD10CM_EXTENSION_LETTER_AT { 26.0 } else { 10.0 })
+                .product::<f64>()
+                * 26.0
+                * 100.0,
+            share: f64::from(per_mille) / 1000.0,
+        });
+    Variety::Strata(strata.collect())
+}
+
+/// An HCPCS Level II code by its format, not from the code set: a letter A to V and four digits.
+fn push_hcpcs_level2(rng: &mut ChaCha8Rng, out: &mut String) {
+    push_upper(rng, HCPCS_LEVEL2_LETTERS, out);
+    push_digits(rng, 4, out);
 }
 
 /// The reserved domains an `email` address is at, so no generated address reaches anyone.
@@ -187,7 +238,8 @@ fn provider_variety(provider: Provider) -> Variety {
         Provider::StateAbbr => entries(EN::ADDRESS_STATE_ABBR),
         Provider::Country => entries(EN::ADDRESS_COUNTRY),
         Provider::CountryCode => entries(EN::ADDRESS_COUNTRY_CODE),
-        Provider::Icd10cm | Provider::HcpcsLevel2 => provider_list(provider).map_or(0.0, |list| list.codes.len() as f64),
+        Provider::Icd10cm => return icd10cm_variety(),
+        Provider::HcpcsLevel2 => f64::from(HCPCS_LEVEL2_LETTERS) * 10_000.0,
         Provider::City => {
             let suffixed = |names: f64| names * entries(EN::ADDRESS_CITY_SUFFIX);
             let stratum = |values, share| Stratum { values, share };
@@ -405,10 +457,9 @@ pub(crate) fn alphabet(classes: Option<&[CharClass]>) -> Vec<u8> {
 #[derive(Debug, Clone)]
 pub(crate) enum TextSource {
     Provider(Provider),
-    /// A shipped list's codes, drawn uniformly, with a dot after the first `dot_after` characters.
-    CodeList {
-        list: &'static CodeList,
-        dot_after: Option<usize>,
+    /// The `icd10cm` provider, with a dot after the category where `dotted`.
+    Icd10cm {
+        dotted: bool,
     },
     Pattern(Box<Pattern>),
     Shapes {
@@ -427,7 +478,7 @@ impl TextSource {
     pub(crate) fn variety(&self) -> Variety {
         match self {
             Self::Provider(provider) => provider_variety(*provider),
-            Self::CodeList { list, .. } => Variety::uniform(list.codes.len() as f64),
+            Self::Icd10cm { .. } => icd10cm_variety(),
             Self::Pattern(pattern) => Variety::uniform(pattern.strings),
             Self::Shapes { shapes, .. } => Variety::Strata(
                 shapes
@@ -462,7 +513,7 @@ impl TextSource {
     pub(crate) fn push(&self, rng: &mut ChaCha8Rng, out: &mut String) {
         match self {
             Self::Provider(provider) => push_provided(*provider, rng, out),
-            Self::CodeList { list, dot_after } => push_code(list, *dot_after, rng, out),
+            Self::Icd10cm { dotted } => push_icd10cm(*dotted, rng, out),
             Self::Pattern(pattern) => pattern.push(rng, out),
             Self::Shapes { choice, shapes } => {
                 for &c in &shapes[choice.sample(rng)].chars {
