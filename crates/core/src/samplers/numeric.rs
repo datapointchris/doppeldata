@@ -7,6 +7,7 @@
 //! it. Beyond the outermost quantile, a fitted family's conditional tail, truncated at the
 //! extremes, is tabulated into dense knots; without a usable fit the tail is linear.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow_array::ArrayRef;
@@ -28,12 +29,22 @@ use arrow_buffer::ScalarBuffer;
 use arrow_schema::DataType;
 use rand_chacha::ChaCha8Rng;
 
+use super::BlockPosition;
+use super::StreamKeys;
+use super::distinct_values::DistinctTarget;
+use super::distinct_values::Stratum;
+use super::distinct_values::ValueIndex;
+use super::distinct_values::Variety;
 use super::fitted_family::FittedFamily;
 use super::inverse_cdf::InverseCdf;
 use super::inverse_cdf::Knots;
+use super::listed_values::ListedValues;
+use super::numeric_top_values::ListedNumbers;
+use super::numeric_top_values::SourceCounts;
 use crate::profile::Histogram;
 use crate::profile::NumericStats;
 use crate::profile::Quantiles;
+use crate::rng::rng_for;
 use crate::rng::unit;
 
 /// Knots tabulated across each fitted tail.
@@ -84,13 +95,65 @@ fn histogram_knots(histogram: Option<&Histogram>) -> Vec<(f64, f64)> {
     knots
 }
 
-/// The inverse CDF a numeric column draws through.
-pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> Result<InverseCdf, String> {
+/// What a numeric column's inverse CDF was built from, as a plan describes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CurveShape {
+    pub(crate) body: CurveBody,
+    /// The family each tail was drawn from, below the body and above it, or `None` for a straight one.
+    pub(crate) lower: Option<&'static str>,
+    pub(crate) upper: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CurveBody {
+    Quantiles,
+    Histogram,
+    /// The fit's median alone, between its tails.
+    FitMedian,
+    Extremes,
+    DefaultRange,
+}
+
+impl CurveShape {
+    pub(crate) fn describe(self) -> String {
+        let tails = match (self.lower, self.upper) {
+            (Some(family), Some(_)) => format!("fitted {family} tails"),
+            (None, None) => "linear tails".to_string(),
+            (lower, upper) => format!("a {} lower tail and a {} upper tail", tail_kind(lower), tail_kind(upper)),
+        };
+        match self.body {
+            CurveBody::Quantiles => format!("quantiles with {tails}"),
+            CurveBody::Histogram => format!("histogram with {tails}"),
+            CurveBody::FitMedian => match (self.lower, self.upper) {
+                (Some(family), Some(_)) => format!("fitted {family}"),
+                _ => format!("the fit's median with {tails}"),
+            },
+            CurveBody::Extremes => "uniform between the extremes".to_string(),
+            CurveBody::DefaultRange => format!("uniform from {} to {}", DEFAULT_RANGE.0, DEFAULT_RANGE.1),
+        }
+    }
+}
+
+fn tail_kind(family: Option<&str>) -> String {
+    family.map_or_else(|| "linear".to_string(), |family| format!("fitted {family}"))
+}
+
+/// The inverse CDF a numeric column draws through, and what it was built from.
+pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> Result<(InverseCdf, CurveShape), String> {
     let extremes = stats.extremes.as_ref();
     let low = extremes.and_then(|e| e.low);
     let high = extremes.and_then(|e| e.high);
     let quantiles = quantile_knots(stats.quantiles.as_ref())?;
     let histogram = histogram_knots(stats.histogram.as_ref());
+    let mut shape = CurveShape {
+        body: if quantiles.is_empty() {
+            CurveBody::Histogram
+        } else {
+            CurveBody::Quantiles
+        },
+        lower: None,
+        upper: None,
+    };
     let (frame, interior) = if quantiles.is_empty() {
         (histogram, Vec::new())
     } else {
@@ -100,11 +163,16 @@ pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> R
     if knots.is_empty() {
         knots = match fit {
             Some(fit) => {
+                shape.body = CurveBody::FitMedian;
                 let median = fit.inverse(0.5);
                 let median = median.max(low.unwrap_or(median)).min(high.unwrap_or(median));
                 Knots::from_sorted(vec![(0.5, median)]).expect("one knot is in order")
             }
             None => {
+                shape.body = match low.is_some() || high.is_some() {
+                    true => CurveBody::Extremes,
+                    false => CurveBody::DefaultRange,
+                };
                 let low = low.unwrap_or(DEFAULT_RANGE.0);
                 let high = high.unwrap_or(DEFAULT_RANGE.1).max(low);
                 Knots::from_sorted(vec![(0.0, low), (1.0, high)]).expect("low is at most high")
@@ -116,15 +184,32 @@ pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> R
     // the fit cannot place, such as a NaN, is left out, and the curve runs straight across it.
     if let Some((level, value)) = body_low.filter(|&(level, _)| level > 0.0) {
         let low = low.filter(|&low| low <= value);
-        match fit.and_then(|fit| lower_tail(fit, low, level, value)) {
-            Some(tail) => _ = knots.extend(tail),
-            None => _ = knots.insert(0.0, low.unwrap_or(value)),
+        // Where the body starts at or above zero, the stated negative rate is the share a fitted tail
+        // below zero may hold, and the levels from it up to the body draw between zero and the body.
+        let below_zero = stats
+            .negative_rate
+            .map(|r| r.0)
+            .filter(|&share| 0.0 < share && share < level && value >= 0.0 && low.is_some_and(|low| low < 0.0));
+        let (top_level, top_value) = below_zero.map_or((level, value), |share| (share, 0.0));
+        // A family whose support stops short of the extreme cannot draw the values between them.
+        let reaches = fit.filter(|fit| low.is_none_or(|low| fit.support().0 <= low));
+        _ = knots.insert(top_level, top_value);
+        match reaches.and_then(|fit| Some((fit.name, lower_tail(fit, low, top_level, top_value)?))) {
+            Some((family, tail)) => {
+                shape.lower = Some(family);
+                _ = knots.extend(tail);
+            }
+            None => _ = knots.insert(0.0, low.unwrap_or(top_value)),
         }
     }
     if let Some((level, value)) = body_high.filter(|&(level, _)| level < 1.0) {
         let high = high.filter(|&high| high >= value);
-        match fit.and_then(|fit| upper_tail(fit, level, value, high)) {
-            Some(tail) => _ = knots.extend(tail),
+        let reaches = fit.filter(|fit| high.is_none_or(|high| fit.support().1 >= high));
+        match reaches.and_then(|fit| Some((fit.name, upper_tail(fit, level, value, high)?))) {
+            Some((family, tail)) => {
+                shape.upper = Some(family);
+                _ = knots.extend(tail);
+            }
             None => _ = knots.insert(1.0, high.unwrap_or(value)),
         }
     }
@@ -143,7 +228,7 @@ pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> R
             knots.insert_run(below_zero, (below_zero + zero_rate).min(1.0), 0.0);
         }
     }
-    Ok(InverseCdf::new(knots))
+    Ok((InverseCdf::new(knots), shape))
 }
 
 /// An inverse CDF over stored quantiles between a minimum and a maximum, linear between them, or
@@ -226,16 +311,27 @@ impl Rounding {
             return Self::Integer;
         }
         match (output, stats.and_then(|s| s.scale)) {
+            // The decimal type quantizes to its scale anyway, so rounding there first changes no value.
+            (&NumericOutput::Decimal128 { scale, .. }, _) => Self::Decimals(power_of_ten(i32::from(scale))),
             (NumericOutput::Float32 | NumericOutput::Float64, Some(scale)) => Self::Decimals(power_of_ten(scale)),
             _ => Self::Exact,
         }
     }
 
-    fn apply(self, value: f64) -> f64 {
+    pub(crate) fn apply(self, value: f64) -> f64 {
         match self {
             Self::Exact => value,
             Self::Integer => value.round(),
             Self::Decimals(factor) => (value * factor).round() / factor,
+        }
+    }
+
+    /// The values a rounded value can take, as how many of them fit in one unit, or `None` for any.
+    pub(crate) fn lattice(self) -> Option<f64> {
+        match self {
+            Self::Exact => None,
+            Self::Integer => Some(1.0),
+            Self::Decimals(factor) => Some(factor),
         }
     }
 }
@@ -245,17 +341,117 @@ fn power_of_ten(exponent: i32) -> f64 {
     if exponent < 0 { 1.0 / power } else { power }
 }
 
+/// How many distinct values draws through `cdf` take once rounded. A linear piece's interior
+/// values are equally likely, so each piece is one stratum, and each end value and flat run is a
+/// stratum of one value, its shares merged wherever pieces meet.
+pub(crate) fn variety(cdf: &InverseCdf, rounding: Rounding) -> Variety {
+    let mut points: BTreeMap<u64, f64> = BTreeMap::new();
+    let mut point = |value: f64, share: f64| *points.entry((rounding.apply(value) + 0.0).to_bits()).or_default() += share;
+    let mut strata = Vec::new();
+    for ((start, low), (end, high)) in cdf.segments() {
+        let width = end - start;
+        let Some(factor) = rounding.lattice().filter(|_| high > low) else {
+            match high > low {
+                true => strata.push(Stratum {
+                    values: f64::INFINITY,
+                    share: width,
+                }),
+                false => point(low, width),
+            }
+            continue;
+        };
+        let (from, to) = (low * factor, high * factor);
+        let (first, last) = (from.round(), to.round());
+        if first == last {
+            point(low, width);
+            continue;
+        }
+        // Levels per lattice step. The end values hold only the part of their step the piece reaches.
+        let density = width / (to - from);
+        point(low, (first + 0.5 - from) * density);
+        point(high, (to - (last - 0.5)) * density);
+        let interior = last - first - 1.0;
+        if interior > 0.0 {
+            strata.push(Stratum {
+                values: interior,
+                share: interior * density,
+            });
+        }
+    }
+    strata.extend(points.into_values().map(|share| Stratum { values: 1.0, share }));
+    Variety::Strata(strata)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct NumericSampler {
+    /// What a value the column does not list is drawn through: the column's inverse CDF, or where it
+    /// lists values, the inverse CDF of the share outside them.
     pub(crate) cdf: InverseCdf,
+    /// What the column's inverse CDF was built from, which the outside share's is cut from.
+    pub(crate) curve: CurveShape,
     pub(crate) rounding: Rounding,
     pub(crate) output: NumericOutput,
+    /// The profile's listed values, then those drawn beyond the trimmed extremes.
+    pub(crate) listed: Option<ListedValues<f64>>,
+    pub(crate) beyond_extremes: usize,
+    /// Where set, a value drawn through `cdf` is the one at an index the row draws.
+    pub(crate) index: Option<ValueIndex>,
 }
 
 impl NumericSampler {
-    pub(crate) fn generate(&self, rng: &mut ChaCha8Rng, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
-        self.output
-            .drawn_array(rows, nulls, || self.rounding.apply(self.cdf.value_at(unit(rng))))
+    /// The sampler drawing through `cdf`, the column's inverse CDF, built as `curve` says. It fails
+    /// only on unusable rates.
+    pub(crate) fn new(
+        (cdf, curve): (InverseCdf, CurveShape),
+        stats: &NumericStats,
+        output: NumericOutput,
+        target: Option<DistinctTarget>,
+        source: Option<SourceCounts>,
+    ) -> Result<Self, String> {
+        let rounding = Rounding::for_column(Some(stats), &output);
+        let Some(numbers) = ListedNumbers::of(&cdf, stats, rounding, source)? else {
+            let index = target.and_then(|target| ValueIndex::for_distinct_in_bands(target, &variety(&cdf, rounding)));
+            return Ok(Self {
+                cdf,
+                curve,
+                rounding,
+                output,
+                listed: None,
+                beyond_extremes: 0,
+                index,
+            });
+        };
+        let cdf = numbers.outside.unwrap_or(cdf);
+        let listed = numbers.listed;
+        let index = target.and_then(|target| ValueIndex::for_distinct_in_bands(listed.outside(target), &variety(&cdf, rounding)));
+        Ok(Self {
+            cdf,
+            curve,
+            rounding,
+            output,
+            listed: Some(listed),
+            beyond_extremes: numbers.beyond_extremes,
+            index,
+        })
+    }
+
+    pub(crate) fn generate(&self, at: &BlockPosition, keys: &StreamKeys, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
+        let mut values = rng_for(at.seed, keys.values, at.block);
+        let mut indices = rng_for(at.seed, keys.index, at.block);
+        let mut unlisted = |values: &mut ChaCha8Rng| {
+            let level = match self.index {
+                Some(index) => index.stratified_level(at.seed, keys, &mut indices),
+                None => unit(values),
+            };
+            self.rounding.apply(self.cdf.value_at(level))
+        };
+        match &self.listed {
+            None => self.output.drawn_array(rows, nulls, || unlisted(&mut values)),
+            Some(listed) => self.output.drawn_array(rows, nulls, || match listed.sample(&mut values) {
+                Some(&value) => value,
+                None => unlisted(&mut values),
+            }),
+        }
     }
 }
 

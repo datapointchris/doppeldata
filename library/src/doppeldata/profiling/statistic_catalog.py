@@ -10,6 +10,8 @@ import string
 
 from doppeldata import _core
 from doppeldata.profile_format import quantile_level
+from doppeldata.profiling.recorded_counts import NUMERIC_TOP_VALUES_THRESHOLD
+from doppeldata.profiling.recorded_counts import TOP_VALUES_THRESHOLD
 
 
 class ColumnKind(enum.Enum):
@@ -27,6 +29,20 @@ class ColumnKind(enum.Enum):
 NUMERIC = frozenset({ColumnKind.INTEGER, ColumnKind.FLOAT, ColumnKind.DECIMAL})
 TEMPORAL = frozenset({ColumnKind.DATE, ColumnKind.DATETIME})
 PROFILED = frozenset(ColumnKind) - {ColumnKind.OTHER}
+
+
+@dc.dataclass(frozen=True)
+class ValueList:
+    """How a column kind lists its values: the profile section holding the list, and the most distinct values it lists."""
+
+    section: str
+    threshold: int
+
+
+# Each kind whose values are counted and listed where it holds no more distinct values than the list's threshold.
+VALUE_LISTS = {ColumnKind.STRING: ValueList('string', TOP_VALUES_THRESHOLD)} | {
+    kind: ValueList('numeric', NUMERIC_TOP_VALUES_THRESHOLD) for kind in NUMERIC
+}
 
 
 @dc.dataclass(frozen=True)
@@ -73,6 +89,8 @@ COLUMN_STATISTICS = (
     Statistic('zero_rate', NUMERIC),
     Statistic('negative_rate', NUMERIC),
     Statistic('quantiles', NUMERIC),
+    # The fewest decimal places every value is written at, up to the argument, or None.
+    Statistic('decimal_places', frozenset({ColumnKind.FLOAT})),
     # The least and greatest difference between neighboring rows, which find a counting sequence.
     Statistic('step_min', frozenset({ColumnKind.INTEGER})),
     Statistic('step_max', frozenset({ColumnKind.INTEGER})),
@@ -94,7 +112,7 @@ COLUMN_STATISTICS = (
 # Counted against the edges and values the first aggregate's answers, or an earlier profile, choose.
 COUNTING_STATISTICS = (
     Statistic('histogram_counts', NUMERIC),
-    Statistic('listed_value_counts', frozenset({ColumnKind.STRING})),
+    Statistic('listed_value_counts', frozenset(VALUE_LISTS)),
 )
 
 # `unparsed_rows` carries each column's name and `ParsedType`, and answers with the rows holding a

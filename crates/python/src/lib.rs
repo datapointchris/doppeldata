@@ -48,6 +48,10 @@ mod _core {
     #[pymodule_export]
     const FORMAT_VERSION: u64 = doppeldata_core::profile::FORMAT_VERSION;
 
+    /// The fewest rows a stored literal or cell rests on, where a profile states no `privacy.k_min`.
+    #[pymodule_export]
+    const DEFAULT_K_MIN: u64 = doppeldata_core::profile::DEFAULT_K_MIN;
+
     /// The rows in each batch the engine generates, every one but the last.
     #[pymodule_export]
     const BLOCK_ROWS: u64 = doppeldata_core::BLOCK_ROWS;

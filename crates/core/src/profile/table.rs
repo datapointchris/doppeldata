@@ -75,6 +75,9 @@ pub enum SampleStrategy {
     Reservoir,
 }
 
+/// The fewest rows a stored literal or cell rests on, where a profile states no `privacy.k_min`.
+pub const DEFAULT_K_MIN: u64 = 11;
+
 /// The privacy policy the profile was written under, and every literal it kept or withheld.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Privacy {
@@ -519,6 +522,8 @@ pub struct Distinct {
 pub struct NumericStats {
     pub integral: Option<bool>,
     pub precision: Option<u32>,
+    /// Decimal places: a decimal type's scale, or the fewest places every value of a float column
+    /// equals itself rounded to, where the profiler finds one.
     pub scale: Option<i32>,
     pub extremes: Option<NumericExtremes>,
     pub mean: Option<f64>,
@@ -532,6 +537,19 @@ pub struct NumericStats {
     pub fit: Option<Fit>,
     pub monotonic: Option<Monotonic>,
     pub sequence: Option<Sequence>,
+    /// Values at least `k_min` rows hold, in a column with few distinct values that is not an
+    /// identifier.
+    pub top_values: Option<Vec<NumericTopValue>>,
+    /// The share of values outside `top_values`.
+    pub other_rate: Option<Rate>,
+    /// Written when the value list was frozen from an earlier profile.
+    pub overflow: Option<ValueOverflow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct NumericTopValue {
+    pub value: f64,
+    pub rate: Rate,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
@@ -551,6 +569,17 @@ pub enum ExtremesMethod {
     /// The least and greatest integers with as many digits as the trimmed extremes, so an
     /// identifier's range shows its length and none of its values.
     DigitBounds,
+}
+
+impl ExtremesMethod {
+    /// The most rows that lie beyond each extreme of a profile whose floor is `k_min`. Digit bounds
+    /// widen the trimmed extremes they are written from, so no more lie beyond them.
+    pub fn rows_beyond_each(self, k_min: u64) -> u64 {
+        match self {
+            Self::Exact => 0,
+            Self::TrimmedK | Self::DigitBounds => k_min.saturating_sub(1),
+        }
+    }
 }
 
 /// Bin edges and the rows in each bin. `counts` has one entry fewer than `edges`. Each bin holds

@@ -102,9 +102,9 @@ def profile(
     listed now, and it was made by this doppeldata, scipy, detector packs, code lists and readers, such as DuckDB and
     CleverCSV, with the same engine, policy, `k_min` and sampling, it is returned unchanged, so a reviewer's
     edits survive a re-run. Otherwise an `EarlierProfileNotReused` names what differs, each column it holds a
-    histogram or value list for is counted
-    against those, and the rows outside them are written as the column's `overflow`. A column only one of
-    the two tables holds issues `ColumnsNotFrozen`.
+    histogram or value list for is counted against those, and the rows outside them are written as the
+    column's `overflow`. A column only one of the two tables holds, or whose list would move to another
+    section, issues `ColumnsNotFrozen`.
     """
     if engine not in ENGINES:
         raise ValueError(f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}')
@@ -166,8 +166,9 @@ def profile(
     if edges_from is not None:
         earlier, now = (column_names(document.to_plain()) for document in (edges_from, profiled))
         undescribed, missing = [name for name in now if name not in earlier], [name for name in earlier if name not in now]
-        if undescribed or missing:
-            warnings.warn(ColumnsNotFrozen(undescribed, missing), stacklevel=2)
+        relisted = table_profile.relisted_columns(edges_from.to_plain(), profiled.to_plain())
+        if undescribed or missing or relisted:
+            warnings.warn(ColumnsNotFrozen(undescribed, missing, relisted), stacklevel=2)
     return profiled
 
 

@@ -57,11 +57,21 @@ matching what it built, so a check through it passes data the profile never desc
 
 ## `tvd` measures over the source's categories, or a date's months, weekdays and hours
 
-A string column's categories are its `top_values`, and a boolean's are `true` and `false`. Every
-value the source does not list counts as one more category, so a value the other profile lists
-and the source does not adds to that category's share. A source value missing from the other's
-list counts as 0 there. A value under `k_min` rows drops off a list, so the error is under
-`k_min` rows.
+A string or numeric column's categories are its `top_values`, and a boolean's are `true` and
+`false`. A numeric column with a list is measured by `ks` too, because its quantiles still stand.
+Every value the source does not list counts as one more category, so a value the other profile
+lists and the source does not adds to that category's share.
+
+- **A source value missing from the other's list may sit in its `other` share.** The other profile
+  folds each value under its `k_min` rows into `other`. So a missing value is taken to hold its
+  source share there, up to `k_min − 1` of the other's rows, while the `other` share has room. A
+  list of hundreds of values checked at a few thousand rows then measures no fold as distance.
+- **The value is the distance beyond what sampling puts between two profiles of one
+  distribution.** A category of share `p`, counted over `n_a` and `n_b` values, lies about
+  `sqrt(2/π · p(1 − p) · (1/n_a + 1/n_b))` apart by chance, and never more than `2p`. Half the sum
+  of those over every category, `other` included, is subtracted, and the value is never below 0.
+  So a correct draw of a list of hundreds of values passes at ordinary row counts, and a draw moving
+  a tenth of its rows onto one value still fails.
 
 A date or timestamp column's shares are `by_month`, `by_dow` and `by_hour`. Its `tvd` is the
 largest of their three distances, over those both profiles hold. It cannot see a shift inside one

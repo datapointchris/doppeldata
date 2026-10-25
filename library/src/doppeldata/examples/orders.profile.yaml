@@ -62,7 +62,7 @@ columns:
     logical_type: number
     nullable: false
     null_rate: 0.0
-    distinct: {approx: 60000, ratio: 0.6}
+    distinct: {approx: 28000, ratio: 0.28}
     numeric:
       integral: false
       precision: 12

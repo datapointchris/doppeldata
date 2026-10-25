@@ -124,6 +124,8 @@ fn discrete_uniform(params: &Params<'_>) -> Result<Standard, String> {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FittedFamily {
+    /// The family's name as [`FITTED_FAMILIES`] gives it.
+    pub(crate) name: &'static str,
     standard: Standard,
     discrete: bool,
     loc: f64,
@@ -146,6 +148,7 @@ impl FittedFamily {
             return Err(format!("{} parameter `scale` is {scale}, not positive", fit.family));
         }
         Ok(Some(Self {
+            name: family.name,
             standard,
             discrete: family.discrete,
             loc: fit.params.get("loc").copied().unwrap_or(0.0),
@@ -159,6 +162,23 @@ impl FittedFamily {
             self.discrete_cdf((x - self.loc).floor())
         } else {
             self.continuous_cdf((x - self.loc) / self.scale)
+        }
+    }
+
+    /// The least and greatest value the family takes.
+    pub(crate) fn support(&self) -> (f64, f64) {
+        let (least, greatest) = match self.standard {
+            Standard::Normal | Standard::Logistic => (f64::NEG_INFINITY, f64::INFINITY),
+            Standard::LogNormal { .. } | Standard::Exponential | Standard::Weibull { .. } => (0.0, f64::INFINITY),
+            Standard::Pareto { .. } | Standard::Geometric { .. } => (1.0, f64::INFINITY),
+            Standard::Uniform | Standard::Triangular { .. } => (0.0, 1.0),
+            Standard::LogUniform { a, b } => (a, b),
+            Standard::DiscreteUniform { low, high } => (low, high - 1.0),
+        };
+        if self.discrete {
+            (self.loc + least, self.loc + greatest)
+        } else {
+            (self.loc + self.scale * least, self.loc + self.scale * greatest)
         }
     }
 

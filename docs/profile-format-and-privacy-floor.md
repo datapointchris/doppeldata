@@ -98,10 +98,12 @@ The `default` policy:
    distinct ratio, length distribution, character-shape histogram and a generalized pattern. An
    integer identifier's extremes become `method: digit_bounds`, the least and greatest integers
    with as many digits as its trimmed extremes, so the generator draws values of the right length.
+   It draws them from a distinct index, so they repeat as often as the distinct ratio says.
 3. Exact extremes are replaced by the values at rank `k_min` from each end, or omitted.
 4. Free text stores length and token statistics only.
 5. Every histogram bin, frequency entry, conditional-table cell and partition share meets `k_min`.
-   A smaller cell merges or folds into `other`.
+   A smaller cell merges or folds into `other`. A cell a reader can subtract counts too, such as a
+   bin's count less the values listed in it, or `negative_rate` less the listed negative values.
 6. Parquet footer minimums and maximums are never copied for an `identifier` or `sensitive` column.
 7. A pattern is stored only when it holds no alternation of data literals.
 

@@ -26,9 +26,13 @@ from doppeldata.privacy_policy import restricted_zip_prefixes
 from doppeldata.privacy_policy import withheld
 from doppeldata.privacy_policy.column_treatment import OLDEST_AGE
 from doppeldata.privacy_policy.column_treatment import ValueFamily
+from doppeldata.privacy_policy.literal_fields import FieldKind
+from doppeldata.privacy_policy.treatment_rules import REFUSED
 from doppeldata.privacy_policy.treatment_rules import ZIP_PREFIX
 from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
+from doppeldata.profile_format import described_rows
+from doppeldata.profile_format import listed_section
 from doppeldata.profiling import file_traits
 from doppeldata.profiling import json_paths
 from doppeldata.profiling import text_types
@@ -47,7 +51,6 @@ from doppeldata.profiling.detector_packs import SuppliedCodeList
 from doppeldata.profiling.profiled_columns import Answers
 from doppeldata.profiling.profiled_columns import ProfiledColumns
 from doppeldata.profiling.recorded_counts import RATE_DIGITS
-from doppeldata.profiling.recorded_counts import TOP_VALUES_THRESHOLD
 from doppeldata.profiling.recorded_counts import kept_values
 from doppeldata.profiling.recorded_counts import rate
 from doppeldata.profiling.recorded_counts import significant
@@ -56,8 +59,10 @@ from doppeldata.profiling.statistic_catalog import NUMERIC
 from doppeldata.profiling.statistic_catalog import PROFILED
 from doppeldata.profiling.statistic_catalog import QUANTILES
 from doppeldata.profiling.statistic_catalog import TIME_UNITS
+from doppeldata.profiling.statistic_catalog import VALUE_LISTS
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
+from doppeldata.profiling.statistic_catalog import ValueList
 from doppeldata.profiling.statistic_catalog import shape_of
 from doppeldata.profiling.text_types import TextColumn
 
@@ -85,6 +90,8 @@ EQUAL_DEPTH_LEVELS = tuple(index / HISTOGRAM_BINS for index in range(1, HISTOGRA
 # A numeric column's named quantiles and its interior bin edges come from one sort.
 NUMERIC_LEVELS = tuple(sorted({*QUANTILES.values(), *EQUAL_DEPTH_LEVELS}))
 LENGTH_LEVELS = tuple(QUANTILES.values())
+# Each place tried is one more comparison of every float value. A column holding more places is drawn continuous.
+DECIMAL_PLACES_TRIED = 9
 # A scipy fit's time grows with its values, so a fit is made on a seeded sample this size.
 FIT_SAMPLE_ROWS = 20_000
 # A column with fewer distinct values is better described by its frequencies than by a family.
@@ -147,29 +154,43 @@ class FrozenLayout:
     @classmethod
     def of(cls, document: dict[str, Any]) -> 'FrozenLayout':
         histograms, values = {}, {}
-        sample = (document.get('generated') or {}).get('sample') or {}
-        described = sample.get('rows_read') or (document.get('dataset') or {}).get('row_count')
+        described = described_rows(document)
         for column in document.get('columns') or []:
             histogram = (column.get('numeric') or {}).get('histogram')
             if histogram and len(histogram['edges']) > 1:
                 histograms[column['name']] = (histogram['kind'], tuple(histogram['edges']))
-            string = column.get('string') or {}
-            if string.get('top_values'):
-                listed = tuple(entry['value'] for entry in string['top_values'])
-                other = string.get('other_rate') or 0.0
+            listing = listed_section(column)
+            if listing:
+                section_name, section = listing
+                other = section.get('other_rate') or 0.0
                 # A list frozen from a profile before it carries that profile's drift in its new_value_rows, which the baseline leaves out.
-                drifted = (string.get('overflow') or {}).get('new_value_rows') or 0
+                drifted = (section.get('overflow') or {}).get('new_value_rows') or 0
                 held = described * (1 - (column.get('null_rate') or 0.0)) if described else 0
-                values[column['name']] = FrozenValues(listed, max(0.0, other - drifted / held) if held else other)
+                baseline = max(0.0, other - drifted / held) if held else other
+                values[column['name']] = FrozenValues(tuple(entry['value'] for entry in section['top_values']), baseline, section_name)
         return cls(histograms, values)
+
+
+def relisted_columns(earlier: dict[str, Any], now: dict[str, Any]) -> list[str]:
+    """The columns of `now` whose values `earlier` lists in a section other than the one their kind lists in now."""
+    listed = {column['name']: listing[0] for column in earlier.get('columns') or [] if (listing := listed_section(column))}
+    relisted = []
+    for column in now.get('columns') or []:
+        listed_now = VALUE_LISTS.get(profiled_kind(column))
+        if column['name'] in listed and (listed_now is None or listed_now.section != listed[column['name']]):
+            relisted.append(column['name'])
+    return relisted
 
 
 @dc.dataclass(frozen=True)
 class FrozenValues:
-    """A string column's top values, in the order an earlier profile lists them, and the share of values outside them it started from."""
+    """A column's top values, in the order an earlier profile lists them, the share of values outside them it started
+    from, and the section that lists them, which names the kind of value they are.
+    """
 
-    values: tuple[str, ...]
+    values: tuple[Any, ...]
     baseline_other_rate: float
+    section: str
 
 
 @dc.dataclass(frozen=True)
@@ -315,10 +336,12 @@ def profile_columns(
         binning = histogram_binning(spec, column_stat(stats, spec.name), described, k_min, layout, capped=capped)
         if binning:
             binnings[spec.name] = binning
+    sections = {spec.name: VALUE_LISTS[spec.kind].section for spec in specs if spec.kind in VALUE_LISTS}
+    # A list of another kind's values is not counted, so a column whose kind changed lists its values afresh.
     listed = {
-        spec.name: layout.values[spec.name]
-        for spec in specs
-        if spec.kind is ColumnKind.STRING and spec.name in layout.values and treatments[spec.name] is not Treatment.ZIP_PREFIX
+        name: frozen
+        for name, frozen in layout.values.items()
+        if sections.get(name) == frozen.section and treatments[name] is not Treatment.ZIP_PREFIX
     }
     counting = [Request(name, 'histogram_counts', binning.edges) for name, binning in binnings.items()]
     counting += [Request(name, 'listed_value_counts', frozen_values.values) for name, frozen_values in listed.items()]
@@ -465,7 +488,11 @@ class ColumnLayout:
 
 def pass_one_requests(specs: list[ColumnSpec], k_min: int) -> list[Request]:
     """Every catalog statistic of every column it applies to, and the row count, for one aggregate."""
-    arguments = {name: k_min for name in TRIMMED_STATISTICS} | {'quantiles': NUMERIC_LEVELS, 'length_quantiles': LENGTH_LEVELS}
+    arguments = {name: k_min for name in TRIMMED_STATISTICS} | {
+        'quantiles': NUMERIC_LEVELS,
+        'length_quantiles': LENGTH_LEVELS,
+        'decimal_places': DECIMAL_PLACES_TRIED,
+    }
     requests = [Request(None, 'rows')]
     for spec in specs:
         for statistic in COLUMN_STATISTICS:
@@ -495,8 +522,9 @@ def column_entry(
 ) -> dict[str, Any]:
     """One column's entry. `distinct` holds each column's distinct count and the rows it was counted over.
 
-    `treatment` decides what the statistics pass computes differently: a ZIP code's prefixes, and a date's extremes and
-    gap rate to the year. What it withholds from the computed entry is left to `withheld`.
+    `treatment` decides what the statistics pass computes differently: a ZIP code's prefixes, no value list where it
+    refuses one, and a date's extremes and gap rate to the year. What it withholds from the computed entry is left to
+    `withheld`.
     """
     entry: dict[str, Any] = {'name': spec.name, 'physical_type': spec.physical_type}
     logical = LOGICAL_TYPES.get(spec.kind) or CONTAINER_LOGICAL_TYPES.get(spec.physical_type.split('<')[0])
@@ -525,11 +553,22 @@ def column_entry(
     # A statistic of fewer than k_min values can give one of them away, as the mean of one value does.
     if values < k_min:
         return entry
+    listing = value_list(spec, treatment)
     if spec.kind in NUMERIC:
-        entry['numeric'] = numeric_section(spec, stat, values, layout, k_min)
+        entry['numeric'] = numeric_section(backend, table, spec, stat, values, layout, listing, k_min)
     elif spec.kind is ColumnKind.STRING:
         entry['string'] = string_section(
-            backend, table, spec, stat, values, shapes[spec.name], patterns.get(spec.name), layout.listed, k_min, prefixes=prefixes
+            backend,
+            table,
+            spec,
+            stat,
+            values,
+            shapes[spec.name],
+            patterns.get(spec.name),
+            layout.listed,
+            listing,
+            k_min,
+            prefixes=prefixes,
         )
     elif spec.kind in (ColumnKind.DATE, ColumnKind.DATETIME):
         entry['temporal'] = temporal_section(spec, stat, values, text, k_min, year_level=treatment is Treatment.DATE_TO_YEAR)
@@ -538,6 +577,16 @@ def column_entry(
     if typing:
         entry |= semantic_sections(typing)
     return entry
+
+
+def value_list(spec: ColumnSpec, treatment: Treatment) -> ValueList | None:
+    """How `spec`'s values are listed, or None for a kind that lists none and for a column whose treatment refuses a list.
+
+    A list the policy would withhold is never counted, so nothing stated beside it gives way to it.
+    """
+    if FieldKind.TOP_VALUES in REFUSED.get(treatment, frozenset()):
+        return None
+    return VALUE_LISTS.get(spec.kind)
 
 
 def written_number(value: Any, integral: bool) -> int | float:
@@ -558,7 +607,22 @@ def sequence_of(stat: Stat) -> dict[str, int] | None:
     return None
 
 
-def numeric_section(spec: ColumnSpec, stat: Stat, values: int, layout: ColumnLayout, k_min: int) -> dict[str, Any]:
+def numeric_section(
+    backend: Backend,
+    table: Table,
+    spec: ColumnSpec,
+    stat: Stat,
+    values: int,
+    layout: ColumnLayout,
+    listing: ValueList | None,
+    k_min: int,
+) -> dict[str, Any]:
+    """A numeric column's section. It lists values only where `listing` says how, and never for a counting sequence,
+    which draws none.
+
+    The zero rows, the rows below zero and each listed value's rows are counts stated beside the histogram, so each
+    rests on k_min rows, and no bin is left with 1 to k_min - 1 rows outside them.
+    """
     integral = spec.kind is ColumnKind.INTEGER
 
     def number(value: Any) -> int | float:
@@ -567,6 +631,9 @@ def numeric_section(spec: ColumnSpec, stat: Stat, values: int, layout: ColumnLay
     section: dict[str, Any] = {'integral': integral}
     if spec.kind is ColumnKind.DECIMAL:
         section |= {'precision': spec.precision, 'scale': spec.scale}
+    # The generator rounds a float column to its scale, so cents generate as cents.
+    if spec.kind is ColumnKind.FLOAT and stat('decimal_places') is not None:
+        section['scale'] = stat('decimal_places')
     if has_trimmed_extremes(values, k_min):
         section['extremes'] = {'low': number(stat('trimmed_low')), 'high': number(stat('trimmed_high')), 'method': 'trimmed_k'}
     # A moment the engine returns as NaN, such as a constant column's skew, is written as null.
@@ -575,25 +642,151 @@ def numeric_section(spec: ColumnSpec, stat: Stat, values: int, layout: ColumnLay
     for name in ('skew', 'kurtosis'):
         # Shape moments carry no units, and a parallel sum's order moves a zero one in its last bits from run to run.
         section[name] = significant(round(stat(name), SHAPE_MOMENT_DECIMALS), MOMENT_DIGITS) + 0.0 if is_finite(stat(name)) else None
-    section['zero_rate'] = significant(stat('zero_rate'), RATE_DIGITS)
-    section['negative_rate'] = significant(stat('negative_rate'), RATE_DIGITS)
+    zeros, negatives = (floored_count(stat(name), values, k_min) for name in ('zero_rate', 'negative_rate'))
+    section['zero_rate'] = rate(zeros, values)
+    section['negative_rate'] = rate(negatives, values)
     at_level = dict(zip(NUMERIC_LEVELS, stat('quantiles'), strict=True))
     quantiles = {name: number(at_level[level]) for name, level in QUANTILES.items() if clear_of_the_ends(level, values, k_min)}
     if quantiles:
         section['quantiles'] = quantiles
-    if layout.binning:
-        histogram = floored_histogram(layout.binning, stat('histogram_counts'), k_min)
+    sequence = sequence_of(stat) if integral and stat('step_min') is not None else None
+    counted = numeric_values(backend, table, spec, stat, values, layout.listed, listing, k_min) if listing and not sequence else None
+    kept = counted.kept if counted else []
+    zero_point = [(0, zeros)] if zeros and not any(value == 0 for value, _ in kept) else []
+    stated = StatedCounts((*kept, *zero_point), negatives)
+    histogram = floored_histogram(layout.binning, stat('histogram_counts'), k_min, stated) if layout.binning else None
+    if layout.binning and histogram is None and negatives:
+        # The rows below zero are one rate and the bins are several counts, so the rate gives way first.
+        histogram = floored_histogram(layout.binning, stat('histogram_counts'), k_min, StatedCounts((*kept, *zero_point)))
         if histogram:
-            section['histogram'] = histogram
+            section['negative_rate'] = None
+    if histogram:
+        section['histogram'] = histogram
+    if histogram is None and small_cell(stated.unaccounted([Region(-math.inf, math.inf, False, values)]), k_min):
+        # With no bin to merge, a count stated beside the list that leaves a small cell is left out.
+        section['negative_rate'] = None
+        if small_cell(StatedCounts((*kept, *zero_point)).unaccounted([Region(-math.inf, math.inf, False, values)]), k_min):
+            section['zero_rate'] = None
     if layout.fit_applies:
         section['fit'] = layout.fit
     if integral and stat('step_min') is not None:
         step_min, step_max = stat('step_min'), stat('step_max')
         section['monotonic'] = 'increasing' if step_min > 0 else 'decreasing' if step_max < 0 else 'none'
-        sequence = sequence_of(stat)
         if sequence:
             section['sequence'] = sequence
+    if counted:
+        section |= counted.written(values, number)
     return section
+
+
+def floored_count(share: float, values: int, k_min: int) -> int:
+    """The rows `share` of `values` holds, or 0 where they are fewer than k_min."""
+    rows = round(share * values)
+    return rows if rows >= k_min else 0
+
+
+def numeric_values(
+    backend: Backend,
+    table: Table,
+    spec: ColumnSpec,
+    stat: Stat,
+    values: int,
+    listed: FrozenValues | None,
+    listing: ValueList,
+    k_min: int,
+) -> 'CountedValues | None':
+    """A column's values counted against `listed`, or else counted where it holds no more distinct ones than the
+    listing's threshold. A float column's NaN and infinities are nulls, so a count of one is left out.
+    """
+    if listed is not None:
+        return counted_against(listed, stat('listed_value_counts'), values, k_min)
+    if stat('distinct_count') > listing.threshold:
+        return None
+    counted = [(value, count) for value, count in backend.top_k(table, spec.name, listing.threshold) if is_finite(value)]
+    return CountedValues(*kept_values(counted, values, k_min))
+
+
+@dc.dataclass(frozen=True)
+class CountedValues:
+    """The values a list keeps with the rows each holds, the rows of every other value, and, for a list counted against
+    an earlier profile's, the rows of new values.
+    """
+
+    kept: list[tuple[Any, int]]
+    other: int
+    new_value_rows: int | None = None
+
+    def written(self, values: int, written_value: Callable[[Any], Any]) -> dict[str, Any]:
+        """The section's `top_values`, `other_rate` and `overflow`, each value written by `written_value`."""
+        section: dict[str, Any] = {}
+        if self.kept:
+            section['top_values'] = [{'value': written_value(value), 'rate': rate(count, values)} for value, count in self.kept]
+            section['other_rate'] = rate(self.other, values)
+        if self.new_value_rows is not None:
+            section['overflow'] = {'new_value_rows': self.new_value_rows}
+        return section
+
+
+def counted_against(listed: FrozenValues, counts: list[int], values: int, k_min: int) -> CountedValues:
+    """The values of `listed` counted by `counts`, and the rows outside it beyond the share it started from."""
+    kept, other = kept_values(list(zip(listed.values, counts, strict=True)), values, k_min)
+    # Counted from `other_rate`'s own rows, so it discloses nothing that rate does not. The rows outside the
+    # list count too, so a listed value that fell under k_min reveals no count of its own.
+    beyond = other - round(listed.baseline_other_rate * values)
+    return CountedValues(kept, other, beyond if beyond >= k_min else 0)
+
+
+@dc.dataclass(frozen=True)
+class Region:
+    """A stretch of a numeric column's values, from `low` up to `high` and through `high` where `closed`, holding `rows`."""
+
+    low: float
+    high: float
+    closed: bool
+    rows: int
+
+    def holds(self, value: Any) -> bool:
+        return bool(self.low <= value < self.high or (self.closed and value == self.high))
+
+    def below_zero(self) -> bool:
+        return self.high < 0 or (self.high == 0 and not self.closed)
+
+    def straddles_zero(self) -> bool:
+        return self.low < 0 and not self.below_zero()
+
+    def joined(self, above: 'Region') -> 'Region':
+        return Region(self.low, above.high, above.closed, self.rows + above.rows)
+
+
+@dc.dataclass(frozen=True)
+class StatedCounts:
+    """The counts a numeric section states beside its histogram: each listed value's rows and the zero rows, as points,
+    and the rows below zero.
+    """
+
+    points: tuple[tuple[Any, int], ...] = ()
+    negative: int = 0
+
+    def unaccounted(self, regions: list[Region]) -> list[list[int]]:
+        """Each region's rows no stated count accounts for, in rising order. A region holding rows on both sides of zero
+        has them split there where the rows below zero are stated, since the regions wholly below zero give the rest.
+        """
+        below_zero, cells = 0, []
+        for region in regions:
+            inside = [(value, rows) for value, rows in self.points if region.holds(value)]
+            unlisted = region.rows - sum(rows for _, rows in inside)
+            if self.negative and region.straddles_zero():
+                negative = self.negative - below_zero - sum(rows for value, rows in inside if value < 0)
+                cells.append([negative, unlisted - negative])
+            else:
+                cells.append([unlisted])
+            if region.below_zero():
+                below_zero += region.rows
+        return cells
+
+
+def small_cell(cells: list[list[int]], k_min: int) -> bool:
+    return any(0 < rows < k_min for region in cells for rows in region)
 
 
 def histogram_binning(
@@ -633,36 +826,45 @@ def histogram_binning(
     return Binning('equal_depth', tuple(rising), frozen=False, capped=capped) if len(rising) > 1 else None
 
 
-def floored_histogram(binning: Binning, counted: list[int], k_min: int) -> dict[str, Any] | None:
-    """The histogram with no bin or overflow count of 1 to k_min - 1 rows, or None where no such histogram exists.
+def floored_histogram(binning: Binning, counted: list[int], k_min: int, stated: StatedCounts | None = None) -> dict[str, Any] | None:
+    """The histogram with no bin or overflow of 1 to k_min - 1 rows, or holding that many outside the counts `stated`
+    holds, or None where no such histogram exists.
 
-    An overflow count that small joins the outermost bin on its side, and a bin that small merges into its smaller
-    non-empty neighbor, so frozen edges are kept wherever the floor allows. An empty bin discloses no row and stays.
-    A capped histogram's last bin takes every row above it.
+    An overflow that small joins the outermost bin on its side, and a bin that small merges into its smaller non-empty
+    neighbor, so frozen edges are kept wherever the floor allows. An empty bin discloses no row and stays. A capped
+    histogram's last bin takes every row above it.
     """
+    stated = stated or StatedCounts()
     below, *bins, above = counted
     if binning.capped:
         bins[-1], above = bins[-1] + above, 0
-    if 0 < below < k_min:
-        bins[0], below = bins[0] + below, 0
-    if 0 < above < k_min:
-        bins[-1], above = bins[-1] + above, 0
     edges = list(binning.edges)
-    while len(bins) > 1:
-        small = [index for index, count in enumerate(bins) if 0 < count < k_min]
-        if not small:
+    last = len(bins) - 1
+    regions = [Region(-math.inf, edges[0], False, below)]
+    regions += [Region(edges[at], edges[at + 1], at == last, count) for at, count in enumerate(bins)]
+    regions.append(Region(math.nextafter(edges[-1], math.inf), math.inf, False, above))
+    while True:
+        cells = stated.unaccounted(regions)
+        small = [at for at, region in enumerate(regions) if small_cell([[region.rows], cells[at]], k_min)]
+        if small and small[0] == 0:
+            regions[0:2] = [Region(-math.inf, -math.inf, False, 0), regions[0].joined(regions[1])]
+            continue
+        if small and small[-1] == len(regions) - 1:
+            regions[-2:] = [regions[-2].joined(regions[-1]), Region(math.inf, math.inf, False, 0)]
+            continue
+        if not small or len(regions) == 3:
             break
-        index = min(small, key=lambda at: (bins[at], at))
-        neighbors = [at for at in (index - 1, index + 1) if 0 <= at < len(bins)]
-        neighbor = min(neighbors, key=lambda at: (bins[at] == 0, bins[at], at))
+        index = min(small, key=lambda at: (regions[at].rows, at))
+        neighbors = [at for at in (index - 1, index + 1) if 0 < at < len(regions) - 1]
+        neighbor = min(neighbors, key=lambda at: (regions[at].rows == 0, regions[at].rows, at))
         first = min(index, neighbor)
-        bins[first : first + 2] = [bins[first] + bins[first + 1]]
-        del edges[first + 1]
-    if any(0 < count < k_min for count in bins):
+        regions[first : first + 2] = [regions[first].joined(regions[first + 1])]
+        del edges[first]
+    if small:
         return None
-    histogram: dict[str, Any] = {'kind': binning.kind, 'edges': edges, 'counts': bins}
+    histogram: dict[str, Any] = {'kind': binning.kind, 'edges': edges, 'counts': [region.rows for region in regions[1:-1]]}
     if binning.frozen:
-        histogram['overflow'] = {'below': below, 'above': above}
+        histogram['overflow'] = {'below': regions[0].rows, 'above': regions[-1].rows}
     return histogram
 
 
@@ -675,11 +877,13 @@ def string_section(
     shapes: list[tuple[str, int]],
     pattern: str | None,
     listed: FrozenValues | None,
+    listing: ValueList | None,
     k_min: int,
     *,
     prefixes: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    """A string column's section. `listed` is an earlier profile's value list, which its top values are counted against.
+    """A string column's section. It lists values only where `listing` says how, counted against `listed`, an earlier
+    profile's list, where there is one.
 
     With `prefixes`, a ZIP column's counted prefixes, the section holds them in place of its top values.
     """
@@ -696,17 +900,14 @@ def string_section(
         section['shapes'] = [{'shape': shape, 'rate': rate(count, values)} for shape, count in shapes]
     if pattern:
         section['pattern'] = pattern
+    if prefixes is not None:
+        return section | zip_prefixes_section(prefixes, shapes, values, k_min)
+    if listing is None:
+        return section
     if listed is not None:
-        kept, other = kept_values(list(zip(listed.values, stat('listed_value_counts'), strict=True)), values, k_min)
-        section |= top_values(kept, other, values)
-        # Counted from `other_rate`'s own rows, so it discloses nothing that rate does not. The rows outside the
-        # list count too, so a listed value that fell under k_min reveals no count of its own.
-        beyond = other - round(listed.baseline_other_rate * values)
-        section['overflow'] = {'new_value_rows': beyond if beyond >= k_min else 0}
-    elif prefixes is not None:
-        section |= zip_prefixes_section(prefixes, shapes, values, k_min)
-    elif stat('distinct_count') <= TOP_VALUES_THRESHOLD:
-        section |= top_values(*kept_values(backend.top_k(table, spec.name, TOP_VALUES_THRESHOLD), values, k_min), values)
+        section |= counted_against(listed, stat('listed_value_counts'), values, k_min).written(values, str)
+    elif stat('distinct_count') <= listing.threshold:
+        section |= CountedValues(*kept_values(backend.top_k(table, spec.name, listing.threshold), values, k_min)).written(values, str)
     return section
 
 
@@ -732,15 +933,6 @@ def zip_prefixes_section(merged: dict[str, int], shapes: list[tuple[str, int]], 
     plus_four = bool(shapes) and shapes[0][0] == ZIP_PLUS_FOUR_SHAPE
     listed = [{'value': prefix, 'rate': rate(count, values)} for prefix, count in kept]
     return {'prefixes': {'values': listed, 'other_rate': rate(other, values), 'suffix': ZIP_PLUS_FOUR_SUFFIX if plus_four else ZIP_SUFFIX}}
-
-
-def top_values(kept: list[tuple[Any, int]], other: int, values: int) -> dict[str, Any]:
-    if not kept:
-        return {}
-    return {
-        'top_values': [{'value': str(value), 'rate': rate(count, values)} for value, count in kept],
-        'other_rate': rate(other, values),
-    }
 
 
 def semantic_sections(typing: 'Typing') -> dict[str, Any]:

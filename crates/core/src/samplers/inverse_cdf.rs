@@ -97,6 +97,23 @@ impl InverseCdf {
         }
     }
 
+    /// Each piece of the curve from level 0 to 1, as (level, value) at its start and at its end. The
+    /// value is flat before the first knot and after the last.
+    pub(crate) fn segments(&self) -> Vec<((f64, f64), (f64, f64))> {
+        let (Some(&first), Some(&last)) = (self.values.first(), self.values.last()) else {
+            return Vec::new();
+        };
+        let knots: Vec<(f64, f64)> = std::iter::once((0.0, first))
+            .chain(self.levels.iter().copied().zip(self.values.iter().copied()))
+            .chain(std::iter::once((1.0, last)))
+            .collect();
+        knots
+            .windows(2)
+            .map(|pair| (pair[0], pair[1]))
+            .filter(|((start, _), (end, _))| end > start)
+            .collect()
+    }
+
     /// The value at level `u`, for `u` in [0, 1).
     pub(crate) fn value_at(&self, u: f64) -> f64 {
         let bucket = ((u * BUCKETS as f64) as usize).min(BUCKETS - 1);

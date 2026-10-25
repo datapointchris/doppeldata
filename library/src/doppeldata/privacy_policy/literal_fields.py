@@ -80,8 +80,22 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
     )
     | {'missing_tokens': FieldKind.MISSING_TOKENS},
     'BooleanStats': {'true_rate': FieldKind.BOOLEAN},
+    # `other_rate` and `overflow` count what a top-value list leaves out, so they are read as part of it.
     'NumericStats': dict.fromkeys(
-        ('integral', 'kurtosis', 'mean', 'monotonic', 'negative_rate', 'precision', 'scale', 'skew', 'std', 'zero_rate')
+        (
+            'integral',
+            'kurtosis',
+            'mean',
+            'monotonic',
+            'negative_rate',
+            'other_rate',
+            'overflow',
+            'precision',
+            'scale',
+            'skew',
+            'std',
+            'zero_rate',
+        )
     )
     | {
         'extremes': FieldKind.NUMERIC_EXTREMES,
@@ -89,8 +103,8 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
         'histogram': FieldKind.HISTOGRAM,
         'fit': FieldKind.FIT,
         'sequence': FieldKind.SEQUENCE,
+        'top_values': FieldKind.TOP_VALUES,
     },
-    # `other_rate` and `overflow` count what a top-value list leaves out, so they are read as part of it.
     'StringStats': dict.fromkeys(('case', 'charset', 'length', 'other_rate', 'overflow', 'whitespace_edge_rate'))
     | {'top_values': FieldKind.TOP_VALUES, 'prefixes': FieldKind.PREFIXES, 'shapes': FieldKind.SHAPES, 'pattern': FieldKind.PATTERN},
     'TemporalStats': dict.fromkeys(('format', 'gap_rate', 'timezone'))
@@ -226,13 +240,13 @@ def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None,
     if numeric.get('sequence'):
         yield LiteralField((*at, 'numeric', 'sequence'), FieldKind.SEQUENCE, 1)
     string = column.get('string') or {}
-    if string.get('top_values'):
-        cells = tuple(
-            Cell((*at, 'string', 'top_values', index), share(entry.get('rate'), held)) for index, entry in enumerate(string['top_values'])
-        )
-        if 'other_rate' in string:
-            cells += (Cell((*at, 'string', 'other_rate'), share(string['other_rate'], held), True),)
-        yield LiteralField((*at, 'string', 'top_values'), FieldKind.TOP_VALUES, len(string['top_values']), cells)
+    for name, section in (('numeric', numeric), ('string', string)):
+        listed = section.get('top_values')
+        if listed:
+            cells = tuple(Cell((*at, name, 'top_values', index), share(entry.get('rate'), held)) for index, entry in enumerate(listed))
+            if 'other_rate' in section:
+                cells += (Cell((*at, name, 'other_rate'), share(section['other_rate'], held), True),)
+            yield LiteralField((*at, name, 'top_values'), FieldKind.TOP_VALUES, len(listed), cells)
     prefixes = string.get('prefixes') or {}
     if prefixes.get('values'):
         listed = prefixes['values']

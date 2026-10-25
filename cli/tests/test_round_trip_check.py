@@ -16,7 +16,9 @@ GENERATED_ROWS = ROWS // 4
 
 
 def source_table() -> pa.Table:
-    """Columns the generator holds every metric for: continuous floats, few categories, unique codes, seconds and flags."""
+    """Columns the generator holds every metric for: continuous floats, few categories, unique codes, seconds, flags, and a
+    numeric code whose 900 values each hold fewer than k_min rows of a quarter-size run.
+    """
     draw = random.Random(3)
     start = dt.datetime(2025, 3, 1)
     return pa.table(
@@ -26,6 +28,7 @@ def source_table() -> pa.Table:
             'code': [f'ORD{index:06d}' for index in draw.sample(range(10**6), ROWS)],
             'ordered_at': [start + dt.timedelta(seconds=draw.randrange(30 * 86_400)) for _ in range(ROWS)],
             'paid': [draw.random() < 0.7 for _ in range(ROWS)],
+            'store_id': [draw.randrange(900) for _ in range(ROWS)],
         }
     )
 
@@ -51,3 +54,12 @@ def test_data_generated_at_fewer_rows_than_its_source_passes_its_check_and_a_rai
     report = sd.check(profile, patched)
     schema.validate(report.to_plain())
     assert failures(report) == [('null_rate_delta', 'amount')]
+
+
+def test_the_orders_example_generated_at_a_tenth_of_its_rows_keeps_every_quantity_and_passes_its_check():
+    """`data generate orders --rows 10000`: `quantity` lists none of its 10 values, and a short run still draws them all."""
+    profile = sd.Profile.example('orders')
+    generated = pa.table(sd.generate(profile, rows=10_000, seed=1))
+    assert len(pc.unique(generated.column('quantity'))) == 10
+    report = sd.check(profile, generated)
+    assert report.passed, failures(report)

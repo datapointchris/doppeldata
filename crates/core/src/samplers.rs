@@ -6,8 +6,10 @@ mod distinct_values;
 mod file_rows;
 mod fitted_family;
 mod inverse_cdf;
+mod listed_values;
 mod nested;
 mod numeric;
+mod numeric_top_values;
 mod temporal;
 mod text;
 mod text_cells;
@@ -25,17 +27,19 @@ use arrow_schema::TimeUnit;
 use rand_distr::weighted::WeightedAliasIndex;
 
 use self::categorical::CategoricalSampler;
+use self::distinct_values::DistinctTarget;
 use self::distinct_values::ValueIndex;
 pub use self::file_rows::file_rows_draws;
 pub use self::fitted_family::FITTED_FAMILIES;
 use self::fitted_family::FittedFamily;
 pub use self::fitted_family::FittedFamilyKind;
+use self::listed_values::ListedValues;
 use self::nested::ListSampler;
 use self::nested::StructSampler;
 use self::numeric::NumericOutput;
 use self::numeric::NumericSampler;
-use self::numeric::Rounding;
 use self::numeric::SequenceSampler;
+use self::numeric_top_values::SourceCounts;
 use self::temporal::TemporalOutput;
 use self::temporal::TemporalSampler;
 use self::text::CheckDigitDraw;
@@ -53,6 +57,7 @@ use crate::physical_type::PhysicalType;
 use crate::plan::ColumnFault;
 use crate::plan::PlanError;
 use crate::profile::Column;
+use crate::profile::Distinct;
 use crate::profile::GeneratorHint;
 use crate::profile::LogicalType;
 use crate::profile::Provider;
@@ -94,6 +99,37 @@ pub(crate) struct PlanContext<'a> {
     pub(crate) table: &'a str,
     pub(crate) seed: u64,
     pub(crate) rows: f64,
+    /// The source's rows a distinct ratio is counted over, `dataset.row_count`.
+    pub(crate) source_rows: Option<f64>,
+    /// The source's rows a rate is a share of: those a sample read, or else every row.
+    pub(crate) described_rows: Option<f64>,
+    /// The profile's `privacy.k_min`, or [`crate::profile::DEFAULT_K_MIN`] where it states none. It bounds the rows
+    /// the trimmed extremes leave beyond them.
+    pub(crate) k_min: u64,
+}
+
+impl PlanContext<'_> {
+    /// The distinct values a column is to hold over the dataset, drawn in its `filled_rows`. At or
+    /// above the source's rows its ratio holds, so a longer run holds more values. Below them it is
+    /// what a random sample of the source holds where each value fills an equal share of its rows,
+    /// `count · (1 − (1 − rows/N)^(N/count))`, so a short run keeps the source's values.
+    fn distinct_target(&self, distinct: Option<&Distinct>, filled_rows: f64) -> Option<DistinctTarget> {
+        let distinct = distinct?;
+        let ratio = distinct.ratio?.0;
+        let held = ratio * self.rows;
+        let source_rows = distinct
+            .approx
+            .map(|count| count as f64)
+            .filter(|&count| count > 0.0 && ratio > 0.0)
+            .map(|count| (count, self.source_rows.unwrap_or(count / ratio)));
+        let distinct = match source_rows {
+            Some((count, source_rows)) if source_rows > self.rows => {
+                count * (1.0 - libm::pow(1.0 - self.rows / source_rows, source_rows / count))
+            }
+            _ => held,
+        };
+        Some(DistinctTarget { distinct, filled_rows })
+    }
 }
 
 /// Why a sampler cannot be built, before the column's place in the profile is known.
@@ -223,7 +259,7 @@ impl ValueSampler {
         let values = || rng_for(at.seed, keys.values, at.block);
         match self {
             Self::Sequence(sampler) => sampler.generate(at.first_row, rows, nulls),
-            Self::Numeric(sampler) => sampler.generate(&mut values(), rows, nulls),
+            Self::Numeric(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::Categorical(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::Temporal(sampler) => sampler.generate(&mut values(), rows, nulls),
             Self::Boolean(true_rate) => {
@@ -344,36 +380,34 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
 fn describe(column: &Column, values: &ValueSampler) -> String {
     match values {
         ValueSampler::Sequence(sequence) => format!("sequence from {} by {}", sequence.start, sequence.step),
-        ValueSampler::Numeric(_) => {
-            let numeric = column.numeric.as_ref();
-            let fit = numeric
-                .and_then(|n| n.fit.as_ref())
-                .filter(|fit| FittedFamily::from_fit(fit).is_ok_and(|family| family.is_some()));
-            let body = if numeric.and_then(|n| n.quantiles.as_ref()).is_some_and(|q| !q.0.is_empty()) {
-                "quantiles".to_string()
-            } else if numeric.and_then(|n| n.histogram.as_ref()).is_some() {
-                "histogram".to_string()
-            } else if let Some(fit) = fit {
-                return format!("fitted {}", fit.family);
-            } else if numeric.and_then(|n| n.extremes.as_ref()).is_some() {
-                return "uniform between the extremes".to_string();
-            } else {
-                return format!("uniform from {} to {}", numeric::DEFAULT_RANGE.0, numeric::DEFAULT_RANGE.1);
+        ValueSampler::Numeric(numeric) => {
+            let mut description = match &numeric.listed {
+                Some(listed) => {
+                    let mut listed_part = format!("{} top values", listed.len() - numeric.beyond_extremes);
+                    if numeric.beyond_extremes > 0 {
+                        listed_part.push_str(&format!(" and {} beyond the extremes", numeric.beyond_extremes));
+                    }
+                    if listed.other_share() > 0.0 {
+                        listed_part.push_str(&format!(", the rest from {}", numeric.curve.describe()));
+                    }
+                    listed_part
+                }
+                None => numeric.curve.describe(),
             };
-            match fit {
-                Some(fit) => format!("{body} with fitted {} tails", fit.family),
-                None => format!("{body} with linear tails"),
+            if numeric.index.is_some() {
+                description.push_str(", at the profiled distinct ratio");
             }
+            description
         }
         ValueSampler::Categorical(categorical) => {
             let string = column.string.as_ref();
             let (top, other_rate) = match (listed_values(string), listed_prefixes(string)) {
                 (None, Some(prefixes)) => (
-                    format!("{} top prefixes, each followed by {}", categorical.values.len(), prefixes.suffix),
+                    format!("{} top prefixes, each followed by {}", categorical.listed.len(), prefixes.suffix),
                     prefixes.other_rate,
                 ),
                 _ => (
-                    format!("{} top values", categorical.values.len()),
+                    format!("{} top values", categorical.listed.len()),
                     string.and_then(|s| s.other_rate),
                 ),
             };
@@ -496,11 +530,21 @@ fn value_sampler(
             None => None,
         };
         let stats = numeric.cloned().unwrap_or_else(empty_numeric_stats);
-        return Ok(ValueSampler::Numeric(NumericSampler {
-            cdf: numeric::numeric_cdf(&stats, fit.as_ref()).map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/numeric"))?,
-            rounding: Rounding::for_column(numeric, &output),
-            output,
-        }));
+        let target = context.distinct_target(column.distinct.as_ref(), filled_rows);
+        let source = column.distinct.as_ref().and_then(|d| {
+            let (distinct, ratio) = (d.approx?, d.ratio?.0);
+            let described = context.described_rows.or((ratio > 0.0).then(|| distinct as f64 / ratio))?;
+            let null_rate = column.null_rate.map_or(0.0, |r| r.0);
+            Some(SourceCounts {
+                distinct,
+                values: described * (1.0 - null_rate),
+                k_min: context.k_min,
+            })
+        });
+        let curve = numeric::numeric_cdf(&stats, fit.as_ref()).map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/numeric"))?;
+        let sampler = NumericSampler::new(curve, &stats, output, target, source)
+            .map_err(site.refuse_as(ColumnFault::UnusableRates, "/numeric/top_values"))?;
+        return Ok(ValueSampler::Numeric(sampler));
     }
     if let Some(output) = TemporalOutput::from_type(&scalar) {
         let gap_days = || rng_for(context.seed, keys.gap_days, 0);
@@ -522,8 +566,7 @@ fn value_sampler(
     let string = column.string.as_ref();
     let hint = column.semantic.as_ref().and_then(|s| s.generator_hint.as_ref());
     let source = text_source(string, hint, site)?;
-    // The ratio is of the dataset's rows, so a run longer than the profiled one holds more values.
-    let distinct = column.distinct.as_ref().and_then(|d| d.ratio).map(|ratio| ratio.0 * context.rows);
+    let target = context.distinct_target(column.distinct.as_ref(), filled_rows);
     let categories = match (listed_values(string), listed_prefixes(string)) {
         (Some(top_values), _) => Some((
             top_values,
@@ -556,13 +599,15 @@ fn value_sampler(
     if let Some((listed, other_rate, suffix, field, other_variety)) = categories {
         let values: Vec<_> = listed.iter().map(|top| (top.value.clone(), top.rate.0)).collect();
         let other_rate = other_rate.map_or(0.0, |r| r.0);
-        let other_share = other_rate / (values.iter().map(|(_, rate)| rate).sum::<f64>() + other_rate);
-        let listed_distinct = values.len() as f64;
-        let other_index =
-            distinct.and_then(|distinct| ValueIndex::for_distinct(distinct - listed_distinct, filled_rows * other_share, &other_variety));
-        let sampler = CategoricalSampler::new(values, other_rate, suffix, source, other_index, output)
-            .map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
-        return Ok(ValueSampler::Categorical(sampler));
+        let listed = ListedValues::new(values, other_rate).map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
+        let other_index = target.and_then(|target| ValueIndex::for_distinct(listed.outside(target), &other_variety));
+        return Ok(ValueSampler::Categorical(CategoricalSampler {
+            listed,
+            suffix: suffix.map(Box::new),
+            other: source,
+            other_index,
+            output,
+        }));
     }
     let check_digit = hint.and_then(|hint| hint.check_digit).map(|kind| {
         let invalid_rate = column.quality.as_ref().and_then(|q| q.invalid_rate).map_or(0.0, |r| r.0);
@@ -572,7 +617,7 @@ fn value_sampler(
         }
     });
     Ok(ValueSampler::Text(TextSampler {
-        index: distinct.and_then(|distinct| ValueIndex::for_distinct(distinct, filled_rows, &source.variety())),
+        index: target.and_then(|target| ValueIndex::for_distinct(target, &source.variety())),
         source,
         check_digit,
         output,
@@ -658,8 +703,11 @@ fn list_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, large
     let length = numeric::bounded_cdf(list.and_then(|l| l.length.as_ref()), None, None, DEFAULT_LIST_LENGTH)
         .map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/list/length"))?;
     let empty_rate = list.and_then(|l| l.empty_rate).map(|r| r.0);
+    let per_row = (1.0 - empty_rate.unwrap_or(0.0)) * nested::mean_length(&length);
     let elements = PlanContext {
-        rows: context.rows * (1.0 - empty_rate.unwrap_or(0.0)) * nested::mean_length(&length),
+        rows: context.rows * per_row,
+        source_rows: context.source_rows.map(|rows| rows * per_row),
+        described_rows: context.described_rows.map(|rows| rows * per_row),
         ..*context
     };
     Ok(ValueSampler::List(Box::new(ListSampler {

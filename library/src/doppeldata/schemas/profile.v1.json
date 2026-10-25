@@ -1702,6 +1702,28 @@
             }
           ]
         },
+        "other_rate": {
+          "description": "The share of values outside `top_values`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overflow": {
+          "description": "Written when the value list was frozen from an earlier profile.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValueOverflow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "precision": {
           "type": [
             "integer",
@@ -1721,6 +1743,7 @@
           ]
         },
         "scale": {
+          "description": "Decimal places: a decimal type's scale, or the fewest places every value of a float column\nequals itself rounded to, where the profiler finds one.",
           "type": [
             "integer",
             "null"
@@ -1751,6 +1774,16 @@
           ],
           "format": "double"
         },
+        "top_values": {
+          "description": "Values at least `k_min` rows hold, in a column with few distinct values that is not an\nidentifier.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/NumericTopValue"
+          }
+        },
         "zero_rate": {
           "anyOf": [
             {
@@ -1762,6 +1795,22 @@
           ]
         }
       }
+    },
+    "NumericTopValue": {
+      "type": "object",
+      "properties": {
+        "rate": {
+          "$ref": "#/$defs/Rate"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "value",
+        "rate"
+      ]
     },
     "ParquetCompression": {
       "oneOf": [
