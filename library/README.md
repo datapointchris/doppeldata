@@ -29,8 +29,9 @@ a `FitsSkipped` warning. Every warning `profile()` issues is a `ProfilingWarning
 needs boto3.
 
 `profile(..., packs=['acme'])` types columns with a third party's detector pack beside the general
-one. A pack registers under the `doppeldata.detector_packs` entry-point group, and implements the
-`DetectorPack` protocol in `doppeldata.profiling.detector_packs`.
+one. A pack registers under the `doppeldata.detector_packs` entry-point group, and is a
+`DetectorPack` from `doppeldata.profiling.detector_packs`. A pack is code the profiler runs on the
+sampled values, so enable only one trusted with the data.
 
 Every release is published to that package index, and nothing else is. PyPI does not carry
 doppeldata, so a package of that name there is someone else's. The library needs Python 3.11 or

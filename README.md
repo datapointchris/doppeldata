@@ -44,20 +44,23 @@ sd.write(profile, 's3://bucket/orders/', rows=100_000_000, seed=7)
 
 `profile create` reads Parquet and Arrow locally or from S3, with the credentials and endpoint the
 AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files. No data
-value it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. Identifier
-columns are typed but not yet suppressed, so profile only data that is already synthetic or public.
+value it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. Typing an
+identifier column does not remove its values from the profile, so profile only data that is already
+synthetic or public.
 
-A string column is given a semantic type where its values pass a validator, or its name hints one:
-an email, phone number, card number, US SSN, UUID, IP or MAC address, URL, US ZIP code or state, a
-person's name, or free text. The type names what the generator draws for it, and the failing share
-becomes `quality.invalid_rate`. `--pack NAME` adds an installed detector pack's types to these.
+A string column is given a semantic type where enough of its values pass a type's validator. Fewer
+need to pass where its name hints the type. An integer column is typed only where its name hints
+the type and a validator agrees. The general pack covers common identifiers, such as emails, card
+numbers and US SSNs, and `doppeldata.profiling.detector_packs.general` lists its types. The type
+names what the generator draws for it, and the failing share becomes `quality.invalid_rate`.
+`--pack NAME` adds an installed detector pack's types to these.
 
 Each numeric column gets an equal-depth histogram, and each with enough distinct values gets the
 distribution family that fits it best. `--edges-from` counts a new profile against an earlier one's
 bin edges and value lists, so the two compare bin for bin, and the rows outside them are written as
 overflow. Where the files, the run's settings, the doppeldata and scipy versions and the detector
 packs match the ones the earlier profile was made with, it is kept as it is, with any edits a
-reviewer made.
+reviewer made. Otherwise `profile create` says what differs.
 
 Each release's notes list what it does. Its commands and its profile format change without notice
 until 1.0.
