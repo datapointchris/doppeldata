@@ -79,6 +79,15 @@ largest of their three distances, over those both profiles hold. It cannot see a
 hour or one month. `gap_rate` is not measured, because which days are empty is a seeded draw no
 profile records.
 
+## `null_rate_delta` subtracts the gap sampling puts between two null rates
+
+A null rate is a share of every row, so it is `tvd` over two categories, null and not null. Two
+profiles of one rate `p`, over `n_a` and `n_b` rows, lie about
+`sqrt(2/π · p(1 − p) · (1/n_a + 1/n_b))` apart by chance. That is subtracted, and the value is
+never below 0. A profile stating no `dataset.row_count`, such as one expanded from a dict of fakes,
+adds no term, because its rate is the parameter itself. So a correct 5% null column drawn at 1,000
+rows passes the 0.01 limit, and a column whose rate rose from 0 to 5% still fails.
+
 ## `boundary_adherence` is read from the overflow counts
 
 The profiler sets a histogram's outer edges at the trimmed extremes, or half a unit beyond them in

@@ -255,9 +255,24 @@ def column_variation(source: Column, observed: Column, inverse_values: float, fo
     return Compared(beyond_sampling(share_distance(p, q, folded=folded), p, inverse_values))
 
 
-def null_rate_change(source: Column, observed: Column) -> Compared | Unmeasured | None:
+def null_rate_changes(source: Document, observed: Document) -> Iterator[Measurement]:
+    """For each column, how far its null rate moved beyond what sampling alone puts between two profiles of one rate."""
+    inverse_rows = sum(1 / rows for rows in (described_rows(source), described_rows(observed)) if rows)
+    for ours, theirs in shared_columns(source, observed):
+        compared = null_rate_change(ours, theirs, inverse_rows)
+        if compared is not None:
+            yield Measurement(ours['name'], compared)
+
+
+def null_rate_change(source: Column, observed: Column, inverse_rows: float) -> Compared | Unmeasured | None:
+    """The change in null rate less the gap sampling puts between two profiles of the source's rate, as `tvd` measures a
+    column of two values. A profile stating no row count is taken as the rate itself, with no sampling in it.
+    """
     a, b = source.get('null_rate'), observed.get('null_rate')
-    return rate_change(a, b, 'the other profile holds no null rate for the column')
+    compared = rate_change(a, b, 'the other profile holds no null rate for the column')
+    if not isinstance(compared, Compared) or a is None:
+        return compared
+    return compared._replace(value=beyond_sampling(compared.value, {'null': a}, inverse_rows))
 
 
 def zero_rate_change(source: Column, observed: Column) -> Compared | Unmeasured | None:
@@ -422,7 +437,13 @@ METRICS = (
         0.05,
         total_variation,
     ),
-    Metric('null_rate_delta', 'the difference in the share of values that are null', Bound.AT_MOST, 0.01, per_column(null_rate_change)),
+    Metric(
+        'null_rate_delta',
+        'the difference in the share of values that are null, beyond what sampling puts between two profiles of one rate',
+        Bound.AT_MOST,
+        0.01,
+        null_rate_changes,
+    ),
     Metric(
         'zero_rate_delta',
         'the difference in the share of non-null values that are zero',
