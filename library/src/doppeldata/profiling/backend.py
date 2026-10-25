@@ -3,6 +3,7 @@
 import dataclasses as dc
 import enum
 import hashlib
+from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Protocol
@@ -14,7 +15,7 @@ from doppeldata.published_schemas import published_enum
 if TYPE_CHECKING:
     import pyarrow as pa
 
-# A table as the backend holds it; Polars' is a LazyFrame.
+# A table as the backend holds it: Polars' is a LazyFrame, and Spark's a DataFrame.
 Table = Any
 
 
@@ -245,9 +246,11 @@ class ParsedType:
 
 
 class Backend(Protocol):
-    """A profiling engine. `aggregate` answers every request it is given in one query."""
+    """A profiling engine. `aggregate` answers every request it is given, in as few queries as the engine compiles."""
 
     name: str
+    # The version of the session that reads the files, as a Spark cluster's, or None for an engine running in this process.
+    session_version: str | None
 
     def scan(self, source: Source) -> Table: ...
 
@@ -265,6 +268,14 @@ class Backend(Protocol):
 
     def sample(self, table: Table, n: int, seed: int) -> 'pa.Table':
         """A seeded uniform sample of n rows, or every row when the table holds no more."""
+        ...
+
+    def sampled(self, table: Table, n: int, seed: int) -> Table:
+        """A seeded sample of n rows as a table the engine queries, so a cluster's sample never crosses to the driver."""
+        ...
+
+    def profiling(self) -> AbstractContextManager[None]:
+        """What every query of one profile runs inside, such as a Spark session's settings."""
         ...
 
     def parse(self, table: Table, types: dict[str, ParsedType]) -> Table:

@@ -5,20 +5,14 @@
 #
 #   spark-parity/check-spark-parity.sh [--scenario FILE] WHEEL [IMAGE...]
 #
-# WHEEL is the library's manylinux2014 x86_64 wheel. With no IMAGE, it checks DEFAULT_IMAGES. uv is mounted into each
-# container, which inside-spark-image.sh uses to give an image with no Python 3.11 one. The container runs as the caller,
-# so what uv caches in the mounted cache directory stays the caller's. With --scenario, every run applies FILE, such as
-# eight-columns.scenario.yaml beside this script.
+# WHEEL is the library's manylinux2014 x86_64 wheel. With no IMAGE, it checks each image spark-images.txt lists. uv is
+# mounted into each container, which inside-spark-image.sh uses to give an image with no Python 3.11 one. The container
+# runs as the caller, so what uv caches in the mounted cache directory stays the caller's. With --scenario, every run
+# applies FILE, such as eight-columns.scenario.yaml beside this script.
 set -euo pipefail
 
 readonly ROWS=10000000 SEED=42 FILE_ROWS=1000000
 readonly CONTAINER_MEMORY=7g DRIVER_MEMORY=3g SPARK_MASTER='local[8]'
-readonly DEFAULT_IMAGES=(
-  apache/spark:3.5.9-python3
-  apache/spark:4.1.3-python3
-  apache/spark:4.2.0-python3
-  public.ecr.aws/glue/aws-glue-libs:5
-)
 
 main() {
   local scenario=() mounted=()
@@ -31,12 +25,14 @@ main() {
     echo "usage: $(basename "$0") [--scenario FILE] WHEEL [IMAGE...]" >&2
     exit 2
   fi
-  local wheel here work cache image fixture status=0
+  local wheel here cache image fixture images=() status=0
   wheel=$(realpath "$1")
   shift
-  (($# > 0)) || set -- "${DEFAULT_IMAGES[@]}"
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  (($# > 0)) || mapfile -t images <"$here/spark-images.txt"
+  (($# > 0)) || set -- "${images[@]}"
   fixture=$here/../crates/core/tests/every-column-kind.profile.yaml
+  # Global, because errexit drops main's locals before the EXIT trap runs.
   work=$(mktemp -d)
   trap 'rm -rf "$work"' EXIT
   cache=${XDG_CACHE_HOME:-$HOME/.cache}/doppeldata-spark-parity
@@ -56,6 +52,7 @@ main() {
       -v "$fixture:/work/every-column-kind.profile.yaml:ro" "${mounted[@]}" \
       -v "$wheel:/wheel/$(basename "$wheel"):ro" --entrypoint bash "$image" \
       /parity/inside-spark-image.sh "/wheel/$(basename "$wheel")" "$SPARK_MASTER" "$DRIVER_MEMORY" \
+      /parity/compare_spark_with_local.py /work/local/_manifest.json /tmp/out /work/every-column-kind.profile.yaml \
       "${mounted:+/work/scenario.yaml}" || status=1
   done
   exit "$status"

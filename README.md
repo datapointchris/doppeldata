@@ -37,6 +37,7 @@ doppeldata profile create data/orders/ --out orders.profile.yaml   # profile a d
 doppeldata profile create s3://bucket/orders/ --sample 1000000     # a seeded sample, printed as YAML
 doppeldata profile create data/orders/ --edges-from orders.profile.yaml --out orders.profile.yaml  # keep its bin edges
 doppeldata profile create data/claims/ --policy healthcare --out claims.profile.yaml  # add HIPAA Safe Harbor
+doppeldata profile create s3://bucket/claims/ --engine spark --out claims.profile.yaml  # compute it in Spark
 doppeldata profile check orders.profile.yaml   # the file against its schema and privacy policy, from the file alone
 doppeldata profile list                # the example profiles
 doppeldata profile show orders         # one of them, as YAML to start a profile from
@@ -81,6 +82,18 @@ sd.spark.write(spark, profile, 's3://bucket/orders/', rows=1_000_000_000, seed=7
 
 `profile create` reads Parquet and Arrow locally or from S3, with the credentials and endpoint the
 AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files.
+
+`--engine spark` computes the profile in Spark instead: in the Spark Connect session `SPARK_REMOTE`
+names, or in one it starts on `local[*]`. Spark reads Parquet, CSV and TSV, from S3 too. It
+estimates distinct counts with a 1% standard error, and quantiles within a rank error of 1/10,000.
+From Python, `sd.profile(frame,
+engine='spark')` profiles a DataFrame in its own session, and `spark=` names a session for files.
+`docs/profiling-with-spark.md` gives the commands for a Glue job and a Glue Spark Connect session.
+
+A directory whose folders hold unlike column names is refused, and the refusal names each table it
+holds. `--tables` profiles it as a bundle of one table per kind of folder, as an AWS Glue crawler
+splits a prefix. Folders sharing most of their column names are one table, and `key=value` folders
+are always Hive partitions of one.
 
 A profile is written under a privacy policy, `default` unless `--policy` names another. No data value
 it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. A
@@ -173,6 +186,9 @@ uv add scipy     # optional: without it, no column is fitted to a distribution f
 uv add sweetviz  # for check(..., html=...), the side-by-side HTML
 ```
 
+`profile(engine='spark')` needs pyspark, pyarrow and boto3 instead of polars, with duckdb, clevercsv
+and charset-normalizer for CSV or TSV. A Spark install brings pyspark, and the CLI declares none.
+
 Code that writes to S3 installs boto3, which resolves the AWS environment's credentials, SSO
 profiles included.
 
@@ -202,6 +218,10 @@ wheel, and its dependencies from PyPI:
 --additional-python-modules  s3://your-bucket/glue/doppeldata-<version>-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 ```
 
+A job that profiles names more modules after the wheel. It names `scipy`, which no Glue
+preinstalls and which fits the numeric columns. For CSV or TSV it also names `duckdb`, `clevercsv`
+and `charset-normalizer`. `docs/profiling-with-spark.md` gives the whole job, with the versions.
+
 Never give pip the package index as an extra index beside PyPI. pip installs the highest version it
 finds on either, so anyone uploading a `doppeldata` to PyPI would run their code in the job.
 
@@ -227,7 +247,7 @@ Upload the zip, pass its `s3://` path to `--additional-python-modules`, and pass
 | `cli/` | the `doppeldata-cli` distribution: the `doppeldata` command over the library |
 | `docs/` | why the design is what it is |
 | `benchmarks/` | the scripts `task bench` runs to time the engine against numpy, Faker and Mimesis |
-| `spark-parity/` | the check that `doppeldata.spark` gives a local run's values and files inside each Spark image named |
+| `spark-parity/` | the checks that `doppeldata.spark` gives a local run's values and files, and that `profile(engine='spark')` gives Polars' profile, inside each Spark image named |
 
 ## Develop
 

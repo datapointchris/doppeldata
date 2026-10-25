@@ -16,7 +16,8 @@ from doppeldata.profiling.sources import s3_errors
 from doppeldata.s3_access import endpoint_named
 from doppeldata.s3_access import s3_session
 
-# The most footers read, from a seeded sample of the files beyond that, because each footer on S3 is a remote read.
+# The most footers a profile describes the files from, a seeded sample beyond that. A reader still reads every footer
+# for the schema, because a drifted file the sample misses would fail the read or lose its columns.
 FOOTERS_READ = 512
 FOOTER_THREADS = 16
 FOOTER_SEED = 0
@@ -28,21 +29,30 @@ SPARK_VERSION_KEY = b'org.apache.spark.version'
 TIME_UNITS = {'milliseconds': 'ms', 'microseconds': 'us', 'nanoseconds': 'ns'}
 
 
-def read_footers(files: tuple[SourceFile, ...], *, every: bool = False) -> tuple[ParquetFooter, ...]:
-    """Each chosen file's footer, or every file's with `every`. On S3, through the boto3 client that lists the source, so its
-    timeouts, retries and region redirects apply, and its failures map as a listing's do.
+def read_footers(files: tuple[SourceFile, ...]) -> tuple[ParquetFooter, ...]:
+    """Each file's footer. On S3, through the boto3 client that lists the source, so its timeouts, retries and region
+    redirects apply, and its failures map as a listing's do.
     """
-    chosen = (
-        list(files)
-        if every or len(files) <= FOOTERS_READ
-        else sorted(random.Random(FOOTER_SEED).sample(list(files), FOOTERS_READ), key=lambda file: file.path)
-    )
+    chosen = list(files)
     if not chosen or not chosen[0].path.startswith('s3://'):
         with concurrent.futures.ThreadPoolExecutor(FOOTER_THREADS) as pool:
             return tuple(pool.map(lambda file: footer_of(parsed(file.path, file.path)), chosen))
     _, client = s3_session()
     with s3_errors(chosen[0].path, endpoint_named(client), doing='read'), concurrent.futures.ThreadPoolExecutor(FOOTER_THREADS) as pool:
         return tuple(pool.map(lambda file: footer_of(parsed(pa.BufferReader(tail_of(client, file)), file.path)), chosen))
+
+
+def sampled_files(files: tuple[SourceFile, ...]) -> list[SourceFile]:
+    """The files whose footers a profile describes the source from: every file, or a seeded sample of `FOOTERS_READ`."""
+    if len(files) <= FOOTERS_READ:
+        return list(files)
+    return sorted(random.Random(FOOTER_SEED).sample(list(files), FOOTERS_READ), key=lambda file: file.path)
+
+
+def sampled_footers(files: tuple[SourceFile, ...], every: tuple[ParquetFooter, ...]) -> tuple[ParquetFooter, ...]:
+    """Of every file's footer, those of the files `sampled_files` chooses."""
+    chosen = {file.path for file in sampled_files(files)}
+    return tuple(footer for file, footer in zip(files, every, strict=True) if file.path in chosen)
 
 
 def tail_of(client: Any, file: SourceFile) -> bytes:

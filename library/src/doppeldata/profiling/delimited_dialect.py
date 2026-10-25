@@ -24,6 +24,8 @@ from doppeldata.profiling.backend import DialectFound
 from doppeldata.profiling.backend import SourceFile
 from doppeldata.profiling.first_blocks import FIRST_BLOCK_BYTES
 from doppeldata.profiling.first_blocks import first_block
+from doppeldata.profiling.first_blocks import first_blocks
+from doppeldata.profiling.first_blocks import local_copy
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
 from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT
 
@@ -64,7 +66,9 @@ def detected(files: tuple[SourceFile, ...], delimiter: str | None, config: dict[
     bom = raw.startswith(UTF8_BOM)
     detected_encoding, encoding = encodings_of(raw)
     text = block_text(raw, encoding)
-    sniffed = duckdb_dialect(path, encoding, config)
+    with local_copy(path, raw) as sniffable:
+        sniffed = duckdb_dialect(sniffable, encoding, config)
+        has_header = duckdb_header(sniffable, encoding, config) if sniffed else True
     confirmed = clevercsv_dialect(text, delimiter)
     agree = sniffed is not None and confirmed is not None and read_as(sniffed)[:2] == read_as(confirmed)[:2]
     if sniffed is not None and (agree or confirmed is None):
@@ -79,7 +83,7 @@ def detected(files: tuple[SourceFile, ...], delimiter: str | None, config: dict[
     records = split_records(text, separator, quote, escape)
     header = glue_header(records)
     if header is None:
-        header = duckdb_header(path, encoding, config) if sniffed else True
+        header = has_header
     dialect = CsvDialect(separator, quote, escape, header, encoding, column_names(records, header))
     check_first_records(files, path, dialect, records[0])
     return DialectFound(
@@ -140,8 +144,7 @@ def check_first_records(files: tuple[SourceFile, ...], path: str, dialect: CsvDi
     if len(others) > FILES_CHECKED:
         others = sorted(random.Random(FILES_CHECKED_SEED).sample(others, FILES_CHECKED), key=lambda file: file.path)
     names = [field.text for field in first]
-    for file in others:
-        raw = first_block(file.path)
+    for file, raw in zip(others, first_blocks([file.path for file in others]), strict=True):
         if not raw.removeprefix(UTF8_BOM).strip():
             continue
         record = split_records(block_text(raw, dialect.encoding), dialect.delimiter, dialect.quote, dialect.escape, limit=1)[0]

@@ -7,7 +7,6 @@ from doppeldata.profiling.backend import Backend
 from doppeldata.profiling.backend import ColumnSpec
 from doppeldata.profiling.backend import ParsedType
 from doppeldata.profiling.backend import Request
-from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import Table
 from doppeldata.profiling.statistic_catalog import RAW_TYPE_FOLDS
 from doppeldata.profiling.statistic_catalog import RAW_TYPE_LAYOUTS
@@ -95,7 +94,7 @@ def column_layouts(layouts: Layouts, name: str) -> tuple[tuple[str, str], ...]:
 
 def best_layouts(backend: Backend, table: Table, specs: list[ColumnSpec], seed: int) -> Layouts:
     """For each column, the date and the timestamp layout that read the most sampled values, or None where none reads one."""
-    trial_table = backend.scan(Source(format=None, table=backend.sample(table, LAYOUT_TRIAL_ROWS, seed)))
+    trial_table = backend.sampled(table, LAYOUT_TRIAL_ROWS, seed)
     trials = [
         Request(spec.name, 'raw_type_counts', ((raw, layout),))
         for spec in specs

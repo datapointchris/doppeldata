@@ -10,8 +10,9 @@ The raw text types with their order, and the time units with their lengths, are 
 catalog too, so a backend and the profile builder read one list.
 
 The `Backend` protocol splits a profile into the queries an engine answers natively. One `aggregate`
-answers every request it is given in one query. Counting the most frequent values, sampling and
-parsing text each need a query of their own. `doppeldata.profiling.table_profile` drives the calls,
+answers every request it is given: Polars in one query, and Spark in a few queries per kind of
+pass, as [profiling-with-spark.md](profiling-with-spark.md) says. Counting the most frequent values, sampling
+and parsing text each need a query of their own. `doppeldata.profiling.table_profile` drives the calls,
 so a backend holds no profiling logic.
 
 A profile is one aggregate over every column, then a second that counts rows against the histogram
@@ -190,20 +191,31 @@ parameters write two profiles, and those generate different tails.
 The generator places each edge at its share of every row, the overflow included, so a frozen
 profile generates the body it describes. Reading `overflow` raised the stream version to 3.
 
-## Polars computes every statistic, and DuckDB only reads text
+## Polars or Spark computes every statistic, and DuckDB only reads or sniffs text
 
-A second statistics backend would translate the catalog twice and need a test pinning the two
-engines' agreement. So DuckDB reads CSV, TSV and JSON with every column as text, and hands Polars
-the result. pyarrow reads Parquet footers, for the layout alone. A profile records
-`generated.engine: polars` whichever reader ran. `generated.readers` names each package that read or
-sniffed the files, with its version, because a DuckDB or CleverCSV upgrade can change what a
-profile of the same files says.
+Polars computes a profile by default. Spark computes it under `--engine spark` or
+`profile(engine='spark')`, for data on a cluster. Each translates the whole catalog, and
+`spark-parity/check-profiler-parity.sh` holds Spark's profile to Polars'.
+
+- **Under Polars, DuckDB reads CSV, TSV and JSON with every column as text**, and hands Polars the
+  result.
+- **Under Spark, Spark's own reader reads CSV and TSV with every column as text**, in the dialect
+  DuckDB and CleverCSV sniff from the first block. Spark profiles no JSON or Arrow file, and names
+  engine polars for them.
+- **pyarrow reads Parquet footers**, for the layout alone.
+- **`generated.engine` names the backend that computed the statistics**, whichever reader ran.
+  `generated.readers` names each package that read or sniffed the files, with its version, because a
+  DuckDB or CleverCSV upgrade can change what a profile of the same files says.
 
 DuckDB runs with extension installing and autoloading off. Its wheel links the CSV and JSON readers
 in, so nothing downloads at run time. Its `httpfs` extension would download itself at first use, so
-DuckDB reads only local files. Parquet and Arrow on S3 are read by Polars' own object store.
+DuckDB reads only local files. Parquet and Arrow on S3 are read by Polars' own object store. So
+Polars profiles text from local files only. Spark reads text on S3 itself, and boto3 reads the first
+block for the sniff, which DuckDB reads from a local copy.
 
-*Rejected:* DuckDB's `SUMMARIZE` as a statistics backend, for the reason above.
+*Rejected:* DuckDB's `SUMMARIZE` as a statistics backend. A backend translates the whole catalog and
+is held to the others by a parity check. DuckDB reaches no data Polars cannot, so it would pay that
+cost for nothing.
 
 *Rejected:* Polars' own CSV and JSON readers. They read clean text as well, but DuckDB's CSV reader
 also sniffs a dialect and records each malformed row in a rejects table, which Polars has no
@@ -223,6 +235,11 @@ A listing makes `S3_ATTEMPTS` attempts, as the AWS CLI's standard mode does. A f
 endpoint and the setting that chose it. `profile create` exits 4 when no answer came, and 1 when S3
 answered and refused. A key with a format's suffix that holds no object is listed as a prefix,
 because Spark writes a table as a `name.parquet/` directory.
+
+Hadoop's `s3a://` and `s3n://` are written as `s3://` before anything is listed, so grouping, the
+listing and the profile see one form. Spark then reads `s3://`, which Glue and EMR read natively.
+A Spark outside them needs `spark.hadoop.fs.s3.impl` set to S3A's
+`org.apache.hadoop.fs.s3a.S3AFileSystem`.
 
 A file or directory whose name starts with `.` or `_` is skipped, such as Spark's `_SUCCESS`. A
 directory or prefix holding `_manifest.partial.json` is refused, because a doppeldata write there
@@ -249,7 +266,11 @@ needed only for CSV and TSV. `LISTING_PACKAGES` names the ones listing S3 needs 
 is listed. Either check raises `ProfilingEnginesMissing` naming each missing distribution, and a
 command it stops exits 2.
 `generated.readers` records the version of each package that reads the source's format, from the
-same table. `doppeldata-cli` declares every one, because `profile create` is one of its verbs.
+same table. pyspark's is the session's Spark version, because the session reads the files. A Spark
+Connect client's pyspark can differ from it, and so can one a launcher leaves in site-packages, as
+the Glue 5.0 image's 3.5.2 sits beside its Spark 3.5.4. `doppeldata-cli` declares every one but
+pyspark, because `profile create` is one of its verbs. pyspark comes with the Spark install it runs
+in, whose version is the cluster's, so a missing pyspark is refused with that said.
 
 ## A text column is read as the type most of its values parse as
 
@@ -285,7 +306,11 @@ typed as a CSV field is.
 
 The dialect comes from the first `FIRST_BLOCK_BYTES` of the first file holding a record,
 decompressed. A block cut mid-record is trimmed at its last line break. A source none of whose
-files holds a record is refused with a `SourceError` naming them.
+files holds a record is refused with a `SourceError` naming them. A file whose block cannot be read
+or decompressed fails the profile with exit 1, naming it. An S3 object's compressed bytes are read
+only so far, so a block cut mid-stream keeps what decompressed before the cut, and fails where
+nothing did. The blocks of several S3 objects are read through one client, on `BLOCK_THREADS`
+threads.
 
 - **A block that decodes as UTF-8 is read as UTF-8, and any other as Latin-1.** A UTF-8 BOM is
   recorded as `bom` and stripped. charset-normalizer's name for the block is recorded as
@@ -340,14 +365,20 @@ is left out of the table, and counted once, under its first error by position.
 - **The profiler reads in DuckDB's strict mode, which rejects a stray quote as `unquoted_value`.**
   With quote `"`, the field `"bad "quote"` gives `UNQUOTED VALUE` in DuckDB 2.0.0, where
   `strict_mode = false` gives `MISSING COLUMNS`. `read_delimited` passes `strict_mode = true`.
+- **Spark gives no error, so it classifies a malformed row by its field count.** Spark's reader
+  runs in `PERMISSIVE` mode and keeps each row it cannot split into the header's fields as text.
+  That row splits on the delimiter into fewer fields than the header's for `missing_columns`, more
+  for `too_many_columns`, and as many for `unquoted_value`. The split ignores quotes, so a quoted
+  delimiter can move a row between the first two.
 
 ## A Parquet footer gives the layout, and never a value
 
 A footer's min and max are single rows' values, so no column statistic comes from one. Every
 statistic is taken from the rows, under the floor below.
 
-- **At most `FOOTERS_READ` footers are read**, a sample seeded by `FOOTER_SEED` beyond that, on
-  `FOOTER_THREADS` threads.
+- **Every footer is read for the schema, and at most `FOOTERS_READ` describe the files**, a sample
+  seeded by `FOOTER_SEED` beyond that. They are read on `FOOTER_THREADS` threads. One drifted file
+  a sample missed would leave its columns out of the union, and Spark would fail reading it.
 - **An S3 footer is read through the boto3 client that lists the source.** One ranged read of the
   last `TAIL_BYTES` holds most footers, and a longer one takes a second. So the listing's
   timeouts, retries and region redirects apply, and a failure exits as a listing's does, with 4
@@ -365,8 +396,6 @@ statistic is taken from the rows, under the floor below.
   Polars the union as its scan schema, so no file's own schema decides the table's. A column is
   read at the widest type a footer stores it as, and is null in a file that lacks it. A
   schema-drifted dataset, generated or not, then profiles as one table.
-- **A sample of footers holding two schemas sends the reader to every footer.** A third schema
-  outside the sample would otherwise lose its columns.
 - **A column two files store as an integer and a string fails the read**, naming the column.
   Neither type widens to the other.
 
@@ -381,6 +410,56 @@ statistic is taken from the rows, under the floor below.
   `TOP_VALUES_THRESHOLD` values.
 - **`sort_order` is the sorting columns every footer declares.** Without them, it is the first
   integer column whose values never fall in read order.
+
+## A directory whose folders hold unlike column names is grouped as a Glue crawler groups one, and profiled as tables only on request
+
+A Glue crawler compares the schemas of the folders under a prefix. Where they match "and the
+partition threshold is higher than 70 percent", the folders are partitions of one table. Otherwise
+"the crawler creates a table for every folder", each named after its folder
+(<https://repost.aws/knowledge-center/glue-crawler-multiple-tables>,
+<https://docs.aws.amazon.com/glue/latest/dg/add-crawler.html>). `profiling/table_grouping.py`
+groups a directory or prefix the same way, with the differences below. It runs before an engine
+starts, so Polars and Spark group alike.
+
+- **`profile()` and `profile create` always give one table.** A source that groups into several is
+  refused with exit 2. The refusal names each table with its folders and up to `NAMES_SHOWN` of its
+  column names, and names both ways out: `profile_tables()` or `profile create --tables`, or one
+  table's folder. A caller then never gets a result whose type depends on what landed on disk.
+- **`profile_tables()` and `profile create --tables` give a `Bundle`**, of one table where the source
+  groups into one. `--out` writes one file of `kind: bundle` holding the tables inline. Two tables
+  taking one name fail the profile.
+- **`edges_from` skips grouping**, because an earlier profile's edges belong to one table. The
+  source is profiled as one table, as before grouping existed. So `data check`, which passes the
+  profile it checks as `edges_from`, reads a generated directory whole.
+- **Each folder directly under the root is a candidate table, and its `key=value` folders never
+  are.** The files directly under the root are one more candidate, and every `key=value` folder is
+  one, both named after the root. A partition is a partition by construction, so drift across
+  `dt=` or `year=` folders never splits a table. The listing resolves links, so a linked file
+  whose target lies outside the root joins the root's own files.
+- **A folder's column names are the union of up to `FILES_READ` of its files'.** A Parquet file's
+  come from its footer and an Arrow file's from its schema. A CSV or TSV gives its header's names,
+  or `col0`, `col1` and on where Glue would find no header. A JSON file gives the keys of its first
+  `RECORDS_READ` records, read a record at a time where it is one array.
+- **Two folders are one table where they share more than `SIMILAR` of their column names**, the
+  crawler's 70 percent. Types are left out, because both readers widen a column across files. One
+  int32 column widened to int64 would otherwise leave a four-column table under the bar. Each
+  folder joins the first cluster whose first folder it matches, in name order.
+- **A folder whose names could not be read matches no other**, and becomes a table of its own with
+  a `ProfilingWarning` naming it. An Arrow file on S3, a JSON file holding no object, and a folder
+  of empty files read no names. Where no folder's names could be read, the source is one table.
+- **Several clusters are a bundle of one table per cluster**, where the crawler makes a table of
+  every folder. Two kinds of table under one prefix, each written as many folders, become two
+  tables rather than one per folder.
+- **A cluster is named for its folders' common prefix, less trailing digits and separators**, so
+  `orders_2024/` and `orders_2025/` are `orders`, and a new `orders_2023/` keeps the name. A
+  cluster holding the root's own files or its `key=value` folders takes the root's name, and one
+  whose prefix leaves nothing takes its first folder's.
+- **More than `MOST_CLUSTERS` clusters make each folder its own table**, as the crawler does. That
+  many kinds of table under one prefix says the folders share no structure worth keeping.
+- **Several paths named are one table**, as a crawler's include path is.
+
+*Not established:* how the crawler measures a match. Neither page defines it, so the share of
+column names is this design's reading of "70 percent".
 
 ## A JSON source is profiled path by path
 
@@ -463,10 +542,13 @@ generator multiplies `distinct.ratio` by the rows it writes, and a distinct rati
 a sample. So a sampled profile counts each column's distinct values in one pass over every row, and
 takes the ratio over the whole table.
 
-## Distinct values are counted exactly
+## Distinct values are counted exactly by Polars, and estimated by Spark at a 1% standard error
 
 `distinct.approx` holds an exact count on the Polars backend, so `distinct.ratio` does not move with
-the engine or its version. A backend that estimates the count writes it to the same field.
+its version. Spark estimates it with HyperLogLog++ at a relative standard deviation of 0.01, and
+writes the estimate to the same field. A count of a few hundred falls in HyperLogLog++'s linear
+counting, and lands within a few values of exact.
+[profiling-with-spark.md](profiling-with-spark.md) gives the errors measured against Polars.
 
 ## A profile's numbers are rounded so that profiling again gives the same digest
 

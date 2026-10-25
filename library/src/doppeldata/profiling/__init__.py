@@ -15,11 +15,14 @@ from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import ProfilingEnginesMissing
 from doppeldata.errors import ProfilingWarning
+from doppeldata.errors import SourceError
 from doppeldata.privacy_policy import APPLIED_POLICIES
 from doppeldata.privacy_policy import Policy
 from doppeldata.profile_format import DERIVED_FROM
+from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
+from doppeldata.profiling import table_grouping
 from doppeldata.profiling import table_profile
 from doppeldata.profiling.backend import Backend
 from doppeldata.profiling.backend import Request
@@ -40,22 +43,33 @@ class EnginePackage:
     """A package an engine imports, by its distribution and module names, and the formats whose files it reads or sniffs.
 
     One `everywhere` is imported to profile any source, and any other only to profile a source of a format it reads.
-    `generated.readers` records the version of each that reads the source's format.
+    `generated.readers` records the version of each that reads the source's format. That is the session's version for
+    one `read_by_session`, because the session reads the files, and a Spark Connect client's package or one a
+    launcher leaves in site-packages need not be its version. `cli_declares` says whether doppeldata-cli installs it.
     """
 
     distribution: str
     module: str
     reads: frozenset[SourceFormat]
     everywhere: bool = True
+    cli_declares: bool = True
+    read_by_session: bool = False
 
 
 @dc.dataclass(frozen=True)
 class Engine:
-    """An engine's backend class, as its module and name, and the packages that module imports."""
+    """An engine's backend class, as its module and name, the packages that module imports, and the formats it reads
+    from local files and from S3. `listed_source` refuses any other before a file is read or a session starts.
+
+    A `sessioned` engine's backend is built on a session the module's `session_for` resolves, as Spark's is.
+    """
 
     module: str
     backend: str
     packages: tuple[EnginePackage, ...]
+    reads: frozenset[SourceFormat]
+    reads_remote: frozenset[SourceFormat]
+    sessioned: bool = False
 
 
 DELIMITED = frozenset({SourceFormat.CSV, SourceFormat.TSV})
@@ -70,7 +84,26 @@ ENGINES = {
             EnginePackage('clevercsv', 'clevercsv', DELIMITED, everywhere=False),
             EnginePackage('charset-normalizer', 'charset_normalizer', DELIMITED, everywhere=False),
         ),
-    )
+        reads=frozenset(SourceFormat),
+        # DuckDB reads text from local files only.
+        reads_remote=frozenset({SourceFormat.PARQUET, SourceFormat.ARROW}),
+    ),
+    # Spark reads every file. DuckDB, CleverCSV and charset-normalizer sniff a delimited source's dialect on the driver.
+    # pyspark comes with the Spark it runs in, whose version is the cluster's, so the CLI declares none.
+    'spark': Engine(
+        'doppeldata.profiling.spark_backend',
+        'SparkBackend',
+        (
+            EnginePackage('pyspark', 'pyspark', DELIMITED | {SourceFormat.PARQUET}, cli_declares=False, read_by_session=True),
+            EnginePackage('pyarrow', 'pyarrow', frozenset({SourceFormat.PARQUET})),
+            EnginePackage('duckdb', 'duckdb', DELIMITED, everywhere=False),
+            EnginePackage('clevercsv', 'clevercsv', DELIMITED, everywhere=False),
+            EnginePackage('charset-normalizer', 'charset_normalizer', DELIMITED, everywhere=False),
+        ),
+        reads=DELIMITED | {SourceFormat.PARQUET},
+        reads_remote=DELIMITED | {SourceFormat.PARQUET},
+        sessioned=True,
+    ),
 }
 # The module that lists what was named, and the packages it imports to list S3, which profiling needs whatever the engine.
 SOURCES_MODULE = 'doppeldata.profiling.sources'
@@ -81,6 +114,7 @@ def profile(
     data: Any,
     *,
     engine: str = 'polars',
+    spark: Any = None,
     sample: int | None = None,
     policy: str = Policy.DEFAULT,
     k_min: int | None = None,
@@ -88,12 +122,19 @@ def profile(
     packs: Sequence[str] = (),
     code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
 ) -> Profile:
-    """Profile `data` into a valid table profile holding no rows, written under the privacy policy `policy`.
+    """Profile `data` into a valid profile of one table holding no rows, written under the privacy policy `policy`.
 
-    `data` is a path, an `s3://` URL, a list of them, or a pyarrow, Polars or pandas table. `sample`
-    profiles a seeded random sample of that many rows. Under `default`, `strict` and `healthcare`, no stored
-    literal rests on fewer than `k_min` rows, `DEFAULT_K_MIN` unless given, and `privacy.audit` lists each one.
-    `none` keeps every value, and takes and states no `k_min`. `healthcare` also enables the healthcare detector pack.
+    `data` is a path, an `s3://` URL, a list of them, a pyarrow, Polars or pandas table, or under `engine='spark'` a
+    Spark DataFrame. One directory or prefix named is grouped as an AWS Glue crawler groups one, and where it holds
+    several tables a `SourceError` names each, so `profile_tables` profiles them or one table's folder is named.
+    `sample` profiles a seeded random sample of that many rows. Under `default`, `strict` and `healthcare`, no stored
+    literal rests on fewer than `k_min` rows, `DEFAULT_K_MIN` unless given, and `privacy.audit` lists each one. `none`
+    keeps every value, and takes and states no `k_min`. `healthcare` also enables the healthcare detector pack.
+
+    `engine` is `polars` or `spark`. Spark profiles in `spark`, the session given, else a DataFrame's own, the active
+    session, or one pyspark's builder starts: over Spark Connect where `SPARK_REMOTE` names a server, else on
+    `local[*]`. Spark estimates distinct counts with HyperLogLog++ and quantiles with Greenwald-Khanna, where Polars
+    counts both.
 
     Each string column, and each integer column whose name hints a type a validator confirms, is typed by
     the detector packs named in `packs` and the general pack, which every run enables. A pack the library does not ship is
@@ -105,88 +146,177 @@ def profile(
     `generated.code_lists` records each list's sha256 and never its path. `InvalidCodeList` names a list no
     enabled detector reads, or a file that cannot be read.
 
-    `edges_from` is an earlier profile of the same table. Where its source fingerprint matches the files
-    listed now, and it was made by this doppeldata, scipy, detector packs, code lists and readers, such as DuckDB and
-    CleverCSV, with the same engine, policy, `k_min` and sampling, it is returned unchanged, so a reviewer's
-    edits survive a re-run. Otherwise an `EarlierProfileNotReused` names what differs, each column it holds a
-    histogram or value list for is counted against those, and the rows outside them are written as the
-    column's `overflow`. A column only one of the two tables holds, or whose list would move to another
-    section, issues `ColumnsNotFrozen`.
+    `edges_from` is an earlier profile of the same table, so the source is profiled as one table without grouping.
+    Where its source fingerprint matches the files listed now, and it was made by this doppeldata, scipy, detector
+    packs, code lists and readers, such as DuckDB and CleverCSV, with the same engine, policy, `k_min` and sampling,
+    it is returned unchanged, so a reviewer's edits survive a re-run. Otherwise an `EarlierProfileNotReused` names what
+    differs, each column it holds a histogram or value list for is counted against those, and the rows outside them
+    are written as the column's `overflow`. A column only one of the two tables holds, or whose list would move to
+    another section, issues `ColumnsNotFrozen`.
     """
-    if sample is not None and sample < 1:
-        raise ValueError(f'sample must be a positive number of rows, not {sample}')
-    applied = applied_policy(policy, k_min)
-    stated = applied.k_min(k_min)
-    # `none` holds no floor, so every statistic is computed over every row.
-    floor = stated or 1
-    backend = engine_backend(engine)
-    named = [*packs, HEALTHCARE] if applied is Policy.HEALTHCARE and HEALTHCARE not in packs else list(packs)
-    enabled = enabled_packs(named)
-    supplied = read_code_lists(code_lists or {}, enabled)
-    source, reading = listed_source(data, engine)
-    readers = {package.distribution: importlib.metadata.version(package.distribution) for package in reading}
+    settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
+    listed, reading = listed_source(data, engine)
+    source = listed if edges_from is not None else table_grouping.only_table(listed)
+    backend = engine_backend(engine, data, spark)
+    readers = session_readers(backend, reading)
     if edges_from is not None:
         changed = what_changed(
             edges_from,
             source.fingerprint,
             engine=engine,
             sample=sample,
-            policy=applied,
-            k_min=stated,
-            packs=enabled,
-            code_lists=supplied,
+            policy=settings.policy,
+            k_min=settings.k_min,
+            packs=settings.packs,
+            code_lists=settings.code_lists,
             readers=readers,
         )
         if changed is None:
             return edges_from
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=2)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
-    profiled = Profile(
-        table_profile.profile_table(
-            backend,
-            source,
-            sample=sample,
-            k_min=floor,
-            policy=applied,
-            packs=enabled,
-            code_lists=supplied,
-            readers=readers,
-            frozen=frozen,
-        )
-    )
-    importlib.import_module(SOURCES_MODULE).check_unchanged(source)
-    issues = profiled.validate()
+    only = profiled_tables(backend, [source], settings, readers, frozen)[source.name]
+    importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
+    issues = only.validate()
     if issues:
         raise InvalidProfile(f'the profile of {data!r}', issues)
     if edges_from is not None:
-        earlier, now = (column_names(document.to_plain()) for document in (edges_from, profiled))
+        earlier, now = (column_names(document.to_plain()) for document in (edges_from, only))
         undescribed, missing = [name for name in now if name not in earlier], [name for name in earlier if name not in now]
-        relisted = table_profile.relisted_columns(edges_from.to_plain(), profiled.to_plain())
+        relisted = table_profile.relisted_columns(edges_from.to_plain(), only.to_plain())
         if undescribed or missing or relisted:
             warnings.warn(ColumnsNotFrozen(undescribed, missing, relisted), stacklevel=2)
+    return only
+
+
+def profile_tables(
+    data: Any,
+    *,
+    engine: str = 'polars',
+    spark: Any = None,
+    sample: int | None = None,
+    policy: str = Policy.DEFAULT,
+    k_min: int | None = None,
+    packs: Sequence[str] = (),
+    code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
+) -> Bundle:
+    """Profile every table `data` holds into a valid bundle, taking `profile`'s arguments but `edges_from`.
+
+    One directory or prefix named is grouped as an AWS Glue crawler groups one. Folders whose column names are
+    similar are one table, named for the folders' common stem, and any other source is a bundle of one table.
+    """
+    settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
+    listed, reading = listed_source(data, engine)
+    tables = [table.source for table in table_grouping.grouped(listed)]
+    backend = engine_backend(engine, data, spark)
+    profiled = profiled_tables(backend, tables, settings, session_readers(backend, reading), None)
+    importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
+    bundle = Bundle.of(listed.name, profiled)
+    issues = bundle.validate()
+    if issues:
+        raise InvalidProfile(f'the profile of {data!r}', issues)
+    return bundle
+
+
+@dc.dataclass(frozen=True)
+class RunSettings:
+    """What a run profiles with, checked before any source is read. `k_min` is the floor stated, None under `none`."""
+
+    engine: str
+    sample: int | None
+    policy: Policy
+    k_min: int | None
+    packs: list[EnabledPack]
+    code_lists: Mapping[str, SuppliedCodeList]
+
+
+def run_settings(
+    engine: str,
+    spark: Any,
+    sample: int | None,
+    policy: str,
+    k_min: int | None,
+    packs: Sequence[str],
+    code_lists: Mapping[str, str | os.PathLike[str]] | None,
+) -> RunSettings:
+    if sample is not None and sample < 1:
+        raise ValueError(f'sample must be a positive number of rows, not {sample}')
+    chosen = available_engine(engine)
+    if spark is not None and not chosen.sessioned:
+        raise ValueError(f'spark names the session engine spark profiles in, and engine {engine} takes none')
+    applied = applied_policy(policy, k_min)
+    named = [*packs, HEALTHCARE] if applied is Policy.HEALTHCARE and HEALTHCARE not in packs else list(packs)
+    enabled = enabled_packs(named)
+    return RunSettings(engine, sample, applied, applied.k_min(k_min), enabled, read_code_lists(code_lists or {}, enabled))
+
+
+def session_readers(backend: Backend, reading: Sequence['EnginePackage']) -> dict[str, str]:
+    """The version of each package that reads the source, as `generated.readers` records it."""
+    return {
+        package.distribution: backend.session_version
+        if package.read_by_session and backend.session_version
+        else importlib.metadata.version(package.distribution)
+        for package in reading
+    }
+
+
+def profiled_tables(
+    backend: Backend,
+    tables: Sequence[Source],
+    settings: RunSettings,
+    readers: dict[str, str],
+    frozen: table_profile.FrozenLayout | None,
+) -> dict[str, Profile]:
+    profiled = {}
+    with backend.profiling():
+        for table in tables:
+            document = table_profile.profile_table(
+                backend,
+                table,
+                sample=settings.sample,
+                # `none` holds no floor, so every statistic is computed over every row.
+                k_min=settings.k_min or 1,
+                policy=settings.policy,
+                packs=settings.packs,
+                code_lists=settings.code_lists,
+                readers=readers,
+                frozen=frozen,
+            )
+            profiled[table.name] = Profile(document)
     return profiled
 
 
-def engine_backend(engine: str) -> Backend:
-    """The engine's backend, refused with ProfilingEnginesMissing where a package every source needs is not installed."""
+def available_engine(engine: str) -> Engine:
+    """The engine named, refused with ProfilingEnginesMissing where a package every source needs is not installed."""
     if engine not in ENGINES:
         raise ValueError(f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}')
     chosen = ENGINES[engine]
-    missing = uninstalled([package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
-    if missing:
-        raise ProfilingEnginesMissing(engine, missing)
+    refuse_uninstalled(engine, [package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
+    return chosen
+
+
+def engine_backend(engine: str, data: Any = None, spark: Any = None) -> Backend:
+    """The engine's backend. A sessioned engine's is built on the session its module's `session_for` resolves from `data`
+    and `spark`."""
+    chosen = available_engine(engine)
     # Imported by name, because each imports packages a library-only install lacks.
-    backend: Backend = getattr(importlib.import_module(chosen.module), chosen.backend)()
+    module = importlib.import_module(chosen.module)
+    backend_class = getattr(module, chosen.backend)
+    backend: Backend = backend_class(module.session_for(data, spark)) if chosen.sessioned else backend_class()
     return backend
 
 
 def listed_source(data: Any, engine: str = 'polars') -> tuple[Source, list[EnginePackage]]:
-    """`data` listed as one source, and the engine's packages that read its format, refused where one is not installed."""
-    source: Source = importlib.import_module(SOURCES_MODULE).resolve(data)
-    reading = [package for package in ENGINES[engine].packages if source.format in package.reads]
-    missing = uninstalled(reading)
-    if missing:
-        raise ProfilingEnginesMissing(engine, missing)
+    """`data` listed as one source, and the engine's packages that read its format, refused where the engine reads no such
+    source or one of those packages is not installed."""
+    chosen = ENGINES[engine]
+    sources = importlib.import_module(SOURCES_MODULE)
+    source: Source = sources.resolve(data)
+    if source.table is not None and sources.is_spark_frame(source.table) and not chosen.sessioned:
+        raise SourceError(f"a Spark DataFrame is profiled with engine='spark', and this run chose {engine}")
+    refuse_unread_format(engine, source)
+    reading = [package for package in chosen.packages if source.format in package.reads]
+    refuse_uninstalled(engine, reading)
     return source, reading
 
 
@@ -205,21 +335,43 @@ class SampledTable:
 def sampled_table(data: Any, rows: int, *, engine: str = 'polars', seed: int = table_profile.SAMPLE_SEED) -> SampledTable:
     """A seeded random sample of up to `rows` rows of `data`, anything `profile` reads, at the types `profile` reads them as.
 
-    A file that changes, appears or goes away while it is read raises the `SourceError` profiling raises.
+    A source that groups into several tables, and a file that changes, appears or goes away while it is read, raise
+    the `SourceError` `profile` raises.
     """
     if rows < 1:
         raise ValueError(f'rows must be a positive number of rows, not {rows}')
-    backend = engine_backend(engine)
-    source, _ = listed_source(data, engine)
-    table = table_profile.typed_table(backend, source)
-    held = table_profile.answered(backend, table, [Request(None, 'rows')])[(None, 'rows')]
-    sampled = SampledTable(backend.sample(table, rows, seed), held, source.fingerprint)
+    listed, _ = listed_source(data, engine)
+    source = table_grouping.only_table(listed)
+    backend = engine_backend(engine, data)
+    with backend.profiling():
+        table = table_profile.typed_table(backend, source)
+        held = table_profile.answered(backend, table, [Request(None, 'rows')])[(None, 'rows')]
+        sampled = SampledTable(backend.sample(table, rows, seed), held, source.fingerprint)
     importlib.import_module(SOURCES_MODULE).check_unchanged(source)
     return sampled
 
 
-def uninstalled(packages: Sequence[EnginePackage]) -> list[str]:
-    return errors.uninstalled({package.distribution: package.module for package in packages})
+def refuse_unread_format(engine: str, source: Source) -> None:
+    """Refuse a source of a format the engine does not read from where it lies, naming the engines that do."""
+    if source.format is None:
+        return
+    remote = any(file.path.startswith('s3://') for file in source.files)
+    if source.format in (ENGINES[engine].reads_remote if remote else ENGINES[engine].reads):
+        return
+    where = ' on S3' if remote else ''
+    readers = [name for name, other in ENGINES.items() if source.format in (other.reads_remote if remote else other.reads)]
+    if readers:
+        raise SourceError(f'engine {engine} does not read {source.format.value}{where}; profile it with engine {" or ".join(readers)}')
+    local = ' or '.join(name for name, other in ENGINES.items() if source.format in other.reads)
+    copy = f'`aws s3 cp --recursive {source.roots[0]} <dir>`'
+    raise SourceError(f'no engine reads {source.format.value} on S3; copy it down with {copy}, and profile the copy with engine {local}')
+
+
+def refuse_uninstalled(engine: str, packages: Sequence[EnginePackage]) -> None:
+    missing = errors.uninstalled({package.distribution: package.module for package in packages})
+    if missing:
+        declared = all(package.cli_declares for package in packages if package.distribution in missing)
+        raise ProfilingEnginesMissing(engine, missing, cli_declares=declared)
 
 
 def applied_policy(policy: str, k_min: int | None) -> Policy:

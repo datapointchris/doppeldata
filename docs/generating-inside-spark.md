@@ -165,6 +165,11 @@ local `doppeldata data generate` records.
   one query, can end that way. With `spark.client.disable_reattachable_execute()` before the first
   query, every query completed. Why reattaching fails through the session's endpoint is not
   established.
+- **The endpoint also ends a stream that sends nothing for between 20 and 45 seconds**, whatever
+  the client sets. A query that computes longer than that before its first row needs reattachable
+  execution on, with the session's sender stream cut to 10 seconds.
+  [profiling-with-spark.md](profiling-with-spark.md) gives the session setting and the first query
+  that make it work.
 - **Over Connect, `write` claims and commits from the client process, with the client's
   credentials.** The tasks still write with the session's role.
 - **A session answered its first query 3 to 4.5 minutes after Glue reported it `READY`.**

@@ -1,5 +1,6 @@
 """The Polars backend. Polars computes every statistic, and DuckDB only reads CSV, TSV and JSON as text."""
 
+import contextlib
 import dataclasses as dc
 import importlib
 import json
@@ -286,6 +287,7 @@ def ancestor_partition_keys(source: Source) -> list[str]:
 
 class PolarsBackend:
     name = 'polars'
+    session_version: str | None = None
 
     def scan(self, source: Source) -> pl.LazyFrame:
         return self.read(source).table
@@ -368,6 +370,12 @@ class PolarsBackend:
             table = table.with_row_index(ROW_INDEX).filter(pl.col(ROW_INDEX).is_in(picked.implode())).drop(ROW_INDEX)
         return table.collect(engine='streaming').to_arrow()
 
+    def sampled(self, table: pl.LazyFrame, n: int, seed: int) -> pl.LazyFrame:
+        return pl.DataFrame(self.sample(table, n, seed)).lazy()
+
+    def profiling(self) -> contextlib.AbstractContextManager[None]:
+        return contextlib.nullcontext()
+
     def parse(self, table: pl.LazyFrame, types: dict[str, ParsedType]) -> pl.LazyFrame:
         return table.with_columns(parsed(pl.col(name), parsed_type).alias(name) for name, parsed_type in types.items())
 
@@ -380,12 +388,9 @@ def read_files(source: Source) -> SourceRead:
     try:
         match source.format:
             case SourceFormat.PARQUET:
-                footers = parquet_footers.read_footers(source.files)
-                union = schema_union(footers)
-                if union and len(footers) < len(source.files):
-                    # A sample holding two schemas may miss a third, whose columns the union would leave out.
-                    union = schema_union(parquet_footers.read_footers(source.files, every=True))
-                read = SourceRead(pl.scan_parquet(paths, hive_partitioning=hive, **union), footers=footers)
+                every = parquet_footers.read_footers(source.files)
+                scan = pl.scan_parquet(paths, hive_partitioning=hive, **schema_union(every))
+                read = SourceRead(scan, footers=parquet_footers.sampled_footers(source.files, every))
             case SourceFormat.ARROW:
                 read = SourceRead(pl.scan_ipc(paths, hive_partitioning=hive))
             case SourceFormat.CSV | SourceFormat.TSV:
@@ -437,7 +442,7 @@ def read_delimited(source: Source) -> SourceRead:
     query = (
         'select * from read_csv($paths, auto_detect = false, columns = $columns, delim = $delimiter, quote = $quote, '
         'escape = $escape, header = $header, encoding = $encoding, allow_quoted_nulls = false, strict_mode = true, store_rejects = true, '
-        'filename = $file_column, hive_partitioning = $hive)'
+        'filename = $file_column, hive_partitioning = $hive, hive_types_autocast = false)'
     )
     parameters = {
         'paths': [file.path for file in source.files],
