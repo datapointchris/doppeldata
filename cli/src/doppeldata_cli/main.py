@@ -1,5 +1,6 @@
 import contextlib
 import dataclasses as dc
+import difflib
 import importlib.metadata
 import importlib.resources
 import json
@@ -19,18 +20,22 @@ from doppeldata import DetectorPackError
 from doppeldata import DoppeldataError
 from doppeldata import InvalidCodeList
 from doppeldata import InvalidProfile
+from doppeldata import InvalidScenario
 from doppeldata import InvalidThresholds
 from doppeldata import Profile
 from doppeldata import ProfilesDrifted
 from doppeldata import ProfilingWarning
+from doppeldata import Scenario
 from doppeldata import SourceError
 from doppeldata import StoppedWrite
 from doppeldata import Thresholds
 from doppeldata import _core
 from doppeldata import check
 from doppeldata import diff
+from doppeldata import example_scenarios
 from doppeldata import profile
 from doppeldata.dataset_generation import WriteChoices
+from doppeldata.dataset_generation import prepared_write
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_resource
 from doppeldata.example_profiles import example_text
@@ -41,11 +46,14 @@ from doppeldata.privacy_policy import TableCheck
 from doppeldata.privacy_policy import file_checks
 from doppeldata.profile_comparison.metrics import METRICS
 from doppeldata.profiling import applied_policy
+from doppeldata.published_schemas import enum_values
 from doppeldata.published_schemas import output_formats
 from doppeldata.published_schemas import partition_styles
 from doppeldata.published_schemas import schema_names
 from doppeldata.published_schemas import schema_summaries
 from doppeldata.published_schemas import schema_text
+from doppeldata.scenario_format import op_schemas
+from doppeldata.scenario_format import scenario_schema
 from typer.core import TyperGroup
 
 
@@ -84,6 +92,8 @@ data_app = typer.Typer(
     no_args_is_help=True, help='Synthetic datasets generated from a profile, written as files with a manifest, and checked against it.'
 )
 app.add_typer(data_app, name='data')
+scenario_app = typer.Typer(no_args_is_help=True, help='Scenarios: layers over a profile that bend the generated data on purpose.')
+app.add_typer(scenario_app, name='scenario')
 schemas_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas of the files doppeldata reads and writes.')
 app.add_typer(schemas_app, name='schemas')
 
@@ -144,6 +154,14 @@ WriterOption = Annotated[
         '--writer',
         metavar='JSON',
         help='The format\'s settings to change, as a JSON object such as \'{"compression":"snappy"}\'. schemas show manifest names them.',
+    ),
+]
+ScenarioOption = Annotated[
+    list[str] | None,
+    typer.Option(
+        '--scenario',
+        metavar='SCENARIO',
+        help='A scenario file, or an example name as scenario list prints it, laid over the profile. Repeat it to compose in order.',
     ),
 ]
 ThresholdsOption = Annotated[
@@ -316,6 +334,28 @@ def loaded_profile(name: str, param_hint: str) -> Profile:
     raise typer.BadParameter(message, param_hint=param_hint)
 
 
+def read_scenario(name: str) -> Scenario:
+    """A scenario file, or an example doppeldata ships. A name that is neither raises FileNotFoundError."""
+    if not Path(name).is_file() and name in example_scenarios.example_names():
+        return Scenario.example(name)
+    return Scenario.load(name)
+
+
+def loaded_scenario(names: list[str] | None) -> Scenario | None:
+    """The scenarios named, composed in order, refused with exit 2 when one is neither a file nor an example, or does not validate."""
+    scenarios = []
+    for name in names or []:
+        try:
+            scenarios.append(read_scenario(name))
+        except FileNotFoundError as error:
+            known = ', '.join(example_scenarios.example_names())
+            message = f'{name!r} is neither a scenario file nor an example; name a file, or one of {known}'
+            raise typer.BadParameter(message, param_hint='--scenario') from error
+        except (OSError, InvalidScenario) as error:
+            raise typer.BadParameter(str(error), param_hint='--scenario') from error
+    return Scenario.compose(*scenarios) if scenarios else None
+
+
 @contextlib.contextmanager
 def failure_exits_3() -> Iterator[None]:
     """End a check verb on 3 when what it wraps fails, so its 1 means drift and nothing else. A usage error keeps 2, and no answer 4."""
@@ -373,19 +413,23 @@ def data_check(
     ],
     data: Annotated[str, typer.Argument(metavar='DATA', help='A file, directory or s3:// prefix holding the generated table.')],
     thresholds: ThresholdsOption = None,
+    scenario: ScenarioOption = None,
     as_json: JsonOption = False,
 ) -> None:
     """Check generated data against its profile, without the real data: doppeldata data check orders.profile.yaml out/orders/
 
     DATA is profiled with PROFILE's histogram edges and value lists, and each metric compares the two profiles.
-    Exits 0 when every metric and column passes, and 3 when one does not or the check could not finish.
+    With --scenario, DATA is measured against the profile the scenario's patch makes, each metric a perturbation moves is
+    skipped, naming it, and each expectation the scenario declares is measured.
+    Exits 0 when every metric, column and expectation passes, and 3 when one does not or the check could not finish.
     """
     source = loaded_profile(profile_name, 'PROFILE')
     chosen = loaded_thresholds(thresholds)
+    applied = loaded_scenario(scenario)
     try:
         with failure_exits_3(), warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', ProfilingWarning)
-            report = check(source, data, thresholds=chosen)
+            report = check(source, data, thresholds=chosen, scenario=applied)
             shown = report.to_json() if as_json else report.to_markdown()
     except InvalidThresholds as error:
         raise typer.BadParameter(str(error), param_hint='--thresholds') from error
@@ -450,16 +494,18 @@ def checked_table_line(check: TableCheck) -> str:
 
 @dc.dataclass(frozen=True)
 class DataChoices:
-    """What data plan and data generate share: the profile, the rows and seed, --out, and what the write lays over the profile."""
+    """What data plan and data generate share: the profile, the rows and seed, --out, what the write lays over the profile,
+    and the scenario."""
 
     profile: Profile
     rows: int | None
     seed: int
     out: str
     write: WriteChoices
+    scenario: Scenario | None
 
     def arguments(self) -> dict[str, Any]:
-        return {'rows': self.rows, 'seed': self.seed, **dc.asdict(self.write)}
+        return {'rows': self.rows, 'seed': self.seed, **dc.asdict(self.write), 'scenario': self.scenario}
 
 
 def data_choices(
@@ -473,6 +519,7 @@ def data_choices(
     no_partitions: bool,
     partition_style: str | None,
     writer: str | None,
+    scenario: list[str] | None,
 ) -> DataChoices:
     """The flags both data verbs take, each refused here with exit 2 when it names nothing doppeldata writes."""
     if file_format is not None and file_format not in output_formats():
@@ -494,7 +541,7 @@ def data_choices(
             raise typer.BadParameter(f'{writer!r} is not a JSON object', param_hint='--writer')
     keys = [] if no_partitions else partition_by or None
     write = WriteChoices(file_format, file_rows, keys, partition_style, settings)
-    return DataChoices(loaded_profile(profile_name, 'PROFILE'), rows, seed, out, write)
+    return DataChoices(loaded_profile(profile_name, 'PROFILE'), rows, seed, out, write, loaded_scenario(scenario))
 
 
 def size(count: int) -> str:
@@ -522,13 +569,16 @@ def data_plan(
     no_partitions: NoPartitionsOption = False,
     partition_style: PartitionStyleOption = None,
     writer: WriterOption = None,
+    scenario: ScenarioOption = None,
     as_json: JsonOption = False,
 ) -> None:
     """Print what data generate would write with the same flags: doppeldata data plan orders --rows 1000000000 --out s3://bucket/orders/
 
     It reads nothing at --out, and generates the first blocks to estimate the size. The --json shape may change before 1.0.
     """
-    choices = data_choices(profile_name, rows, seed, file_format, out, file_rows, partition_by, no_partitions, partition_style, writer)
+    choices = data_choices(
+        profile_name, rows, seed, file_format, out, file_rows, partition_by, no_partitions, partition_style, writer, scenario
+    )
     planned = doppeldata.plan(choices.profile, choices.out, **choices.arguments())
     if as_json:
         typer.echo(json.dumps(planned.to_json(), indent=2))
@@ -550,6 +600,8 @@ def data_plan(
         f'estimate   {size(planned.estimated_bytes)}, from the first blocks encoded with these settings',
         '',
     ]
+    if choices.scenario is not None:
+        lines.insert(2, f'scenario   {choices.scenario.name} {identity["scenario_digest"]}')
     width = max(len(column.name) for column in planned.columns)
     type_width = max(len(column.physical_type) for column in planned.columns)
     for column in planned.columns:
@@ -585,6 +637,7 @@ def data_generate(
     threads: Annotated[
         int, typer.Option('--threads', metavar='N', min=0, help='Threads that generate and encode. 0 takes one per core.')
     ] = 0,
+    scenario: ScenarioOption = None,
 ) -> None:
     """Write a dataset and its _manifest.json, as data plan prints it: doppeldata data generate orders --rows 1000000 --out orders/
 
@@ -592,21 +645,128 @@ def data_generate(
     Ctrl-C or SIGTERM, leaves _manifest.partial.json listing the files it completed. S3 is written with the AWS environment's
     credentials.
     """
-    choices = data_choices(profile_name, rows, seed, file_format, out, file_rows, partition_by, no_partitions, partition_style, writer)
+    choices = data_choices(
+        profile_name, rows, seed, file_format, out, file_rows, partition_by, no_partitions, partition_style, writer, scenario
+    )
     terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
         manifest = doppeldata.write(choices.profile, choices.out, **choices.arguments(), threads=threads, replace=replace)
     finally:
         signal.signal(signal.SIGTERM, terminate)
     document = manifest.document
-    rows_written = int(manifest.identity['dataset_rows'])
+    generated = int(manifest.identity['dataset_rows'])
+    rows_written = sum(file['rows'] for file in manifest.files)
+    copies = f' ({generated:,} generated, the rest copies)' if rows_written != generated else ''
     seconds = max(document['elapsed_ms'], 1) / 1000
     stored = size(sum(file['bytes'] for file in manifest.files))
     typer.echo(
-        f'wrote {counted(rows_written, "row")} as {document["format"]} in {counted(len(manifest.files), "file")}, {stored}, '
+        f'wrote {counted(rows_written, "row")}{copies} as {document["format"]} in {counted(len(manifest.files), "file")}, {stored}, '
         f'in {seconds:.2f} s on {counted(document["threads"], "thread")}: {rows_written / seconds / 1e6:.2f}M rows/s'
     )
     typer.echo(f'{beside(document["destination"], "_manifest.json")} names dataset {manifest.dataset_digest}')
+
+
+ID_PARAMETER = "Keys the op's random stream. Defaults to <op>:<column, or table>:<n>, n counting earlier entries of that op and column."
+
+
+def one_line(schema: dict[str, Any]) -> str:
+    return ' '.join((schema.get('description') or '').split())
+
+
+def parameter_type(schema: dict[str, Any]) -> str:
+    """A parameter's type as a person reads it: `string`, `integer, at least 1`, `one of MCAR, MAR, MNAR`, or its definition's
+    description."""
+    definitions = scenario_schema()['$defs']
+    branches = [branch for branch in schema.get('anyOf', [schema]) if branch.get('type') != 'null']
+    part = branches[0] if branches else schema
+    if '$ref' in part:
+        name = part['$ref'].rsplit('/', 1)[1]
+        definition = definitions[name]
+        listed = 'enum' in definition or all('const' in branch for branch in definition.get('oneOf', [{}]))
+        return f'one of {", ".join(enum_values(definition))}' if listed else one_line(definition).removesuffix('.') or name
+    types = part.get('type')
+    kind = ' or '.join(each for each in (types if isinstance(types, list) else [types]) if each and each != 'null')
+    if kind == 'array':
+        return f'a list of {parameter_type(part["items"])}'
+    if kind == 'object' and isinstance(part.get('additionalProperties'), dict):
+        return f'a map to {parameter_type(part["additionalProperties"])}'
+    return kind + (f', at least {part["minimum"]:g}' if 'minimum' in part else '')
+
+
+@scenario_app.command('list')
+def scenario_list(as_json: JsonOption = False) -> None:
+    """List the ops a scenario applies and the example scenarios doppeldata ships, by the name scenario show takes."""
+    ops = [{'name': name, 'description': one_line(branch)} for name, branch in op_schemas().items()]
+    examples = [
+        {'name': name, 'description': Scenario.example(name).document.get('description') or ''}
+        for name in example_scenarios.example_names()
+    ]
+    if as_json:
+        typer.echo(json.dumps({'ops': ops, 'examples': examples}, indent=2))
+        return
+    width = max(len(row['name']) for row in ops + examples)
+    lines = ['ops', *(f'  {row["name"]:<{width}}  {row["description"]}' for row in ops), '', 'examples']
+    lines += [f'  {row["name"]:<{width}}  {row["description"]}' for row in examples]
+    typer.echo('\n'.join(lines))
+
+
+@scenario_app.command('show', no_args_is_help=True)
+def scenario_show(name: Annotated[str, typer.Argument(metavar='NAME', help='An op or an example, as scenario list prints it.')]) -> None:
+    """Print an op's parameters, or an example scenario's YAML to start one from: doppeldata scenario show hot_keys"""
+    if name in example_scenarios.example_names():
+        typer.echo(f'doppeldata: {name} is an example scenario, written for the orders example profile', err=True)
+        typer.echo(example_scenarios.example_text(name), nl=False)
+        return
+    if name not in op_schemas():
+        known = [*op_schemas(), *example_scenarios.example_names()]
+        closest = difflib.get_close_matches(name, known, n=1)
+        hint = f'; the closest is {closest[0]}' if closest else ''
+        raise typer.BadParameter(f'{name!r} is neither an op nor an example scenario{hint}; scenario list lists both', param_hint='NAME')
+    branch = op_schemas()[name]
+    parameters = {key: value for key, value in branch['properties'].items() if key != 'op'}
+    width = max(len(key) for key in parameters)
+    lines = [f'op {name}: {one_line(branch)}', '']
+    for key, schema in parameters.items():
+        needed = 'required' if key in branch.get('required', ()) else 'optional'
+        described = ID_PARAMETER if key == 'id' else one_line(schema)
+        lines.append(f'  {key:<{width}}  {needed}  {parameter_type(schema)}' + (f'. {described}' if described else ''))
+    typer.echo('\n'.join(lines))
+
+
+@scenario_app.command('check', no_args_is_help=True)
+def scenario_check(
+    scenario_name: Annotated[
+        str, typer.Argument(metavar='SCENARIO', help='A scenario file, or an example name as scenario list prints it.')
+    ],
+    profile_name: Annotated[str, typer.Argument(metavar='PROFILE', help='The profile it applies to, a file or an example name.')],
+    as_json: JsonOption = False,
+) -> None:
+    """Check a scenario against a profile without generating: doppeldata scenario check hot-key.scenario.yaml orders
+
+    It validates the scenario, applies its patch, and plans each perturbation and the profile's file layout as a write would.
+    Exits 0 when the scenario holds, and 3 when it does not, naming each fault and the JSON Pointer to it.
+    """
+    source = loaded_profile(profile_name, 'PROFILE')
+    try:
+        scenario = read_scenario(scenario_name)
+        prepared = prepared_write(source, 'memory://', None, 0, WriteChoices(), scenario)
+        prepared.engine.ranges_json(prepared.options)
+    except FileNotFoundError as error:
+        raise typer.BadParameter(f'{scenario_name!r} is neither a scenario file nor an example', param_hint='SCENARIO') from error
+    except InvalidScenario as error:
+        if as_json:
+            typer.echo(
+                json.dumps({'valid': False, 'source': error.source, 'issues': [dc.asdict(issue) for issue in error.issues]}, indent=2)
+            )
+        else:
+            typer.echo(f'doppeldata: {error}', err=True)
+        raise typer.Exit(3) from error
+    if as_json:
+        typer.echo(json.dumps({'valid': True, 'source': scenario.source, 'issues': []}, indent=2))
+        return
+    plain = scenario.to_plain()
+    held = f'{counted(len(plain.get("perturbations") or []), "perturbation")} and {counted(len(plain.get("expect") or []), "expectation")}'
+    typer.echo(f'{scenario.source} holds for profile {source.document["name"]}: {held}, scenario {scenario.digest}')
 
 
 @schemas_app.command('list')
