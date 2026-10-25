@@ -334,6 +334,8 @@ class PolarsBackend:
         key = pl.col(column)
         if of is FrequencyKey.SHAPE:
             key = key.str.replace_many(list(SHAPE_FROM), list(SHAPE_TO))
+        elif of is FrequencyKey.ZIP_PREFIX:
+            key = key.str.slice(0, 3)
         counted = (
             table.select(key.alias('key'))
             .drop_nulls()

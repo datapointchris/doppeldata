@@ -11,6 +11,8 @@ from typing import Any
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import PoorFits
+from doppeldata.privacy_policy import DEFAULT_K_MIN
+from doppeldata.privacy_policy import Policy
 from doppeldata.profile_comparison.field_changes import column_changes
 from doppeldata.profile_comparison.field_changes import overflow_changes
 from doppeldata.profile_comparison.field_changes import source_changes
@@ -24,7 +26,6 @@ from doppeldata.profile_comparison.reports import MetricResult
 from doppeldata.profile_comparison.reports import ReportedProfile
 from doppeldata.profile_comparison.thresholds import Thresholds
 from doppeldata.profile_format import Profile
-from doppeldata.profiling import DEFAULT_K_MIN
 from doppeldata.profiling import profile as profile_data
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
@@ -42,7 +43,10 @@ def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) 
     source = profile.to_plain()
     thresholds = thresholds or Thresholds()
     thresholds.check_columns(source)
-    k_min = (source.get('privacy') or {}).get('k_min') or DEFAULT_K_MIN
+    # The data is profiled under the profile's own policy, so each field it writes is one the profile could hold.
+    privacy = source.get('privacy') or {}
+    policy = privacy.get('policy') or Policy.DEFAULT
+    k_min = None if policy == Policy.NONE else privacy.get('k_min') or DEFAULT_K_MIN
     # The data is typed with the packs the profile was, so a type one of them declares can be confirmed.
     packs = enabled_packs((source.get('generated') or {}).get('detector_packs') or ())
     with warnings.catch_warnings():
@@ -51,7 +55,7 @@ def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) 
         warnings.simplefilter('ignore', ColumnsNotFrozen)
         # Generated data is never the data the profile was made from, so the profile is always made again.
         warnings.simplefilter('ignore', EarlierProfileNotReused)
-        checked = profile_data(data, k_min=k_min, edges_from=profile, packs=[each.pack.name for each in packs])
+        checked = profile_data(data, policy=policy, k_min=k_min, edges_from=profile, packs=[each.pack.name for each in packs])
     observed = checked.to_plain()
     return CheckReport(
         profile=reported(profile),

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from doppeldata.manifest import Manifest
 
 if TYPE_CHECKING:
+    from doppeldata.privacy_policy import ProfileFileCheck
     from doppeldata.profile_comparison.reports import CheckReport
     from doppeldata.profile_comparison.reports import DiffReport
 
@@ -12,7 +13,8 @@ if TYPE_CHECKING:
 class DoppeldataError(Exception):
     """A failure the caller can act on.
 
-    `exit_code` is 1 for a failure or a drift, 2 for a usage error, 3 for a check the data failed, and 4 when no answer came.
+    `exit_code` is 1 for a failure or a drift, 2 for a usage error, 3 for a check that found what a person must act on,
+    and 4 when no answer came.
     """
 
     exit_code = 1
@@ -88,13 +90,17 @@ class InvalidThresholds(DoppeldataError, ValueError):
 
 
 class CheckFailed(DoppeldataError):
-    """Generated data missed its profile on a metric or a column. `report` is the check, naming each one."""
+    """A check found what a person must act on. `report` is the check, naming each finding.
+
+    It is a `CheckReport` where generated data missed its profile on a metric or a column, and a `ProfileFileCheck`
+    where a profile file breaks its schema or its privacy policy.
+    """
 
     exit_code = 3
 
-    def __init__(self, report: 'CheckReport') -> None:
+    def __init__(self, report: 'CheckReport | ProfileFileCheck') -> None:
         self.report = report
-        super().__init__(f'the data missed its profile on {report.failures().summary()}')
+        super().__init__(report.failure_message())
 
 
 class ProfilesDrifted(DoppeldataError):

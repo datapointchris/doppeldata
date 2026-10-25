@@ -6,6 +6,7 @@ import datetime as dt
 import importlib
 import math
 import random
+import re
 import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -17,6 +18,14 @@ from ruamel.yaml.comments import CommentedSeq
 from doppeldata import _core
 from doppeldata.errors import FitsSkipped
 from doppeldata.errors import PoorFits
+from doppeldata.privacy_policy import ColumnFacts
+from doppeldata.privacy_policy import Policy
+from doppeldata.privacy_policy import Treatment
+from doppeldata.privacy_policy import column_treatment
+from doppeldata.privacy_policy import restricted_zip_prefixes
+from doppeldata.privacy_policy import withheld
+from doppeldata.privacy_policy.column_treatment import OLDEST_AGE
+from doppeldata.privacy_policy.column_treatment import ValueFamily
 from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
 from doppeldata.profiling import file_traits
@@ -92,6 +101,23 @@ LOGICAL_TYPES = {
     ColumnKind.DATETIME: 'timestamp',
 }
 CONTAINER_LOGICAL_TYPES = {'list': 'array', 'fixed_size_list': 'array', 'struct': 'object'}
+VALUE_FAMILIES = {
+    ColumnKind.INTEGER: ValueFamily.NUMERIC,
+    ColumnKind.FLOAT: ValueFamily.NUMERIC,
+    ColumnKind.DECIMAL: ValueFamily.NUMERIC,
+    ColumnKind.STRING: ValueFamily.STRING,
+    ColumnKind.DATE: ValueFamily.TEMPORAL,
+    ColumnKind.DATETIME: ValueFamily.TEMPORAL,
+}
+# Every three-digit prefix there is, so none is left uncounted.
+ZIP_PREFIXES_COUNTED = 1000
+ZIP_PREFIX = re.compile(r'\d{3}')
+RESTRICTED_ZIP_PREFIX = '000'
+ZIP_SUFFIX = r'\d{2}'
+ZIP_PLUS_FOUR_SUFFIX = r'\d{2}-\d{4}'
+ZIP_PLUS_FOUR_SHAPE = '99999-9999'
+# The last bin of a capped age histogram stands for every age over 89, and its rows are drawn as 90.
+AGE_BIN_EDGES = (OLDEST_AGE - 0.5, OLDEST_AGE + 0.5)
 
 
 def profiled_kind(column: dict[str, Any]) -> ColumnKind:
@@ -147,11 +173,13 @@ class FrozenValues:
 
 @dc.dataclass(frozen=True)
 class Binning:
-    """The edges one numeric column's rows are counted against, and whether an earlier profile froze them."""
+    """The edges one numeric column's rows are counted against, whether an earlier profile froze them, and whether
+    its last bin holds every row above it, as an age's over-89 bin does."""
 
     kind: str
     edges: tuple[float, ...]
     frozen: bool
+    capped: bool = False
 
 
 def answered(backend: Backend, table: Table, requests: list[Request]) -> Answers:
@@ -164,14 +192,16 @@ def profile_table(
     *,
     sample: int | None,
     k_min: int,
+    policy: Policy,
     packs: list[EnabledPack],
     readers: dict[str, str],
     frozen: FrozenLayout | None = None,
 ) -> dict[str, Any]:
-    """The profile document of `source`, from every row or from a seeded sample of `sample` rows.
+    """The profile document of `source`, from every row or from a seeded sample of `sample` rows, written under `policy`.
 
-    The detectors of `packs` type each column `semantic_types.detected_columns` names. With `frozen`, each column it
-    names is counted against the earlier profile's edges and value list.
+    The detectors of `packs` type each column `semantic_types.detected_columns` names, and the type decides which rule
+    of the policy holds the column. With `frozen`, each column it names is counted against the earlier profile's edges
+    and value list.
     """
     read = backend.read(source)
     table = read.table
@@ -184,7 +214,7 @@ def profile_table(
     whole_distinct: dict[str, int] = {column: count for (column, _), count in counted.items() if column is not None}
     if sample is not None and rows > sample:
         table = backend.scan(Source(format=None, table=backend.sample(table, sample, SAMPLE_SEED)))
-    settings = ColumnSettings(source.format, k_min, packs, frozen or FrozenLayout(), read.json.elements if read.json else {})
+    settings = ColumnSettings(source.format, k_min, policy, packs, frozen or FrozenLayout(), read.json.elements if read.json else {})
     profiled = profile_columns(backend, table, settings, rows, whole_distinct, read.json.paths if read.json else None)
     fitting, _ = fitting_module()
     generated: dict[str, Any] = {
@@ -197,13 +227,13 @@ def profile_table(
         'kind': 'table',
         'name': source.name,
         'generated': generated,
-        'privacy': {'k_min': k_min},
+        'privacy': {},
     }
     if source.format:
         document['source'] = file_traits.source_section(backend, source, read, profiled, rows, k_min)
     document['dataset'] = {'row_count': rows}
     document['columns'] = profiled.columns
-    return reviewable(document)
+    return reviewable(withheld(document, policy, k_min))
 
 
 def visible_specs(backend: Backend, table: Table) -> list[ColumnSpec]:
@@ -213,12 +243,13 @@ def visible_specs(backend: Backend, table: Table) -> list[ColumnSpec]:
 
 @dc.dataclass(frozen=True)
 class ColumnSettings:
-    """What every table of one source is profiled with: its format, the floor, the detector packs, an earlier profile's
-    edges and value lists, and a JSON source's element tables by array path.
+    """What every table of one source is profiled with: its format, the floor, the privacy policy, the detector packs,
+    an earlier profile's edges and value lists, and a JSON source's element tables by array path.
     """
 
     source_format: SourceFormat | None
     k_min: int
+    policy: Policy
     packs: list[EnabledPack]
     frozen: FrozenLayout
     elements: dict[str, Table]
@@ -262,15 +293,6 @@ def profile_columns(
     specs = visible_specs(backend, table)
     stats = answered(backend, table, pass_one_requests(specs, k_min))
     described = stats[(None, 'rows')]
-    binnings = {}
-    for spec in specs:
-        binning = histogram_binning(spec, column_stat(stats, spec.name), described, k_min, layout)
-        if binning:
-            binnings[spec.name] = binning
-    listed = {spec.name: layout.values[spec.name] for spec in specs if spec.kind is ColumnKind.STRING and spec.name in layout.values}
-    counting = [Request(name, 'histogram_counts', binning.edges) for name, binning in binnings.items()]
-    counting += [Request(name, 'listed_value_counts', frozen_values.values) for name, frozen_values in listed.items()]
-    stats |= answered(backend, table, counting)
     shapes = {
         spec.name: [(shape, count) for shape, count in backend.top_k(table, spec.name, SHAPES_KEPT, FrequencyKey.SHAPE) if count >= k_min]
         for spec in specs
@@ -281,13 +303,30 @@ def profile_columns(
     value_sample = backend.sample(table, VALUE_SAMPLE_ROWS, SAMPLE_SEED) if detected else None
     patterns = generalized_patterns(value_sample, shapes, stats, described, k_min)
     typings = detection.column_typings(value_sample, detected, patterns, k_min) if value_sample else {}
+    treatments = {spec.name: column_treatment(column_facts(spec, typings.get(spec.name)), settings.policy) for spec in specs}
+    binnings = {}
+    for spec in specs:
+        capped = treatments[spec.name] is Treatment.AGE
+        binning = histogram_binning(spec, column_stat(stats, spec.name), described, k_min, layout, capped=capped)
+        if binning:
+            binnings[spec.name] = binning
+    listed = {
+        spec.name: layout.values[spec.name]
+        for spec in specs
+        if spec.kind is ColumnKind.STRING and spec.name in layout.values and treatments[spec.name] is not Treatment.ZIP_PREFIX
+    }
+    counting = [Request(name, 'histogram_counts', binning.edges) for name, binning in binnings.items()]
+    counting += [Request(name, 'listed_value_counts', frozen_values.values) for name, frozen_values in listed.items()]
+    stats |= answered(backend, table, counting)
     distinct: dict[str, tuple[int, int]] = {
         spec.name: (whole_distinct[spec.name] if spec.name in whole_distinct else stats[(spec.name, 'distinct_count')], rows)
         for spec in specs
         if spec.kind in PROFILED
     }
     fitting, import_error = fitting_module()
-    fits = column_fits(backend, table, specs, stats, described, distinct, k_min, fitting, import_error)
+    # A fit's support would reach past what the policy withholds, so a column kept to no value, or an age, is not fitted.
+    fitted = [spec for spec in specs if not treatments[spec.name].keeps_no_value and treatments[spec.name] is not Treatment.AGE]
+    fits = column_fits(backend, table, fitted, stats, described, distinct, k_min, fitting, import_error)
     columns = [
         column_entry(
             backend,
@@ -301,6 +340,7 @@ def profile_columns(
             patterns,
             ColumnLayout(binnings.get(spec.name), listed.get(spec.name), spec.name in fits, fits.get(spec.name)),
             typings.get(spec.name),
+            treatments[spec.name],
             k_min,
         )
         for spec in specs
@@ -313,6 +353,18 @@ def profile_columns(
         return dc.replace(profiled, json=json_table)
     outside = [entry for entry in columns if entry['name'] not in paths]
     return dc.replace(profiled, columns=json_paths.assembled(json_root, json_table) + outside, json=json_table)
+
+
+def column_facts(spec: ColumnSpec, typing: 'Typing | None') -> ColumnFacts:
+    """What the policy reads of a column before its entry is written: its kind, and the type a detector gave it."""
+    detector = typing.candidate.detector if typing else None
+    return ColumnFacts(
+        spec.name,
+        VALUE_FAMILIES.get(spec.kind, ValueFamily.OTHER),
+        spec.kind is ColumnKind.INTEGER,
+        detector.type if detector else None,
+        detector.sensitivity if detector else None,
+    )
 
 
 def json_profiled(backend: Backend, profiled: ProfiledColumns, settings: ColumnSettings, root: JsonNode) -> json_paths.ProfiledTable:
@@ -425,9 +477,14 @@ def column_entry(
     patterns: dict[str, str],
     layout: ColumnLayout,
     typing: 'Typing | None',
+    treatment: Treatment,
     k_min: int,
 ) -> dict[str, Any]:
-    """One column's entry. `distinct` holds each column's distinct count and the rows it was counted over."""
+    """One column's entry. `distinct` holds each column's distinct count and the rows it was counted over.
+
+    `treatment` decides what the statistics pass computes differently: a ZIP code's prefixes, and a person's dates to
+    the year. What it withholds from the computed entry is left to `withheld`.
+    """
     entry: dict[str, Any] = {'name': spec.name, 'physical_type': spec.physical_type}
     logical = LOGICAL_TYPES.get(spec.kind) or CONTAINER_LOGICAL_TYPES.get(spec.physical_type.split('<')[0])
     if logical:
@@ -453,11 +510,12 @@ def column_entry(
     if spec.kind in NUMERIC:
         entry['numeric'] = numeric_section(spec, stat, values, layout, k_min)
     elif spec.kind is ColumnKind.STRING:
+        prefixes = treatment is Treatment.ZIP_PREFIX
         entry['string'] = string_section(
-            backend, table, spec, stat, values, shapes[spec.name], patterns.get(spec.name), layout.listed, k_min
+            backend, table, spec, stat, values, shapes[spec.name], patterns.get(spec.name), layout.listed, k_min, zip_prefixes=prefixes
         )
     elif spec.kind in (ColumnKind.DATE, ColumnKind.DATETIME):
-        entry['temporal'] = temporal_section(spec, stat, values, text, k_min)
+        entry['temporal'] = temporal_section(spec, stat, values, text, k_min, year_level=treatment is Treatment.PERSON_DATE)
     elif spec.kind is ColumnKind.BOOLEAN:
         entry['boolean'] = {'true_rate': significant(stat('true_rate'), RATE_DIGITS)}
     if typing:
@@ -521,20 +579,23 @@ def numeric_section(spec: ColumnSpec, stat: Stat, values: int, layout: ColumnLay
     return section
 
 
-def histogram_binning(spec: ColumnSpec, stat: Stat, described: int, k_min: int, layout: FrozenLayout) -> Binning | None:
+def histogram_binning(
+    spec: ColumnSpec, stat: Stat, described: int, k_min: int, layout: FrozenLayout, *, capped: bool = False
+) -> Binning | None:
     """The edges a numeric column's rows are counted against: the earlier profile's, or its own equal-depth ones.
 
     The outer edges are the trimmed extremes, and each interior one is the value at a level `k_min` rows clear of
     both ends, so every edge is a value the profile could already store. An integer column's edges sit half a unit
     below the least integer of each bin, the trimmed high's own included, and its last edge half a unit above the
     trimmed high. The generator rounds a drawn value to the nearest integer, so each bin's share is then drawn to
-    the integers it counted.
+    the integers it counted. A `capped` column is an age: an edge above 89.5 gives way to one bin from 89.5 to
+    90.5, which counts every age over 89.
     """
     if spec.kind not in NUMERIC or described - stat('null_count') < k_min:
         return None
     if spec.name in layout.histograms:
         kind, edges = layout.histograms[spec.name]
-        return Binning(kind, edges, frozen=True)
+        return Binning(kind, edges, frozen=True, capped=capped)
     values = described - stat('null_count')
     if not has_trimmed_extremes(values, k_min):
         return None
@@ -547,7 +608,9 @@ def histogram_binning(spec: ColumnSpec, stat: Stat, described: int, k_min: int, 
         rising = [value - 0.5 for value in lowest] + [written_number(high, True) + 0.5]
     else:
         rising = sorted({written_number(value, False) for value in (low, *(value for value in interior if low < value < high), high)})
-    return Binning('equal_depth', tuple(rising), frozen=False) if len(rising) > 1 else None
+    if capped and rising[-1] > AGE_BIN_EDGES[0]:
+        rising = [edge for edge in rising if edge < AGE_BIN_EDGES[0]] + list(AGE_BIN_EDGES)
+    return Binning('equal_depth', tuple(rising), frozen=False, capped=capped) if len(rising) > 1 else None
 
 
 def floored_histogram(binning: Binning, counted: list[int], k_min: int) -> dict[str, Any] | None:
@@ -555,8 +618,11 @@ def floored_histogram(binning: Binning, counted: list[int], k_min: int) -> dict[
 
     An overflow count that small joins the outermost bin on its side, and a bin that small merges into its smaller
     non-empty neighbor, so frozen edges are kept wherever the floor allows. An empty bin discloses no row and stays.
+    A capped histogram's last bin takes every row above it.
     """
     below, *bins, above = counted
+    if binning.capped:
+        bins[-1], above = bins[-1] + above, 0
     if 0 < below < k_min:
         bins[0], below = bins[0] + below, 0
     if 0 < above < k_min:
@@ -590,8 +656,13 @@ def string_section(
     pattern: str | None,
     listed: FrozenValues | None,
     k_min: int,
+    *,
+    zip_prefixes: bool = False,
 ) -> dict[str, Any]:
-    """A string column's section. `listed` is an earlier profile's value list, which its top values are counted against."""
+    """A string column's section. `listed` is an earlier profile's value list, which its top values are counted against.
+
+    With `zip_prefixes`, the top values are the column's three-digit ZIP prefixes.
+    """
     length: dict[str, Any] = {}
     if has_trimmed_extremes(values, k_min):
         length |= {'min': int(stat('length_trimmed_low')), 'max': int(stat('length_trimmed_high'))}
@@ -612,8 +683,27 @@ def string_section(
         # list count too, so a listed value that fell under k_min reveals no count of its own.
         beyond = other - round(listed.baseline_other_rate * values)
         section['overflow'] = {'new_value_rows': beyond if beyond >= k_min else 0}
+    elif zip_prefixes:
+        section |= zip_prefix_values(backend.top_k(table, spec.name, ZIP_PREFIXES_COUNTED, FrequencyKey.ZIP_PREFIX), shapes, values, k_min)
     elif stat('distinct_count') <= TOP_VALUES_THRESHOLD:
         section |= top_values(*kept_values(backend.top_k(table, spec.name, TOP_VALUES_THRESHOLD), values, k_min), values)
+    return section
+
+
+def zip_prefix_values(counted: list[tuple[Any, int]], shapes: list[tuple[str, int]], values: int, k_min: int) -> dict[str, Any]:
+    """A ZIP column's top values as the prefixes `counted` holds, each restricted one counted as `000`, and the digits
+    the generator appends to each. A prefix that is not three digits is counted in `other_rate`."""
+    restricted = restricted_zip_prefixes()
+    merged: dict[str, int] = {}
+    for prefix, count in counted:
+        if isinstance(prefix, str) and ZIP_PREFIX.fullmatch(prefix):
+            key = RESTRICTED_ZIP_PREFIX if prefix in restricted else prefix
+            merged[key] = merged.get(key, 0) + count
+    ordered = sorted(merged.items(), key=lambda item: (-item[1], item[0]))
+    section = top_values(*kept_values(ordered, values, k_min), values)
+    if section:
+        plus_four = bool(shapes) and shapes[0][0] == ZIP_PLUS_FOUR_SHAPE
+        section['top_value_suffix'] = ZIP_PLUS_FOUR_SUFFIX if plus_four else ZIP_SUFFIX
     return section
 
 
@@ -735,18 +825,22 @@ def fit_entry(fitted: Any) -> dict[str, Any]:
     return entry
 
 
-def temporal_section(spec: ColumnSpec, stat: Stat, values: int, text: TextColumn | None, k_min: int) -> dict[str, Any]:
+def temporal_section(
+    spec: ColumnSpec, stat: Stat, values: int, text: TextColumn | None, k_min: int, *, year_level: bool = False
+) -> dict[str, Any]:
+    """A date or timestamp column's section. With `year_level`, its extremes and gap rate name no date finer than a year."""
     section: dict[str, Any] = {}
     if text and text.parsed.format:
         section['format'] = text.parsed.format
     if spec.timezone:
         section['timezone'] = spec.timezone
     if has_trimmed_extremes(values, k_min):
-        section['extremes'] = {
-            'low': stat('trimmed_low').isoformat(),
-            'high': stat('trimmed_high').isoformat(),
-            'granularity': granularity(spec, stat),
-        }
+        low, high = stat('trimmed_low'), stat('trimmed_high')
+        if year_level:
+            low, high = low.replace(month=1, day=1), high.replace(month=12, day=31)
+            if isinstance(low, dt.datetime):
+                low, high = (value.replace(hour=0, minute=0, second=0, microsecond=0) for value in (low, high))
+        section['extremes'] = {'low': low.isoformat(), 'high': high.isoformat(), 'granularity': granularity(spec, stat)}
     for field, counts in (('by_month', 'month_counts'), ('by_dow', 'weekday_counts'), ('by_hour', 'hour_counts')):
         if spec.kind is ColumnKind.DATETIME or counts != 'hour_counts':
             shares = floored_shares(stat(counts), k_min)
@@ -754,8 +848,10 @@ def temporal_section(spec: ColumnSpec, stat: Stat, values: int, text: TextColumn
                 section[field] = shares
     # The generator empties this share of the days between the extremes, so it is counted between them.
     if has_trimmed_extremes(values, k_min):
-        days = (day_of(stat('trimmed_high')) - day_of(stat('trimmed_low'))).days + 1
-        section['gap_rate'] = significant(1 - stat('distinct_days') / days, RATE_DIGITS)
+        first, last = day_of(stat('trimmed_low')), day_of(stat('trimmed_high'))
+        if year_level:
+            first, last = dt.date(first.year, 1, 1), dt.date(last.year, 12, 31)
+        section['gap_rate'] = significant(1 - stat('distinct_days') / ((last - first).days + 1), RATE_DIGITS)
     return section
 
 

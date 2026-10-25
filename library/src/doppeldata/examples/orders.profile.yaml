@@ -7,9 +7,24 @@ privacy:
   policy: default
   k_min: 11
   suppressed:
+    - {column: customer_id, reason: identifier}
     - {column: customer_email, reason: identifier, semantic: email}
+  # Every field holding a literal, the rule that admits it, and the fewest rows any of its values or cells rests on.
   audit:
-    - {column: status, values: 5, rule: "count >= k_min"}
+    - {field: /columns/0/numeric/extremes, column: order_id, values: 2, rule: "trimmed_k", min_count: 11}
+    - {field: /columns/0/numeric/sequence, column: order_id, values: 1, rule: "follows the trimmed extreme"}
+    - {field: /columns/2/numeric/extremes, column: amount, values: 2, rule: "trimmed_k", min_count: 11}
+    - {field: /columns/2/numeric/quantiles, column: amount, values: 7, rule: "k_min rows from each end", min_count: 1001}
+    - {field: /columns/2/numeric/fit, column: amount, values: 3, rule: "fitted within the trimmed extremes"}
+    - {field: /columns/3/numeric/extremes, column: quantity, values: 2, rule: "trimmed_k", min_count: 11}
+    - {field: /columns/3/numeric/quantiles, column: quantity, values: 6, rule: "k_min rows from each end", min_count: 1001}
+    - {field: /columns/3/numeric/fit, column: quantity, values: 2, rule: "fitted within the trimmed extremes"}
+    - {field: /columns/4/string/top_values, column: status, values: 5, rule: "count >= k_min", min_count: 7910}
+    - {field: /columns/5/temporal/extremes, column: ordered_at, values: 2, rule: "trimmed_k", min_count: 11}
+    - {field: /columns/5/temporal/by_month, column: ordered_at, values: 12, rule: "cell >= k_min", min_count: 7670}
+    - {field: /columns/5/temporal/by_dow, column: ordered_at, values: 7, rule: "cell >= k_min", min_count: 14230}
+    - {field: /columns/7/string/shapes, column: ship_zip, values: 1, rule: "count >= k_min", min_count: 100000}
+    - {field: /columns/7/string/pattern, column: ship_zip, values: 1, rule: "generalized"}
 source:
   format: parquet
   compression: zstd
@@ -27,9 +42,10 @@ columns:
     distinct: {approx: 100000, ratio: 1.0}
     numeric:
       integral: true
-      extremes: {low: 1, high: 100000}
+      extremes: {low: 11, high: 99990, method: trimmed_k}
       monotonic: increasing
       sequence: {start: 1, step: 1}
+  # An identifier keeps no value: its extremes are the bounds of its digit counts.
   - name: customer_id
     physical_type: int64
     logical_type: integer
@@ -38,11 +54,9 @@ columns:
     distinct: {approx: 20000, ratio: 0.2}
     numeric:
       integral: true
-      extremes: {low: 1, high: 20000}
-      quantiles: {p05: 1000, p25: 5000, p50: 10000, p75: 15000, p95: 19000}
-      fit: {family: randint, params: {low: 1, high: 20001}}
+      extremes: {low: 10, high: 99999, method: digit_bounds}
       monotonic: none
-    semantic: {type: customer_id, confidence: 0.9, detectors: [name_hint], sensitivity: identifier}
+    semantic: {sensitivity: identifier}
   - name: amount
     physical_type: "decimal128(12, 2)"
     logical_type: number
@@ -53,7 +67,7 @@ columns:
       integral: false
       precision: 12
       scale: 2
-      extremes: {low: 0.5, high: 4000.0}
+      extremes: {low: 0.5, high: 4000.0, method: trimmed_k}
       mean: 92.45
       std: 165.91
       zero_rate: 0.0
@@ -69,7 +83,7 @@ columns:
     distinct: {approx: 10, ratio: 0.0001}
     numeric:
       integral: true
-      extremes: {low: 1, high: 10}
+      extremes: {low: 1, high: 10, method: trimmed_k}
       mean: 2.5
       quantiles: {p05: 1, p25: 2, p50: 2, p75: 3, p95: 5, p99: 6}
       fit: {family: poisson, params: {mu: 1.5, loc: 1.0}}

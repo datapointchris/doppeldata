@@ -258,7 +258,7 @@ class Backend(Protocol):
     def aggregate(self, table: Table, requests: list[Request]) -> dict[Request, Any]: ...
 
     def top_k(self, table: Table, column: str, k: int, of: FrequencyKey = FrequencyKey.VALUE) -> list[tuple[Any, int]]:
-        """The k most frequent non-null values or shapes and their row counts, most frequent first, ties by value."""
+        """The k most frequent non-null values, shapes or ZIP prefixes and their row counts, most frequent first, ties by value."""
         ...
 
     def sample(self, table: Table, n: int, seed: int) -> 'pa.Table':

@@ -167,10 +167,11 @@ RAW_TYPE_LAYOUTS = {'date': DATE_FORMATS, 'timestamp': TIMESTAMP_FORMATS}
 
 
 class FrequencyKey(enum.Enum):
-    """What `top_k` counts: each value as written, or each value's shape."""
+    """What `top_k` counts: each value as written, each value's shape, or each value's first three characters."""
 
     VALUE = 'value'
     SHAPE = 'shape'
+    ZIP_PREFIX = 'zip_prefix'
 
 
 # The characters a shape classes, and the class the engine's `shape_of` gives each; every other
