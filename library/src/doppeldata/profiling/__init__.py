@@ -2,8 +2,10 @@
 
 import importlib
 import importlib.util
+import warnings
 from typing import Any
 
+from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import ProfilingEnginesMissing
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
@@ -26,9 +28,10 @@ def profile(
     profiles a seeded random sample of that many rows. No stored literal rests on fewer than `k_min` rows.
 
     `edges_from` is an earlier profile of the same table. Where its source fingerprint matches the files
-    listed now, and it was made with the same engine, `k_min` and sampling, it is returned unchanged, so a
-    reviewer's edits survive a re-run. Otherwise each column it holds a histogram or value list for is
-    counted against those, and the rows outside them are written as the column's `overflow`.
+    listed now, and it was made by this doppeldata and scipy with the same engine, `k_min` and sampling, it
+    is returned unchanged, so a reviewer's edits survive a re-run. Otherwise each column it holds a
+    histogram or value list for is counted against those, and the rows outside them are written as the
+    column's `overflow`. A column only one of the two tables holds issues `ColumnsNotFrozen`.
     """
     if engine not in ENGINES:
         raise ValueError(f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}')
@@ -52,16 +55,30 @@ def profile(
     issues = profiled.validate()
     if issues:
         raise InvalidProfile(f'the profile of {data!r}', issues)
+    if edges_from is not None:
+        earlier, now = (column_names(document.to_plain()) for document in (edges_from, profiled))
+        undescribed, missing = [name for name in now if name not in earlier], [name for name in earlier if name not in now]
+        if undescribed or missing:
+            warnings.warn(ColumnsNotFrozen(undescribed, missing), stacklevel=2)
     return profiled
 
 
+def column_names(document: dict[str, Any]) -> list[str]:
+    return [column['name'] for column in document.get('columns') or []]
+
+
 def profiles_unchanged_source(previous: Profile, fingerprint: str | None, *, engine: str, sample: int | None, k_min: int) -> bool:
-    """Whether `previous` is what profiling the listed source with these settings would give, so it can stand unchanged."""
+    """Whether `previous` is what profiling the listed source with these settings would give, so it can stand unchanged.
+
+    So an earlier doppeldata, or a run without scipy, never hands back a profile this one would write differently.
+    """
     document = previous.to_plain()
     generated = document.get('generated') or {}
-    if fingerprint is None or generated.get('source_fingerprint') != fingerprint:
+    if fingerprint is None or (document.get('privacy') or {}).get('k_min') != k_min:
         return False
-    if generated.get('engine') != engine or (document.get('privacy') or {}).get('k_min') != k_min:
+    fitting, _ = table_profile.fitting_module()
+    recorded = {field: generated[field] for field in table_profile.DERIVED_FROM if field in generated}
+    if recorded != table_profile.derivation(engine, fingerprint, fitting.FITTER if fitting else None):
         return False
     # A profile of every row stands for any sample of it, and a sampled one only for a sample of that size.
     read = generated.get('sample') or {}

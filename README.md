@@ -29,10 +29,11 @@ AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from lo
 value it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. Profile only
 data that is already synthetic or public until identifier columns are detected and suppressed.
 
-Each numeric column gets an equal-depth histogram and the distribution family that fits it best.
-`--edges-from` counts a new profile against an earlier one's bin edges and value lists, so the two
-compare bin for bin, and the rows outside them are written as overflow. Where the files have not
-changed since the earlier profile, it is kept as it is, with any edits a reviewer made.
+Each numeric column gets an equal-depth histogram, and each with enough distinct values gets the
+distribution family that fits it best. `--edges-from` counts a new profile against an earlier one's
+bin edges and value lists, so the two compare bin for bin, and the rows outside them are written as
+overflow. Where the files, the run's settings, and the doppeldata and scipy versions match the ones
+the earlier profile was made with, it is kept as it is, with any edits a reviewer made.
 
 Each release's notes list what it does. Its commands and its profile format change without notice
 until 1.0.

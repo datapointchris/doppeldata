@@ -3,7 +3,6 @@
 import dataclasses as dc
 import datetime as dt
 import importlib
-import importlib.util
 import math
 import random
 import warnings
@@ -15,6 +14,7 @@ from ruamel.yaml.comments import CommentedSeq
 
 from doppeldata import _core
 from doppeldata.errors import FitsSkipped
+from doppeldata.errors import PoorFits
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
 from doppeldata.profiling import text_types
 from doppeldata.profiling.backend import TEXT_FORMATS
@@ -59,6 +59,9 @@ FIT_SAMPLE_ROWS = 20_000
 # A column with fewer distinct values is better described by its frequencies than by a family.
 FIT_MIN_DISTINCT = 50
 FITTED_FAMILIES_MODULE = 'doppeldata.profiling.fitted_families'
+TOOL = f'doppeldata {_core.VERSION}'
+# The `generated` fields that, beside the rows, `k_min` and the sampling, decide what profiling writes.
+DERIVED_FROM = ('tool', 'engine', 'fitter', 'source_fingerprint')
 LOGICAL_TYPES = {
     ColumnKind.INTEGER: 'integer',
     ColumnKind.FLOAT: 'number',
@@ -96,8 +99,8 @@ class FrozenLayout:
             if string.get('top_values'):
                 listed = tuple(entry['value'] for entry in string['top_values'])
                 other = string.get('other_rate') or 0.0
-                # A list frozen from a profile before it carries that profile's drift in its new_values, which the baseline leaves out.
-                drifted = (string.get('overflow') or {}).get('new_values') or 0
+                # A list frozen from a profile before it carries that profile's drift in its new_value_rows, which the baseline leaves out.
+                drifted = (string.get('overflow') or {}).get('new_value_rows') or 0
                 held = described * (1 - (column.get('null_rate') or 0.0)) if described else 0
                 values[column['name']] = FrozenValues(listed, max(0.0, other - drifted / held) if held else other)
         return cls(histograms, values)
@@ -169,7 +172,8 @@ def profile_table(
         for spec in specs
         if spec.kind in PROFILED
     }
-    fits = column_fits(backend, table, specs, stats, described, distinct, k_min)
+    fitting, import_error = fitting_module()
+    fits = column_fits(backend, table, specs, stats, described, distinct, k_min, fitting, import_error)
     columns = [
         column_entry(
             backend,
@@ -187,12 +191,9 @@ def profile_table(
         for spec in specs
     ]
     generated: dict[str, Any] = {
-        'tool': f'doppeldata {_core.VERSION}',
+        'tool': TOOL,
         'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
-        'engine': backend.name,
-    }
-    if source.fingerprint:
-        generated['source_fingerprint'] = source.fingerprint
+    } | derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None)
     generated['sample'] = {'strategy': 'reservoir', 'rows_read': described} if described < rows else {'strategy': 'full'}
     document: dict[str, Any] = {
         'profile_version': _core.FORMAT_VERSION,
@@ -206,6 +207,24 @@ def profile_table(
     document['dataset'] = {'row_count': rows}
     document['columns'] = columns
     return reviewable(document)
+
+
+def derivation(engine: str, fingerprint: str | None, fitter: str | None) -> dict[str, str]:
+    """The `DERIVED_FROM` fields a profile made now with this engine, listing and fitter writes."""
+    values = (TOOL, engine, fitter, fingerprint)
+    return {field: value for field, value in zip(DERIVED_FROM, values, strict=True) if value is not None}
+
+
+def fitting_module() -> tuple[Any, str | None]:
+    """The module that fits families, or None and the error that stopped its import.
+
+    It is imported by name, because it imports scipy, which the library does not declare. scipy may be missing,
+    or installed and built against another numpy, which fails only on import.
+    """
+    try:
+        return importlib.import_module(FITTED_FAMILIES_MODULE), None
+    except ImportError as error:
+        return None, str(error)
 
 
 @dc.dataclass(frozen=True)
@@ -340,7 +359,10 @@ def histogram_binning(spec: ColumnSpec, stat: Stat, described: int, k_min: int, 
     """The edges a numeric column's rows are counted against: the earlier profile's, or its own equal-depth ones.
 
     The outer edges are the trimmed extremes, and each interior one is the value at a level `k_min` rows clear of
-    both ends, so every edge is a value the profile could already store.
+    both ends, so every edge is a value the profile could already store. An integer column's edges sit half a unit
+    below the least integer of each bin, the trimmed high's own included, and its last edge half a unit above the
+    trimmed high. The generator rounds a drawn value to the nearest integer, so each bin's share is then drawn to
+    the integers it counted.
     """
     if spec.kind not in NUMERIC or described - stat('null_count') < k_min:
         return None
@@ -354,7 +376,11 @@ def histogram_binning(spec: ColumnSpec, stat: Stat, described: int, k_min: int, 
     low, high = stat('trimmed_low'), stat('trimmed_high')
     at_level = dict(zip(NUMERIC_LEVELS, stat('quantiles'), strict=True))
     interior = [at_level[level] for level in EQUAL_DEPTH_LEVELS if clear_of_the_ends(level, values, k_min)]
-    rising = sorted({written_number(value, integral) for value in (low, *(value for value in interior if low < value < high), high)})
+    if integral:
+        lowest = sorted({written_number(value, True) for value in (low, *(value for value in interior if low < value <= high))})
+        rising = [value - 0.5 for value in lowest] + [written_number(high, True) + 0.5]
+    else:
+        rising = sorted({written_number(value, False) for value in (low, *(value for value in interior if low < value < high), high)})
     return Binning('equal_depth', tuple(rising), frozen=False) if len(rising) > 1 else None
 
 
@@ -419,7 +445,7 @@ def string_section(
         # Counted from `other_rate`'s own rows, so it discloses nothing that rate does not. The rows outside the
         # list count too, so a listed value that fell under k_min reveals no count of its own.
         beyond = other - round(listed.baseline_other_rate * values)
-        section['overflow'] = {'new_values': beyond if beyond >= k_min else 0}
+        section['overflow'] = {'new_value_rows': beyond if beyond >= k_min else 0}
     elif stat('distinct_count') <= TOP_VALUES_THRESHOLD:
         section |= top_values(*kept_values(backend.top_k(table, spec.name, TOP_VALUES_THRESHOLD), values, k_min), values)
     return section
@@ -479,8 +505,10 @@ def column_fits(
     described: int,
     distinct: dict[str, tuple[int, int]],
     k_min: int,
+    fitting: Any,
+    import_error: str | None,
 ) -> dict[str, dict[str, Any] | None]:
-    """Each fittable numeric column's fit, from one seeded sample, or None for each when scipy is not installed.
+    """Each fittable numeric column's fit, from one seeded sample, or None for each when `fitting` did not import.
 
     A column is fittable when it has trimmed extremes, `FIT_MIN_DISTINCT` distinct values, and is no counting sequence.
     """
@@ -493,11 +521,9 @@ def column_fits(
             fittable.append(spec)
     if not fittable:
         return {}
-    if importlib.util.find_spec('scipy') is None:
-        warnings.warn(FitsSkipped(), stacklevel=4)
+    if fitting is None:
+        warnings.warn(FitsSkipped(import_error or 'no error given'), stacklevel=4)
         return {spec.name: None for spec in fittable}
-    # Imported by name, because it imports scipy, which the library does not declare.
-    fitting = importlib.import_module(FITTED_FAMILIES_MODULE)
     sample = backend.sample(table, FIT_SAMPLE_ROWS, SAMPLE_SEED)
     fits = {}
     for spec in fittable:
@@ -510,14 +536,18 @@ def column_fits(
             zero_rate=stat('zero_rate'),
         )
         fits[spec.name] = fit_entry(fitted) if fitted else None
+    poor = {name: (fit['family'], fit['ks']) for name, fit in fits.items() if fit and fit['poor']}
+    unfitted = [name for name, fit in fits.items() if fit is None]
+    if poor or unfitted:
+        warnings.warn(PoorFits(poor, unfitted, fitting.POOR_FIT_KS), stacklevel=4)
     return fits
 
 
 def fit_entry(fitted: Any) -> dict[str, Any]:
-    """A fit as the profile writes it. A discrete family's locations are whole numbers, written exactly."""
-    discrete = fitted.family in ('geom', 'randint')
+    """A fit as the profile writes it. A discrete family's whole-number parameters, such as its `loc`, are written exactly."""
+    discrete = _core.fitted_families()[fitted.family]
     params = {
-        name: int(value) if discrete and name != 'p' else significant(value, FIT_PARAMETER_DIGITS) + 0.0
+        name: int(value) if discrete and value.is_integer() else significant(value, FIT_PARAMETER_DIGITS) + 0.0
         for name, value in fitted.params.items()
     }
     entry: dict[str, Any] = {

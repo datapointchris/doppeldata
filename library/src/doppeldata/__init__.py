@@ -1,8 +1,11 @@
 """Profile a dataset into a reviewable file holding no rows, then generate synthetic data from it."""
 
+from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import DoppeldataError
 from doppeldata.errors import FitsSkipped
+from doppeldata.errors import PoorFits
 from doppeldata.errors import ProfilingEnginesMissing
+from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
@@ -12,12 +15,15 @@ from doppeldata.profiling import profile
 
 __all__ = [
     'Bundle',
+    'ColumnsNotFrozen',
     'DoppeldataError',
     'FitsSkipped',
     'InvalidProfile',
     'Issue',
+    'PoorFits',
     'Profile',
     'ProfilingEnginesMissing',
+    'ProfilingWarning',
     'SourceError',
     'profile',
 ]

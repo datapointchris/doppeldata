@@ -16,7 +16,9 @@ its own rows give.
 Every value is one uniform draw, whatever the knots came from. So a profiler that adds a histogram
 changes the values but not the draw order, and the samplers need no change to read it.
 
-`integral` rounds the value. `precision` and `scale` quantize it, or become a decimal type. A
+`integral` rounds the value to the nearest integer. So the profiler writes an integer column's
+histogram edges halfway between integers, and each bin draws the integers it counted. `precision`
+and `scale` quantize the value, or become a decimal type. A
 `sequence` emits `start + step · row` and draws nothing.
 
 ## Beyond the outermost quantile, a fitted tail replaces the straight line

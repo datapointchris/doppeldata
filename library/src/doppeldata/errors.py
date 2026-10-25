@@ -27,11 +27,45 @@ class ProfilingEnginesMissing(DoppeldataError, ImportError):
         )
 
 
-class FitsSkipped(UserWarning):
-    """Profiling finished without fitting a distribution family to any column, because scipy is not installed."""
+class ProfilingWarning(UserWarning):
+    """A profile was written, and something in it is not what the caller may have asked for."""
 
-    def __init__(self) -> None:
+
+class FitsSkipped(ProfilingWarning):
+    """Profiling finished without fitting a distribution family to any column, because scipy did not import."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
         super().__init__(
-            'no distribution family was fitted, because scipy is not installed; '
+            f'no distribution family was fitted, because scipy did not import ({reason}); '
             'run `pip install scipy`, or install doppeldata-cli, which declares it'
         )
+
+
+class ColumnsNotFrozen(ProfilingWarning):
+    """A re-profile's table and its earlier profile do not hold the same columns, so some were not counted against it."""
+
+    def __init__(self, undescribed: list[str], missing: list[str]) -> None:
+        self.undescribed = undescribed
+        self.missing = missing
+        parts = []
+        if undescribed:
+            parts.append(f'columns the earlier profile does not describe, binned afresh: {", ".join(undescribed)}')
+        if missing:
+            parts.append(f'columns the earlier profile describes that this table lacks: {", ".join(missing)}')
+        super().__init__('; '.join(parts))
+
+
+class PoorFits(ProfilingWarning):
+    """Some numeric columns' best fit has a KS statistic above the poor-fit threshold, or no family fitted them."""
+
+    def __init__(self, poor: dict[str, tuple[str, float]], unfitted: list[str], threshold: float) -> None:
+        self.poor = poor
+        self.unfitted = unfitted
+        parts = []
+        if poor:
+            fits = ', '.join(f'{column} ({family}, KS {ks})' for column, (family, ks) in poor.items())
+            parts.append(f'best fits with a KS statistic above {threshold}, written with `poor: true`: {fits}')
+        if unfitted:
+            parts.append(f'columns no distribution family fits: {", ".join(unfitted)}')
+        super().__init__('; '.join(parts))

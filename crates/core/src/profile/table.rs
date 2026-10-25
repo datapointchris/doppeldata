@@ -22,12 +22,15 @@ pub struct TableProfile {
     pub columns: Option<Vec<Column>>,
 }
 
-/// How and when the profile was made. `at`, `tool` and `source_fingerprint` are left out of the
-/// profile's digest.
+/// How and when the profile was made. `at`, `tool`, `fitter` and `source_fingerprint` are left out
+/// of the profile's digest.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Generated {
     /// The tool and its version, as `doppeldata <version>`.
     pub tool: Option<String>,
+    /// The package that fits each numeric column's family, and its version, as `scipy <version>`.
+    /// Left out when scipy was not installed, so no column was fitted.
+    pub fitter: Option<String>,
     /// When profiling finished, in RFC 3339.
     pub at: Option<String>,
     pub engine: Option<Engine>,
@@ -393,8 +396,8 @@ pub struct Fit {
     /// The share of the fitting sample's values that were zero and were left out of the fit, so
     /// the column is the family mixed with this share of zeros.
     pub zero_inflation: Option<Rate>,
-    /// Whether the KS statistic is above 0.1, so a scenario must set `allow_poor_fit` to reshape a
-    /// tail through it.
+    /// Whether the KS statistic is above the profiler's poor-fit threshold, so the family describes
+    /// the column's tail only loosely.
     pub poor: Option<bool>,
 }
 
@@ -434,9 +437,9 @@ pub struct StringStats {
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct ValueOverflow {
     /// The rows `other_rate` holds beyond the share it held when the list was first frozen: the
-    /// earlier profile's `other_rate`, less its own `new_values`. So a column whose values did not
-    /// change writes about 0. A count of fewer than `k_min` rows is written as 0.
-    pub new_values: u64,
+    /// earlier profile's `other_rate`, less its own `new_value_rows`. So a column whose values did
+    /// not change writes about 0. A count of fewer than `k_min` rows is written as 0.
+    pub new_value_rows: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]

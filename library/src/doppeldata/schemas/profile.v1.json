@@ -832,7 +832,7 @@
           }
         },
         "poor": {
-          "description": "Whether the KS statistic is above 0.1, so a scenario must set `allow_poor_fit` to reshape a\ntail through it.",
+          "description": "Whether the KS statistic is above the profiler's poor-fit threshold, so the family describes\nthe column's tail only loosely.",
           "type": [
             "boolean",
             "null"
@@ -865,7 +865,7 @@
       ]
     },
     "Generated": {
-      "description": "How and when the profile was made. `at`, `tool` and `source_fingerprint` are left out of the\nprofile's digest.",
+      "description": "How and when the profile was made. `at`, `tool`, `fitter` and `source_fingerprint` are left out\nof the profile's digest.",
       "type": "object",
       "properties": {
         "at": {
@@ -883,6 +883,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "fitter": {
+          "description": "The package that fits each numeric column's family, and its version, as `scipy <version>`.\nLeft out when scipy was not installed, so no column was fitted.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "sample": {
@@ -2431,15 +2438,15 @@
     "ValueOverflow": {
       "type": "object",
       "properties": {
-        "new_values": {
-          "description": "The rows `other_rate` holds beyond the share it held when the list was first frozen: the\nearlier profile's `other_rate`, less its own `new_values`. So a column whose values did not\nchange writes about 0. A count of fewer than `k_min` rows is written as 0.",
+        "new_value_rows": {
+          "description": "The rows `other_rate` holds beyond the share it held when the list was first frozen: the\nearlier profile's `other_rate`, less its own `new_value_rows`. So a column whose values did\nnot change writes about 0. A count of fewer than `k_min` rows is written as 0.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         }
       },
       "required": [
-        "new_values"
+        "new_value_rows"
       ]
     }
   }
