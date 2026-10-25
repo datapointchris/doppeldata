@@ -41,6 +41,10 @@ aws glue start-job-run --job-name profile-claims \
 A DataFrame the job already holds is profiled in its own session, with `sd.profile(frame,
 engine='spark')`.
 
+The `==` versions are the ones `uv.lock` resolves, which the parity check below measured.
+`generated.readers` records each reader's version, so a profile read with another version is never
+reused as one read with these.
+
 ## Profile over a Spark Connect session
 
 Over Spark Connect, the client runs the profiler and the session computes every statistic. The
@@ -123,8 +127,10 @@ finally:
 - **A session's first query fails with `INVALID_HANDLE.SESSION_NOT_FOUND` when reattachable
   execution is on**, so it runs with execution off. It returns 3 to 5.5 minutes after Glue reports
   the session `READY`.
-- **The endpoint's `AuthToken` lives 1,800 seconds.** The claims' profile ran 1,158 seconds on a
-  token fetched before the first query. Whether a profile outlives its token is not established.
+- **The endpoint's `AuthToken` lives 1,800 seconds.** The client reattaches every 10 seconds with
+  the token fetched before the first query in its URL. So a profile expected to run past about 25
+  minutes goes to the job recipe, which holds no token. The claims' profile ran 1,158 seconds on one
+  token.
 - [generating-inside-spark.md](generating-inside-spark.md) holds what else a Glue 5.1 Connect
   session showed.
 
@@ -143,7 +149,7 @@ doppeldata profile create data/claims/ --engine spark --out claims.profile.yaml
 | Source | Glue job | Glue Spark Connect session |
 | --- | --- | --- |
 | Parquet | the wheel, `scipy` | the wheel |
-| CSV or TSV | the wheel, `scipy`, `duckdb==2.0.0`, `clevercsv==0.8.5`, `charset-normalizer` | the wheel |
+| CSV or TSV | the wheel, `scipy`, `duckdb`, `clevercsv`, `charset-normalizer` | the wheel |
 
 - **The executors import the library for the `mapInArrow` passes**, so the wheel is named in every
   case.
@@ -174,16 +180,17 @@ POLICY=healthcare spark-parity/check-profiler-parity.sh \
 ```
 
 It ran on CMS DE-SynPUF sample 1 under `--policy healthcare`, in `apache/spark:3.5.9-python3`,
-`apache/spark:4.1.3-python3` and `public.ecr.aws/glue/aws-glue-libs:5`:
+`apache/spark:4.1.3-python3` and `public.ecr.aws/glue/aws-glue-libs:5`. The beneficiary summary
+also ran in `apache/spark:4.2.0-python3`:
 
 | File | Rows | Columns | Worst quantile rank error | Worst distinct count error | `profile check` |
 | --- | --- | --- | --- | --- | --- |
 | 2008 beneficiary summary | 116,352 | 32 | 0.0001, `MEDREIMB_OP` p99.9 | 1.0%, `BENRES_CAR` 403 against 399 | 123 literal fields, 0 violations |
 | 2008–2010 carrier claims 1A | 2,370,667 | 142 | 0.00005, `CLM_ID` p99.9 | 1.3%, `LINE_ICD9_DGNS_CD_7` 2,565 against 2,599 | 437 literal fields, 0 violations |
 
-- **The three images wrote the same profile.** Outside `generated` and `source`, all 3,402 fields of
-  the beneficiary profile and all 10,945 of the claims profile match across them. Spark 4.1.3 reads
-  through `try_cast` and the others with ANSI off.
+- **Every image wrote the same profile.** Outside `generated` and `source`, all 3,401 fields of
+  the beneficiary profile and all 10,945 of the claims profile match across them. Spark 4 reads
+  through `try_cast`, and Spark 3.5 with ANSI off.
 - **Every exact field matches Polars'.** That covers each value list, other rate and decimal scale.
   The fields that differ are the estimates: distinct counts, tail quantiles, and the histogram edges
   and counts set by those quantiles. The fits differ too, because each engine fits its own sample.
@@ -215,8 +222,10 @@ of 4 vCPUs and a 10 GB heap beside the driver.
 
 ## On one machine Polars profiles several times faster than Spark
 
-Polars ran on the host's 16 cores. Spark ran in the Glue image on `local[8]` with a 4 GB driver,
-under the default policy.
+Polars ran on the host's 16 cores, timed with `/usr/bin/time -v doppeldata profile create FILE`,
+its elapsed time and maximum resident set. Spark ran in the Glue image on `local[8]` with a 4 GB
+driver, timed by the seconds `check-profiler-parity.sh` prints for the image. Both ran under the
+default policy.
 
 | Data | Rows | Columns | Polars | Spark |
 | --- | --- | --- | --- | --- |
@@ -226,24 +235,14 @@ under the default policy.
 
 Polars computes each pass as one streaming query over the files. Spark runs a query per pass over a
 table persisted to disk, and a CSV adds the passes that type its text. On the claims no query
-dominates:
-
-| Query | Time |
-| --- | --- |
-| read the CSV and persist its text | 40 s |
-| try each text column's layouts on a sample | 17.5 s |
-| count each column's raw types | 36.1 s |
-| count the rows a parse would reject | 25.8 s |
-| parse and persist the typed table, with the first 16 columns' aggregate | 59.4 s |
-| each later 16-column aggregate | 1 to 3 s |
-| quantiles | 41.4 s |
-| distinct counts | 58.1 s |
-| end values | 21.9 s |
+dominates. Reading and persisting the text, each typing pass, the parse, the quantiles and the
+distinct counts each take a like share. Each aggregate of `COLUMNS_PER_QUERY` columns after the
+first takes a small part of one.
 
 So Spark is the engine for a table that already sits on a cluster, or that one machine's memory
 cannot hold.
 
-## Each statistic comes from one of seven passes, so no query is larger than Spark compiles
+## Each statistic comes from one of the passes below, so no query is larger than Spark compiles
 
 `SparkBackend.aggregate` splits the requests it is given by the pass that answers them. Each pass is
 one query over every column it covers, except the compiled aggregate, which is one per
@@ -251,8 +250,8 @@ one query over every column it covers, except the compiled aggregate, which is o
 
 | Pass | Answers | How |
 | --- | --- | --- |
-| compiled aggregate | rows, nulls, extremes, moments, rates, value, month, weekday, hour and histogram counts | one `agg` of declarative aggregates per 16 columns |
-| sketched aggregate | `quantiles` and `length_quantiles` | `percentile_approx` at accuracy 10,000 |
+| compiled aggregate | rows, nulls, extremes, moments, rates, value, month, weekday, hour and histogram counts | one `agg` of declarative aggregates per `COLUMNS_PER_QUERY` columns |
+| sketched aggregate | `quantiles` and `length_quantiles` | `percentile_approx` at `QUANTILE_ACCURACY` |
 | distinct stream | `distinct_count` | one HyperLogLog++ over `(column, value as text)` pairs, grouped by column |
 | type stream | `raw_type_counts` | one code per distinct set of layouts over `(column, value)` pairs, grouped by column |
 | end values | the values at rank `k_min` from each end | `mapInArrow`: each task keeps its `k_min` values nearest each end, merged on the driver |
@@ -263,7 +262,7 @@ The split follows what Spark compiles:
 
 - **Spark compiles no query whose rows or buffers hold more than `spark.sql.codegen.maxFields`
   fields.** Its default of 100 is passed by the moments of a few dozen columns, which then run
-  interpreted. The backend raises it to 10,000 for the profile.
+  interpreted. The backend raises it for the profile, as `SESSION_SETTINGS` sets.
 - **A compiled query's generated `processNext()` must stay under the JVM's 64 KB method limit.**
   The carrier claims' 142 numeric columns in one aggregate passed it, and Spark ran the query
   interpreted in 140.6 s. Split by columns, 16 a query took 19.1 s, 32 took 21.7 s, and 64 passed
@@ -275,7 +274,7 @@ The split follows what Spark compiles:
   Spark spends tens of seconds handling for a few dozen columns, whatever the row count. One sketch
   grouped by column holds one sketch's buffer per group.
 - **A layout tried on every text column is one expression in the type stream.** Tried per column,
-  the layout trial's 25 layouts by six codes made a plan too large to compile.
+  every layout the catalog holds by every raw type's code made a plan too large to compile.
 
 *Rejected:* one `agg` holding every statistic. Spark runs it interpreted, and it profiled the
 116,352-row beneficiary file in 236 s against Polars' 5 s.

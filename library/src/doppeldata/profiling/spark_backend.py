@@ -60,13 +60,13 @@ from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
 from doppeldata.spark import PYTHON_ERROR_LINE
 
-# HyperLogLog++'s relative standard deviation. At 0.01 each column's sketch holds 2^14 registers, and a count of a few
-# thousand values is linear counting's, close to exact.
+# HyperLogLog++'s relative standard deviation. At 0.01 each column's sketch holds 2^14 registers. A count of a few hundred
+# falls in linear counting and lands within a few values of exact.
 DISTINCT_RSD = 0.01
 # Greenwald-Khanna's accuracy, whose reciprocal is the largest rank error a quantile may carry.
 QUANTILE_ACCURACY = 10_000
-# The columns one compiled aggregate covers. Twice as many make its generated code pass the JVM's 64 KB method limit on a
-# table of numeric columns, and Spark then runs the query interpreted, several times slower.
+# The columns one compiled aggregate covers. Too many make its generated code pass the JVM's 64 KB method limit, and Spark
+# then runs the query interpreted. docs/profiling-with-spark.md gives the split that was measured.
 COLUMNS_PER_QUERY = 16
 # The share of the hash range a sample keeps, as a multiple of the rows asked for. Rows each placed apart fall short of
 # them with odds too small to meet, and a DataFrame's repeated rows, placed together, can.

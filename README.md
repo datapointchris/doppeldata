@@ -219,8 +219,8 @@ wheel, and its dependencies from PyPI:
 ```
 
 A job that profiles names more modules after the wheel. It names `scipy`, which no Glue
-preinstalls and which fits the numeric columns. For CSV or TSV it also names `duckdb==2.0.0`,
-`clevercsv==0.8.5` and `charset-normalizer`. `docs/profiling-with-spark.md` gives the whole job.
+preinstalls and which fits the numeric columns. For CSV or TSV it also names `duckdb`, `clevercsv`
+and `charset-normalizer`. `docs/profiling-with-spark.md` gives the whole job, with the versions.
 
 Never give pip the package index as an extra index beside PyPI. pip installs the highest version it
 finds on either, so anyone uploading a `doppeldata` to PyPI would run their code in the job.

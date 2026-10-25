@@ -26,8 +26,8 @@ ran both at 10M rows with the same setting.
 [performance.md](performance.md) its throughput.
 
 A job that profiles adds scipy, which no supported Glue preinstalls. A CSV or TSV source adds
-`duckdb==2.0.0`, `clevercsv==0.8.5` and `charset-normalizer` too.
-[profiling-with-spark.md](profiling-with-spark.md) gives the whole job.
+`duckdb`, `clevercsv` and `charset-normalizer` too.
+[profiling-with-spark.md](profiling-with-spark.md) gives the whole job, with the versions.
 
 ## The library floors at Python 3.11 because Glue 5.0 and 5.1 run it
 

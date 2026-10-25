@@ -10,8 +10,8 @@ The raw text types with their order, and the time units with their lengths, are 
 catalog too, so a backend and the profile builder read one list.
 
 The `Backend` protocol splits a profile into the queries an engine answers natively. One `aggregate`
-answers every request it is given: Polars in one query, and Spark in one query per kind of pass, as
-[profiling-with-spark.md](profiling-with-spark.md) says. Counting the most frequent values, sampling
+answers every request it is given: Polars in one query, and Spark in a few queries per kind of
+pass, as [profiling-with-spark.md](profiling-with-spark.md) says. Counting the most frequent values, sampling
 and parsing text each need a query of their own. `doppeldata.profiling.table_profile` drives the calls,
 so a backend holds no profiling logic.
 
@@ -542,7 +542,7 @@ generator multiplies `distinct.ratio` by the rows it writes, and a distinct rati
 a sample. So a sampled profile counts each column's distinct values in one pass over every row, and
 takes the ratio over the whole table.
 
-## Distinct values are counted exactly by Polars, and estimated within about 1% by Spark
+## Distinct values are counted exactly by Polars, and estimated by Spark at a 1% standard error
 
 `distinct.approx` holds an exact count on the Polars backend, so `distinct.ratio` does not move with
 its version. Spark estimates it with HyperLogLog++ at a relative standard deviation of 0.01, and
