@@ -50,6 +50,7 @@ from doppeldata.profile_comparison.real_data_scores import DEFAULT_SAMPLE_ROWS
 from doppeldata.profile_comparison.real_data_scores import SCORES
 from doppeldata.profile_comparison.real_data_scores import scored_columns
 from doppeldata.profile_comparison.side_by_side_html import unwritable
+from doppeldata.profiling import ENGINES
 from doppeldata.profiling import applied_policy
 from doppeldata.published_schemas import enum_values
 from doppeldata.published_schemas import output_formats
@@ -240,6 +241,17 @@ def profile_create(
         Path | None,
         typer.Option('--out', metavar='FILE', help='Write the profile to FILE, as JSON when it ends in .json, rather than print its YAML.'),
     ] = None,
+    engine: Annotated[
+        str,
+        typer.Option(
+            '--engine',
+            metavar='NAME',
+            help=(
+                f'Compute the statistics with NAME: {" or ".join(ENGINES)}. spark profiles in the Spark Connect session '
+                'SPARK_REMOTE names, else in one it starts on local[*], and estimates distinct counts and quantiles.'
+            ),
+        ),
+    ] = 'polars',
     sample: Annotated[int | None, typer.Option('--sample', metavar='N', min=1, help='Profile a seeded random sample of N rows.')] = None,
     policy: Annotated[
         str,
@@ -296,10 +308,13 @@ def profile_create(
 ) -> None:
     """Profile a dataset into a file holding no rows: doppeldata profile create data/orders/ --out orders.profile.yaml
 
-    Each file is read as its suffix's format. S3 is read with the AWS environment's credentials, and text formats from local files only.
+    Each file is read as its suffix's format. S3 is read with the AWS environment's credentials, and polars reads text formats from
+    local files only. One directory or prefix whose folders hold unlike schemas is written as a bundle of one table per schema.
     """
     if out is not None and not out.parent.is_dir():
         raise typer.BadParameter(f'{out.parent} is not a directory; create it, or name a FILE in one that exists', param_hint='--out')
+    if engine not in ENGINES:
+        raise typer.BadParameter(f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}', param_hint='--engine')
     try:
         applied_policy(policy, k_min)
     except ValueError as error:
@@ -313,7 +328,14 @@ def profile_create(
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', ProfilingWarning)
             profiled = profile(
-                data, sample=sample, policy=policy, k_min=k_min, edges_from=earlier, packs=packs or (), code_lists=named_lists
+                data,
+                engine=engine,
+                sample=sample,
+                policy=policy,
+                k_min=k_min,
+                edges_from=earlier,
+                packs=packs or (),
+                code_lists=named_lists,
             )
     except InvalidCodeList as error:
         raise typer.BadParameter(str(error), param_hint='--code-list') from error

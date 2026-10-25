@@ -37,6 +37,7 @@ doppeldata profile create data/orders/ --out orders.profile.yaml   # profile a d
 doppeldata profile create s3://bucket/orders/ --sample 1000000     # a seeded sample, printed as YAML
 doppeldata profile create data/orders/ --edges-from orders.profile.yaml --out orders.profile.yaml  # keep its bin edges
 doppeldata profile create data/claims/ --policy healthcare --out claims.profile.yaml  # add HIPAA Safe Harbor
+doppeldata profile create s3://bucket/claims/ --engine spark --out claims.profile.yaml  # compute it in Spark
 doppeldata profile check orders.profile.yaml   # the file against its schema and privacy policy, from the file alone
 doppeldata profile list                # the example profiles
 doppeldata profile show orders         # one of them, as YAML to start a profile from
@@ -81,6 +82,16 @@ sd.spark.write(spark, profile, 's3://bucket/orders/', rows=1_000_000_000, seed=7
 
 `profile create` reads Parquet and Arrow locally or from S3, with the credentials and endpoint the
 AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files.
+
+`--engine spark` computes the profile in Spark instead: in the Spark Connect session `SPARK_REMOTE`
+names, or in one it starts on `local[*]`. Spark reads Parquet, CSV and TSV, from S3 too, and
+estimates distinct counts and quantiles within 1%. From Python, `sd.profile(frame,
+engine='spark')` profiles a DataFrame in its own session, and `spark=` names a session for files.
+`docs/profiling-with-spark.md` gives the commands for a Glue job and a Glue Spark Connect session.
+
+A directory whose folders hold unlike schemas is profiled as a bundle, one table per kind of folder,
+as an AWS Glue crawler splits a prefix. Folders that match are one table, their `key=value` names
+Hive partitions.
 
 A profile is written under a privacy policy, `default` unless `--policy` names another. No data value
 it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. A
@@ -172,6 +183,9 @@ uv add clevercsv charset-normalizer   # to profile CSV or TSV files
 uv add scipy     # optional: without it, no column is fitted to a distribution family
 uv add sweetviz  # for check(..., html=...), the side-by-side HTML
 ```
+
+`profile(engine='spark')` needs pyspark, pyarrow and boto3 instead of polars, with duckdb, clevercsv
+and charset-normalizer for CSV or TSV. A Spark install brings pyspark, and the CLI declares none.
 
 Code that writes to S3 installs boto3, which resolves the AWS environment's credentials, SSO
 profiles included.

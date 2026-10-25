@@ -5,6 +5,7 @@ import uuid
 
 import polars as pl
 import pytest
+from doppeldata import Bundle
 from doppeldata import Profile
 from doppeldata import profile
 from doppeldata_cli.main import app
@@ -127,3 +128,22 @@ def test_no_histogram_bin_less_the_listed_values_in_it_leaves_a_cell_under_k_min
         outside = count - sum(rows for value, rows in listed.items() if low <= value <= high)
         assert not 0 < outside < 11
     assert not 0 < round(numeric['zero_rate'] * len(values)) < 11
+
+
+def test_a_directory_whose_folders_share_a_schema_is_one_table_and_one_whose_folders_differ_is_a_bundle(tmp_path):
+    orders = pl.DataFrame({'order_id': range(60), 'amount': [i * 1.5 for i in range(60)]})
+    customers = pl.DataFrame({'customer_id': range(60), 'region': [('north', 'south')[i % 2] for i in range(60)]})
+    for year in (2023, 2024):
+        (tmp_path / 'hive' / f'year={year}').mkdir(parents=True)
+        orders.write_parquet(tmp_path / 'hive' / f'year={year}' / 'part.parquet')
+    for name, table in (('orders', orders), ('customers', customers)):
+        (tmp_path / 'mixed' / name).mkdir(parents=True)
+        table.write_parquet(tmp_path / 'mixed' / name / 'part.parquet')
+
+    for tree in ('hive', 'mixed'):
+        result = CliRunner().invoke(app, ['profile', 'create', str(tmp_path / tree), '--out', str(tmp_path / f'{tree}.yaml')])
+        assert result.exit_code == 0, result.output
+
+    hive = Profile.load(tmp_path / 'hive.yaml').to_plain()
+    assert [key['name'] for key in hive['source']['layout']['partitioning']['keys']] == ['year']
+    assert Bundle.load(tmp_path / 'mixed.yaml').tables.keys() == {'customers', 'orders'}

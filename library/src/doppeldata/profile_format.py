@@ -5,6 +5,7 @@ from the engine's Rust model. A profile's identity is the SHA-256 of its RFC 878
 which the library alone computes and hands to the generator.
 """
 
+import copy
 import dataclasses as dc
 import hashlib
 import importlib.resources
@@ -441,10 +442,11 @@ class Profile:
 class Bundle:
     """Several tables' profiles and their relationships: a `kind: bundle` file, or a directory holding `bundle.yaml`."""
 
-    def __init__(self, document: Any, path: Path, tables: dict[str, Profile]) -> None:
+    def __init__(self, document: Any, path: Path | None = None, tables: dict[str, Profile] | None = None) -> None:
+        """A bundle of `document`, whose tables are inline unless `tables` holds each one read from its own file."""
         self.document = document
         self.path = path
-        self.tables = tables
+        self.tables = tables if tables is not None else {name: Profile(entry) for name, entry in document['tables'].items()}
 
     @classmethod
     def load(cls, path: str | Path) -> 'Bundle':
@@ -478,6 +480,27 @@ class Bundle:
     def to_plain(self) -> dict[str, Any]:
         """The bundle with every table inline, as a single-file bundle would hold it."""
         return to_plain(self.document) | {'tables': {name: table.to_plain() for name, table in self.tables.items()}}
+
+    def validate(self) -> list[Issue]:
+        """Every reason the bundle or one of its tables is invalid. Empty when all are valid."""
+        return check(self.to_plain())
+
+    def inline(self) -> Any:
+        """The document with every table written inside it, as a single-file bundle holds them."""
+        document = copy.copy(self.document)
+        document['tables'] = type(self.document['tables'])((name, table.document) for name, table in self.tables.items())
+        return document
+
+    def to_yaml(self) -> str:
+        """The bundle as the single-file YAML `save` writes."""
+        text = io.StringIO()
+        yaml().dump(self.inline(), text)
+        return text.getvalue()
+
+    def save(self, path: str | Path) -> None:
+        """Write the bundle as one file with every table inline, as YAML, or as JSON to a `.json` path."""
+        write_document(self.inline(), Path(path))
+        self.path = Path(path)
 
     def canonical(self) -> bytes:
         plain = self.to_plain()

@@ -236,7 +236,7 @@ def profile_table(
     rows = counted.pop((None, 'rows'))
     whole_distinct: dict[str, int] = {column: count for (column, _), count in counted.items() if column is not None}
     if sample is not None and rows > sample:
-        table = backend.scan(Source(format=None, table=backend.sample(table, sample, SAMPLE_SEED)))
+        table = backend.sampled(table, sample, SAMPLE_SEED)
     elements = read.json.elements if read.json else {}
     settings = ColumnSettings(source.format, k_min, policy, packs, code_lists, frozen or FrozenLayout(), elements)
     profiled = profile_columns(backend, table, settings, rows, whole_distinct, read.json.paths if read.json else None)

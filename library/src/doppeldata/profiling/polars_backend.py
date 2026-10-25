@@ -1,5 +1,6 @@
 """The Polars backend. Polars computes every statistic, and DuckDB only reads CSV, TSV and JSON as text."""
 
+import contextlib
 import dataclasses as dc
 import importlib
 import json
@@ -367,6 +368,12 @@ class PolarsBackend:
             picked = pl.int_range(0, rows, eager=True).sample(n, seed=seed).sort()
             table = table.with_row_index(ROW_INDEX).filter(pl.col(ROW_INDEX).is_in(picked.implode())).drop(ROW_INDEX)
         return table.collect(engine='streaming').to_arrow()
+
+    def sampled(self, table: pl.LazyFrame, n: int, seed: int) -> pl.LazyFrame:
+        return pl.DataFrame(self.sample(table, n, seed)).lazy()
+
+    def profiling(self) -> contextlib.AbstractContextManager[None]:
+        return contextlib.nullcontext()
 
     def parse(self, table: pl.LazyFrame, types: dict[str, ParsedType]) -> pl.LazyFrame:
         return table.with_columns(parsed(pl.col(name), parsed_type).alias(name) for name, parsed_type in types.items())

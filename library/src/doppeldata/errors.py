@@ -90,11 +90,10 @@ class PackagesMissing(DoppeldataError, ImportError):
 class ProfilingEnginesMissing(PackagesMissing):
     """Profiling was asked of an engine whose packages are not installed."""
 
-    def __init__(self, engine: str, missing: list[str]) -> None:
+    def __init__(self, engine: str, missing: list[str], *, cli_declares: bool = True) -> None:
         self.engine = engine
-        super().__init__(
-            'profiling', missing, doing=f'profiling with {engine}', installed_by=', or install doppeldata-cli, which declares them'
-        )
+        route = ', or install doppeldata-cli, which declares them' if cli_declares else ', or run it where Spark is installed'
+        super().__init__('profiling', missing, doing=f'profiling with {engine}', installed_by=route)
 
 
 class DetectorPackError(DoppeldataError):

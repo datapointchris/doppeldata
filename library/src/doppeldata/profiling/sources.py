@@ -34,8 +34,8 @@ UNFINISHED_WRITE = PurePosixPath('_manifest.partial.json')
 
 
 def resolve(data: Any) -> Source:
-    """The source behind `data`: a path, an `s3://` URL, a list of them, or an Arrow-exporting table."""
-    if hasattr(data, '__arrow_c_stream__'):
+    """The source behind `data`: a path, an `s3://` URL, a list of them, an Arrow-exporting table or a Spark DataFrame."""
+    if hasattr(data, '__arrow_c_stream__') or is_spark_frame(data):
         return Source(format=None, table=data)
     items = [os.fspath(data)] if isinstance(data, str | os.PathLike) else [os.fspath(item) for item in data]
     if not items:
@@ -47,10 +47,22 @@ def resolve(data: Any) -> Source:
     source_format = format_of(files[0].path)
     if source_format is None:
         raise SourceError(f'{files[0].path} is not a format doppeldata reads; name a file ending in one of {", ".join(SUFFIX_FORMATS)}')
-    if source_format in TEXT_FORMATS and any(file.path.startswith('s3://') for file in files):
-        message = f'{source_format.value} is read from local files only; copy it down first with `aws s3 cp --recursive {items[0]} <dir>`'
-        raise SourceError(message)
     return Source(format=source_format, files=files, name=name_of(items[0]), roots=tuple(items))
+
+
+def is_spark_frame(data: Any) -> bool:
+    """Whether `data` is a Spark DataFrame, classic or over Connect, told apart without importing pyspark."""
+    return type(data).__module__.startswith('pyspark.sql') and hasattr(data, 'sparkSession')
+
+
+def refuse_remote_text(source: Source) -> None:
+    """Refuse a text source on S3, which an engine reading text through DuckDB cannot reach."""
+    if source.format in TEXT_FORMATS and any(file.path.startswith('s3://') for file in source.files):
+        message = (
+            f'{source.format.value} on S3 is read by engine spark, and engine polars reads it from local files only; '
+            f'copy it down first with `aws s3 cp --recursive {source.roots[0]} <dir>`'
+        )
+        raise SourceError(message)
 
 
 def format_of(path: str) -> SourceFormat | None:

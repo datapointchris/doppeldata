@@ -11,15 +11,19 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from doppeldata import errors
+from doppeldata._core import FORMAT_VERSION
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import ProfilingEnginesMissing
 from doppeldata.errors import ProfilingWarning
+from doppeldata.errors import SourceError
 from doppeldata.privacy_policy import APPLIED_POLICIES
 from doppeldata.privacy_policy import Policy
 from doppeldata.profile_format import DERIVED_FROM
+from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
+from doppeldata.profiling import table_grouping
 from doppeldata.profiling import table_profile
 from doppeldata.profiling.backend import Backend
 from doppeldata.profiling.backend import Request
@@ -40,22 +44,30 @@ class EnginePackage:
     """A package an engine imports, by its distribution and module names, and the formats whose files it reads or sniffs.
 
     One `everywhere` is imported to profile any source, and any other only to profile a source of a format it reads.
-    `generated.readers` records the version of each that reads the source's format.
+    `generated.readers` records the version of each that reads the source's format. `cli_declares` says whether
+    doppeldata-cli installs it.
     """
 
     distribution: str
     module: str
     reads: frozenset[SourceFormat]
     everywhere: bool = True
+    cli_declares: bool = True
 
 
 @dc.dataclass(frozen=True)
 class Engine:
-    """An engine's backend class, as its module and name, and the packages that module imports."""
+    """An engine's backend class, as its module and name, and the packages that module imports.
+
+    A `sessioned` engine's backend is built on a session the module's `session_for` resolves, as Spark's is.
+    `reads_remote_text` says whether it reads a text source on S3.
+    """
 
     module: str
     backend: str
     packages: tuple[EnginePackage, ...]
+    sessioned: bool = False
+    reads_remote_text: bool = False
 
 
 DELIMITED = frozenset({SourceFormat.CSV, SourceFormat.TSV})
@@ -70,7 +82,22 @@ ENGINES = {
             EnginePackage('clevercsv', 'clevercsv', DELIMITED, everywhere=False),
             EnginePackage('charset-normalizer', 'charset_normalizer', DELIMITED, everywhere=False),
         ),
-    )
+    ),
+    # Spark reads every file. DuckDB, CleverCSV and charset-normalizer sniff a delimited source's dialect on the driver.
+    # pyspark comes with the Spark it runs in, whose version is the cluster's, so the CLI declares none.
+    'spark': Engine(
+        'doppeldata.profiling.spark_backend',
+        'SparkBackend',
+        (
+            EnginePackage('pyspark', 'pyspark', DELIMITED | {SourceFormat.PARQUET}, cli_declares=False),
+            EnginePackage('pyarrow', 'pyarrow', frozenset({SourceFormat.PARQUET})),
+            EnginePackage('duckdb', 'duckdb', DELIMITED, everywhere=False),
+            EnginePackage('clevercsv', 'clevercsv', DELIMITED, everywhere=False),
+            EnginePackage('charset-normalizer', 'charset_normalizer', DELIMITED, everywhere=False),
+        ),
+        sessioned=True,
+        reads_remote_text=True,
+    ),
 }
 # The module that lists what was named, and the packages it imports to list S3, which profiling needs whatever the engine.
 SOURCES_MODULE = 'doppeldata.profiling.sources'
@@ -81,19 +108,28 @@ def profile(
     data: Any,
     *,
     engine: str = 'polars',
+    spark: Any = None,
     sample: int | None = None,
     policy: str = Policy.DEFAULT,
     k_min: int | None = None,
     edges_from: Profile | None = None,
     packs: Sequence[str] = (),
     code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
-) -> Profile:
-    """Profile `data` into a valid table profile holding no rows, written under the privacy policy `policy`.
+) -> Profile | Bundle:
+    """Profile `data` into a valid profile holding no rows, written under the privacy policy `policy`.
 
-    `data` is a path, an `s3://` URL, a list of them, or a pyarrow, Polars or pandas table. `sample`
-    profiles a seeded random sample of that many rows. Under `default`, `strict` and `healthcare`, no stored
-    literal rests on fewer than `k_min` rows, `DEFAULT_K_MIN` unless given, and `privacy.audit` lists each one.
-    `none` keeps every value, and takes and states no `k_min`. `healthcare` also enables the healthcare detector pack.
+    `data` is a path, an `s3://` URL, a list of them, a pyarrow, Polars or pandas table, or under `engine='spark'` a
+    Spark DataFrame. One directory or prefix named is grouped into tables as an AWS Glue crawler groups one: where its
+    folders' schemas are similar it is one table, and otherwise the result is a `Bundle` of one table per cluster of
+    similar folders. `sample` profiles a seeded random sample of that many rows. Under `default`, `strict` and
+    `healthcare`, no stored literal rests on fewer than `k_min` rows, `DEFAULT_K_MIN` unless given, and
+    `privacy.audit` lists each one. `none` keeps every value, and takes and states no `k_min`. `healthcare` also
+    enables the healthcare detector pack.
+
+    `engine` is `polars` or `spark`. Spark profiles in `spark`, the session given, else a DataFrame's own, the active
+    session, or one pyspark's builder starts: over Spark Connect where `SPARK_REMOTE` names a server, else on
+    `local[*]`. Spark estimates distinct counts with HyperLogLog++ and quantiles with Greenwald-Khanna, where Polars
+    counts both.
 
     Each string column, and each integer column whose name hints a type a validator confirms, is typed by
     the detector packs named in `packs` and the general pack, which every run enables. A pack the library does not ship is
@@ -115,16 +151,23 @@ def profile(
     """
     if sample is not None and sample < 1:
         raise ValueError(f'sample must be a positive number of rows, not {sample}')
+    chosen = available_engine(engine)
+    if spark is not None and not chosen.sessioned:
+        raise ValueError(f'spark names the session engine spark profiles in, and engine {engine} takes none')
     applied = applied_policy(policy, k_min)
     stated = applied.k_min(k_min)
     # `none` holds no floor, so every statistic is computed over every row.
     floor = stated or 1
-    backend = engine_backend(engine)
     named = [*packs, HEALTHCARE] if applied is Policy.HEALTHCARE and HEALTHCARE not in packs else list(packs)
     enabled = enabled_packs(named)
     supplied = read_code_lists(code_lists or {}, enabled)
     source, reading = listed_source(data, engine)
-    readers = {package.distribution: importlib.metadata.version(package.distribution) for package in reading}
+    tables = table_grouping.grouped(source)
+    if edges_from is not None and len(tables) > 1:
+        grouping = f'{", ".join(source.roots)} groups into {len(tables)} tables'
+        message = f"edges_from is one table's profile, and {grouping}; profile each table's folder on its own"
+        raise SourceError(message)
+    readers = {package.distribution: installed_version(package) for package in reading}
     if edges_from is not None:
         changed = what_changed(
             edges_from,
@@ -141,52 +184,75 @@ def profile(
             return edges_from
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=2)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
-    profiled = Profile(
-        table_profile.profile_table(
-            backend,
-            source,
-            sample=sample,
-            k_min=floor,
-            policy=applied,
-            packs=enabled,
-            code_lists=supplied,
-            readers=readers,
-            frozen=frozen,
-        )
-    )
+    backend = engine_backend(engine, data, spark)
+    profiled = {}
+    with backend.profiling():
+        for table in tables:
+            document = table_profile.profile_table(
+                backend,
+                table,
+                sample=sample,
+                k_min=floor,
+                policy=applied,
+                packs=enabled,
+                code_lists=supplied,
+                readers=readers,
+                frozen=frozen,
+            )
+            profiled[table.name] = Profile(document)
     importlib.import_module(SOURCES_MODULE).check_unchanged(source)
-    issues = profiled.validate()
+    if len(tables) > 1:
+        bundle = Bundle({'profile_version': FORMAT_VERSION, 'kind': 'bundle', 'name': source.name, 'tables': {}}, tables=profiled)
+        bundle.document['tables'] = {name: table.document for name, table in profiled.items()}
+        issues = bundle.validate()
+        if issues:
+            raise InvalidProfile(f'the profile of {data!r}', issues)
+        return bundle
+    only = next(iter(profiled.values()))
+    issues = only.validate()
     if issues:
         raise InvalidProfile(f'the profile of {data!r}', issues)
     if edges_from is not None:
-        earlier, now = (column_names(document.to_plain()) for document in (edges_from, profiled))
+        earlier, now = (column_names(document.to_plain()) for document in (edges_from, only))
         undescribed, missing = [name for name in now if name not in earlier], [name for name in earlier if name not in now]
-        relisted = table_profile.relisted_columns(edges_from.to_plain(), profiled.to_plain())
+        relisted = table_profile.relisted_columns(edges_from.to_plain(), only.to_plain())
         if undescribed or missing or relisted:
             warnings.warn(ColumnsNotFrozen(undescribed, missing, relisted), stacklevel=2)
-    return profiled
+    return only
 
 
-def engine_backend(engine: str) -> Backend:
-    """The engine's backend, refused with ProfilingEnginesMissing where a package every source needs is not installed."""
+def available_engine(engine: str) -> Engine:
+    """The engine named, refused with ProfilingEnginesMissing where a package every source needs is not installed."""
     if engine not in ENGINES:
         raise ValueError(f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}')
     chosen = ENGINES[engine]
-    missing = uninstalled([package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
-    if missing:
-        raise ProfilingEnginesMissing(engine, missing)
+    refuse_uninstalled(engine, [package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
+    return chosen
+
+
+def engine_backend(engine: str, data: Any = None, spark: Any = None) -> Backend:
+    """The engine's backend. A sessioned engine's is built on the session its module's `session_for` resolves from `data`
+    and `spark`."""
+    chosen = available_engine(engine)
     # Imported by name, because each imports packages a library-only install lacks.
-    backend: Backend = getattr(importlib.import_module(chosen.module), chosen.backend)()
+    module = importlib.import_module(chosen.module)
+    backend_class = getattr(module, chosen.backend)
+    backend: Backend = backend_class(module.session_for(data, spark)) if chosen.sessioned else backend_class()
     return backend
 
 
 def listed_source(data: Any, engine: str = 'polars') -> tuple[Source, list[EnginePackage]]:
-    """`data` listed as one source, and the engine's packages that read its format, refused where one is not installed."""
-    source: Source = importlib.import_module(SOURCES_MODULE).resolve(data)
-    reading = [package for package in ENGINES[engine].packages if source.format in package.reads]
-    missing = uninstalled(reading)
-    if missing:
-        raise ProfilingEnginesMissing(engine, missing)
+    """`data` listed as one source, and the engine's packages that read its format, refused where the engine reads no such
+    source or one of those packages is not installed."""
+    chosen = ENGINES[engine]
+    sources = importlib.import_module(SOURCES_MODULE)
+    source: Source = sources.resolve(data)
+    if source.table is not None and sources.is_spark_frame(source.table) and not chosen.sessioned:
+        raise SourceError(f"a Spark DataFrame is profiled with engine='spark', and this run chose {engine}")
+    if not chosen.reads_remote_text:
+        sources.refuse_remote_text(source)
+    reading = [package for package in chosen.packages if source.format in package.reads]
+    refuse_uninstalled(engine, reading)
     return source, reading
 
 
@@ -209,17 +275,30 @@ def sampled_table(data: Any, rows: int, *, engine: str = 'polars', seed: int = t
     """
     if rows < 1:
         raise ValueError(f'rows must be a positive number of rows, not {rows}')
-    backend = engine_backend(engine)
     source, _ = listed_source(data, engine)
-    table = table_profile.typed_table(backend, source)
-    held = table_profile.answered(backend, table, [Request(None, 'rows')])[(None, 'rows')]
-    sampled = SampledTable(backend.sample(table, rows, seed), held, source.fingerprint)
+    backend = engine_backend(engine, data)
+    with backend.profiling():
+        table = table_profile.typed_table(backend, source)
+        held = table_profile.answered(backend, table, [Request(None, 'rows')])[(None, 'rows')]
+        sampled = SampledTable(backend.sample(table, rows, seed), held, source.fingerprint)
     importlib.import_module(SOURCES_MODULE).check_unchanged(source)
     return sampled
 
 
-def uninstalled(packages: Sequence[EnginePackage]) -> list[str]:
-    return errors.uninstalled({package.distribution: package.module for package in packages})
+def installed_version(package: EnginePackage) -> str:
+    """The installed version of a package, from its distribution's metadata, or its module's own where a runtime such as
+    Glue's puts pyspark on the path with no metadata."""
+    try:
+        return importlib.metadata.version(package.distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return str(importlib.import_module(package.module).__version__)
+
+
+def refuse_uninstalled(engine: str, packages: Sequence[EnginePackage]) -> None:
+    missing = errors.uninstalled({package.distribution: package.module for package in packages})
+    if missing:
+        declared = all(package.cli_declares for package in packages if package.distribution in missing)
+        raise ProfilingEnginesMissing(engine, missing, cli_declares=declared)
 
 
 def applied_policy(policy: str, k_min: int | None) -> Policy:
