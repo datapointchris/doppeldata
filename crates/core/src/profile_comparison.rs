@@ -21,8 +21,11 @@ pub struct CheckReport {
     /// The scenario applied to the profile, or null for none.
     pub scenario: Option<ReportedScenario>,
     pub data: CheckedData,
-    /// Whether every metric and every column change passed. A metric the profile states and the
-    /// data cannot supply fails, because a check vouches for the data.
+    /// The real data the data was scored against, or null when none was named.
+    #[serde(default)]
+    pub against: Option<RealData>,
+    /// Whether every metric that decides and every column change passed. A metric the profile
+    /// states and the data cannot supply fails, because a check vouches for the data.
     pub passed: bool,
     /// Whether every declared expectation held. True when no scenario declares any.
     pub verified: bool,
@@ -83,12 +86,33 @@ pub struct CheckedData {
     pub fingerprint: Option<String>,
 }
 
-/// One metric's value for one column, or for the table where `column` is null.
+/// The real data a check scored the data against. The report holds its scores and none of its
+/// rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RealData {
+    /// The real data as the caller named it.
+    pub path: String,
+    /// The rows the real data holds.
+    pub rows: u64,
+    /// The `source_fingerprint` of the real data's files, or null for an in-memory table.
+    pub fingerprint: Option<String>,
+    /// The rows of each side's seeded sample that the scores read.
+    pub scored_rows: u64,
+    /// The coefficient `CorrelationSimilarity` compares, such as `spearman`.
+    pub correlation: String,
+}
+
+/// One metric's value for one column, or for a pair where `paired_with` names the second, or for
+/// the table where `column` is null.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MetricResult {
-    /// The metric's name, such as `ks`, as `--thresholds` keys it.
+    /// The metric's name, such as `ks` or `KSComplement`, as `--thresholds` keys it.
     pub metric: String,
+    /// The column, or a pair's first column in the profile's order.
     pub column: Option<String>,
+    /// A pair's second column, for a score of two columns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paired_with: Option<String>,
     /// The metric's value. It is null where `unmeasured` says why the other profile cannot supply
     /// it, and where `skipped_by` names the perturbation that moves it.
     pub value: Option<f64>,
@@ -96,10 +120,16 @@ pub struct MetricResult {
     /// Whether `value` passes at or below `threshold`, or at or above it.
     pub bound: Bound,
     pub passed: bool,
-    /// The statistic the metric compares, as the source profile holds it: A's, in a diff.
+    /// False on a row the report's `passed` leaves out: a score against the real data whose
+    /// threshold no thresholds file sets. Such a row's `passed` reads its value against the
+    /// score's reference threshold.
+    #[serde(default = "deciding", skip_serializing_if = "is_deciding")]
+    pub decides: bool,
+    /// The statistic the metric compares, as the source profile holds it, or the real data for a
+    /// score against it: A's, in a diff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected: Option<f64>,
-    /// The same statistic in the profile of the data checked: B's, in a diff.
+    /// The same statistic in the data checked: B's, in a diff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed: Option<f64>,
     /// Why the metric has no value: the source profile states what it compares, and the other
@@ -111,6 +141,14 @@ pub struct MetricResult {
     /// is not measured and passes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped_by: Option<String>,
+}
+
+fn deciding() -> bool {
+    true
+}
+
+fn is_deciding(decides: &bool) -> bool {
+    *decides
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

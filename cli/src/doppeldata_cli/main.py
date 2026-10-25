@@ -44,7 +44,10 @@ from doppeldata.privacy_policy import ProfileFileCheck
 from doppeldata.privacy_policy import TableCheck
 from doppeldata.privacy_policy import file_checks
 from doppeldata.profile_comparison.metrics import METRICS
+from doppeldata.profile_comparison.real_data_scores import DEFAULT_SAMPLE_ROWS
+from doppeldata.profile_comparison.real_data_scores import SCORES
 from doppeldata.profiling import applied_policy
+from doppeldata.profiling import listed_source
 from doppeldata.published_schemas import enum_values
 from doppeldata.published_schemas import output_formats
 from doppeldata.published_schemas import partition_styles
@@ -181,6 +184,13 @@ ThresholdsOption = Annotated[
 METRIC_DEFINITIONS = '\n\n'.join(
     f'{metric.name}: {metric.summary}. Passes at {metric.bound.value.removeprefix("at_")} {metric.threshold:g} by default.'
     for metric in METRICS
+)
+SCORE_DEFINITIONS = (
+    'With --against, these scores compare a sample of DATA with one of REAL_DATA. Each decides nothing until a --thresholds '
+    'file sets its threshold, and its row reads its value against the reference shown.\n\n'
+    + '\n\n'.join(
+        f'{score.name}: {score.summary}. Reference {score.bound.value.removeprefix("at_")} {score.threshold:g}.' for score in SCORES
+    )
 )
 
 
@@ -420,7 +430,7 @@ def profile_diff(
         raise ProfilesDrifted(report)
 
 
-@data_app.command('check', no_args_is_help=True, epilog=METRIC_DEFINITIONS)
+@data_app.command('check', no_args_is_help=True, epilog=f'{METRIC_DEFINITIONS}\n\n{SCORE_DEFINITIONS}')
 def data_check(
     profile_name: Annotated[
         str, typer.Argument(metavar='PROFILE', help='The profile the data was generated from, a file or an example name.')
@@ -428,22 +438,59 @@ def data_check(
     data: Annotated[str, typer.Argument(metavar='DATA', help='A file, directory or s3:// prefix holding the generated table.')],
     thresholds: ThresholdsOption = None,
     scenario: ScenarioOption = None,
+    against: Annotated[
+        str | None,
+        typer.Option(
+            '--against',
+            metavar='REAL_DATA',
+            help="Also score DATA against the real data with SDMetrics' scores. The report holds the scores and none of its rows.",
+        ),
+    ] = None,
+    against_sample: Annotated[
+        int,
+        typer.Option('--against-sample', metavar='N', min=1, help='Score a seeded random sample of N rows from each side.'),
+    ] = DEFAULT_SAMPLE_ROWS,
+    html: Annotated[
+        Path | None,
+        typer.Option(
+            '--html',
+            metavar='FILE',
+            help=(
+                'With --against, write the two samples side by side to FILE with sweetviz, which doppeldata does not install. '
+                "It shows the real data's extremes and categories, so it is not for sharing."
+            ),
+        ),
+    ] = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Check generated data against its profile, without the real data: doppeldata data check orders.profile.yaml out/orders/
+    """Check generated data against its profile: doppeldata data check orders.profile.yaml out/orders/
 
     DATA is profiled with PROFILE's histogram edges and value lists, and each metric compares the two profiles.
     With --scenario, DATA is measured against the profile the scenario's patch makes, each metric a perturbation moves is
     skipped, naming it, and each expectation the scenario declares is measured.
-    Exits 0 when every metric, column and expectation passes, and 3 when one does not or the check could not finish.
+    Only --against reads the real data. Exits 0 when every metric, column and expectation passes, and 3 when one does not
+    or the check could not finish.
     """
     source = loaded_profile(profile_name, 'PROFILE')
     chosen = loaded_thresholds(thresholds)
     applied = loaded_scenario(scenario)
+    if html is not None and against is None:
+        raise typer.BadParameter('the HTML shows the real data beside DATA; name it with --against', param_hint='--html')
+    if html is not None and not html.parent.is_dir():
+        raise typer.BadParameter(f'{html.parent} is not a directory; create it, or name a FILE in one that exists', param_hint='--html')
+    if against is not None:
+        # Listed before DATA is profiled, so a name that lists nothing is refused as --against's rather than DATA's.
+        try:
+            with failure_exits_3():
+                listed_source(against)
+        except SourceError as error:
+            if error.exit_code != 2:
+                raise
+            raise typer.BadParameter(str(error), param_hint='--against') from error
     try:
         with failure_exits_3(), warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', ProfilingWarning)
-            report = check(source, data, thresholds=chosen, scenario=applied)
+            report = check(source, data, thresholds=chosen, scenario=applied, against=against, against_sample=against_sample, html=html)
             shown = report.to_json() if as_json else report.to_markdown()
     except InvalidThresholds as error:
         raise typer.BadParameter(str(error), param_hint='--thresholds') from error

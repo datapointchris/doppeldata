@@ -4,6 +4,18 @@
   "description": "Generated data measured against the profile it was generated from, by profiling the data with\nthat profile's histogram edges and value lists frozen.",
   "type": "object",
   "properties": {
+    "against": {
+      "description": "The real data the data was scored against, or null when none was named.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RealData"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "changes": {
       "description": "Columns the data adds or drops, or holds as another kind or semantic type. A change a writer\nalone causes is listed and passes: an Arrow type, which a writer may store at another width\nor unit, and a decimal read back from text as a float. So does a semantic type no detector\npack both profiles ran declares.",
       "type": "array",
@@ -34,7 +46,7 @@
       }
     },
     "passed": {
-      "description": "Whether every metric and every column change passed. A metric the profile states and the\ndata cannot supply fails, because a check vouches for the data.",
+      "description": "Whether every metric that decides and every column change passed. A metric the profile\nstates and the data cannot supply fails, because a check vouches for the data.",
       "type": "boolean"
     },
     "profile": {
@@ -228,7 +240,7 @@
       ]
     },
     "MetricResult": {
-      "description": "One metric's value for one column, or for the table where `column` is null.",
+      "description": "One metric's value for one column, or for a pair where `paired_with` names the second, or for\nthe table where `column` is null.",
       "type": "object",
       "properties": {
         "bound": {
@@ -236,13 +248,18 @@
           "$ref": "#/$defs/Bound"
         },
         "column": {
+          "description": "The column, or a pair's first column in the profile's order.",
           "type": [
             "string",
             "null"
           ]
         },
+        "decides": {
+          "description": "False on a row the report's `passed` leaves out: a score against the real data whose\nthreshold no thresholds file sets. Such a row's `passed` reads its value against the\nscore's reference threshold.",
+          "type": "boolean"
+        },
         "expected": {
-          "description": "The statistic the metric compares, as the source profile holds it: A's, in a diff.",
+          "description": "The statistic the metric compares, as the source profile holds it, or the real data for a\nscore against it: A's, in a diff.",
           "type": [
             "number",
             "null"
@@ -250,16 +267,23 @@
           "format": "double"
         },
         "metric": {
-          "description": "The metric's name, such as `ks`, as `--thresholds` keys it.",
+          "description": "The metric's name, such as `ks` or `KSComplement`, as `--thresholds` keys it.",
           "type": "string"
         },
         "observed": {
-          "description": "The same statistic in the profile of the data checked: B's, in a diff.",
+          "description": "The same statistic in the data checked: B's, in a diff.",
           "type": [
             "number",
             "null"
           ],
           "format": "double"
+        },
+        "paired_with": {
+          "description": "A pair's second column, for a score of two columns.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "passed": {
           "type": "boolean"
@@ -296,6 +320,45 @@
         "threshold",
         "bound",
         "passed"
+      ]
+    },
+    "RealData": {
+      "description": "The real data a check scored the data against. The report holds its scores and none of its\nrows.",
+      "type": "object",
+      "properties": {
+        "correlation": {
+          "description": "The coefficient `CorrelationSimilarity` compares, such as `spearman`.",
+          "type": "string"
+        },
+        "fingerprint": {
+          "description": "The `source_fingerprint` of the real data's files, or null for an in-memory table.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "The real data as the caller named it.",
+          "type": "string"
+        },
+        "rows": {
+          "description": "The rows the real data holds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "scored_rows": {
+          "description": "The rows of each side's seeded sample that the scores read.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "rows",
+        "scored_rows",
+        "correlation"
       ]
     },
     "ReportedProfile": {

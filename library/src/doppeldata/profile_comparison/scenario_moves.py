@@ -43,12 +43,13 @@ def moves(scenario: Scenario) -> list[Move]:
 
 
 def skipped(results: list[MetricResult], moved: list[Move]) -> list[MetricResult]:
-    """Each result a perturbation moves, as skipped by the first that does, with no value, passing."""
+    """Each result a perturbation moves, on either column of a pair, as skipped by the first that does, with no value, passing."""
     kept = []
     for result in results:
-        move = next((move for move in moved if move.moves(result.metric, result.column)), None)
+        columns = (result.column, result.paired_with) if result.paired_with is not None else (result.column,)
+        move = next((move for move in moved if any(move.moves(result.metric, column) for column in columns)), None)
         if move is not None:
-            result = MetricResult(result.metric, result.column, None, result.threshold, result.bound, True, skipped_by=move.id)
+            result = dc.replace(result, value=None, passed=True, expected=None, observed=None, unmeasured=None, skipped_by=move.id)
         kept.append(result)
     return kept
 

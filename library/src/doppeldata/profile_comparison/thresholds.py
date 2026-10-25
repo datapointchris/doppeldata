@@ -13,6 +13,8 @@ from doppeldata.errors import InvalidThresholds
 from doppeldata.profile_comparison.metrics import METRICS_BY_NAME
 from doppeldata.profile_comparison.metrics import Document
 from doppeldata.profile_comparison.metrics import Metric
+from doppeldata.profile_comparison.real_data_scores import SCORES_BY_NAME
+from doppeldata.profile_comparison.real_data_scores import Score
 from doppeldata.profile_format import to_plain
 
 
@@ -55,9 +57,13 @@ class Thresholds:
             raise InvalidThresholds(f'{source} is not a valid thresholds file:\n' + '\n'.join(f'  {fault}' for fault in faults))
         return cls(defaults, columns)
 
-    def threshold(self, metric: Metric, column: str | None) -> float:
+    def threshold(self, metric: Metric | Score, column: str | None) -> float:
         by_column = self.columns.get(column, {}) if column is not None else {}
         return by_column.get(metric.name, self.defaults.get(metric.name, metric.threshold))
+
+    def sets(self, name: str, column: str | None) -> bool:
+        """Whether these thresholds set `name`'s threshold for `column`, or for every column. A pair is set by `defaults` alone."""
+        return name in self.defaults or (column is not None and name in self.columns.get(column, {}))
 
     def check_columns(self, source: Document) -> None:
         """Refuse a column the source profile does not hold, which a misspelled name would be. Each metric measures the source's columns."""
@@ -72,8 +78,8 @@ def metric_faults(metrics: Any, at: str) -> list[str]:
         return [f'{at} must map each metric name to its threshold']
     faults = []
     for name, value in metrics.items():
-        if name not in METRICS_BY_NAME:
-            faults.append(f'{at}/{name}: {name!r} is not a metric; choose from {", ".join(METRICS_BY_NAME)}')
+        if name not in METRICS_BY_NAME and name not in SCORES_BY_NAME:
+            faults.append(f'{at}/{name}: {name!r} is not a metric; choose from {", ".join([*METRICS_BY_NAME, *SCORES_BY_NAME])}')
         elif isinstance(value, bool) or not isinstance(value, int | float):
             faults.append(f'{at}/{name}: {value!r} is not a number')
     return faults

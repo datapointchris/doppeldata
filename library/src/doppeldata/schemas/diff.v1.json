@@ -126,7 +126,7 @@
       ]
     },
     "MetricResult": {
-      "description": "One metric's value for one column, or for the table where `column` is null.",
+      "description": "One metric's value for one column, or for a pair where `paired_with` names the second, or for\nthe table where `column` is null.",
       "type": "object",
       "properties": {
         "bound": {
@@ -134,13 +134,18 @@
           "$ref": "#/$defs/Bound"
         },
         "column": {
+          "description": "The column, or a pair's first column in the profile's order.",
           "type": [
             "string",
             "null"
           ]
         },
+        "decides": {
+          "description": "False on a row the report's `passed` leaves out: a score against the real data whose\nthreshold no thresholds file sets. Such a row's `passed` reads its value against the\nscore's reference threshold.",
+          "type": "boolean"
+        },
         "expected": {
-          "description": "The statistic the metric compares, as the source profile holds it: A's, in a diff.",
+          "description": "The statistic the metric compares, as the source profile holds it, or the real data for a\nscore against it: A's, in a diff.",
           "type": [
             "number",
             "null"
@@ -148,16 +153,23 @@
           "format": "double"
         },
         "metric": {
-          "description": "The metric's name, such as `ks`, as `--thresholds` keys it.",
+          "description": "The metric's name, such as `ks` or `KSComplement`, as `--thresholds` keys it.",
           "type": "string"
         },
         "observed": {
-          "description": "The same statistic in the profile of the data checked: B's, in a diff.",
+          "description": "The same statistic in the data checked: B's, in a diff.",
           "type": [
             "number",
             "null"
           ],
           "format": "double"
+        },
+        "paired_with": {
+          "description": "A pair's second column, for a score of two columns.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "passed": {
           "type": "boolean"

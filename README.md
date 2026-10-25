@@ -24,6 +24,7 @@ doppeldata profile list                # the example profiles
 doppeldata profile show orders         # one of them, as YAML to start a profile from
 doppeldata profile diff march.profile.yaml april.profile.yaml  # how far April drifted from March
 doppeldata data check orders.profile.yaml out/orders/        # generated data against its profile
+doppeldata data check orders.profile.yaml out/orders/ --against data/orders/ --html side-by-side.html  # and the real data
 doppeldata schemas show profile        # the JSON Schema every profile validates against
 
 doppeldata data plan orders --rows 1000000 --seed 7 --out orders/       # the files a write makes, and their size
@@ -96,13 +97,18 @@ overflow. Where the files, the run's settings, the doppeldata, scipy and reader 
 detector packs and the code lists match the ones the earlier profile was made with, it is kept as it is, with any edits a
 reviewer made. Otherwise `profile create` says what differs.
 
-`data check` profiles generated data with its profile's edges frozen, and never reads the real data.
-It measures each column against the profile by the metrics `data check --help` defines, each with a
-threshold and a verdict, and exits 3 when any fails or the check cannot finish. `profile diff`
-measures the same metrics between two profiles of one table, and lists every field that changed
-between them. It exits 1 on drift.
+`data check` profiles generated data with its profile's edges frozen, and reads the real data only
+with `--against`. It measures each column against the profile by the metrics `data check --help`
+defines, each with a threshold and a verdict, and exits 3 when any fails or the check cannot finish.
+`profile diff` measures the same metrics between two profiles of one table, and lists every field
+that changed between them. It exits 1 on drift.
 `--thresholds FILE` sets each metric's threshold, and `--json` prints the report that `schemas show
 check` or `schemas show diff` describes.
+
+`--against REAL_DATA` also scores a seeded sample of each side, 100,000 rows by default, by six of
+SDMetrics' scores, which doppeldata computes itself. The report holds the scores and no real row.
+They decide nothing until `--thresholds` sets them. `--html FILE` writes the two samples side by
+side with sweetviz. It shows the real data's extremes and category names, so it is not for sharing.
 
 Each release's notes list what it does. Its commands and its profile format change without notice
 until 1.0.
@@ -124,6 +130,12 @@ uvx --index https://pypi.ichrisbirch.com/simple/ --from doppeldata-cli doppeldat
 
 Every release is published to that package index, and nothing else is. Name it on every install.
 
+`data check --html` also needs sweetviz, which the command line does not declare:
+
+```bash
+uv tool install --index https://pypi.ichrisbirch.com/simple/ --with sweetviz doppeldata-cli
+```
+
 The library, for code that profiles or generates data itself:
 
 ```bash
@@ -137,6 +149,7 @@ The library installs no profiling engine, so a job that only generates carries n
 uv add polars duckdb pyarrow boto3
 uv add clevercsv charset-normalizer   # to profile CSV or TSV files
 uv add scipy     # optional: without it, no column is fitted to a distribution family
+uv add sweetviz  # for check(..., html=...), the side-by-side HTML
 ```
 
 Code that writes to S3 installs boto3, which resolves the AWS environment's credentials, SSO
