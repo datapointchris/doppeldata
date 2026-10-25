@@ -53,6 +53,7 @@ QUANTILES = {name: quantile_level(name) for name in ('p001', 'p01', 'p05', 'p25'
 
 # A request for `trimmed_low` or `trimmed_high` carries k_min as its argument: the value at rank
 # k_min from that end. An exact minimum or maximum is one row's value, so only these are stored.
+# `distinct_days` carries k_min too, and counts the days holding a value between those two.
 # `quantiles` and `length_quantiles` carry a tuple of levels, and answer with the nearest-rank value
 # at each, in order. `histogram_counts` carries a tuple of rising edges, and answers with the rows
 # below the first, in each bin from one edge up to the next with the last bin closed, and above the

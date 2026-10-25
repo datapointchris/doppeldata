@@ -2387,7 +2387,7 @@
           ]
         },
         "gap_rate": {
-          "description": "The share of days in the range holding no rows.",
+          "description": "The share of days between the extremes holding no rows.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"

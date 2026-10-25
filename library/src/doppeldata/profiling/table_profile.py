@@ -56,7 +56,7 @@ MOMENT_DIGITS = 6
 SHAPE_MOMENT_DECIMALS = 6
 # A fit's parameters can cancel, as a near-normal lognorm's loc and scale do, so they keep more digits than a moment.
 FIT_PARAMETER_DIGITS = 8
-TRIMMED_STATISTICS = frozenset({'trimmed_low', 'trimmed_high', 'length_trimmed_low', 'length_trimmed_high'})
+TRIMMED_STATISTICS = frozenset({'trimmed_low', 'trimmed_high', 'length_trimmed_low', 'length_trimmed_high', 'distinct_days'})
 # Equal-depth bins carry a skewed column's shape in fewer bins than equal-width ones.
 HISTOGRAM_BINS = 32
 EQUAL_DEPTH_LEVELS = tuple(index / HISTOGRAM_BINS for index in range(1, HISTOGRAM_BINS))
@@ -627,8 +627,10 @@ def temporal_section(spec: ColumnSpec, stat: Stat, values: int, text: TextColumn
             shares = floored_shares(stat(counts), k_min)
             if shares:
                 section[field] = shares
-    days = (day_of(stat('max')) - day_of(stat('min'))).days + 1
-    section['gap_rate'] = significant(1 - stat('distinct_days') / days, RATE_DIGITS)
+    # The generator empties this share of the days between the extremes, so it is counted between them.
+    if has_trimmed_extremes(values, k_min):
+        days = (day_of(stat('trimmed_high')) - day_of(stat('trimmed_low'))).days + 1
+        section['gap_rate'] = significant(1 - stat('distinct_days') / days, RATE_DIGITS)
     return section
 
 
