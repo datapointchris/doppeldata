@@ -75,6 +75,9 @@ pub enum SampleStrategy {
     Reservoir,
 }
 
+/// The fewest rows a stored literal or cell rests on, where a profile states no `privacy.k_min`.
+pub const DEFAULT_K_MIN: u64 = 11;
+
 /// The privacy policy the profile was written under, and every literal it kept or withheld.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Privacy {

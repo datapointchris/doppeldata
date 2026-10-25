@@ -15,6 +15,11 @@ DEFAULT_FILE_ROWS: Final[int]
 The rows in each file a write makes when neither the caller nor the profile sizes them.
 """
 
+DEFAULT_K_MIN: Final[int]
+"""
+The fewest rows a stored literal or cell rests on, where a profile states no `privacy.k_min`.
+"""
+
 FORMAT_VERSION: Final[int]
 """
 The profile format version the engine reads.

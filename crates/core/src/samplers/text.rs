@@ -190,7 +190,7 @@ fn provider_variety(provider: Provider) -> Variety {
         Provider::Icd10cm | Provider::HcpcsLevel2 => provider_list(provider).map_or(0.0, |list| list.codes.len() as f64),
         Provider::City => {
             let suffixed = |names: f64| names * entries(EN::ADDRESS_CITY_SUFFIX);
-            let stratum = |strings, share| Stratum { strings, share };
+            let stratum = |values, share| Stratum { values, share };
             return Variety::Strata(vec![
                 stratum(suffixed(last), 0.6),
                 stratum(suffixed(first), 0.2),
@@ -433,7 +433,7 @@ impl TextSource {
                 shapes
                     .iter()
                     .map(|shape| Stratum {
-                        strings: shape.strings(),
+                        values: shape.strings(),
                         share: shape.share,
                     })
                     .collect(),
@@ -450,7 +450,7 @@ impl TextSource {
                 shapes
                     .iter()
                     .map(|shape| Stratum {
-                        strings: shape.leading_strings(chars),
+                        values: shape.leading_strings(chars),
                         share: shape.share,
                     })
                     .collect(),

@@ -13,6 +13,7 @@ use arrow_schema::SchemaRef;
 
 use crate::identity::DatasetIdentity;
 use crate::identity::is_sha256_digest;
+use crate::profile::DEFAULT_K_MIN;
 use crate::profile::FORMAT_VERSION;
 use crate::profile::Profile;
 use crate::profile::provenance;
@@ -160,11 +161,19 @@ pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Re
         return Err(PlanError::NoColumns { name: table.name.clone() });
     }
     let mut seen = BTreeSet::new();
+    let source_rows = table.dataset.as_ref().and_then(|dataset| dataset.row_count);
+    let rows_read = table
+        .generated
+        .as_ref()
+        .and_then(|g| g.sample.as_ref())
+        .and_then(|sample| sample.rows_read);
     let context = PlanContext {
         table: &table.name,
         seed,
         rows: rows as f64,
-        k_min: table.privacy.as_ref().and_then(|privacy| privacy.k_min),
+        source_rows: source_rows.map(|rows| rows as f64),
+        described_rows: rows_read.or(source_rows).map(|rows| rows as f64),
+        k_min: table.privacy.as_ref().and_then(|privacy| privacy.k_min).unwrap_or(DEFAULT_K_MIN),
     };
     let mut planned = Vec::with_capacity(columns.len());
     for (index, column) in columns.iter().enumerate() {

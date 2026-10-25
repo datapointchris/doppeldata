@@ -10,50 +10,50 @@ use crate::rng::below_u64;
 use crate::rng::rng_for;
 use crate::rng::unit;
 
-/// How many distinct strings a source draws.
+/// How many distinct values a source draws.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Variety {
-    /// Not counted, so each distinct index is taken to give a distinct string.
+    /// Not counted, so each distinct index is taken to give a distinct value.
     Uncounted,
-    /// Groups of strings, each string drawn as often as the others in its group.
+    /// Groups of values, each value drawn as often as the others in its group.
     Strata(Vec<Stratum>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Stratum {
-    pub(crate) strings: f64,
+    pub(crate) values: f64,
     /// The share of draws landing in the group.
     pub(crate) share: f64,
 }
 
 impl Variety {
-    /// `strings` strings, each drawn as often as any other.
-    pub(crate) fn uniform(strings: f64) -> Self {
-        Self::Strata(vec![Stratum { strings, share: 1.0 }])
+    /// `values` values, each drawn as often as any other.
+    pub(crate) fn uniform(values: f64) -> Self {
+        Self::Strata(vec![Stratum { values, share: 1.0 }])
     }
 
-    /// The distinct strings that `indices` distinct indices are expected to give.
-    fn distinct_strings(&self, indices: f64) -> f64 {
+    /// The distinct values that `indices` distinct indices are expected to give.
+    fn distinct_values(&self, indices: f64) -> f64 {
         match self {
             Self::Uncounted => indices,
             Self::Strata(strata) => strata
                 .iter()
                 .map(|stratum| {
                     let draws = stratum.share * indices;
-                    if stratum.strings.is_infinite() {
+                    if stratum.values.is_infinite() {
                         draws
                     } else {
-                        -stratum.strings * libm::expm1(-draws / stratum.strings)
+                        -stratum.values * libm::expm1(-draws / stratum.values)
                     }
                 })
                 .sum(),
         }
     }
 
-    /// The distinct strings that `draws` draws give when each lands in one of `range` equal bands
-    /// of levels, and a band gives one string wherever it is drawn. Each stratum lays its share of
-    /// the bands evenly across its strings.
-    fn distinct_strings_in_bands(&self, range: f64, draws: f64) -> f64 {
+    /// The distinct values that `draws` draws give when each lands in one of `range` equal bands
+    /// of levels, and a band gives one value wherever it is drawn. Each stratum lays its share of
+    /// the bands evenly across its values.
+    fn distinct_values_in_bands(&self, range: f64, draws: f64) -> f64 {
         let drawn = -libm::expm1(-draws / range);
         match self {
             Self::Uncounted => range * drawn,
@@ -61,10 +61,10 @@ impl Variety {
                 .iter()
                 .map(|stratum| {
                     let bands = stratum.share * range;
-                    if stratum.strings.is_infinite() {
+                    if stratum.values.is_infinite() {
                         bands * drawn
                     } else {
-                        stratum.strings * cell_reached(bands / stratum.strings, drawn)
+                        stratum.values * cell_reached(bands / stratum.values, drawn)
                     }
                 })
                 .sum(),
@@ -72,8 +72,8 @@ impl Variety {
     }
 }
 
-/// The chance that some drawn band gives a string, where the levels rounding to the string span
-/// `width` bands and each band is drawn with chance `drawn`. Nothing aligns the string's levels
+/// The chance that some drawn band gives a value, where the levels rounding to the value span
+/// `width` bands and each band is drawn with chance `drawn`. Nothing aligns the value's levels
 /// with the bands, so the chance is averaged over where in a band they start.
 fn cell_reached(width: f64, drawn: f64) -> f64 {
     let (q, p) = (drawn, 1.0 - drawn);
@@ -83,7 +83,7 @@ fn cell_reached(width: f64, drawn: f64) -> f64 {
     }
     let whole = width.floor();
     let part = width - whole;
-    // Started at u in its first band, the string takes 1 - u of it, whole bands after it, and
+    // Started at u in its first band, the value takes 1 - u of it, whole bands after it, and
     // `last` - q·u of the band it ends in, scaled to the chance that band misses it.
     let missed = |from: f64, to: f64, last: f64| {
         let cube = |u: f64| u * u * u;
@@ -100,14 +100,14 @@ pub(crate) struct ValueIndex {
 }
 
 impl ValueIndex {
-    /// The range whose `draws` uniform draws are expected to give `distinct` distinct strings from a
+    /// The range whose `draws` uniform draws are expected to give `distinct` distinct values from a
     /// source of `variety`. `None` where fresh draws come no nearer than that, as at a ratio of 1.
     pub(crate) fn for_distinct(distinct: f64, draws: f64, variety: &Variety) -> Option<Self> {
         let distinct = distinct.max(1.0);
-        if draws.is_nan() || draws < 1.0 || variety.distinct_strings(draws) <= distinct {
+        if draws.is_nan() || draws < 1.0 || variety.distinct_values(draws) <= distinct {
             return None;
         }
-        let indices = solve_rising(|indices| variety.distinct_strings(indices), distinct, distinct, draws);
+        let indices = solve_rising(|indices| variety.distinct_values(indices), distinct, distinct, draws);
         // K - K·e^(-n/K) is at least n - n²/2K, so this range holds `indices` distinct indices or more.
         let widest = draws * draws / (2.0 * (draws - indices));
         let range = solve_rising(|range| distinct_indices(range, draws), indices, indices, widest);
@@ -117,14 +117,14 @@ impl ValueIndex {
     }
 
     /// The range whose `draws` draws at [`Self::stratified_level`] levels are expected to give
-    /// `distinct` distinct strings from a source of `variety`. `None` where fresh draws come no
+    /// `distinct` distinct values from a source of `variety`. `None` where fresh draws come no
     /// nearer than that.
     pub(crate) fn for_distinct_in_bands(distinct: f64, draws: f64, variety: &Variety) -> Option<Self> {
         let distinct = distinct.max(1.0);
-        if draws.is_nan() || draws < 1.0 || variety.distinct_strings(draws) <= distinct {
+        if draws.is_nan() || draws < 1.0 || variety.distinct_values(draws) <= distinct {
             return None;
         }
-        let reached = |range: f64| variety.distinct_strings_in_bands(range, draws);
+        let reached = |range: f64| variety.distinct_values_in_bands(range, draws);
         // The count rises toward the fresh draws' as the bands narrow, so some range reaches it.
         let mut widest = distinct;
         while reached(widest) < distinct && widest < f64::MAX / 4.0 {

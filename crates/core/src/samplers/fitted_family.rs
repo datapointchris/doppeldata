@@ -124,6 +124,8 @@ fn discrete_uniform(params: &Params<'_>) -> Result<Standard, String> {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FittedFamily {
+    /// The family's name as [`FITTED_FAMILIES`] gives it.
+    pub(crate) name: &'static str,
     standard: Standard,
     discrete: bool,
     loc: f64,
@@ -146,6 +148,7 @@ impl FittedFamily {
             return Err(format!("{} parameter `scale` is {scale}, not positive", fit.family));
         }
         Ok(Some(Self {
+            name: family.name,
             standard,
             discrete: family.discrete,
             loc: fit.params.get("loc").copied().unwrap_or(0.0),

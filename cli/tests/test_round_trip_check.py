@@ -51,3 +51,12 @@ def test_data_generated_at_fewer_rows_than_its_source_passes_its_check_and_a_rai
     report = sd.check(profile, patched)
     schema.validate(report.to_plain())
     assert failures(report) == [('null_rate_delta', 'amount')]
+
+
+def test_the_orders_example_generated_at_a_tenth_of_its_rows_keeps_every_quantity_and_passes_its_check():
+    """`data generate orders --rows 10000`: `quantity` lists none of its 10 values, and a short run still draws them all."""
+    profile = sd.Profile.example('orders')
+    generated = pa.table(sd.generate(profile, rows=10_000, seed=1))
+    assert len(pc.unique(generated.column('quantity'))) == 10
+    report = sd.check(profile, generated)
+    assert report.passed, failures(report)
