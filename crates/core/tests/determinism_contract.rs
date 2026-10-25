@@ -34,7 +34,7 @@ const _: () = assert!(
 /// refuses a new hash at a released version.
 const PINNED_STREAM_VERSION: u32 = 7;
 const PINNED_VALUES: &str = "12735e7dbf80220695779bfdad51845c4897e2a2fcf7ee8ab08f2f058a65b385";
-const PINNED_SCENARIO_VALUES: &str = "8a40b3e492b186d3c55436d6c10b2045a171133ef566b6ad37a5b899709c18fa";
+const PINNED_SCENARIO_VALUES: &str = "1a1ae1c10cfb975ef2ce1f03be01368b55ff8c6a2ce7933705ae28ed293ade76";
 
 fn document(path: &Path) -> serde_json::Value {
     let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -184,11 +184,11 @@ fn a_dataset_identity_digests_to_its_pinned_value() {
             r#"{"dataset_rows":"10000000","#,
             r#""profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
             r#""scenario_digest":"sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","#,
-            r#""seed":"18446744073709551615","stream_version":4}"#
+            r#""seed":"18446744073709551615","stream_version":7}"#
         )
     );
     assert_eq!(
         with_scenario.digest(),
-        "sha256:bd55826c0c6410bd412152c07fd50aa41b847bd9cd54283af45d5ff5e2474b92"
+        "sha256:9e5b3710683f27a48d907edbc5be60ebae84a33455f63e576cc8765b14dd7f1d"
     );
 }
