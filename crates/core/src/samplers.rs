@@ -2,6 +2,7 @@
 //! mask and text-only values every column shares.
 
 mod categorical;
+mod distinct_values;
 mod fitted_family;
 mod inverse_cdf;
 mod nested;
@@ -23,6 +24,7 @@ use arrow_schema::TimeUnit;
 use rand_distr::weighted::WeightedAliasIndex;
 
 use self::categorical::CategoricalSampler;
+use self::distinct_values::ValueIndex;
 use self::fitted_family::FittedFamily;
 use self::nested::ListSampler;
 use self::nested::StructSampler;
@@ -33,6 +35,7 @@ use self::numeric::SequenceSampler;
 use self::temporal::TemporalOutput;
 use self::temporal::TemporalSampler;
 use self::text::CheckDigitDraw;
+use self::text::Shape;
 use self::text::StringOutput;
 use self::text::TextSampler;
 use self::text::TextSource;
@@ -66,10 +69,13 @@ pub(crate) struct BlockPosition {
     pub(crate) first_row: u64,
 }
 
-/// What every column's plan is built in: the table its streams are named for, and the seed.
+/// What every column's plan is built in: the table its streams are named for, the seed, and the
+/// rows a column's values fill over the whole dataset. A list element's rows are the elements its
+/// lists are expected to hold.
 pub(crate) struct PlanContext<'a> {
     pub(crate) table: &'a str,
     pub(crate) seed: u64,
+    pub(crate) rows: f64,
 }
 
 /// Why a sampler cannot be built, before the column's place in the profile is known.
@@ -145,6 +151,10 @@ pub(crate) struct StreamKeys {
     lengths: u64,
     /// Drawn once at plan time, from block 0, to pick a date column's empty days.
     gap_days: u64,
+    /// A row's index into a string column's values, where the column draws one.
+    index: u64,
+    /// Positioned at an index rather than a block: the value at that index.
+    indexed_values: u64,
 }
 
 impl StreamKeys {
@@ -159,6 +169,8 @@ impl StreamKeys {
             invalid: key("invalid"),
             lengths: key("lengths"),
             gap_days: key("gap_days"),
+            index: key("index"),
+            indexed_values: key("indexed_values"),
         }
     }
 }
@@ -194,17 +206,14 @@ impl ValueSampler {
         match self {
             Self::Sequence(sampler) => sampler.generate(at.first_row, rows, nulls),
             Self::Numeric(sampler) => sampler.generate(&mut values(), rows, nulls),
-            Self::Categorical(sampler) => sampler.generate(&mut values(), rows, nulls),
+            Self::Categorical(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::Temporal(sampler) => sampler.generate(&mut values(), rows, nulls),
             Self::Boolean(true_rate) => {
                 let mut rng = values();
                 let values = BooleanBuffer::collect_bool(rows, |_| true_rate.draw(&mut rng));
                 Arc::new(BooleanArray::new(values, nulls))
             }
-            Self::Text(sampler) => {
-                let mut invalid = rng_for(at.seed, keys.invalid, at.block);
-                sampler.generate(&mut values(), &mut invalid, rows, nulls)
-            }
+            Self::Text(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::List(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::Struct(sampler) => sampler.generate(at, rows, nulls),
         }
@@ -267,7 +276,6 @@ pub(crate) fn column_plan(context: &PlanContext, column: &Column, site: &ColumnS
 /// As [`column_plan`], for a field present in `presence` of its parent's rows.
 fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite, presence: f64) -> Result<ColumnPlan, PlanError> {
     let keys = StreamKeys::new(context.table, &site.path);
-    let values = value_sampler(context, column, site, &keys)?;
     let may_be_null = column.nullable != Some(false);
     let null_rate = column.null_rate.map_or(0.0, |r| r.0);
     let null_share = if may_be_null {
@@ -275,6 +283,7 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
     } else {
         0.0
     };
+    let values = value_sampler(context, column, site, &keys, context.rows * (1.0 - null_share))?;
     let string_column = matches!(values.data_type(), DataType::Utf8 | DataType::LargeUtf8);
     let text_only = TextOnlyValues::new(column.type_mix.as_ref(), column.missing_tokens.as_ref(), null_share, string_column)
         .map_err(site.refuse("/missing_tokens"))?;
@@ -328,7 +337,14 @@ fn physical(column: &Column) -> Result<PhysicalType, String> {
     })
 }
 
-fn value_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, keys: &StreamKeys) -> Result<ValueSampler, PlanError> {
+/// The sampler for `column`, whose value is not null in `filled_rows` of the dataset's rows.
+fn value_sampler(
+    context: &PlanContext,
+    column: &Column,
+    site: &ColumnSite,
+    keys: &StreamKeys,
+    filled_rows: f64,
+) -> Result<ValueSampler, PlanError> {
     let scalar = match physical(column).map_err(site.refuse_as(ColumnFault::UnsupportedType, "/physical_type"))? {
         PhysicalType::Container(Container::Struct) => return struct_sampler(context, column, site),
         PhysicalType::Container(container) => return list_sampler(context, column, site, container == Container::LargeList),
@@ -374,11 +390,16 @@ fn value_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, keys
     let string = column.string.as_ref();
     let hint = column.semantic.as_ref().and_then(|s| s.generator_hint.as_ref());
     let source = text_source(string, hint, site)?;
+    // The ratio is of the dataset's rows, so a run longer than the profiled one holds more values.
+    let distinct = column.distinct.as_ref().and_then(|d| d.ratio).map(|ratio| ratio.0 * context.rows);
     let top_values = string.and_then(|s| s.top_values.as_ref()).filter(|values| !values.is_empty());
     if let Some(top_values) = top_values {
-        let values = top_values.iter().map(|top| (top.value.clone(), top.rate.0)).collect();
+        let values: Vec<_> = top_values.iter().map(|top| (top.value.clone(), top.rate.0)).collect();
         let other_rate = string.and_then(|s| s.other_rate).map_or(0.0, |r| r.0);
-        let sampler = CategoricalSampler::new(values, other_rate, source, output)
+        let other_share = other_rate / (values.iter().map(|(_, rate)| rate).sum::<f64>() + other_rate);
+        let other_index = distinct
+            .and_then(|distinct| ValueIndex::for_distinct(distinct - values.len() as f64, filled_rows * other_share, &source.variety()));
+        let sampler = CategoricalSampler::new(values, other_rate, source, other_index, output)
             .map_err(site.refuse_as(ColumnFault::UnusableRates, "/string/top_values"))?;
         return Ok(ValueSampler::Categorical(sampler));
     }
@@ -390,6 +411,7 @@ fn value_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, keys
         }
     });
     Ok(ValueSampler::Text(TextSampler {
+        index: distinct.and_then(|distinct| ValueIndex::for_distinct(distinct, filled_rows, &source.variety())),
         source,
         check_digit,
         output,
@@ -419,9 +441,10 @@ fn text_source(string: Option<&StringStats>, hint: Option<&GeneratorHint>, site:
         let choice = WeightedAliasIndex::new(shapes.iter().map(|shape| shape.rate.0).collect())
             .map_err(|error| format!("shape rates are unusable: {error}"))
             .map_err(site.refuse_as(ColumnFault::UnusableRates, "/string/shapes"))?;
+        let total: f64 = shapes.iter().map(|shape| shape.rate.0).sum();
         return Ok(TextSource::Shapes {
             choice,
-            shapes: shapes.iter().map(|shape| text::shape_chars(&shape.shape)).collect(),
+            shapes: shapes.iter().map(|shape| Shape::new(&shape.shape, shape.rate.0 / total)).collect(),
         });
     }
     let length = string.and_then(|s| s.length.as_ref());
@@ -447,10 +470,15 @@ fn list_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, large
     };
     let length = numeric::bounded_cdf(list.and_then(|l| l.length.as_ref()), None, None, DEFAULT_LIST_LENGTH)
         .map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/list/length"))?;
+    let empty_rate = list.and_then(|l| l.empty_rate).map(|r| r.0);
+    let elements = PlanContext {
+        rows: context.rows * (1.0 - empty_rate.unwrap_or(0.0)) * nested::mean_length(&length),
+        ..*context
+    };
     Ok(ValueSampler::List(Box::new(ListSampler {
-        element: column_plan(context, &element, &site.child(&element, "/list/element"))?,
+        element: column_plan(&elements, &element, &site.child(&element, "/list/element"))?,
         length,
-        empty: list.and_then(|l| l.empty_rate).map(|r| Bernoulli::new(r.0)),
+        empty: empty_rate.map(Bernoulli::new),
         large,
     })))
 }

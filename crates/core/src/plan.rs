@@ -125,7 +125,11 @@ pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Re
         return Err(PlanError::NoColumns { name: table.name.clone() });
     }
     let mut seen = BTreeSet::new();
-    let context = PlanContext { table: &table.name, seed };
+    let context = PlanContext {
+        table: &table.name,
+        seed,
+        rows: rows as f64,
+    };
     let mut planned = Vec::with_capacity(columns.len());
     for (index, column) in columns.iter().enumerate() {
         if !seen.insert(column.name.as_str()) {

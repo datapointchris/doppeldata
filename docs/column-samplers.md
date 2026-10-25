@@ -62,6 +62,53 @@ cargo run --release -p doppeldata-core --example throughput -- eight-columns --r
 `quality.invalid_rate` share of values. *Rejected:* the `luhn` crate. Its `checksum` allocates on
 every call, and it panics on lower-case input and on a `u8` overflow past about 28 digits.
 
+`email` is `first.last` at `example.com`, `example.net` or `example.org`, domains reserved so no
+generated address reaches anyone. That holds 3,007 × 474 × 3 = 4,275,954 addresses. *Rejected:*
+fake's `SafeEmail`. It is a first name at one of the three domains, so it holds 9,021 addresses.
+
+## A string column below a distinct ratio of 1 draws each value at an index
+
+A generated string is drawn fresh by default, so its distinct count is whatever the source
+yields. With `distinct.ratio`, a row instead draws an index from `0..K` on a stream of its own.
+The value at an index comes from a stream positioned at that index. So a value is a pure function
+of its index, no pool of values is held, and any block still generates alone.
+
+- **The target is `distinct.ratio` times the generated rows**, never `distinct.approx`. So a
+  10M-row run of a 100K-row profile holds 100 times the profiled distinct count, and its ratio
+  matches the profile's. A coded column such as a ZIP code might saturate at its profiled count
+  instead. One profile cannot show which, so the ratio holds.
+- **K is chosen so the expected count of distinct indices meets the target.** `n` uniform draws
+  from `0..K` hold `K · (1 − e^(−n/K))` distinct indices. `n` counts the rows not null.
+- **A source whose strings can be counted has its collisions counted too.** `m` distinct indices
+  drawn into `S` equally likely strings give `S · (1 − e^(−m/S))` distinct strings, so the index
+  target is raised to meet the value target. A pattern is counted from its syntax, as if every
+  string were equally likely. A shape is counted per character at its rate. `email`, `city`, and
+  the providers drawing one entry of one list are counted from fake's lists. Characters and
+  every other provider are uncounted, and each distinct index is taken as a distinct string.
+- **Where fresh draws reach no more than the target, the column draws fresh**, with no index. A
+  ratio of 1 is always that case. So is a source whose variety sits below the target, which caps
+  the column's distinct count.
+- **With `top_values`, the index covers only the `other` share**, and the target subtracts the
+  top values' count.
+- **A check digit draws from the value's stream, after the value**, so whether a value's digit is
+  wrong is a function of its index too.
+- **A list element's rows are the elements its lists are expected to hold**: the list's rows,
+  times the non-empty share, times the mean length.
+
+On 1M rows of the bundled `orders` example, at seed 42 and stream version 2:
+
+| Column | Source | Profiled ratio | Indexed, uncounted | Indexed, counted |
+| --- | --- | --- | --- | --- |
+| `ship_zip` | pattern `^\d{5}$`, 100,000 strings | 0.09 | 0.059167 | 0.089921 |
+| `customer_email` | `email`, 4,275,954 strings | 0.195 | 0.190699 | 0.195046 |
+
+The ratios are each column's distinct values, nulls left out, over all rows, read by Polars from
+the file this writes:
+
+```bash
+cargo run --release -p doppeldata-core --example throughput -- orders --rows 1000000 --repeat 0 --ipc orders.arrow
+```
+
 ## A temporal column is uniform over its range unless the profile weights it
 
 With no `by_month`, `by_dow` or `by_hour` and no `gap_rate`, a value is uniform over the extremes at

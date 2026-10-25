@@ -43,10 +43,13 @@ Every (seed, table, column path, perturbation) derives its own ChaCha8 stream fr
 name. So adding, removing or reordering a column leaves every other column's values unchanged.
 
 Within a column, each kind of draw has its own stream: the values, the null mask, the `type_mix`
-errors, the missing-value tokens, the wrong check digits and a list's lengths. The values stream
-draws a value for every row, a null row's included. So a column's values do not move when its null
-rate, its error rate or its tokens change. A nested field's streams are named by its dotted path, so
-it draws the same whatever its siblings are.
+errors, the missing-value tokens, the wrong check digits, a list's lengths and a generated
+string's index. The values stream draws a value for every row, a null row's included. So a
+column's values do not move when its null rate, its error rate or its tokens change. A nested
+field's streams are named by its dotted path, so it draws the same whatever its siblings are.
+
+A string column drawn by index takes each value from its `indexed_values` stream, positioned at
+the index rather than the block. So the value at an index is the same in every block that draws it.
 
 A copula group, the set of numeric columns correlated through one matrix, draws from one stream keyed
 by its sorted column names. Adding an unrelated column changes nothing. Adding a column to the group

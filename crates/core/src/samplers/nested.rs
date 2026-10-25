@@ -21,6 +21,20 @@ use crate::rng::Bernoulli;
 use crate::rng::rng_for;
 use crate::rng::unit;
 
+/// A list's length at level `u` of its length distribution.
+fn length_at(length: &InverseCdf, u: f64) -> usize {
+    length.value_at(u).round().max(0.0) as usize
+}
+
+/// The mean length a non-empty list draws, over evenly spaced levels.
+pub(crate) fn mean_length(length: &InverseCdf) -> f64 {
+    const LEVELS: u32 = 4096;
+    let total: usize = (0..LEVELS)
+        .map(|level| length_at(length, (f64::from(level) + 0.5) / f64::from(LEVELS)))
+        .sum();
+    total as f64 / f64::from(LEVELS)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ListSampler {
     pub(crate) element: ColumnPlan,
@@ -46,7 +60,7 @@ impl ListSampler {
                 if self.empty.is_some_and(|empty| empty.draw(&mut rng)) {
                     0
                 } else {
-                    self.length.value_at(unit(&mut rng)).round().max(0.0) as usize
+                    length_at(&self.length, unit(&mut rng))
                 }
             })
             .collect();

@@ -146,6 +146,23 @@ columns:
   - name: large_characters
     physical_type: large_string
     string: {length: {min: 1, max: 3}}
+  - name: pattern_at_distinct_ratio
+    null_rate: 0.1
+    distinct: {ratio: 0.05}
+    string: {pattern: '^\d{4}$'}
+  - name: check_digit_at_distinct_ratio
+    distinct: {ratio: 0.03}
+    quality: {invalid_rate: 0.2}
+    semantic: {generator_hint: {pattern: '^4\d{15}$', check_digit: luhn}}
+  - name: provider_at_distinct_ratio
+    distinct: {ratio: 0.02}
+    semantic: {generator_hint: {provider: city}}
+  - name: top_values_with_indexed_other
+    distinct: {ratio: 0.01}
+    string:
+      top_values: [{value: shipped, rate: 0.6}, {value: pending, rate: 0.3}]
+      other_rate: 0.1
+      shapes: [{shape: AA99, rate: 0.8}, {shape: aaa, rate: 0.2}]
   - name: integer_with_foreign_text
     physical_type: int64
     type_mix: {integer: 0.9, string: 0.06, decimal: 0.04}
@@ -168,6 +185,11 @@ columns:
     physical_type: large_list
     list:
       element: {name: element, physical_type: int16, numeric: {integral: true, extremes: {low: 0.0, high: 9.0}}}
+  - name: list_element_at_distinct_ratio
+    logical_type: array
+    list:
+      length: {p50: 3}
+      element: {name: element, distinct: {ratio: 0.01}, string: {shapes: [{shape: AA99, rate: 1.0}]}}
   - name: address
     logical_type: object
     struct:
