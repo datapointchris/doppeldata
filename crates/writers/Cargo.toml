@@ -1,0 +1,42 @@
+[package]
+name = "doppeldata-writers"
+description = "Writes doppeldata's generated blocks as Parquet, Arrow IPC, CSV and JSON files to any object store, with a manifest."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+arrow-array = "59"
+arrow-cast = "59"
+arrow-ipc = { version = "59", features = ["lz4", "zstd"] }
+arrow-json = "59"
+arrow-schema = "59"
+arrow-select = "59"
+bytes = "1.1"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+csv = "1.4.0"
+doppeldata-core = { path = "../core" }
+encoding_rs = "0.8.42"
+# zlib-rs is the backend parquet's own gzip uses, so one build carries one deflate implementation.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+futures = "0.3"
+object_store = { version = "0.14.2", features = ["aws"] }
+# parquet's own `object_store` feature stays off. parquet 59 takes object_store 0.13, and
+# pyo3-object_store needs 0.14, while arrow stays on 59 for pyo3-arrow. The writers drive the sync
+# ArrowWriter into their own byte sink, which uploads through object_store's BufWriter, so the
+# feature would buy nothing.
+parquet = { version = "59", default-features = false, features = ["arrow", "snap", "zstd", "lz4", "flate2-zlib-rs", "simdutf8"] }
+rand = "0.10.3"
+rand_chacha = "0.10.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "io-util", "net", "time"] }
+zstd = { version = "0.13", default-features = false }
+
+[dev-dependencies]
+serde-saphyr = "2.0.0"
