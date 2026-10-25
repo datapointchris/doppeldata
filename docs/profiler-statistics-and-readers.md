@@ -18,7 +18,8 @@ A profile is one aggregate over every column, then a second that counts rows aga
 edges and value lists the first one chose, then the frequency counts, then samples. Values are
 counted only in string columns holding at most `TOP_VALUES_THRESHOLD` distinct values, the
 `DEFAULT_CARDINALITY_THRESHOLD` of Deequ's column profiler. Every string column's shapes are counted.
-One sample feeds grex and the date-layout trial, and another the distribution fits.
+One sample of the parsed table feeds grex and the semantic detectors, and another the distribution
+fits. The date-layout trial samples the raw text before it is parsed.
 
 ## A column's quantiles and bin edges come from one sort
 
@@ -100,14 +101,15 @@ parameters write two profiles, and those generate different tails.
 `profile(..., edges_from=earlier)` takes an earlier profile of the same table, and `profile create
 --edges-from FILE` reads one.
 
-- **Where nothing it was made from has changed, the earlier profile is returned as it is.** Its
-  `generated` fields named in `DERIVED_FROM` must equal the ones this run would write: the listing's
-  `source_fingerprint`, the engine, the `tool` and the `fitter`. Its `k_min` and sampling must match
-  the run's too. So a reviewer's edits survive a re-run, while a new doppeldata, or a scipy installed
-  since, profiles again. A profile of every row stands for a sampled run too. The fingerprint hashes
-  each file's resolved path, so the same files match from any working directory. `profile create`
-  says on stderr when it returns the earlier profile. No cache directory is written, because the
-  library runs inside Glue executors.
+- **Where nothing it was made from has changed, the earlier profile is returned as it is.** Each
+  `generated` field `GENERATED_FIELDS` in `doppeldata.profile_format` marks `derived_from`, such as
+  `source_fingerprint` and `tool`, must equal the one this run would write. Its `k_min` and sampling
+  must match the run's too. So a reviewer's edits survive a re-run, while a new doppeldata, a scipy
+  installed since, or a detector pack enabled or upgraded, profiles again. A profile of every row
+  stands for a sampled run too. The fingerprint hashes each file's resolved path, so the same files
+  match from any working directory. `profile create` says on stderr when it returns the earlier
+  profile. Otherwise a `ProfilingWarning` names the first thing that differs, which `profile create`
+  prints. No cache directory is written, because the library runs inside Glue executors.
 - **Otherwise each column is counted against the earlier histogram edges and value list.** Values
   outside the edges are written as `histogram.overflow`, `below` and `above`. A column only one of
   the two tables holds issues one `ColumnsNotFrozen` warning naming it.

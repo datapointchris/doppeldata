@@ -17,7 +17,7 @@ class SourceError(DoppeldataError, ValueError):
         self.exit_code = exit_code
 
 
-# Each kind of stopped write, and the exit status a command ends on for it.
+# Each kind of failure, such as a stopped write's, and the exit status a command ends on for it.
 EXIT_CODES = {'failed': 1, 'refused': 2, 'unanswered': 4}
 
 
@@ -58,6 +58,18 @@ class ProfilingEnginesMissing(DoppeldataError, ImportError):
             f'profiling with {engine} needs {", ".join(missing)}, which doppeldata does not install; '
             f'run `pip install {" ".join(missing)}`, or install doppeldata-cli, which declares them'
         )
+
+
+class DetectorPackError(DoppeldataError):
+    """A detector pack named for a run is not installed, does not load, or holds what the profile format refuses.
+
+    `kind` is `refused` for a pack that is not installed, and `failed` for any other.
+    """
+
+    def __init__(self, message: str, *, kind: str = 'failed') -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.exit_code = EXIT_CODES[kind]
 
 
 class ProfilingWarning(UserWarning):

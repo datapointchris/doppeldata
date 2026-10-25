@@ -8,6 +8,7 @@ from doppeldata.dataset_generation import plan
 from doppeldata.dataset_generation import stream
 from doppeldata.dataset_generation import write
 from doppeldata.errors import ColumnsNotFrozen
+from doppeldata.errors import DetectorPackError
 from doppeldata.errors import DoppeldataError
 from doppeldata.errors import FitsSkipped
 from doppeldata.errors import PoorFits
@@ -29,6 +30,7 @@ __all__ = [
     'Bundle',
     'ColumnSampler',
     'ColumnsNotFrozen',
+    'DetectorPackError',
     'DoppeldataError',
     'FitsSkipped',
     'InvalidProfile',

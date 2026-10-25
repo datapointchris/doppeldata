@@ -3,6 +3,7 @@
 import dataclasses as dc
 import importlib.resources
 import json
+from typing import Any
 
 from doppeldata import _core
 
@@ -28,7 +29,28 @@ def schema_text(name: str) -> str:
 
 def published_enum(definition: str) -> list[str]:
     """The values the profile schema allows for one of its string enums, such as `SourceFormat`."""
-    return list(json.loads(schema_text('profile'))['$defs'][definition]['enum'])
+    return enum_values(profile_definitions()[definition])
+
+
+def published_fields(definition: str) -> dict[str, list[str] | None]:
+    """Each field of one of the profile schema's objects, such as `GeneratorHint`, with the values it allows where it is an enum."""
+    definitions = profile_definitions()
+    fields: dict[str, list[str] | None] = {}
+    for field, schema in definitions[definition]['properties'].items():
+        refs = [branch['$ref'] for branch in (schema, *schema.get('anyOf', ())) if '$ref' in branch]
+        fields[field] = enum_values(definitions[refs[0].rsplit('/', 1)[1]]) if refs else None
+    return fields
+
+
+def profile_definitions() -> dict[str, Any]:
+    definitions: dict[str, Any] = json.loads(schema_text('profile'))['$defs']
+    return definitions
+
+
+def enum_values(schema: dict[str, Any]) -> list[str]:
+    """An enum's values. One whose values carry descriptions is published as a `oneOf`, of constants and of the undescribed rest."""
+    branches = schema.get('oneOf', [schema])
+    return [value for branch in branches for value in (branch['enum'] if 'enum' in branch else [branch['const']])]
 
 
 def output_formats() -> list[str]:

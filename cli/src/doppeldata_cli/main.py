@@ -10,6 +10,7 @@ from typing import Any
 
 import doppeldata
 import typer
+from doppeldata import DetectorPackError
 from doppeldata import DoppeldataError
 from doppeldata import InvalidProfile
 from doppeldata import Profile
@@ -161,9 +162,17 @@ def profile_create(
             metavar='FILE',
             help=(
                 "Count each column against FILE's histogram edges and value list, writing the rows outside them as overflow. "
-                'FILE is returned unchanged when the files, the settings, and the doppeldata and scipy versions '
-                'match the ones it was made with.'
+                'FILE is returned unchanged when nothing it was made from has changed: the files, the settings, '
+                'and the versions of the tools and detector packs that wrote it.'
             ),
+        ),
+    ] = None,
+    packs: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--pack',
+            metavar='NAME',
+            help=('Also type columns with the installed detector pack NAME; repeat it for more than one. The general pack is always on.'),
         ),
     ] = None,
 ) -> None:
@@ -180,11 +189,15 @@ def profile_create(
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', ProfilingWarning)
-            profiled = profile(data, sample=sample, k_min=k_min, edges_from=earlier)
+            profiled = profile(data, sample=sample, k_min=k_min, edges_from=earlier, packs=packs or ())
     except SourceError as error:
         if error.exit_code != 2:
             raise
         raise typer.BadParameter(str(error), param_hint='DATA') from error
+    except DetectorPackError as error:
+        if error.kind != 'refused':
+            raise
+        raise typer.BadParameter(str(error), param_hint='--pack') from error
     except InvalidProfile:
         typer.echo('doppeldata: the profile it wrote fails its own schema, which is a bug in doppeldata:', err=True)
         raise

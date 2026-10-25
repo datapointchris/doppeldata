@@ -66,6 +66,14 @@ const DEFAULT_LIST_LENGTH: (f64, f64) = (0.0, 4.0);
 /// The most extra repeats a pattern's `*`, `+` or `{n,}` generates.
 const PATTERN_MAX_REPEAT: u32 = 16;
 
+pub use text::check_digit_holds;
+
+/// Why the engine cannot generate from `pattern`, as planning a profile that stores it refuses
+/// it, or None when it can.
+pub fn pattern_problem(pattern: &str) -> Option<String> {
+    text::compile_pattern(pattern, PATTERN_MAX_REPEAT).err()
+}
+
 /// Where a block sits: the seed, the block's number, and the dataset row its first row is.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BlockPosition {

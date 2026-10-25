@@ -50,7 +50,7 @@ pub mod provenance {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Profile {
     Table(Box<TableProfile>),
-    Bundle(BundleProfile),
+    Bundle(Box<BundleProfile>),
 }
 
 /// The profile's JSON Schema (Draft 2020-12), as the library ships it.

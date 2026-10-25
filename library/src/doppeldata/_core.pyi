@@ -101,6 +101,12 @@ class WriteOptions:
         The format, every setting it writes with, and the layout, as the manifest records them.
         """
 
+def check_digits_hold(kind: str, values: SupportsGetItem[int, str]) -> list[bool]:
+    """
+    Whether each value holds the check digit ``kind`` names, such as ``luhn``, where generation
+    writes one: its last digit, computed from the digits before it.
+    """
+
 def destination_scheme(url: str) -> tuple[str, str |None]:
     """
     What ``url`` names as a write's destination: ``("local", None)``, ``("s3", bucket)`` or
@@ -124,6 +130,12 @@ def generalize_pattern(values: SupportsGetItem[int, str]) -> str |None:
     """
     The anchored regular expression grex generalizes the values to, with each digit as a digit
     class, or None when it would hold a literal or a character class only some values have.
+    """
+
+def pattern_problem(pattern: str) -> str |None:
+    """
+    Why the engine cannot generate from ``pattern``, as planning a profile that stores it
+    refuses it, or None when it can.
     """
 
 def schema_file_names() -> dict[str, str]:

@@ -7,6 +7,7 @@ import math
 import random
 import warnings
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 from typing import Any
 
 from ruamel.yaml.comments import CommentedMap
@@ -15,6 +16,7 @@ from ruamel.yaml.comments import CommentedSeq
 from doppeldata import _core
 from doppeldata.errors import FitsSkipped
 from doppeldata.errors import PoorFits
+from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
 from doppeldata.profiling import text_types
 from doppeldata.profiling.backend import TEXT_FORMATS
@@ -23,6 +25,7 @@ from doppeldata.profiling.backend import ColumnSpec
 from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import Table
+from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.statistic_catalog import COLUMN_STATISTICS
 from doppeldata.profiling.statistic_catalog import NUMERIC
 from doppeldata.profiling.statistic_catalog import PROFILED
@@ -33,11 +36,17 @@ from doppeldata.profiling.statistic_catalog import FrequencyKey
 from doppeldata.profiling.statistic_catalog import shape_of
 from doppeldata.profiling.text_types import TextColumn
 
+if TYPE_CHECKING:
+    import pyarrow as pa
+
+    from doppeldata.profiling.semantic_types import Typing
+
 # Deequ's DEFAULT_CARDINALITY_THRESHOLD: a column with no more distinct values than this has its values counted.
 TOP_VALUES_THRESHOLD = 120
 SHAPES_KEPT = 20
 SAMPLE_SEED = 0
-PATTERN_SAMPLE_ROWS = 10_000
+# One seeded sample of this many rows feeds grex and the semantic detectors.
+VALUE_SAMPLE_ROWS = 10_000
 PATTERN_VALUES = 1_000
 # A pattern stands for the dominant shape, and the generator prefers it to the shapes, so it is
 # stored only where that shape holds most of the values.
@@ -59,9 +68,9 @@ FIT_SAMPLE_ROWS = 20_000
 # A column with fewer distinct values is better described by its frequencies than by a family.
 FIT_MIN_DISTINCT = 50
 FITTED_FAMILIES_MODULE = 'doppeldata.profiling.fitted_families'
+# Imported by name, because it imports pyarrow, which a library-only install lacks.
+SEMANTIC_TYPES_MODULE = 'doppeldata.profiling.semantic_types'
 TOOL = f'doppeldata {_core.VERSION}'
-# The `generated` fields that, beside the rows, `k_min` and the sampling, decide what profiling writes.
-DERIVED_FROM = ('tool', 'engine', 'fitter', 'source_fingerprint')
 LOGICAL_TYPES = {
     ColumnKind.INTEGER: 'integer',
     ColumnKind.FLOAT: 'number',
@@ -128,11 +137,18 @@ def answered(backend: Backend, table: Table, requests: list[Request]) -> Answers
 
 
 def profile_table(
-    backend: Backend, source: Source, *, sample: int | None, k_min: int, frozen: FrozenLayout | None = None
+    backend: Backend,
+    source: Source,
+    *,
+    sample: int | None,
+    k_min: int,
+    packs: list[EnabledPack],
+    frozen: FrozenLayout | None = None,
 ) -> dict[str, Any]:
     """The profile document of `source`, from every row or from a seeded sample of `sample` rows.
 
-    With `frozen`, each column it names is counted against the earlier profile's edges and value list.
+    The detectors of `packs` type each column `semantic_types.detected_columns` names. With `frozen`, each column it
+    names is counted against the earlier profile's edges and value list.
     """
     table = backend.scan(source)
     first = [Request(None, 'rows')]
@@ -166,7 +182,11 @@ def profile_table(
         for spec in specs
         if spec.kind is ColumnKind.STRING
     }
-    patterns = generalized_patterns(backend, table, shapes, stats, described, k_min)
+    detection = importlib.import_module(SEMANTIC_TYPES_MODULE)
+    detected = detection.detected_columns(specs, packs)
+    value_sample = backend.sample(table, VALUE_SAMPLE_ROWS, SAMPLE_SEED) if detected else None
+    patterns = generalized_patterns(value_sample, shapes, stats, described, k_min)
+    typings = detection.column_typings(value_sample, detected, patterns, k_min) if value_sample else {}
     distinct: dict[str, tuple[int, int]] = {
         spec.name: (whole_distinct[spec.name] if spec.name in whole_distinct else stats[(spec.name, 'distinct_count')], rows)
         for spec in specs
@@ -186,6 +206,7 @@ def profile_table(
             shapes,
             patterns,
             ColumnLayout(binnings.get(spec.name), listed.get(spec.name), spec.name in fits, fits.get(spec.name)),
+            typings.get(spec.name),
             k_min,
         )
         for spec in specs
@@ -193,7 +214,7 @@ def profile_table(
     generated: dict[str, Any] = {
         'tool': TOOL,
         'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
-    } | derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None)
+    } | derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None, packs)
     generated['sample'] = {'strategy': 'reservoir', 'rows_read': described} if described < rows else {'strategy': 'full'}
     document: dict[str, Any] = {
         'profile_version': _core.FORMAT_VERSION,
@@ -209,10 +230,16 @@ def profile_table(
     return reviewable(document)
 
 
-def derivation(engine: str, fingerprint: str | None, fitter: str | None) -> dict[str, str]:
-    """The `DERIVED_FROM` fields a profile made now with this engine, listing and fitter writes."""
-    values = (TOOL, engine, fitter, fingerprint)
-    return {field: value for field, value in zip(DERIVED_FROM, values, strict=True) if value is not None}
+def derivation(engine: str, fingerprint: str | None, fitter: str | None, packs: list[EnabledPack]) -> dict[str, Any]:
+    """The `DERIVED_FROM` fields a profile made now with this engine, listing, fitter and detector packs writes."""
+    values = {
+        'tool': TOOL,
+        'engine': engine,
+        'fitter': fitter,
+        'detector_packs': {enabled.pack.name: enabled.provided_by for enabled in packs},
+        'source_fingerprint': fingerprint,
+    }
+    return {field: values[field] for field in DERIVED_FROM if values[field] is not None}
 
 
 def fitting_module() -> tuple[Any, str | None]:
@@ -264,6 +291,7 @@ def column_entry(
     shapes: dict[str, list[tuple[str, int]]],
     patterns: dict[str, str],
     layout: ColumnLayout,
+    typing: 'Typing | None',
     k_min: int,
 ) -> dict[str, Any]:
     """One column's entry. `distinct` holds each column's distinct count and the rows it was counted over."""
@@ -296,6 +324,8 @@ def column_entry(
         entry['temporal'] = temporal_section(spec, stat, values, text, k_min)
     elif spec.kind is ColumnKind.BOOLEAN:
         entry['boolean'] = {'true_rate': significant(stat('true_rate'), RATE_DIGITS)}
+    if typing:
+        entry |= semantic_sections(typing)
     return entry
 
 
@@ -471,18 +501,35 @@ def top_values(kept: list[tuple[Any, int]], other: int, values: int) -> dict[str
     }
 
 
+def semantic_sections(typing: 'Typing') -> dict[str, Any]:
+    """A typed column's `semantic` section, and its `quality` where a validator counted the values failing it."""
+    detector = typing.candidate.detector
+    semantic: dict[str, Any] = {
+        'type': detector.type,
+        'pack': typing.candidate.pack,
+        'confidence': significant(typing.confidence, RATE_DIGITS),
+        'detectors': typing.methods,
+        'sensitivity': detector.sensitivity,
+    }
+    if typing.generator_hint:
+        semantic['generator_hint'] = typing.generator_hint
+    sections: dict[str, Any] = {'semantic': semantic}
+    if typing.passed is not None:
+        sections['quality'] = {'invalid_rate': rate(typing.sampled - typing.passed, typing.sampled)}
+    return sections
+
+
 def generalized_patterns(
-    backend: Backend, table: Table, shapes: dict[str, list[tuple[str, int]]], stats: Answers, described: int, k_min: int
+    sample: 'pa.Table | None', shapes: dict[str, list[tuple[str, int]]], stats: Answers, described: int, k_min: int
 ) -> dict[str, str]:
-    """Each string column's pattern, generalized from sampled values of its dominant shape by grex."""
+    """Each string column's pattern, generalized by grex from the sampled values of its dominant shape."""
     dominant = {
         name: counted[0][0]
         for name, counted in shapes.items()
         if counted and counted[0][1] >= PATTERN_SHAPE_SHARE * (described - stats[(name, 'null_count')])
     }
-    if not dominant:
+    if not dominant or sample is None:
         return {}
-    sample = backend.sample(table, PATTERN_SAMPLE_ROWS, SAMPLE_SEED)
     patterns = {}
     for name, shape in dominant.items():
         matching = [value for value in sample.column(name).to_pylist() if value is not None and shape_of(value) == shape]

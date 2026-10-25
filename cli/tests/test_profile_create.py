@@ -1,8 +1,10 @@
 import datetime as dt
 import math
 import random
+import uuid
 
 import polars as pl
+import pytest
 from doppeldata import Profile
 from doppeldata_cli.main import app
 from typer.testing import CliRunner
@@ -53,6 +55,47 @@ def test_parquet_through_polars_and_csv_through_duckdb_profile_to_the_same_field
     assert {path: value for path, value in parquet.items() if path[-1] not in MOMENTS} == {
         path: value for path, value in csv.items() if path[-1] not in MOMENTS
     }
+
+
+def luhn_completed(payload: str) -> str:
+    total = sum(sum(divmod(int(digit) * (2 - position % 2), 10)) for position, digit in enumerate(reversed(payload)))
+    return payload + str(-total % 10)
+
+
+def test_the_general_pack_types_each_column_of_the_mixed_fixture(tmp_path):
+    rows, draw = 10_000, random.Random(11)
+    corrupted = set(draw.sample(range(rows), 30))
+    cards = [luhn_completed(draw.choice(['4', '51', '37']) + ''.join(draw.choices('0123456789', k=13))) for _ in range(rows)]
+    cards = [card[:-1] + str((int(card[-1]) + 1) % 10) if index in corrupted else card for index, card in enumerate(cards)]
+    table = pl.DataFrame(
+        {
+            'contact': [f'user{index}@mail{draw.randrange(9)}.example.com' for index in range(rows)],
+            'card_number': cards,
+            'ssn': [f'{draw.randint(1, 665):03d}-{draw.randint(1, 99):02d}-{draw.randint(1, 9999):04d}' for _ in range(rows)],
+            'event_id': [str(uuid.UUID(int=draw.getrandbits(128), version=4)) for _ in range(rows)],
+            'client_ip': ['.'.join(str(draw.randrange(256)) for _ in range(4)) for _ in range(rows)],
+            'ship_zip': [f'{draw.randrange(100_000):05d}' for _ in range(rows)],
+            'state': [draw.choice(['CA', 'NY', 'TX', 'WA', 'FL', 'MA', 'IL', 'OH']) for _ in range(rows)],
+            'last_name_id': draw.sample(range(10**6), rows),
+        }
+    )
+    table.write_parquet(tmp_path / 'mixed.parquet')
+    out = tmp_path / 'mixed.profile.yaml'
+    result = CliRunner().invoke(app, ['profile', 'create', str(tmp_path / 'mixed.parquet'), '--out', str(out)])
+    assert result.exit_code == 0, result.output
+
+    columns = {column['name']: column for column in Profile.load(out).to_plain()['columns']}
+    assert {name: (column.get('semantic') or {}).get('type') for name, column in columns.items()} == {
+        'contact': 'email',
+        'card_number': 'credit_card',
+        'ssn': 'us_ssn',
+        'event_id': 'uuid',
+        'client_ip': 'ipv4_address',
+        'ship_zip': 'us_zip',
+        'state': 'us_state',
+        'last_name_id': None,
+    }
+    assert columns['card_number']['quality']['invalid_rate'] == pytest.approx(0.003, abs=0.001)
 
 
 def test_a_log_uniform_column_is_fitted_as_the_loguniform_the_generator_reads(tmp_path):

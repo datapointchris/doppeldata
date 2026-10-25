@@ -632,13 +632,26 @@
       ]
     },
     "Detector": {
-      "type": "string",
-      "enum": [
-        "pattern",
-        "check_digit",
-        "presidio",
-        "glue",
-        "name_hint"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "check_digit",
+            "presidio",
+            "glue",
+            "name_hint"
+          ]
+        },
+        {
+          "description": "A regular expression matched the column's values.",
+          "type": "string",
+          "const": "pattern"
+        },
+        {
+          "description": "A check of the value other than a regular expression, such as a lookup or a parse.",
+          "type": "string",
+          "const": "validator"
+        }
       ]
     },
     "DifferentialPrivacy": {
@@ -865,7 +878,7 @@
       ]
     },
     "Generated": {
-      "description": "How and when the profile was made. `at`, `tool`, `fitter` and `source_fingerprint` are left out\nof the profile's digest.",
+      "description": "How and when the profile was made. `GENERATED_FIELDS` in the library's\n`doppeldata.profile_format` says which fields the profile's digest leaves out.",
       "type": "object",
       "properties": {
         "at": {
@@ -874,6 +887,16 @@
             "string",
             "null"
           ]
+        },
+        "detector_packs": {
+          "description": "Each detector pack the profiler typed columns with, by name, with the distribution that\nprovides it and its version, as `doppeldata <version>`.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "engine": {
           "anyOf": [
@@ -1921,6 +1944,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "pack": {
+          "description": "The detector pack whose detector assigned the type, such as `general`.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "sensitivity": {

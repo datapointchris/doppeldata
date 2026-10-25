@@ -26,7 +26,9 @@ pub use rng::STREAM_VERSION;
 pub use samplers::FITTED_FAMILIES;
 pub use samplers::FittedFamilyKind;
 pub use samplers::TextCell;
+pub use samplers::check_digit_holds;
 pub use samplers::file_rows_draws;
+pub use samplers::pattern_problem;
 pub use samplers::shape_of;
 pub use values_digest::values_digest;
 
