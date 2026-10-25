@@ -38,8 +38,9 @@ spark-parity/   the check that doppeldata.spark matches a local run inside each 
   declared nowhere, and its missing-import error names what to install.
 - **A change to a sampler's or a perturbation's draw order raises the engine's stream version**, and
   so does a change to how a scenario's patch merges, or the engine starting to read a profile field
-  it ignored before. So does a change to the hint `name_hinted_types.py` fills for a typed column,
-  which no hash pins because the engine's tests read the profile unfilled. The stream version is part
+  it ignored before. So does a change to the hint `name_hinted_types.py` fills for a typed column.
+  The engine's tests read the profile unfilled, so `library/tests/test_typed_column_hints.py` pins
+  a hash over the fill beside the stream version. The stream version is part
   of a generated dataset's identity. `docs/determinism-contract.md` says what else must never change.
   The determinism contract test pins the stream version and a hash over what
   `crates/core/tests/every-column-kind.profile.yaml` generates, as one pair. A second hash covers it
