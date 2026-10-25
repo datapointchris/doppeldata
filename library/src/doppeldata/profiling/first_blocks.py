@@ -11,9 +11,11 @@ from typing import Any
 
 import pyarrow as pa
 
+from doppeldata import _core
 from doppeldata.errors import SourceError
 
-FIRST_BLOCK_BYTES = 64 * 1024
+# Held by the writer too, which starts no invalid_utf8 fault inside it.
+FIRST_BLOCK_BYTES = _core.FIRST_BLOCK_BYTES
 # The compressed bytes read of an S3 object to give a first block, since text compresses to well under a quarter.
 COMPRESSED_BYTES_READ = 4 * FIRST_BLOCK_BYTES
 # The codec pyarrow decompresses each compressed suffix with.

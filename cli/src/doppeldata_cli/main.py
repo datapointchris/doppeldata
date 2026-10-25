@@ -41,6 +41,8 @@ from doppeldata.dataset_generation import prepared_write
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_resource
 from doppeldata.example_profiles import example_text
+from doppeldata.manifest import MANIFEST_FILE_NAME
+from doppeldata.manifest import PARTIAL_MANIFEST_FILE_NAME
 from doppeldata.privacy_policy import APPLIED_POLICIES
 from doppeldata.privacy_policy import DEFAULT_K_MIN
 from doppeldata.privacy_policy import ProfileFileCheck
@@ -80,7 +82,7 @@ def report_stopped_write(error: StoppedWrite) -> None:
     hint = '; rerun with --replace' if error.code == 'destination-not-empty' else ''
     typer.echo(f'doppeldata: {error}{hint}', err=True)
     if error.manifest is not None and error.manifest_stored and error.manifest.partial:
-        location = beside(error.manifest.document['destination'], '_manifest.partial.json')
+        location = beside(error.manifest.document['destination'], PARTIAL_MANIFEST_FILE_NAME)
         typer.echo(f'doppeldata: {location} lists the {counted(len(error.manifest.files), "file")} the write completed', err=True)
 
 
@@ -868,7 +870,7 @@ def data_generate(
     if one_file is not None and not manifest_beside:
         typer.echo(f'{one_file} holds dataset {manifest.dataset_digest}')
     else:
-        typer.echo(f'{beside(document["destination"], "_manifest.json")} names dataset {manifest.dataset_digest}')
+        typer.echo(f'{beside(document["destination"], MANIFEST_FILE_NAME)} names dataset {manifest.dataset_digest}')
 
 
 ID_PARAMETER = "Keys the op's random stream. Defaults to <op>:<column, or table>:<n>, n counting earlier entries of that op and column."

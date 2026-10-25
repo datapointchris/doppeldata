@@ -67,6 +67,22 @@ mod _core {
     #[pymodule_export]
     const DEFAULT_FILE_ROWS: u64 = doppeldata_core::manifest::DEFAULT_FILE_ROWS;
 
+    /// The name of the record a whole write leaves beside its files.
+    #[pymodule_export]
+    const MANIFEST_FILE_NAME: &str = doppeldata_core::manifest::MANIFEST_FILE_NAME;
+
+    /// The name of the claim a write holds its destination with, and the record a stopped write leaves.
+    #[pymodule_export]
+    const PARTIAL_MANIFEST_FILE_NAME: &str = doppeldata_core::manifest::PARTIAL_MANIFEST_FILE_NAME;
+
+    /// The name of the list of faults a write under `malformed_rows` leaves beside its files.
+    #[pymodule_export]
+    const FAULTS_FILE_NAME: &str = doppeldata_core::manifest::FAULTS_FILE_NAME;
+
+    /// The head of a text file the profiler reads its dialect, JSON layout and encoding from.
+    #[pymodule_export]
+    const FIRST_BLOCK_BYTES: u64 = doppeldata_writers::FIRST_BLOCK_BYTES;
+
     /// How often a call waiting on the engine checks for a signal, such as the interrupt Ctrl-C sends.
     const SIGNAL_CHECK: Duration = Duration::from_millis(100);
 

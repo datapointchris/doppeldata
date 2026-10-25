@@ -45,6 +45,11 @@ pub use write::write_ranges;
 pub use write_options::WriteChoices;
 pub use write_options::WriteOptions;
 
+/// The head of a text file doppeldata's profiler reads its dialect, JSON layout and encoding from.
+/// One invalid UTF-8 byte there reads the file as Latin-1, where no row is rejected, so no
+/// `invalid_utf8` fault starts in it.
+pub const FIRST_BLOCK_BYTES: u64 = 64 * 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {
     #[error(transparent)]

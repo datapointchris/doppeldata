@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+from doppeldata.manifest import FAULTS_FILE_NAME
 
 DUCKDB_TYPES = {'int64': 'BIGINT', 'int32': 'INTEGER', 'string': 'VARCHAR', 'timestamp[us, tz=UTC]': 'TIMESTAMPTZ'}
 READER = f'duckdb {duckdb.__version__}'
@@ -35,7 +36,7 @@ def data_files(dataset: Path, extension: str) -> list[Path]:
 
 
 def faults_of(dataset: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in (dataset / '_faults.ndjson').read_text().splitlines()]
+    return [json.loads(line) for line in (dataset / FAULTS_FILE_NAME).read_text().splitlines()]
 
 
 def rejected_lines(path: Path, columns: dict[str, str]) -> dict[int, str]:

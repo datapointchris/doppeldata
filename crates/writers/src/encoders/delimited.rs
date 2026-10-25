@@ -47,10 +47,6 @@ const MIN_ROOM: usize = 64;
 /// DuckDB's default `max_line_size`, which a `line_too_long` record passes.
 const DUCKDB_MAX_LINE_SIZE: usize = 2_097_152;
 
-/// The head of a file doppeldata's profiler guesses the encoding from. One invalid UTF-8 byte
-/// there reads the file as Latin-1, where no row is rejected, so no `invalid_utf8` starts in it.
-const ENCODING_GUESSED_FROM_BYTES: u64 = 64 * 1024;
-
 /// A dialect character, which must be one ASCII byte other than a line break.
 fn dialect_byte(name: &str, character: char) -> Result<u8, WriteError> {
     match u8::try_from(character) {
@@ -572,7 +568,7 @@ impl DelimitedEncoder {
                 self.put_fields(fields, width, Some((column, Replacement::Text(text.clone()))), one_column)?;
                 (Some(column), json!({"text": text}))
             }
-            FaultKind::InvalidUtf8 if file == Some(FaultKind::Latin1File) || start < ENCODING_GUESSED_FROM_BYTES => {
+            FaultKind::InvalidUtf8 if file == Some(FaultKind::Latin1File) || start < crate::FIRST_BLOCK_BYTES => {
                 self.put_fields(fields, width, None, one_column)?;
                 self.out.terminator()?;
                 return Ok(());

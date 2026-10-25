@@ -12,6 +12,7 @@ import botocore.exceptions
 
 from doppeldata.errors import SourceError
 from doppeldata.manifest import MANIFEST_FILE_NAME
+from doppeldata.manifest import PARTIAL_MANIFEST_FILE_NAME
 from doppeldata.manifest import Manifest
 from doppeldata.profiling.backend import FORMAT_TRAITS
 from doppeldata.profiling.backend import TEXT_CODEC_SUFFIXES
@@ -31,7 +32,7 @@ COMPRESSION_SUFFIXES = tuple(TEXT_CODEC_SUFFIXES)
 # Hadoop's names for S3, which a Spark user writes.
 HADOOP_S3_SCHEMES = ('s3a://', 's3n://')
 # A doppeldata write claims its destination with this file, and removes it once every file is written.
-UNFINISHED_WRITE = PurePosixPath('_manifest.partial.json')
+UNFINISHED_WRITE = PurePosixPath(PARTIAL_MANIFEST_FILE_NAME)
 
 
 def resolve(data: Any) -> Source:

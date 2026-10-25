@@ -20,9 +20,29 @@ DEFAULT_K_MIN: Final[int]
 The fewest rows a stored literal or cell rests on, where a profile states no `privacy.k_min`.
 """
 
+FAULTS_FILE_NAME: Final[str]
+"""
+The name of the list of faults a write under `malformed_rows` leaves beside its files.
+"""
+
+FIRST_BLOCK_BYTES: Final[int]
+"""
+The head of a text file the profiler reads its dialect, JSON layout and encoding from.
+"""
+
 FORMAT_VERSION: Final[int]
 """
 The profile format version the engine reads.
+"""
+
+MANIFEST_FILE_NAME: Final[str]
+"""
+The name of the record a whole write leaves beside its files.
+"""
+
+PARTIAL_MANIFEST_FILE_NAME: Final[str]
+"""
+The name of the claim a write holds its destination with, and the record a stopped write leaves.
 """
 
 STREAM_VERSION: Final[int]

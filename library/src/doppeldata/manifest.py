@@ -7,8 +7,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-MANIFEST_FILE_NAME = '_manifest.json'
-FAULTS_FILE_NAME = '_faults.ndjson'
+from doppeldata import _core
+
+MANIFEST_FILE_NAME = _core.MANIFEST_FILE_NAME
+PARTIAL_MANIFEST_FILE_NAME = _core.PARTIAL_MANIFEST_FILE_NAME
+FAULTS_FILE_NAME = _core.FAULTS_FILE_NAME
 
 
 @dc.dataclass(frozen=True)
