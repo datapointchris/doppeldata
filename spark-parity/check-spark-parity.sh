@@ -2,7 +2,7 @@
 # Checks doppeldata.spark against doppeldata run locally, in each Spark image named, one container at a time. Each generates
 # 10M rows of the eight-columns example through generate and write, with 7 and with 40 partitions.
 #
-#   library/spark-parity/check-spark-parity.sh WHEEL IMAGE...
+#   spark-parity/check-spark-parity.sh WHEEL IMAGE...
 #
 # WHEEL is the library's manylinux2014 x86_64 wheel. uv is mounted into each container, which inside-spark-image.sh uses to
 # give an image with no Python 3.11 one.
@@ -24,7 +24,7 @@ main() {
   trap 'rm -rf "$work"' EXIT
   cache=${XDG_CACHE_HOME:-$HOME/.cache}/doppeldata-spark-parity
   mkdir -p "$cache"
-  uv run --project "$here/../.." doppeldata data generate eight-columns --rows "$ROWS" --seed "$SEED" \
+  uv run --project "$here/.." doppeldata data generate eight-columns --rows "$ROWS" --seed "$SEED" \
     --file-rows "$FILE_ROWS" --out "$work/local" >&2
   for image in "$@"; do
     echo "== $image" >&2

@@ -149,6 +149,8 @@ Upload the zip, pass its `s3://` path to `--additional-python-modules`, and pass
 | `library/` | the `doppeldata` distribution: the compiled extension and the Python code over it |
 | `cli/` | the `doppeldata-cli` distribution: the `doppeldata` command over the library |
 | `docs/` | why the design is what it is |
+| `benchmarks/` | the scripts `task bench` runs to time the engine against numpy, Faker and Mimesis |
+| `spark-parity/` | the check that `doppeldata.spark` gives a local run's values and files inside each Spark image named |
 
 ## Develop
 
