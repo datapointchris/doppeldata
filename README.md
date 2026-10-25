@@ -21,6 +21,8 @@ doppeldata profile create s3://bucket/orders/ --sample 1000000     # a seeded sa
 doppeldata profile create data/orders/ --edges-from orders.profile.yaml --out orders.profile.yaml  # keep its bin edges
 doppeldata profile list                # the example profiles
 doppeldata profile show orders         # one of them, as YAML to start a profile from
+doppeldata profile diff march.profile.yaml april.profile.yaml  # how far April drifted from March
+doppeldata data check orders.profile.yaml out/orders/        # generated data against its profile
 doppeldata schemas show profile        # the JSON Schema every profile validates against
 
 doppeldata data plan orders --rows 1000000 --seed 7 --out orders/       # the files a write makes, and their size
@@ -61,6 +63,14 @@ bin edges and value lists, so the two compare bin for bin, and the rows outside 
 overflow. Where the files, the run's settings, the doppeldata and scipy versions and the detector
 packs match the ones the earlier profile was made with, it is kept as it is, with any edits a
 reviewer made. Otherwise `profile create` says what differs.
+
+`data check` profiles generated data with its profile's edges frozen, and never reads the real data.
+It measures each column against the profile by `ks`, `tvd`, `null_rate_delta`,
+`distinct_ratio_delta` and `boundary_adherence`, each with a threshold and a verdict, and exits 3
+when any fails. `profile diff` measures the same metrics between two profiles of one table, and
+lists each column, type, overflow, CSV setting and partition key that changed. It exits 1 on drift.
+`--thresholds FILE` sets each metric's threshold, and `--json` prints the report that `schemas show
+check` or `schemas show diff` describes.
 
 Each release's notes list what it does. Its commands and its profile format change without notice
 until 1.0.
