@@ -63,6 +63,7 @@ driver   commit ─── _manifest.json, claim removed
   `s3://` there.
 - **A path naming one file, such as `people.csv`, is refused with `one-file-from-executors`.** A
   local write stages that file and moves it into place, and no task can move what another wrote.
+  `people.csv/`, with the trailing slash, names a directory.
 - **The profile may be a list of column names, a dict of fakes and ranges, or a short YAML**, as
   for `sd.write`. The driver expands it before it plans.
 - **A retried or speculative task writes the same names with the same bytes.** An object is

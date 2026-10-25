@@ -19,11 +19,17 @@ doppeldata data generate --columns name,email,city,zip --rows 1000 --out people.
   `us_zip` and `email_address` an `email`. A provider matches its whole name, such as `city`, or an
   alias in `PROVIDER_HINTS` ending the name, such as `street` for `street_address`. So
   `billing_city` draws cities, and `city_count` matches nothing.
+- **A provider's own name draws that provider where its type draws another.** So `free_email` and
+  `state` draw as `sd.fakes.free_email` and `sd.fakes.state` do. A type drawn by a pattern keeps
+  it: `phone_number` takes the type's pattern over fake's numbers with extensions.
 - **A name matching nothing is refused, naming the closest fakes**, as `InvalidProfile` in Python
   and exit 2 on the command line. A column of random text would pass for data until someone read it.
+  Each says what to give instead where the name was written: a dict in Python, a short YAML on the
+  command line.
 
   ```text
-  /columns/zipp: 'zipp' names no fake; give the column one from sd.fakes, the closest being zip_code, ipv4, ipv6 [no-fake-for-name]
+  /columns/zipp: 'zipp' names no fake; give it one from sd.fakes, sd.integers, sd.decimals, sd.dates or sd.choice in a dict; the closest are zip_code [no-fake-for-name]
+  Invalid value for --columns: 'age' names no fake; give it a fake, a low..high range such as 18..90, or a list of values, in a short YAML
   ```
 
 - **Expanding the names imports no profiling engine.** The table of name hints sits in
@@ -54,7 +60,7 @@ table = sd.generate({
 - **`None` takes the column's fake from its name**, as the list does.
 - **Every call that generates takes the dict and the list**, Spark's included.
 
-## A short YAML holds the same columns, and every command reading a profile reads it
+## A short YAML gives each column a fake, a range or a list, and every command reading a profile reads it
 
 ```yaml
 rows: 1000
@@ -74,6 +80,9 @@ doppeldata data check people.yaml people.csv
 - **A column's value is a provider, a `low..high` range, a list, or empty.** A range of integers,
   numbers or ISO dates is `sd.integers`, `sd.decimals` or `sd.dates`. A list is `sd.choice`. Empty
   takes the name's fake.
+- **`0..1` is a range of integers.** Write `0.0..1` for decimals.
+- **Null shares, weights and decimal places need the dict or the expanded profile.** A short YAML
+  holds none of them.
 - **`rows` is the count `--rows` defaults to.** The table is named for the file, so this one is
   `people`.
 - **A file holding `profile_version` or `kind` is read as a full profile.**
@@ -81,19 +90,30 @@ doppeldata data check people.yaml people.csv
 ## A write to one local file writes that file alone
 
 `--out people.csv` writes `people.csv` and nothing beside it. The suffix is the name of a format
-`doppeldata schemas show manifest` lists, such as `.csv` or `.parquet`. An existing directory of
-that name is still written as a directory. `--manifest`, or `manifest=True` on `sd.write`, writes
-`_manifest.json` beside the file. A directory or S3 destination always holds one.
+`doppeldata schemas show manifest` lists, such as `.csv` or `.parquet`. `--manifest`, or
+`manifest=True` on `sd.write`, writes `_manifest.json` beside the file. A directory or S3
+destination always holds one.
 
-- **The file is staged in a directory made beside it, then moved into place whole.** So a write
-  that stops before the move leaves nothing.
+- **The path alone decides.** A suffixed path with no trailing `/` is one file, and
+  `--out events.parquet/` is a directory. A path with no format suffix, such as `--out people`, is
+  a directory too. An existing directory at a one-file path is refused as
+  `destination-is-a-directory`, exit 2, and `--replace` does not remove it.
+- **The file is staged in `.people.csv.doppeldata-staging` beside it, then moved into place
+  whole.** A write that fails, or that Ctrl-C or SIGTERM stops, removes the staging directory. A
+  write killed outright leaves it. The next write to the file then refuses, and `--replace`
+  removes it.
+- **`--replace` writes over the file**, whether or not doppeldata made it.
 - **A manifest recording only the file goes when the file is replaced**, with or without
   `--manifest`. So no manifest is left naming rows the file no longer holds. It goes before the
   file moves.
-- **A manifest recording other files refuses `--manifest`, exit 2, even with `--replace`.** It
-  belongs to those files. Write the second file to another directory.
+- **A directory whose manifest records other files refuses the write, exit 2, even with
+  `--replace`.** That directory is their dataset, and a reader of it would count the file's rows
+  among theirs. Write the file to another directory.
+- **`data check` finds the manifest beside the file** where it records that file alone, as it finds
+  one in a directory.
 - **One file refuses what would split it, exit 2.** That is `--file-rows`, `--partition-by`, a
-  `--format` its suffix does not name, and a scenario op that shapes the files.
+  `--format` its suffix does not name, and a scenario op that shapes the files. Writer settings
+  that change the file's extension are refused too, such as gzip, which writes `.csv.gz`.
 - **`sd.spark.write` refuses one file**, with `one-file-from-executors`. Its executors write their
   own objects, and none of them can move a staged file into place.
 - **No rows write no file**, as they write none in a directory.

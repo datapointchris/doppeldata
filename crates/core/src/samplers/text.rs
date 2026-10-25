@@ -152,8 +152,8 @@ const ICD10CM_EXTENSION_PER_MILLE: [u32; 5] = [19, 103, 149, 205, 524];
 const ICD10CM_EXTENSION_LETTER_AT: usize = 3;
 /// An HCPCS Level II code's letter is one of A to V.
 const HCPCS_LEVEL2_LETTERS: u32 = 22;
-/// A US ZIP code's digits, and the codes they spell. fake's `ZipCode` draws three and four as often
-/// as five.
+/// A US ZIP code's digits, and the codes they spell. fake 5.1's `ZipCode` picks three, four or
+/// five digits uniformly.
 const ZIP_CODE_DIGITS: usize = 5;
 const ZIP_CODES: f64 = 100_000.0;
 

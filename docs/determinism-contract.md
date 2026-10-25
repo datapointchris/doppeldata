@@ -88,7 +88,8 @@ Any change to a sampler's draw order raises the stream version. So does the engi
 a profile field it ignored before, because a profile that carries the field then generates
 different values. The library fills a typed column's generator hint where the column has none, and
 the profile's digest is taken before the fill. So a change to the hint a type fills, or to which
-columns take one, raises the stream version too. The engine never sees the fill, so a library test
+columns take one, raises the stream version too. The fill reads the type alone, never the column's
+name, so a name hint added for detection moves no value. The engine never sees the fill, so a library test
 pins a hash over the hints it writes, beside the stream version. The stream version is part of a dataset's identity, so a dataset generated
 before the change is still named exactly. An encoder upgrade or a change to the file-size draw
 moves bytes and leaves every value alone. The manifest's `tool` names the version that wrote the

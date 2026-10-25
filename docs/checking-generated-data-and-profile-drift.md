@@ -79,14 +79,17 @@ largest of their three distances, over those both profiles hold. It cannot see a
 hour or one month. `gap_rate` is not measured, because which days are empty is a seeded draw no
 profile records.
 
-## `null_rate_delta` subtracts the gap sampling puts between two null rates
+## `null_rate_delta` and `zero_rate_delta` subtract the gap sampling puts between two rates
 
 A null rate is a share of every row, so it is `tvd` over two categories, null and not null. Two
 profiles of one rate `p`, over `n_a` and `n_b` rows, lie about
 `sqrt(2/π · p(1 − p) · (1/n_a + 1/n_b))` apart by chance. That is subtracted, and the value is
-never below 0. A profile stating no `dataset.row_count`, such as one expanded from a dict of fakes,
-adds no term, because its rate is the parameter itself. So a correct 5% null column drawn at 1,000
-rows passes the default threshold, and a column whose rate rose from 0 to 5% still fails.
+never below 0. A zero rate is a share of the values not null, so its `n` counts those.
+
+A profile stating no `dataset.row_count`, such as one expanded from a dict of fakes, adds no term.
+Its rate is the parameter itself. So a correct 5% null column drawn at 1,000 rows passes the
+default threshold on most seeds, where the raw difference failed about one seed in seven. A column
+whose rate rose from 0 to 5% still fails.
 
 ## `boundary_adherence` is read from the overflow counts
 
@@ -171,7 +174,8 @@ Arrow decimal type telling a decimal from a float.
 - **A check lists and passes a change a writer alone causes.** A Parquet write given
   `timestamp_unit` casts every timestamp column to that unit, and no unit reproduces a source's
   INT96. Data written as CSV or JSON reads back at the text reader's types, so an `int32` column
-  profiles as `int64`, and a decimal as a float.
+  profiles as `int64`, and a decimal as a float. A string column whose text the reader types as
+  another kind passes too, as a CSV's 16-digit card numbers read back as integers.
 - **A semantic type change passes where no detector pack both profiles ran declares the type.** A
   hand-written profile may carry any type, and one no pack declares is found in no data. A
   column's `semantic.pack` names the pack, and in a check the packs it ran name it for a column

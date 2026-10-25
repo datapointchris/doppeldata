@@ -121,7 +121,7 @@ doppeldata data check taxi.profile.yaml taxi-generated/
    replacing the faker library breaks no profile. A profile naming another fails validation.
    `icd10cm` and `hcpcs_level2` draw a code in the shape the healthcare pack types the column by.
    The code may name nothing in the code set, and `healthcare-policy.md` says how each is drawn.
-   `zip_code` is five digits, where fake's draws three and four as often as five.
+   `zip_code` is five digits, which fake 5.1's `ZipCode` is not.
 3. **A pattern**, from `generator_hint.pattern` or `string.pattern`. A line anchor is dropped,
    because a value is the whole line, and `\d` and the other classes are ASCII.
 4. **`shapes`**: a shape is drawn by rate, then each `A` becomes an upper-case letter, each `a` a

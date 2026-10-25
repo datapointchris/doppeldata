@@ -23,8 +23,9 @@ sd.generate(['name', 'email', 'city', 'zip'], rows=1000)   # an Arrow table of 1
 doppeldata data generate --columns name,email,city,zip --rows 1000 --out people.csv
 ```
 
-A dict sets ranges and categories, such as `{'age': sd.integers(18, 90), 'plan': sd.choice(['free', 'pro'])}`,
-and a short YAML holds the same. `doppeldata profile expand` writes the full profile any of them
+A dict sets ranges and categories, such as `{'age': sd.integers(18, 90), 'plan': sd.choice(['free', 'pro'])}`.
+A short YAML gives each column a fake, a `low..high` range or a list of values. Null shares, weights
+and decimal places need the dict. `doppeldata profile expand` writes the full profile any of them
 stands for. [Generating from Python and the command line](docs/generating-from-python-and-the-cli.md)
 climbs from there to a profile of real data.
 

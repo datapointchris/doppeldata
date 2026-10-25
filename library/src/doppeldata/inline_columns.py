@@ -10,7 +10,7 @@ import math
 from collections.abc import Sequence
 from typing import Any
 
-# The decimal places a choice's rates are written to. The profile accepts rates summing to 1 within 0.01.
+# The decimal places a choice's rates are written to, which keeps their sum within the profile's RATE_SUM_TOLERANCE of 1.
 RATE_PLACES = 6
 
 
