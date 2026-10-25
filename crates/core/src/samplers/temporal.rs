@@ -30,7 +30,9 @@ use rand_chacha::ChaCha8Rng;
 use rand_distr::Distribution;
 use rand_distr::weighted::WeightedAliasIndex;
 
+use super::Refusal;
 use super::numeric::primitive;
+use crate::plan::ColumnFault;
 use crate::profile::Granularity;
 use crate::profile::TemporalStats;
 use crate::rng::below;
@@ -192,14 +194,14 @@ impl TemporalSampler {
         stats: Option<&TemporalStats>,
         output: TemporalOutput,
         gap_days: impl FnOnce() -> ChaCha8Rng,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, Refusal> {
         let extremes = stats.and_then(|s| s.extremes.as_ref());
         let ticks_per_day = output.ticks_per_day();
-        let parse = |text: Option<&String>, default: &str| match text {
-            Some(text) => output
+        let parse = |text: Option<&String>, default: &str| {
+            let text = text.map_or(default, String::as_str);
+            output
                 .ticks(text)
-                .ok_or_else(|| format!("extreme {text:?} is not a {output:?} value")),
-            None => output.ticks(default).ok_or_else(|| format!("{output:?} has no default range")),
+                .ok_or_else(|| Refusal::new(ColumnFault::InvalidExtreme, format!("extreme {text:?} is not a {output:?} value")))
         };
         let (default_low, default_high) = if output.is_time_of_day() {
             ("00:00:00", "23:59:59.999999999")
@@ -257,11 +259,10 @@ impl TemporalSampler {
                 weights[order[at]] = 0.0;
             }
         }
-        let days = WeightedAliasIndex::new(weights).map_err(|error| format!("day weights are unusable: {error}"))?;
+        let unusable = |what: &'static str| move |error| Refusal::new(ColumnFault::UnusableRates, format!("{what} are unusable: {error}"));
+        let days = WeightedAliasIndex::new(weights).map_err(unusable("the day weights"))?;
         let hours = match by_hour {
-            Some(by_hour) => Some(
-                WeightedAliasIndex::new(by_hour.iter().map(|r| r.0).collect()).map_err(|error| format!("by_hour is unusable: {error}"))?,
-            ),
+            Some(by_hour) => Some(WeightedAliasIndex::new(by_hour.iter().map(|r| r.0).collect()).map_err(unusable("by_hour's rates"))?),
             None => None,
         };
         let ticks_per_hour = ticks_per_day / 24;

@@ -18,6 +18,7 @@ use crate::profile::provenance;
 use crate::rng::BLOCK_ROWS;
 use crate::samplers::BlockPosition;
 use crate::samplers::ColumnPlan;
+use crate::samplers::ColumnSite;
 use crate::samplers::PlanContext;
 use crate::samplers::TextCell;
 use crate::samplers::column_plan;
@@ -32,8 +33,52 @@ pub enum PlanError {
     DuplicateColumn { column: String },
     #[error("profile digest {digest:?} is not `sha256:` and 64 lowercase hex digits")]
     ProfileDigest { digest: String },
-    #[error("column {column:?}: {reason}")]
-    Column { column: String, reason: String },
+    /// A column the engine cannot generate. `field` is an RFC 6901 JSON Pointer into the profile,
+    /// as the library's own issues carry.
+    #[error("{field}: {message} [{code}]")]
+    Column { code: ColumnFault, field: String, message: String },
+}
+
+/// Why a column cannot be generated, as a code a caller can branch on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnFault {
+    /// `physical_type` names an Arrow type the engine does not write.
+    UnsupportedType,
+    /// The column holds a statistic the engine does not generate from yet.
+    NotGeneratedYet,
+    /// A fit names a family the engine inverts, with a parameter outside its domain.
+    InvalidFit,
+    /// A pattern that does not parse, or that no string matches.
+    InvalidPattern,
+    /// Quantiles or histogram edges that fall, or a quantile name with no level.
+    InvalidQuantiles,
+    /// Rates no alias table can draw from, such as all zero.
+    UnusableRates,
+    /// A temporal extreme that does not parse as the column's type.
+    InvalidExtreme,
+    StructWithoutFields,
+}
+
+impl ColumnFault {
+    /// The kebab-case code, in the form of the library's issue codes.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::UnsupportedType => "unsupported-type",
+            Self::NotGeneratedYet => "not-generated-yet",
+            Self::InvalidFit => "invalid-fit",
+            Self::InvalidPattern => "invalid-pattern",
+            Self::InvalidQuantiles => "invalid-quantiles",
+            Self::UnusableRates => "unusable-rates",
+            Self::InvalidExtreme => "invalid-extreme",
+            Self::StructWithoutFields => "struct-without-fields",
+        }
+    }
+}
+
+impl std::fmt::Display for ColumnFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.code())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -79,18 +124,13 @@ pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Re
     let mut seen = BTreeSet::new();
     let context = PlanContext { table: &table.name, seed };
     let mut planned = Vec::with_capacity(columns.len());
-    for column in columns {
+    for (index, column) in columns.iter().enumerate() {
         if !seen.insert(column.name.as_str()) {
             return Err(PlanError::DuplicateColumn {
                 column: column.name.clone(),
             });
         }
-        let path = column.path.as_deref().unwrap_or(&column.name);
-        let plan = column_plan(&context, column, path).map_err(|reason| PlanError::Column {
-            column: column.name.clone(),
-            reason,
-        })?;
-        planned.push(plan);
+        planned.push(column_plan(&context, column, &ColumnSite::top_level(index, column))?);
     }
     let identity = DatasetIdentity::new(profile_digest, seed, rows);
     let metadata = HashMap::from([

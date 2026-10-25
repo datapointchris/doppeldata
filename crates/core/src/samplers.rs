@@ -41,12 +41,13 @@ use self::text_cells::TextOnlyValues;
 use crate::physical_type;
 use crate::physical_type::Container;
 use crate::physical_type::PhysicalType;
+use crate::plan::ColumnFault;
+use crate::plan::PlanError;
 use crate::profile::Column;
 use crate::profile::GeneratorHint;
 use crate::profile::LogicalType;
 use crate::profile::StringStats;
 use crate::rng::Bernoulli;
-use crate::rng::draw;
 use crate::rng::rng_for;
 use crate::rng::stream_key;
 
@@ -71,7 +72,65 @@ pub(crate) struct PlanContext<'a> {
     pub(crate) seed: u64,
 }
 
-/// A column's stream names, hashed once.
+/// Why a sampler cannot be built, before the column's place in the profile is known.
+#[derive(Debug)]
+pub(crate) struct Refusal {
+    fault: ColumnFault,
+    message: String,
+}
+
+impl Refusal {
+    pub(crate) fn new(fault: ColumnFault, message: impl Into<String>) -> Self {
+        Self {
+            fault,
+            message: message.into(),
+        }
+    }
+}
+
+/// Where a column sits: the dotted path its streams are named by, and its JSON Pointer in the
+/// profile. A nested field's path is its own `path`, or its parent's and its name.
+pub(crate) struct ColumnSite {
+    path: String,
+    pointer: String,
+}
+
+impl ColumnSite {
+    /// The `index`th of the table's columns.
+    pub(crate) fn top_level(index: usize, column: &Column) -> Self {
+        Self {
+            path: column.path.clone().unwrap_or_else(|| column.name.clone()),
+            pointer: format!("/columns/{index}"),
+        }
+    }
+
+    /// `child`, which sits at `below` under this column's pointer.
+    fn child(&self, child: &Column, below: &str) -> Self {
+        Self {
+            path: child.path.clone().unwrap_or_else(|| format!("{}.{}", self.path, child.name)),
+            pointer: format!("{}{below}", self.pointer),
+        }
+    }
+
+    /// The error for a refusal of the statistic at `field` under this column.
+    fn refuse(&self, field: &str) -> impl FnOnce(Refusal) -> PlanError + use<> {
+        let field = format!("{}{field}", self.pointer);
+        move |refusal| PlanError::Column {
+            code: refusal.fault,
+            field,
+            message: refusal.message,
+        }
+    }
+
+    /// As [`Self::refuse`], for a reason from a function that fails in one way only.
+    fn refuse_as(&self, fault: ColumnFault, field: &str) -> impl FnOnce(String) -> PlanError + use<> {
+        let refuse = self.refuse(field);
+        move |message| refuse(Refusal::new(fault, message))
+    }
+}
+
+/// Every stream a column draws from, each named by the table, the column's path and what it draws,
+/// and hashed once.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StreamKeys {
     values: u64,
@@ -81,19 +140,22 @@ pub(crate) struct StreamKeys {
     missing_tokens: u64,
     invalid: u64,
     lengths: u64,
+    /// Drawn once at plan time, from block 0, to pick a date column's empty days.
+    gap_days: u64,
 }
 
 impl StreamKeys {
     fn new(table: &str, path: &str) -> Self {
-        let key = |name| stream_key(table, path, name);
+        let key = |draw| stream_key(table, path, draw);
         Self {
-            values: key(draw::VALUES),
-            nulls: key(draw::NULLS),
-            type_mix: key(draw::TYPE_MIX),
-            type_mix_text: key(draw::TYPE_MIX_TEXT),
-            missing_tokens: key(draw::MISSING_TOKENS),
-            invalid: key(draw::INVALID),
-            lengths: key(draw::LENGTHS),
+            values: key("values"),
+            nulls: key("nulls"),
+            type_mix: key("type_mix"),
+            type_mix_text: key("type_mix_text"),
+            missing_tokens: key("missing_tokens"),
+            invalid: key("invalid"),
+            lengths: key("lengths"),
+            gap_days: key("gap_days"),
         }
     }
 }
@@ -194,16 +256,17 @@ impl ColumnPlan {
     }
 }
 
-/// The plan for `column` at `path`, the dotted path its streams are named by.
-pub(crate) fn column_plan(context: &PlanContext, column: &Column, path: &str) -> Result<ColumnPlan, String> {
-    column_plan_present(context, column, path, 1.0)
+/// The plan for `column`, which sits at `site`.
+pub(crate) fn column_plan(context: &PlanContext, column: &Column, site: &ColumnSite) -> Result<ColumnPlan, PlanError> {
+    column_plan_present(context, column, site, 1.0)
 }
 
 /// As [`column_plan`], for a field present in `presence` of its parent's rows.
-fn column_plan_present(context: &PlanContext, column: &Column, path: &str, presence: f64) -> Result<ColumnPlan, String> {
-    let keys = StreamKeys::new(context.table, path);
-    let values = value_sampler(context, column, path)?;
-    let text_only = TextOnlyValues::new(column.type_mix.as_ref(), column.missing_tokens.as_ref())?;
+fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite, presence: f64) -> Result<ColumnPlan, PlanError> {
+    let keys = StreamKeys::new(context.table, &site.path);
+    let values = value_sampler(context, column, site, &keys)?;
+    let text_only = TextOnlyValues::new(column.type_mix.as_ref(), column.missing_tokens.as_ref())
+        .map_err(site.refuse_as(ColumnFault::UnusableRates, "/missing_tokens"))?;
     let may_be_null = column.nullable != Some(false);
     let null_rate = column.null_rate.map_or(0.0, |r| r.0);
     let null_share = if may_be_null { 1.0 - presence * (1.0 - null_rate) } else { 0.0 };
@@ -246,10 +309,10 @@ fn physical(column: &Column) -> Result<PhysicalType, String> {
     })
 }
 
-fn value_sampler(context: &PlanContext, column: &Column, path: &str) -> Result<ValueSampler, String> {
-    let scalar = match physical(column)? {
-        PhysicalType::Container(Container::Struct) => return struct_sampler(context, column, path),
-        PhysicalType::Container(container) => return list_sampler(context, column, path, container == Container::LargeList),
+fn value_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, keys: &StreamKeys) -> Result<ValueSampler, PlanError> {
+    let scalar = match physical(column).map_err(site.refuse_as(ColumnFault::UnsupportedType, "/physical_type"))? {
+        PhysicalType::Container(Container::Struct) => return struct_sampler(context, column, site),
+        PhysicalType::Container(container) => return list_sampler(context, column, site, container == Container::LargeList),
         PhysicalType::Scalar(data_type) => data_type,
     };
     let numeric = column.numeric.as_ref();
@@ -262,44 +325,43 @@ fn value_sampler(context: &PlanContext, column: &Column, path: &str) -> Result<V
             }));
         }
         let fit = match numeric.and_then(|n| n.fit.as_ref()) {
-            Some(fit) => FittedFamily::from_fit(fit)?,
+            Some(fit) => FittedFamily::from_fit(fit).map_err(site.refuse_as(ColumnFault::InvalidFit, "/numeric/fit"))?,
             None => None,
         };
         let stats = numeric.cloned().unwrap_or_else(empty_numeric_stats);
         return Ok(ValueSampler::Numeric(NumericSampler {
-            cdf: numeric::numeric_cdf(&stats, fit.as_ref())?,
+            cdf: numeric::numeric_cdf(&stats, fit.as_ref()).map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/numeric"))?,
             rounding: Rounding::for_column(numeric, &output),
             output,
         }));
     }
     if let Some(output) = TemporalOutput::from_type(&scalar) {
-        let gap_days = || rng_for(context.seed, stream_key(context.table, path, draw::GAP_DAYS), 0);
-        return Ok(ValueSampler::Temporal(TemporalSampler::new(
-            column.temporal.as_ref(),
-            output,
-            gap_days,
-        )?));
+        let gap_days = || rng_for(context.seed, keys.gap_days, 0);
+        let sampler = TemporalSampler::new(column.temporal.as_ref(), output, gap_days).map_err(site.refuse("/temporal"))?;
+        return Ok(ValueSampler::Temporal(sampler));
     }
     if scalar == DataType::Boolean {
         let true_rate = column.boolean.as_ref().and_then(|b| b.true_rate).map_or(0.5, |r| r.0);
         return Ok(ValueSampler::Boolean(Bernoulli::new(true_rate)));
     }
     let Some(output) = StringOutput::from_type(&scalar) else {
-        return Err(format!("{scalar} is not a type this engine generates"));
+        let message = format!("{scalar} is not a type this engine generates");
+        return Err(site.refuse_as(ColumnFault::UnsupportedType, "/physical_type")(message));
     };
     if column.temporal.is_some() {
-        return Err("a string column with temporal statistics is not generated yet".into());
+        let message = "a string column with temporal statistics is not generated yet".to_string();
+        return Err(site.refuse_as(ColumnFault::NotGeneratedYet, "/temporal")(message));
     }
     let string = column.string.as_ref();
     let hint = column.semantic.as_ref().and_then(|s| s.generator_hint.as_ref());
-    let source = text_source(string, hint)?;
+    let source = text_source(string, hint, site)?;
     let top_values = string.and_then(|s| s.top_values.as_ref()).filter(|values| !values.is_empty());
     if let Some(top_values) = top_values {
         let values = top_values.iter().map(|top| (top.value.clone(), top.rate.0)).collect();
         let other_rate = string.and_then(|s| s.other_rate).map_or(0.0, |r| r.0);
-        return Ok(ValueSampler::Categorical(CategoricalSampler::new(
-            values, other_rate, source, output,
-        )?));
+        let sampler = CategoricalSampler::new(values, other_rate, source, output)
+            .map_err(site.refuse_as(ColumnFault::UnusableRates, "/string/top_values"))?;
+        return Ok(ValueSampler::Categorical(sampler));
     }
     let check_digit = hint.and_then(|hint| hint.check_digit).map(|kind| {
         let invalid_rate = column.quality.as_ref().and_then(|q| q.invalid_rate).map_or(0.0, |r| r.0);
@@ -321,67 +383,71 @@ fn empty_numeric_stats() -> crate::profile::NumericStats {
 
 /// Where a string column's generated values come from, most specific first: a provider, a
 /// pattern, the shapes, then characters of the profiled classes.
-fn text_source(string: Option<&StringStats>, hint: Option<&GeneratorHint>) -> Result<TextSource, String> {
+fn text_source(string: Option<&StringStats>, hint: Option<&GeneratorHint>, site: &ColumnSite) -> Result<TextSource, PlanError> {
     if let Some(provider) = hint.and_then(|hint| hint.provider) {
         return Ok(TextSource::Provider(provider));
     }
-    let hinted_pattern = hint.and_then(|hint| hint.pattern.as_deref());
-    if let Some(pattern) = hinted_pattern.or(string.and_then(|s| s.pattern.as_deref())) {
-        return Ok(TextSource::Pattern(Box::new(text::compile_pattern(pattern, PATTERN_MAX_REPEAT)?)));
+    let hinted_pattern = hint
+        .and_then(|hint| hint.pattern.as_deref())
+        .map(|p| (p, "/semantic/generator_hint/pattern"));
+    let stored_pattern = string.and_then(|s| s.pattern.as_deref()).map(|p| (p, "/string/pattern"));
+    if let Some((pattern, field)) = hinted_pattern.or(stored_pattern) {
+        let compiled = text::compile_pattern(pattern, PATTERN_MAX_REPEAT).map_err(site.refuse_as(ColumnFault::InvalidPattern, field))?;
+        return Ok(TextSource::Pattern(Box::new(compiled)));
     }
     let shapes = string.and_then(|s| s.shapes.as_ref()).filter(|shapes| !shapes.is_empty());
     if let Some(shapes) = shapes {
         let choice = WeightedAliasIndex::new(shapes.iter().map(|shape| shape.rate.0).collect())
-            .map_err(|error| format!("shape rates are unusable: {error}"))?;
+            .map_err(|error| format!("shape rates are unusable: {error}"))
+            .map_err(site.refuse_as(ColumnFault::UnusableRates, "/string/shapes"))?;
         return Ok(TextSource::Shapes {
             choice,
             shapes: shapes.iter().map(|shape| text::shape_chars(&shape.shape)).collect(),
         });
     }
     let length = string.and_then(|s| s.length.as_ref());
+    let length = numeric::bounded_cdf(
+        length.and_then(|l| l.quantiles.as_ref()),
+        length.and_then(|l| l.min).map(|min| min as f64),
+        length.and_then(|l| l.max).map(|max| max as f64),
+        DEFAULT_STRING_LENGTH,
+    )
+    .map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/string/length"))?;
     Ok(TextSource::Characters {
-        length: numeric::bounded_cdf(
-            length.and_then(|l| l.quantiles.as_ref()),
-            length.and_then(|l| l.min).map(|min| min as f64),
-            length.and_then(|l| l.max).map(|max| max as f64),
-            DEFAULT_STRING_LENGTH,
-        )?,
+        length,
         alphabet: text::alphabet(string.and_then(|s| s.charset.as_ref()).and_then(|c| c.classes.as_deref())),
     })
 }
 
-fn child_path(path: &str, child: &Column) -> String {
-    child.path.clone().unwrap_or_else(|| format!("{path}.{}", child.name))
-}
-
-fn list_sampler(context: &PlanContext, column: &Column, path: &str, large: bool) -> Result<ValueSampler, String> {
+fn list_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, large: bool) -> Result<ValueSampler, PlanError> {
     let list = column.list.as_ref();
     let element = match list.and_then(|l| l.element.as_deref()) {
         Some(element) => element.clone(),
         None => serde_json::from_value(serde_json::json!({"name": "element", "logical_type": "string"}))
             .expect("a name and a logical type make a column"),
     };
-    let element_path = child_path(path, &element);
+    let length = numeric::bounded_cdf(list.and_then(|l| l.length.as_ref()), None, None, DEFAULT_LIST_LENGTH)
+        .map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/list/length"))?;
     Ok(ValueSampler::List(Box::new(ListSampler {
-        element: column_plan(context, &element, &element_path).map_err(|e| format!("{element_path}: {e}"))?,
-        length: numeric::bounded_cdf(list.and_then(|l| l.length.as_ref()), None, None, DEFAULT_LIST_LENGTH)?,
+        element: column_plan(context, &element, &site.child(&element, "/list/element"))?,
+        length,
         empty: list.and_then(|l| l.empty_rate).map(|r| Bernoulli::new(r.0)),
         large,
     })))
 }
 
-fn struct_sampler(context: &PlanContext, column: &Column, path: &str) -> Result<ValueSampler, String> {
+fn struct_sampler(context: &PlanContext, column: &Column, site: &ColumnSite) -> Result<ValueSampler, PlanError> {
     let stats = column.struct_fields.as_ref();
     let presence = stats.and_then(|s| s.presence.as_ref());
     let mut fields = Vec::new();
-    for field in stats.and_then(|s| s.fields.as_ref()).into_iter().flatten() {
-        let field_path = child_path(path, field);
+    for (index, field) in stats.and_then(|s| s.fields.as_ref()).into_iter().flatten().enumerate() {
         let present = presence.and_then(|p| p.get(&field.name)).map_or(1.0, |r| r.0);
-        let plan = column_plan_present(context, field, &field_path, present).map_err(|e| format!("{field_path}: {e}"))?;
-        fields.push(plan);
+        let field_site = site.child(field, &format!("/struct/fields/{index}"));
+        fields.push(column_plan_present(context, field, &field_site, present)?);
     }
     if fields.is_empty() {
-        return Err("a struct column needs at least one field in struct.fields".into());
+        let message = "a struct column needs at least one field".to_string();
+        return Err(site.refuse_as(ColumnFault::StructWithoutFields, "/struct/fields")(message));
     }
     Ok(ValueSampler::Struct(StructSampler { fields }))
 }

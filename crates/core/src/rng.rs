@@ -13,18 +13,6 @@ pub const STREAM_VERSION: u32 = 1;
 /// The rows one block holds. A block's streams start fresh, so any thread can produce any block.
 pub const BLOCK_ROWS: u64 = 65_536;
 
-/// What a stream draws, the third part of its name beside the table and the column path.
-pub mod draw {
-    pub const VALUES: &str = "values";
-    pub const NULLS: &str = "nulls";
-    pub const TYPE_MIX: &str = "type_mix";
-    pub const TYPE_MIX_TEXT: &str = "type_mix_text";
-    pub const MISSING_TOKENS: &str = "missing_tokens";
-    pub const INVALID: &str = "invalid";
-    pub const GAP_DAYS: &str = "gap_days";
-    pub const LENGTHS: &str = "lengths";
-}
-
 fn splitmix(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = x;

@@ -11,6 +11,7 @@ mod samplers;
 
 pub use identity::DatasetIdentity;
 pub use plan::BlockOutOfRange;
+pub use plan::ColumnFault;
 pub use plan::Plan;
 pub use plan::PlanError;
 pub use plan::plan;
