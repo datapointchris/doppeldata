@@ -129,6 +129,9 @@ struct RecordWriter {
     /// cut.
     hold: bool,
     held: HeldRecord,
+    /// Whether a byte past ASCII has gone to the sink, kept only for a `latin1_file`. ASCII is the
+    /// same bytes in either encoding.
+    past_ascii: Option<bool>,
 }
 
 impl RecordWriter {
@@ -228,6 +231,9 @@ impl RecordWriter {
             true => (self.held.start - self.flushed) as usize,
             false => self.used,
         };
+        if let Some(past) = &mut self.past_ascii {
+            *past = *past || !self.buffer[..keep_from].is_ascii();
+        }
         self.sink.write_all(&self.buffer[..keep_from])?;
         self.buffer.copy_within(keep_from..self.used, 0);
         self.flushed += keep_from as u64;
@@ -421,6 +427,7 @@ impl DelimitedEncoder {
                 ends: [0; 3],
                 hold: file == Some(FaultKind::TruncatedLine),
                 held: HeldRecord::default(),
+                past_ascii: (settings.encoding == TextEncoding::Utf8 && file == Some(FaultKind::Latin1File)).then_some(false),
             },
             null: settings.null.clone(),
             empty_string: (settings.null.is_empty() && settings.quoting != Quoting::Never).then_some([quote, quote]),
@@ -567,6 +574,7 @@ impl DelimitedEncoder {
             }
             FaultKind::InvalidUtf8 if file == Some(FaultKind::Latin1File) || start < ENCODING_GUESSED_FROM_BYTES => {
                 self.put_fields(fields, width, None, one_column)?;
+                self.out.terminator()?;
                 return Ok(());
             }
             FaultKind::InvalidUtf8 => {
@@ -757,8 +765,13 @@ impl FileEncoder for DelimitedEncoder {
             ));
             cut = Some(at);
         }
+        let end = cut.map_or(self.out.used, |cut| (cut - self.out.flushed) as usize);
+        let ascii_only = self.out.past_ascii.is_some_and(|past| !past && self.out.buffer[..end].is_ascii());
         let object = self.out.finish(cut)?;
         let mut records = faults.records;
+        if ascii_only {
+            records.retain(|record| record.kind != FaultKind::Latin1File);
+        }
         let at = records.iter().take_while(|record| record.line.is_none()).count();
         records.splice(at..at, first);
         Ok(Finished { object, faults: records })
