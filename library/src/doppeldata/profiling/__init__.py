@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
 
-from doppeldata import _core
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import ProfilingEnginesMissing
@@ -27,8 +26,6 @@ from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import SuppliedCodeList
 from doppeldata.profiling.detector_packs import enabled_packs
 from doppeldata.profiling.detector_packs import read_code_lists
-
-DEFAULT_K_MIN = _core.DEFAULT_K_MIN
 
 
 @dc.dataclass(frozen=True)

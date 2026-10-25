@@ -11,13 +11,15 @@ import importlib.resources
 from functools import cache
 from typing import Any
 
+from doppeldata import _core
 from doppeldata.column_name_words import ZIP_HINTS
 from doppeldata.column_name_words import hint_runs_in
 from doppeldata.column_name_words import name_words
 from doppeldata.published_schemas import published_enum
 
-# A cell from 1 to 10 rows is what the CMS cell-size suppression policy forbids reporting.
-DEFAULT_K_MIN = 11
+# A cell from 1 to 10 rows is what the CMS cell-size suppression policy forbids reporting. The engine reads the same
+# floor from a profile stating none.
+DEFAULT_K_MIN = _core.DEFAULT_K_MIN
 # Safe Harbor's single category for every age over 89.
 OLDEST_AGE = 90
 # Words a name holds anywhere when the column holds an age in years.
