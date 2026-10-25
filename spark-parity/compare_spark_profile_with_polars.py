@@ -2,11 +2,13 @@
 
 compare_spark_profile_with_polars.py POLARS SPARK DATA
 
-Row counts, null rates, types and the trimmed extremes must be equal. Each Spark quantile's rank error is measured
+Row counts, null rates, types and the trimmed extremes must be equal, but for a timestamp's unit, which Spark always holds
+as microseconds. Each Spark quantile's rank error is measured
 against the data and must stay within RANK_ERROR. Each distinct count must stay within DISTINCT_ERROR of Polars' exact
 count. Every other field that differs is printed, except those a sample or a float sum's order decides.
 """
 
+import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -44,6 +46,12 @@ UNCOMPARED = (
     '/quality',
     '/pattern',
 )
+TIMESTAMP_UNIT = re.compile(r'^timestamp\[(s|ms|us|ns)')
+
+
+def as_spark_holds(physical_type: Any) -> Any:
+    """A physical type with any timestamp unit as microseconds, the only unit Spark holds."""
+    return TIMESTAMP_UNIT.sub('timestamp[us', physical_type) if isinstance(physical_type, str) else physical_type
 
 
 def leaves(value: Any, path: str = '') -> Iterator[tuple[str, Any]]:
@@ -82,7 +90,9 @@ def compared(polars: dict[str, Any], spark: dict[str, Any], frame: pl.LazyFrame)
         if found is None:
             failures.append(f'{name}: missing from the Spark profile')
             continue
-        for field in ('physical_type', 'logical_type', 'null_rate', 'nullable'):
+        if as_spark_holds(expected.get('physical_type')) != found.get('physical_type'):
+            failures.append(f'{name}: physical_type {expected.get("physical_type")!r} against {found.get("physical_type")!r}')
+        for field in ('logical_type', 'null_rate', 'nullable'):
             if expected.get(field) != found.get(field):
                 failures.append(f'{name}: {field} {expected.get(field)!r} against {found.get(field)!r}')
         for section in ('numeric', 'temporal'):
