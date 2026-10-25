@@ -119,6 +119,29 @@ all 1,000 files as a local `doppeldata data generate` with the same arguments. B
 `dataset_digest`. Ten of its objects, sampled from S3 and hashed, hash as the manifest records.
 [performance.md](performance.md) holds the run's throughput and the job's configuration.
 
+## Over a Glue 5.1 Spark Connect session, both calls match a local run once reattachable execution is off
+
+A Glue 5.1 Spark Connect session of two G.1X workers ran the 10M-row case from a client outside AWS.
+`generate` with 7 and with 40 partitions was collected one Spark partition per query, and every
+value matched `sd.stream`, each float by its bits. `write` stored 10 files, and all 10 hash as the
+local `doppeldata data generate` records.
+
+- **The session is `create_session` with `SessionType` `SPARK_CONNECT`**, and
+  `--additional-python-modules` naming the wheel. `get_session_endpoint` returns its `Url` and an
+  `AuthToken` that lives 1,800 s. The client connects to
+  `<Url>:443/;use_ssl=true;x-aws-proxy-auth=<AuthToken>`, the token URL-quoted.
+- **The client runs `pyspark[connect]` 3.5.6, the session's Spark.** pyarrow 26 refuses the numpy
+  below 2 that it pins, so the client ran pyarrow 22.0.0, Glue 5.1's own.
+- **With reattachable execution on, the client's default, a result stream ended in `Stream removed
+  (Data frame with END_STREAM flag received)`.** It did so once collecting all 10M rows in one
+  query. It did so again two minutes into a 72.6 MB query, after three such queries had arrived. With
+  `spark.client.disable_reattachable_execute()`, every query in the run completed. Why reattaching
+  fails through the session's endpoint is not established.
+- **Over Connect, `write` claims and commits from the client process, with the client's
+  credentials.** The tasks still write with the session's role.
+- **Each session took 3 to 4.5 minutes after Glue reported it `READY` before its first query
+  returned.**
+
 ## Executors write to S3 with their own credentials, which Glue 5.1 resolves from the job's role
 
 Each write task builds its own S3 store through boto3 on its executor. The driver's store cannot

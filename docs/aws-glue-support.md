@@ -21,7 +21,8 @@ both. Glue 5.0 provides pandas 2.2.2, and Glue 5.1 and 6.0 provide 2.3.3, which 
 floor of 2.2.0. AWS lists each version's modules in
 <https://docs.aws.amazon.com/glue/latest/dg/aws-glue-programming-python-libraries.html#glue-modules-provided>.
 Glue 5.1 ran `sd.spark.generate` and `sd.spark.write` at 1B rows with
-`--additional-python-modules` naming the library's wheel alone.
+`--additional-python-modules` naming the library's wheel alone. A Glue 5.1 Spark Connect session
+ran both at 10M rows with the same setting.
 [generating-inside-spark.md](generating-inside-spark.md) holds what that run verified, and
 [performance.md](performance.md) its throughput.
 
