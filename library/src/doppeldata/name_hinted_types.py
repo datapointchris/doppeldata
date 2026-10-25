@@ -16,11 +16,20 @@ from doppeldata.column_name_words import name_words
 
 @dc.dataclass(frozen=True)
 class HintedType:
-    """A semantic type, the words a column's name holds where it hints the type, and what the generator draws for it."""
+    """A semantic type, the words a column's name holds where it hints the type, and what the generator draws for it.
+
+    `fake` is the provider drawing what a pattern hint draws, offered to a name close to the hints that matches none.
+    """
 
     type: str
     name_hints: tuple[str, ...]
     generator_hint: Mapping[str, str]
+    fake: str | None = None
+
+    @property
+    def offered_fake(self) -> str | None:
+        """The provider a name close to this type's hints is offered: the hint's own, or else `fake`."""
+        return self.generator_hint.get('provider') or self.fake
 
     def ends(self, name: str) -> bool:
         """Whether one of the hints ends `name`, as a hint must where the name alone assigns the type."""
@@ -59,7 +68,7 @@ URL = HintedType(
     ('url', 'uri', 'link', 'href', 'website', 'homepage'),
     {'pattern': r'https://example\.(?:com|net|org)/[a-z0-9]{1,12}(?:/[a-z0-9]{1,12}){0,2}'},
 )
-US_ZIP = HintedType('us_zip', ZIP_HINTS, {'pattern': r'\d{5}'})
+US_ZIP = HintedType('us_zip', ZIP_HINTS, {'pattern': r'\d{5}'}, fake='zip_code')
 US_STATE = HintedType('us_state', ('state', 'st', 'state_code', 'state_abbr', 'province'), {'provider': 'state_abbr'})
 # Split by the part of a name the column holds, so a first-name column draws first names. A bare `name` hints none of
 # them, because a product, a company or a file has one too.

@@ -53,8 +53,6 @@ PROVIDER_HINTS = {
     'username': ('user_name',),
     'state': ('state_name',),
 }
-# The fake drawing what a type drawn by a pattern draws, so a name close to the type's hints is offered it.
-PATTERN_TYPE_FAKES = {'us_zip': 'zip_code'}
 CLOSEST_FAKES = 3
 SHORT_KEYS = ('rows', 'columns')
 # A short YAML's range: two integers, two numbers or two ISO dates, joined by `..`.
@@ -259,7 +257,7 @@ def closest_fakes(name: str) -> tuple[str, ...]:
         for hint in hints:
             hinting.setdefault('_'.join(name_words(hint)), provider)
     for hinted in GENERAL:
-        fake = hinted.generator_hint.get('provider') or PATTERN_TYPE_FAKES.get(hinted.type)
+        fake = hinted.offered_fake
         if fake is None:
             continue
         for hint in hinted.name_hints:
