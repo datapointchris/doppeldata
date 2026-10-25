@@ -1,4 +1,4 @@
-"""The errors doppeldata raises for a caller to report, each with the exit status a command ends on."""
+"""The errors doppeldata raises for a caller to report, each with the exit status a command ends on, and the warnings it issues."""
 
 
 class DoppeldataError(Exception):
@@ -24,4 +24,14 @@ class ProfilingEnginesMissing(DoppeldataError, ImportError):
         super().__init__(
             f'profiling with {engine} needs {", ".join(missing)}, which doppeldata does not install; '
             f'run `pip install {" ".join(missing)}`, or install doppeldata-cli, which declares them'
+        )
+
+
+class FitsSkipped(UserWarning):
+    """Profiling finished without fitting a distribution family to any column, because scipy is not installed."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            'no distribution family was fitted, because scipy is not installed; '
+            'run `pip install scipy`, or install doppeldata-cli, which declares it'
         )

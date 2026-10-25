@@ -35,3 +35,19 @@ the profile as the reviewed artifact. doppeldata works without a model.
 Differential-privacy noise distorts the tails and the skew that a performance scenario exists to
 reproduce. It is never the default. Data that needs it gets a policy of its own beside `default`,
 `strict` and `none`.
+
+## A fit calls scipy itself, because fitter is GPL-3.0 and distfit wraps the same calls
+
+fitter is under the GPL-3.0. distfit (MIT) fits scipy.stats families through the same calls, and
+would add a dependency for no measured gain. scipy (BSD-3-Clause) is imported only when fitting
+runs, so the library declares it nowhere, and the CLI declares it.
+
+## Frozen bin edges are borrowed from Glue Data Quality, and the zero mixture from NeMo
+
+Glue Data Quality's Distribution analyzer bins a numeric column at equal width and keeps a
+categorical column's 20 most frequent values. It freezes those after the first run, and rebins only
+after three consecutive runs with more than 5% of values outside them. doppeldata copies the frozen
+edges and the overflow count. Rebinning stays explicit: profiling again without `edges_from`.
+
+A zero-inflated fit is the `bernoulli_mixture` of NeMo Data Designer (Apache-2.0): a share of zeros
+beside a family fitted to the rest.

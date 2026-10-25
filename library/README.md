@@ -12,7 +12,8 @@ uv add --index https://pypi.ichrisbirch.com/simple/ doppeldata
 
 The library installs no profiling engine, so a job that only generates carries none.
 `doppeldata.profile()` needs polars, duckdb, pyarrow and boto3 installed beside it, and names any
-that are missing.
+that are missing. With scipy installed too, it fits each numeric column to a distribution family.
+Without it, each fit is written as null, and `profile()` issues a `FitsSkipped` warning.
 
 Every release is published to that package index, and nothing else is. PyPI does not carry
 doppeldata, so a package of that name there is someone else's. The library needs Python 3.11 or

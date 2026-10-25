@@ -17,11 +17,18 @@ SOURCES_MODULE = 'doppeldata.profiling.sources'
 LISTING_PACKAGES = ('boto3',)
 
 
-def profile(data: Any, *, engine: str = 'polars', sample: int | None = None, k_min: int = DEFAULT_K_MIN) -> Profile:
+def profile(
+    data: Any, *, engine: str = 'polars', sample: int | None = None, k_min: int = DEFAULT_K_MIN, edges_from: Profile | None = None
+) -> Profile:
     """Profile `data` into a valid table profile holding no rows.
 
     `data` is a path, an `s3://` URL, a list of them, or a pyarrow, Polars or pandas table. `sample`
     profiles a seeded random sample of that many rows. No stored literal rests on fewer than `k_min` rows.
+
+    `edges_from` is an earlier profile of the same table. Where its source fingerprint matches the files
+    listed now, and it was made with the same engine, `k_min` and sampling, it is returned unchanged, so a
+    reviewer's edits survive a re-run. Otherwise each column it holds a histogram or value list for is
+    counted against those, and the rows outside them are written as the column's `overflow`.
     """
     if engine not in ENGINES:
         raise ValueError(f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}')
@@ -37,9 +44,25 @@ def profile(data: Any, *, engine: str = 'polars', sample: int | None = None, k_m
     backend = getattr(importlib.import_module(module_name), class_name)()
     sources = importlib.import_module(SOURCES_MODULE)
     source = sources.resolve(data)
-    profiled = Profile(table_profile.profile_table(backend, source, sample=sample, k_min=k_min))
+    if edges_from is not None and profiles_unchanged_source(edges_from, source.fingerprint, engine=engine, sample=sample, k_min=k_min):
+        return edges_from
+    frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
+    profiled = Profile(table_profile.profile_table(backend, source, sample=sample, k_min=k_min, frozen=frozen))
     sources.check_unchanged(source)
     issues = profiled.validate()
     if issues:
         raise InvalidProfile(f'the profile of {data!r}', issues)
     return profiled
+
+
+def profiles_unchanged_source(previous: Profile, fingerprint: str | None, *, engine: str, sample: int | None, k_min: int) -> bool:
+    """Whether `previous` is what profiling the listed source with these settings would give, so it can stand unchanged."""
+    document = previous.to_plain()
+    generated = document.get('generated') or {}
+    if fingerprint is None or generated.get('source_fingerprint') != fingerprint:
+        return False
+    if generated.get('engine') != engine or (document.get('privacy') or {}).get('k_min') != k_min:
+        return False
+    # A profile of every row stands for any sample of it, and a sampled one only for a sample of that size.
+    read = generated.get('sample') or {}
+    return read.get('strategy') == 'full' or (sample is not None and read.get('rows_read') == sample)

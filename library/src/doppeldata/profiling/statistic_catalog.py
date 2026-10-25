@@ -53,6 +53,10 @@ QUANTILES = {name: quantile_level(name) for name in ('p001', 'p01', 'p05', 'p25'
 
 # A request for `trimmed_low` or `trimmed_high` carries k_min as its argument: the value at rank
 # k_min from that end. An exact minimum or maximum is one row's value, so only these are stored.
+# `quantiles` and `length_quantiles` carry a tuple of levels, and answer with the nearest-rank value
+# at each, in order. `histogram_counts` carries a tuple of rising edges, and answers with the rows
+# below the first, in each bin from one edge up to the next with the last bin closed, and above the
+# last. `listed_value_counts` carries a tuple of values, and answers with the rows holding each.
 COLUMN_STATISTICS = (
     Statistic('null_count', frozenset(ColumnKind)),
     # Non-null distinct values, exact or estimated as the engine affords, written as `distinct.approx`.
@@ -67,14 +71,14 @@ COLUMN_STATISTICS = (
     Statistic('kurtosis', NUMERIC),
     Statistic('zero_rate', NUMERIC),
     Statistic('negative_rate', NUMERIC),
-    *(Statistic(name, NUMERIC) for name in QUANTILES),
+    Statistic('quantiles', NUMERIC),
     # The least and greatest difference between neighboring rows, which find a counting sequence.
     Statistic('step_min', frozenset({ColumnKind.INTEGER})),
     Statistic('step_max', frozenset({ColumnKind.INTEGER})),
     Statistic('length_mean', frozenset({ColumnKind.STRING})),
     Statistic('length_trimmed_low', frozenset({ColumnKind.STRING})),
     Statistic('length_trimmed_high', frozenset({ColumnKind.STRING})),
-    *(Statistic(f'length_{name}', frozenset({ColumnKind.STRING})) for name in QUANTILES),
+    Statistic('length_quantiles', frozenset({ColumnKind.STRING})),
     Statistic('whitespace_edge_rate', frozenset({ColumnKind.STRING})),
     Statistic('true_rate', frozenset({ColumnKind.BOOLEAN})),
     # Rows in each month from January, each weekday from Monday, each hour from 00, as one list.
@@ -84,6 +88,12 @@ COLUMN_STATISTICS = (
     Statistic('distinct_days', TEMPORAL),
     # Whether every value is a whole number of the unit in local time, which sets the granularity.
     *(Statistic(f'whole_{unit}', frozenset({ColumnKind.DATETIME})) for unit, _, _ in TIME_UNITS),
+)
+
+# Counted against the edges and values the first aggregate's answers, or an earlier profile, choose.
+COUNTING_STATISTICS = (
+    Statistic('histogram_counts', NUMERIC),
+    Statistic('listed_value_counts', frozenset({ColumnKind.STRING})),
 )
 
 TABLE_STATISTICS = (Statistic('rows', frozenset()),)
@@ -105,7 +115,7 @@ TEXT_TYPE_STATISTICS = (
     Statistic('padded_digits', frozenset({ColumnKind.STRING})),
 )
 
-ALL_STATISTICS = (*COLUMN_STATISTICS, *TABLE_STATISTICS, *TEXT_TYPE_STATISTICS)
+ALL_STATISTICS = (*COLUMN_STATISTICS, *COUNTING_STATISTICS, *TABLE_STATISTICS, *TEXT_TYPE_STATISTICS)
 
 # The raw-value patterns behind the raw type counts, in syntax both Rust's regex and Java's accept.
 # A number with a leading zero, such as a ZIP code, matches neither, so it stays a string.
