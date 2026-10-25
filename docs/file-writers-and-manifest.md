@@ -15,6 +15,9 @@ are serde and schemars types with no I/O.
   then the profile's recorded one, then Parquet. A recorded codec applies only when the format is the
   recorded one. `override_writer` lays a caller's keys over the result, and `partition_by` sets the
   keys.
+- **`WriteOptions::chosen` lays a caller's `WriteChoices` over a profile in that order.** The CLI,
+  the Python SDK and the `write_dataset` example all go through it, so a flag means the same thing
+  in each. `WriteChoices` deserializes from JSON and refuses an unknown key.
 
 ## A layout fixes every file's rows before anything is generated
 

@@ -175,8 +175,9 @@ identity.
 
 ## The library declares no engine, so a job that only generates installs none
 
-polars, duckdb, pyarrow and boto3 are imported only by the modules that profile. `ENGINES` names each
-engine's packages, and `LISTING_PACKAGES` names boto3, which listing S3 needs whatever the engine.
+polars, duckdb, pyarrow and boto3 are imported only by the modules that profile, and boto3 also by
+a write to S3. `ENGINES` names each engine's packages, and `LISTING_PACKAGES` names boto3, which
+listing S3 needs whatever the engine.
 `profile()` checks for every one of them before it imports one, and raises
 `ProfilingEnginesMissing` naming each missing package. `doppeldata-cli` declares them, because
 `profile create` is one of its verbs.
