@@ -44,6 +44,14 @@ polars.DataFrame(table)
 sd.write(profile, 's3://bucket/orders/', rows=100_000_000, seed=7)
 ```
 
+Inside Spark, the executors generate the rows, with the values a local run gives at any partition
+count. `sd.spark.write` writes the files `sd.write` writes, byte for byte, from the executors:
+
+```python
+frame = sd.spark.generate(spark, profile, rows=1_000_000_000, seed=7)   # a DataFrame, for any Spark writer
+sd.spark.write(spark, profile, 's3://bucket/orders/', rows=1_000_000_000, seed=7)
+```
+
 `profile create` reads Parquet and Arrow locally or from S3, with the credentials and endpoint the
 AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files. No data
 value it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. Typing an
@@ -159,6 +167,8 @@ Upload the zip, pass its `s3://` path to `--additional-python-modules`, and pass
 | `library/` | the `doppeldata` distribution: the compiled extension and the Python code over it |
 | `cli/` | the `doppeldata-cli` distribution: the `doppeldata` command over the library |
 | `docs/` | why the design is what it is |
+| `benchmarks/` | the scripts `task bench` runs to time the engine against numpy, Faker and Mimesis |
+| `spark-parity/` | the check that `doppeldata.spark` gives a local run's values and files inside each Spark image named |
 
 ## Develop
 

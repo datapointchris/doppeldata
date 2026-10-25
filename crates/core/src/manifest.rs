@@ -54,8 +54,13 @@ pub struct Manifest {
     /// True when the run stopped early, so `files` lists only the objects that completed. Such a
     /// manifest is stored as `_manifest.partial.json`, and regenerates nothing.
     pub partial: bool,
-    /// The threads that generated and encoded. The count never changes a byte.
+    /// The threads that generated and encoded in each process that wrote. The count never changes
+    /// a byte.
     pub threads: u32,
+    /// The tasks a write split across processes divided its ranges among, such as a Spark job's,
+    /// or null for a write in one process.
+    #[serde(default)]
+    pub tasks: Option<u32>,
     pub elapsed_ms: u64,
     /// When the write finished, in RFC 3339.
     pub written_at: String,
@@ -110,6 +115,7 @@ impl Manifest {
             files: Vec::new(),
             partial: false,
             threads: 0,
+            tasks: None,
             elapsed_ms: 0,
             written_at: String::new(),
         }

@@ -94,14 +94,101 @@ const UPLOAD_THREADS: usize = 2;
 /// Writes `plan`'s dataset to `destination`, and the manifest beside it, which is also returned.
 pub fn write(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination: &Destination) -> Result<Manifest, WriteFailure> {
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
-    let manifest = Manifest::new(
+    execute(plan, &layout, new_manifest(plan, options, destination), run, destination)
+}
+
+/// Claims `destination` for the dataset [`write`] would write there, as `write` does before its
+/// first object. Any process holding the same plan and options then writes ranges with
+/// [`write_ranges`], and one calls [`commit`] with every range's records.
+pub fn claim(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination: &Destination) -> Result<(), WriteFailure> {
+    let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
+    let manifest = claimed(plan, &layout, new_manifest(plan, options, destination))?;
+    on_upload_runtime(run, |runtime| Ok(runtime.block_on(destination.prepare(run.replace, &manifest))?))
+}
+
+/// The record a claim stores as `_manifest.partial.json`, once the output's format can encode the
+/// files `layout` makes.
+fn claimed(plan: &Plan, layout: &FileLayout, mut manifest: Manifest) -> Result<Manifest, WriteError> {
+    encoders::check(&manifest.output, partitioner(plan, layout).file_schema())?;
+    manifest.partial = true;
+    manifest.written_at = now_rfc3339();
+    Ok(manifest)
+}
+
+/// Writes the objects of the ranges numbered `ranges` in the layout [`write`] makes, and returns
+/// each object's record. It neither claims the destination nor stores a manifest, so the objects
+/// are the bytes `write` writes for those ranges.
+pub fn write_ranges(
+    plan: &Plan,
+    options: &WriteOptions,
+    ranges: &[u32],
+    run: &RunOptions,
+    destination: &Destination,
+) -> Result<Vec<ManifestFile>, WriteFailure> {
+    let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
+    let selected = ranges
+        .iter()
+        .map(|&range| {
+            layout.ranges.get(range as usize).copied().ok_or(WriteError::RangeOutOfLayout {
+                range,
+                ranges: layout.ranges.len(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    encoders::check(&options.output, partitioner(plan, &layout).file_schema())?;
+    on_upload_runtime(run, |runtime| {
+        let written = write_ranges_on(plan, &layout, &selected, &options.output, run, destination, runtime);
+        match written.error {
+            Some(error) => Err(error.into()),
+            None => Ok(written.files),
+        }
+    })
+}
+
+/// How a write split across processes ran, which its manifest records.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SplitRun {
+    /// The tasks the ranges were divided among.
+    pub tasks: u32,
+    /// The threads each task wrote on.
+    pub threads: u32,
+    /// From the claim to the commit.
+    pub elapsed_ms: u64,
+}
+
+/// Records a write [`claim`] claimed and [`write_ranges`] filled: `_manifest.json` when `files`
+/// holds an object of every range in the layout, replacing the claim. Otherwise it stores the
+/// partial manifest under the claim's name and fails with [`WriteError::RangesUnrecorded`].
+pub fn commit(
+    plan: &Plan,
+    options: &WriteOptions,
+    files: Vec<ManifestFile>,
+    split: SplitRun,
+    run: &RunOptions,
+    destination: &Destination,
+) -> Result<Manifest, WriteFailure> {
+    let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
+    let files: BTreeMap<String, ManifestFile> = files.into_iter().map(|file| (file.path.clone(), file)).collect();
+    let mut manifest = new_manifest(plan, options, destination);
+    manifest.files = files.into_values().collect();
+    manifest.threads = split.threads;
+    manifest.tasks = Some(split.tasks);
+    manifest.elapsed_ms = split.elapsed_ms;
+    on_upload_runtime(run, |runtime| finish(runtime, destination, &layout, manifest, None))
+}
+
+fn new_manifest(plan: &Plan, options: &WriteOptions, destination: &Destination) -> Manifest {
+    Manifest::new(
         plan.identity(),
         profile_record(plan, options.profile_path.clone()),
         options.output.clone(),
         options.layout.clone(),
         destination.url.clone(),
-    );
-    execute(plan, &layout, manifest, run, destination)
+    )
+}
+
+fn partitioner(plan: &Plan, layout: &FileLayout) -> Partitioner {
+    Partitioner::new(&plan.schema(), &layout.partition_by, layout.partition_style)
 }
 
 /// Writes every file a whole `manifest` names again, from `plan`, which must have the manifest's
@@ -170,6 +257,7 @@ fn profile_record(plan: &Plan, path: Option<String>) -> ManifestProfile {
 struct Run<'a> {
     plan: &'a Plan,
     layout: &'a FileLayout,
+    ranges: &'a [FileRange],
     output: &'a Output,
     partitioner: Partitioner,
     destination: &'a Destination,
@@ -190,7 +278,7 @@ impl Run<'_> {
 
     fn work(&self) {
         while !self.stopped() {
-            let Some(range) = self.layout.ranges.get(self.next_range.fetch_add(1, Ordering::Relaxed)) else {
+            let Some(range) = self.ranges.get(self.next_range.fetch_add(1, Ordering::Relaxed)) else {
                 return;
             };
             match self.write_range(range) {
@@ -282,14 +370,16 @@ fn now_rfc3339() -> String {
     chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn execute(
-    plan: &Plan,
-    layout: &FileLayout,
-    mut manifest: Manifest,
-    run: &RunOptions,
-    destination: &Destination,
-) -> Result<Manifest, WriteFailure> {
-    let started = Instant::now();
+fn worker_threads(threads: usize) -> usize {
+    match threads {
+        0 => thread::available_parallelism().map_or(1, |count| count.get()),
+        threads => threads,
+    }
+}
+
+/// Runs `work` on a thread this module spawns, with `run`'s upload runtime or one built for the
+/// call, so no caller's thread is ever blocked on from within a runtime.
+fn on_upload_runtime<T: Send>(run: &RunOptions, work: impl FnOnce(&Handle) -> Result<T, WriteFailure> + Send) -> Result<T, WriteFailure> {
     if run
         .runtime
         .as_ref()
@@ -297,15 +387,6 @@ fn execute(
     {
         return Err(WriteError::CurrentThreadRuntime.into());
     }
-    let partitioner = Partitioner::new(&plan.schema(), &layout.partition_by, layout.partition_style);
-    encoders::check(&manifest.output, partitioner.file_schema())?;
-    let threads = match run.threads {
-        0 => thread::available_parallelism().map_or(1, |count| count.get()),
-        threads => threads,
-    };
-    manifest.threads = threads as u32;
-    manifest.partial = true;
-    manifest.written_at = now_rfc3339();
     thread::scope(|scope| {
         scope
             .spawn(move || {
@@ -322,46 +403,108 @@ fn execute(
                         owned_runtime.handle().clone()
                     }
                 };
-                runtime.block_on(destination.prepare(run.replace, &manifest))?;
-                let shared = Run {
-                    plan,
-                    layout,
-                    output: &manifest.output,
-                    partitioner,
-                    destination,
-                    runtime: runtime.clone(),
-                    prints_text_cells: manifest.output.is_text(),
-                    cancel: run.cancel.clone(),
-                    next_range: AtomicUsize::new(0),
-                    completed_ranges: AtomicUsize::new(0),
-                    stop: AtomicBool::new(false),
-                    files: Mutex::new(Vec::new()),
-                    error: Mutex::new(None),
-                };
-                let workers = threads.min(layout.ranges.len()).max(1);
-                thread::scope(|workers_scope| {
-                    for _ in 0..workers {
-                        workers_scope.spawn(|| shared.work());
-                    }
-                });
-                let unwritten = shared.completed_ranges.load(Ordering::Relaxed) < layout.ranges.len();
-                let cancelled = unwritten && shared.cancel.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed));
-                let error = shared
-                    .error
-                    .into_inner()
-                    .expect("no worker panics holding it")
-                    .or_else(|| cancelled.then_some(WriteError::Cancelled));
-                let mut files = shared.files.into_inner().expect("no worker panics holding it");
-                files.sort_by(|a, b| a.path.cmp(&b.path));
-                manifest.files = files;
-                manifest.partial = error.is_some();
-                manifest.elapsed_ms = started.elapsed().as_millis() as u64;
-                manifest.written_at = now_rfc3339();
-                record(&runtime, destination, manifest, error)
+                work(&runtime)
             })
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     })
+}
+
+/// What writing some ranges left: every object completed, in path order, and why the rest stopped.
+struct WrittenRanges {
+    files: Vec<ManifestFile>,
+    error: Option<WriteError>,
+}
+
+/// Writes `ranges` of `layout` on `run.threads` worker threads, uploading on `runtime`.
+fn write_ranges_on(
+    plan: &Plan,
+    layout: &FileLayout,
+    ranges: &[FileRange],
+    output: &Output,
+    run: &RunOptions,
+    destination: &Destination,
+    runtime: &Handle,
+) -> WrittenRanges {
+    let shared = Run {
+        plan,
+        layout,
+        ranges,
+        output,
+        partitioner: partitioner(plan, layout),
+        destination,
+        runtime: runtime.clone(),
+        prints_text_cells: output.is_text(),
+        cancel: run.cancel.clone(),
+        next_range: AtomicUsize::new(0),
+        completed_ranges: AtomicUsize::new(0),
+        stop: AtomicBool::new(false),
+        files: Mutex::new(Vec::new()),
+        error: Mutex::new(None),
+    };
+    let workers = worker_threads(run.threads).min(ranges.len()).max(1);
+    thread::scope(|workers_scope| {
+        for _ in 0..workers {
+            workers_scope.spawn(|| shared.work());
+        }
+    });
+    let unwritten = shared.completed_ranges.load(Ordering::Relaxed) < ranges.len();
+    let cancelled = unwritten && shared.cancel.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed));
+    let error = shared
+        .error
+        .into_inner()
+        .expect("no worker panics holding it")
+        .or_else(|| cancelled.then_some(WriteError::Cancelled));
+    let mut files = shared.files.into_inner().expect("no worker panics holding it");
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    WrittenRanges { files, error }
+}
+
+fn execute(
+    plan: &Plan,
+    layout: &FileLayout,
+    manifest: Manifest,
+    run: &RunOptions,
+    destination: &Destination,
+) -> Result<Manifest, WriteFailure> {
+    let started = Instant::now();
+    let mut manifest = claimed(plan, layout, manifest)?;
+    manifest.threads = worker_threads(run.threads) as u32;
+    on_upload_runtime(run, |runtime| {
+        runtime.block_on(destination.prepare(run.replace, &manifest))?;
+        let written = write_ranges_on(plan, layout, &layout.ranges, &manifest.output, run, destination, runtime);
+        manifest.files = written.files;
+        manifest.elapsed_ms = started.elapsed().as_millis() as u64;
+        finish(runtime, destination, layout, manifest, written.error)
+    })
+}
+
+/// Stores the record of a run that wrote `manifest.files`. It is partial, and the run fails, when
+/// `error` stopped the run or a range of `layout` has no object recorded.
+fn finish(
+    runtime: &Handle,
+    destination: &Destination,
+    layout: &FileLayout,
+    mut manifest: Manifest,
+    error: Option<WriteError>,
+) -> Result<Manifest, WriteFailure> {
+    let recorded: BTreeSet<u32> = manifest.files.iter().map(|file| file.range).collect();
+    let missing: Vec<u32> = layout
+        .ranges
+        .iter()
+        .map(|range| range.index)
+        .filter(|index| !recorded.contains(index))
+        .collect();
+    let error = error.or_else(|| {
+        missing.first().map(|&first| WriteError::RangesUnrecorded {
+            missing: missing.len(),
+            ranges: layout.ranges.len(),
+            first,
+        })
+    });
+    manifest.partial = error.is_some();
+    manifest.written_at = now_rfc3339();
+    record(runtime, destination, manifest, error)
 }
 
 /// Stores the finished run's manifest: as `_manifest.json` once every object is whole, replacing the

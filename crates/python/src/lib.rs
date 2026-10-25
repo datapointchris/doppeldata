@@ -18,11 +18,13 @@ mod _core {
     use arrow_schema::ArrowError;
     use arrow_schema::SchemaRef;
     use doppeldata_core::PlanError;
+    use doppeldata_core::manifest::ManifestFile;
     use doppeldata_core::profile::Profile;
     use doppeldata_writers::Destination;
     use doppeldata_writers::DestinationUrl;
     use doppeldata_writers::FailureKind;
     use doppeldata_writers::RunOptions;
+    use doppeldata_writers::SplitRun;
     use doppeldata_writers::WriteChoices;
     use doppeldata_writers::WriteError;
     use doppeldata_writers::WriteFailure;
@@ -197,7 +199,25 @@ mod _core {
         /// make the blocks ahead of the reader, and each holds at most two.
         #[pyo3(signature = (*, threads))]
         fn stream(&self, threads: usize) -> PyRecordBatchReader {
-            PyRecordBatchReader::new(Box::new(BlockStream::start(self.plan.clone(), threads)))
+            let count = self.plan.block_count();
+            PyRecordBatchReader::new(Box::new(BlockStream::start(self.plan.clone(), 0..count, threads)))
+        }
+
+        /// Blocks ``start`` up to ``stop`` in order, as a reader made the way ``stream`` makes
+        /// every block, so they are the batches ``stream`` yields for those blocks.
+        #[pyo3(signature = (start, stop, *, threads))]
+        fn stream_blocks(&self, start: u64, stop: u64, threads: usize) -> PyResult<PyRecordBatchReader> {
+            let count = self.plan.block_count();
+            if start > stop || stop > count {
+                return Err(PyValueError::new_err(format!(
+                    "blocks {start} to {stop} are not a run within the plan's {count} blocks"
+                )));
+            }
+            Ok(PyRecordBatchReader::new(Box::new(BlockStream::start(
+                self.plan.clone(),
+                start..stop,
+                threads,
+            ))))
         }
 
         /// What to write: the profile's recorded settings, with ``choices_json`` laid over them. It
@@ -252,25 +272,116 @@ mod _core {
             replace: bool,
             s3_store: Option<Bound<'_, PyDict>>,
         ) -> PyResult<String> {
-            let destination = match DestinationUrl::parse(destination).map_err(|error| refused(py, error))? {
-                DestinationUrl::S3 { bucket, prefix } => s3_destination(py, &bucket, prefix, destination, s3_store)?,
-                DestinationUrl::Memory => Destination::new(Arc::new(InMemory::new()), Default::default(), destination),
-                DestinationUrl::Local(dir) => Destination::local(dir).map_err(|error| refused(py, error))?,
-            };
-            let cancel = Arc::new(AtomicBool::new(false));
-            let run = RunOptions {
-                threads,
-                replace,
-                cancel: Some(cancel.clone()),
-                runtime: None,
-            };
+            let destination = destination_at(py, destination, s3_store)?;
+            let (run, cancel) = run_options(threads, replace);
             let (plan, options) = (&*self.plan, &options.options);
-            let (written, signal) = detached(py, &cancel, || doppeldata_writers::write(plan, options, &run, &destination));
-            match (written, signal) {
-                (Ok(_), Some(signal)) => Err(signal),
-                (Ok(manifest), None) => Ok(serde_json::to_string(&manifest).expect("a manifest always serializes")),
-                (Err(failure), signal) => Err(write_failed(py, failure, signal.is_some())),
-            }
+            let manifest = settled(py, &cancel, || doppeldata_writers::write(plan, options, &run, &destination))?;
+            Ok(serde_json::to_string(&manifest).expect("a manifest always serializes"))
+        }
+
+        /// Claims ``destination`` for the dataset ``write`` would write there, as ``write`` does
+        /// before its first object. Any process then writes ranges with ``write_ranges``, and one
+        /// calls ``commit``.
+        #[pyo3(signature = (options, destination, *, replace, s3_store=None))]
+        fn claim(
+            &self,
+            py: Python<'_>,
+            options: PyRef<'_, WriteOptions>,
+            destination: &str,
+            replace: bool,
+            s3_store: Option<Bound<'_, PyDict>>,
+        ) -> PyResult<()> {
+            let destination = destination_at(py, destination, s3_store)?;
+            let (run, cancel) = run_options(1, replace);
+            let (plan, options) = (&*self.plan, &options.options);
+            settled(py, &cancel, || doppeldata_writers::claim(plan, options, &run, &destination))
+        }
+
+        /// Writes the objects of the ranges numbered ``ranges`` in the layout ``ranges_json``
+        /// lists, the bytes ``write`` writes for them, on one thread, and returns their manifest
+        /// records as a JSON list. It neither claims ``destination`` nor stores a manifest.
+        #[pyo3(signature = (options, destination, ranges, *, s3_store=None))]
+        fn write_ranges(
+            &self,
+            py: Python<'_>,
+            options: PyRef<'_, WriteOptions>,
+            destination: &str,
+            ranges: Vec<u32>,
+            s3_store: Option<Bound<'_, PyDict>>,
+        ) -> PyResult<String> {
+            let destination = destination_at(py, destination, s3_store)?;
+            let (run, cancel) = run_options(SPLIT_TASK_THREADS, false);
+            let (plan, options) = (&*self.plan, &options.options);
+            let files = settled(py, &cancel, || {
+                doppeldata_writers::write_ranges(plan, options, &ranges, &run, &destination)
+            })?;
+            Ok(serde_json::to_string(&files).expect("a manifest record always serializes"))
+        }
+
+        /// Stores the manifest of a write ``claim`` claimed, from every record ``write_ranges``
+        /// returned, given as one JSON list, and returns it as JSON. ``tasks`` is how many the
+        /// ranges were divided among, and ``elapsed_ms`` the time from the claim. A range with no
+        /// record leaves the partial manifest under the claim's name, and raises.
+        #[pyo3(signature = (options, destination, files_json, *, tasks, elapsed_ms, s3_store=None))]
+        fn commit(
+            &self,
+            options: PyRef<'_, WriteOptions>,
+            destination: &str,
+            files_json: &str,
+            tasks: u32,
+            elapsed_ms: u64,
+            s3_store: Option<Bound<'_, PyDict>>,
+        ) -> PyResult<String> {
+            let py = options.py();
+            let files: Vec<ManifestFile> = serde_json::from_str(files_json)
+                .map_err(|error| PyValueError::new_err(format!("files_json is not a list of manifest records: {error}")))?;
+            let destination = destination_at(py, destination, s3_store)?;
+            let (run, cancel) = run_options(1, false);
+            let (plan, options) = (&*self.plan, &options.options);
+            let split = SplitRun {
+                tasks,
+                threads: SPLIT_TASK_THREADS as u32,
+                elapsed_ms,
+            };
+            let manifest = settled(py, &cancel, || {
+                doppeldata_writers::commit(plan, options, files, split, &run, &destination)
+            })?;
+            Ok(serde_json::to_string(&manifest).expect("a manifest always serializes"))
+        }
+    }
+
+    /// The threads ``write_ranges`` writes on. A task scheduler such as Spark already gives each
+    /// task a core, so a task's ranges are written in turn.
+    const SPLIT_TASK_THREADS: usize = 1;
+
+    /// The destination ``url`` names, with an S3 URL's store built from ``s3_store``.
+    fn destination_at(py: Python<'_>, url: &str, s3_store: Option<Bound<'_, PyDict>>) -> PyResult<Destination> {
+        Ok(match DestinationUrl::parse(url).map_err(|error| refused(py, error))? {
+            DestinationUrl::S3 { bucket, prefix } => s3_destination(py, &bucket, prefix, url, s3_store)?,
+            DestinationUrl::Memory => Destination::new(Arc::new(InMemory::new()), Default::default(), url),
+            DestinationUrl::Local(dir) => Destination::local(dir).map_err(|error| refused(py, error))?,
+        })
+    }
+
+    /// A write's run on ``threads`` threads, with the cancel flag a signal sets.
+    fn run_options(threads: usize, replace: bool) -> (RunOptions, Arc<AtomicBool>) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let run = RunOptions {
+            threads,
+            replace,
+            cancel: Some(cancel.clone()),
+            runtime: None,
+        };
+        (run, cancel)
+    }
+
+    /// Runs a writers call detached, as the library's result or its ``WriteFailed``, or
+    /// ``WriteInterrupted`` when a signal stopped it.
+    fn settled<T: Send>(py: Python<'_>, cancel: &AtomicBool, call: impl FnOnce() -> Result<T, WriteFailure> + Send) -> PyResult<T> {
+        match detached(py, cancel, call) {
+            (Ok(_), Some(signal)) => Err(signal),
+            (Ok(value), None) => Ok(value),
+            (Err(failure), signal) => Err(write_failed(py, failure, signal.is_some())),
         }
     }
 
@@ -291,19 +402,20 @@ mod _core {
         }
     }
 
-    /// The plan's blocks in order, each made ahead on one of a few threads that take turns, so the
-    /// reader holds at most two blocks per thread.
+    /// A run of the plan's blocks in order, each made ahead on one of a few threads that take
+    /// turns, so the reader holds at most two blocks per thread.
     struct BlockStream {
         schema: SchemaRef,
         blocks: Vec<mpsc::Receiver<RecordBatch>>,
         next: u64,
-        count: u64,
+        stop: u64,
+        start: u64,
     }
 
     impl BlockStream {
-        fn start(plan: Arc<doppeldata_core::Plan>, threads: usize) -> Self {
-            let count = plan.block_count();
-            let workers = worker_threads(threads).min(count as usize).max(1);
+        fn start(plan: Arc<doppeldata_core::Plan>, run: std::ops::Range<u64>, threads: usize) -> Self {
+            let (start, stop) = (run.start, run.end);
+            let workers = worker_threads(threads).min((stop - start) as usize).max(1);
             let blocks = (0..workers)
                 .map(|worker| {
                     let (sender, receiver) = mpsc::sync_channel(1);
@@ -311,7 +423,7 @@ mod _core {
                     thread::Builder::new()
                         .name("doppeldata-stream".into())
                         .spawn(move || {
-                            for block in (worker as u64..count).step_by(workers) {
+                            for block in (start + worker as u64..stop).step_by(workers) {
                                 let batch = plan.generate_block(block).expect("every block below block_count is in range");
                                 if sender.send(batch).is_err() {
                                     return;
@@ -325,8 +437,9 @@ mod _core {
             Self {
                 schema: plan.schema(),
                 blocks,
-                next: 0,
-                count,
+                next: start,
+                stop,
+                start,
             }
         }
     }
@@ -335,10 +448,10 @@ mod _core {
         type Item = Result<RecordBatch, ArrowError>;
 
         fn next(&mut self) -> Option<Self::Item> {
-            if self.next == self.count {
+            if self.next == self.stop {
                 return None;
             }
-            let receiver = &self.blocks[(self.next % self.blocks.len() as u64) as usize];
+            let receiver = &self.blocks[((self.next - self.start) % self.blocks.len() as u64) as usize];
             self.next += 1;
             Some(
                 receiver

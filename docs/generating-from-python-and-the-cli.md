@@ -48,7 +48,9 @@ sets the writers' cancel flag, and the workers stop at the next block.
   swallows it. It and `WriteFailed` are both a `StoppedWrite`, which carries the partial manifest
   and whether it was stored.
 - **A stopped write's partial manifest lists every object it completed, and leaves no open
-  multipart upload.** A sink dropped unfinished aborts its upload.
+  multipart upload.** A sink dropped unfinished aborts its upload. `doppeldata.spark.write` is the
+  exception: a failed Spark job's partial manifest lists no object, as
+  [generating-inside-spark.md](generating-inside-spark.md) says.
 - **`data generate` treats SIGTERM as Ctrl-C.** A container stop or a `kill` sends SIGTERM, which
   would otherwise end the process mid-upload.
 - **A process ended outright leaves its open multipart uploads in the bucket.** SIGKILL does that,
