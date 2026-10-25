@@ -12,15 +12,18 @@ from typing import Any
 
 import numpy as np
 import pyarrow as pa
+import scipy
 from scipy import optimize
 from scipy import stats
 
-# The families `FittedFamily::from_fit` in the core crate reads. Any other leaves the column a linear tail.
-CONTINUOUS_FAMILIES = ('norm', 'lognorm', 'expon', 'weibull_min', 'pareto', 'uniform', 'logistic', 'loguniform', 'triang')
-DISCRETE_FAMILIES = ('geom', 'randint')
+from doppeldata import _core
+
+FAMILIES = _core.fitted_families()
+# What a profile's `generated.fitter` records.
+FITTER = f'scipy {scipy.__version__}'
 # Where loc must stay below the least value, its search reaches this many spans of the values below it.
 LOC_SEARCH_SPANS = 1_000.0
-# A fit with a larger KS statistic is kept, and flagged so a scenario does not reshape a tail through it unasked.
+# A fit with a larger KS statistic is kept, and written `poor: true`.
 POOR_FIT_KS = 0.1
 # A column holding at least this share of zeros is the family mixed with a run of zeros, so the zeros are left out of the fit.
 ZERO_INFLATION_RATE = 0.05
@@ -54,8 +57,8 @@ class Candidate:
 
 
 def finite_values(column: pa.ChunkedArray) -> np.ndarray:
-    """The column's values as doubles, with nulls, NaN and infinities left out as the profile counts them."""
-    values = np.asarray(column.cast(pa.float64()).to_numpy(zero_copy_only=False), dtype=np.float64)
+    """The column's values as the nearest doubles, with nulls, NaN and infinities left out as the profile counts them."""
+    values = np.asarray(column.cast(pa.float64(), safe=False).to_numpy(zero_copy_only=False), dtype=np.float64)
     return values[np.isfinite(values)]
 
 
@@ -78,10 +81,12 @@ def best_fit(values: np.ndarray, *, integral: bool, low: float, high: float, zer
     reached = np.cumsum(counts) / x.size
     ecdf = (reached, reached - counts / x.size)
     fitters: list[Callable[[], Candidate]] = [
-        functools.partial(continuous, family, x, distinct, integral) for family in CONTINUOUS_FAMILIES
+        functools.partial(DISCRETE_FITTERS[family], x, distinct)
+        if discrete
+        else functools.partial(continuous, family, x, distinct, integral)
+        for family, discrete in FAMILIES.items()
+        if integral or not discrete
     ]
-    if integral:
-        fitters += [functools.partial(geometric, x, distinct), functools.partial(discrete_uniform, x, distinct)]
     fits = []
     with warnings.catch_warnings(), np.errstate(all='ignore'):
         warnings.simplefilter('ignore')
@@ -162,3 +167,7 @@ def discrete_uniform(x: np.ndarray, distinct: np.ndarray) -> Candidate:
     frozen = stats.randint(low, high)
     params = {'low': low, 'high': high, 'loc': 0.0}
     return Candidate('randint', params, float(np.sum(frozen.logpmf(x))), 2, frozen.cdf(distinct), frozen.cdf(distinct - 1))
+
+
+# scipy fits no discrete family generically, so each has its own maximum-likelihood estimate.
+DISCRETE_FITTERS: dict[str, Callable[[np.ndarray, np.ndarray], Candidate]] = {'geom': geometric, 'randint': discrete_uniform}

@@ -24,6 +24,16 @@ mod _core {
             .collect()
     }
 
+    /// Whether each scipy.stats family a profile's ``fit`` can name is discrete, by its name. Any
+    /// other family leaves the column a linear tail.
+    #[pyfunction]
+    fn fitted_families() -> BTreeMap<&'static str, bool> {
+        doppeldata_core::FITTED_FAMILIES
+            .iter()
+            .map(|family| (family.name, family.discrete))
+            .collect()
+    }
+
     /// The anchored regular expression grex generalizes the values to, with each digit as a digit
     /// class, or None when it would hold a literal or a character class only some values have.
     #[pyfunction]
