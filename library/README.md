@@ -20,6 +20,9 @@ The table crosses through the Arrow PyCapsule interface, so Polars, DuckDB and p
 read it with no copy, and none of them is needed to generate. `sd.stream()` returns a
 RecordBatchReader for data larger than memory. `sd.write()` writes files with a manifest, and
 `sd.plan()` says what it would write. A write that stops raises a `StoppedWrite`.
+`sd.spark.generate()` and `sd.spark.write()` do the same inside Spark's executors, with the values
+and files a local run gives. They need PySpark 3.5 or later, with pyarrow 15 or later and the pandas
+PySpark asks for, and doppeldata installed on every executor.
 
 The library installs no profiling engine, so a job that only generates carries none.
 `doppeldata.profile()` needs polars, duckdb, pyarrow and boto3 installed beside it, and names any
