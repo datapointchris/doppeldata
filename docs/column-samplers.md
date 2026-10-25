@@ -62,6 +62,11 @@ the column's granularity, from one draw. Otherwise a day is drawn with weight `b
 `by_dow`, each spread over the days holding it, with `gap_rate`'s share of days left empty. Then an
 hour is drawn by `by_hour`, and an offset within it.
 
+The extremes are the observed minimum and maximum, so they rarely fall on midnight. The first and
+last day hold only their granules inside the extremes, and count in a month's or weekday's share
+by that fraction of the day. So a stored weekday share holds exactly, and no value is clamped onto
+an extreme.
+
 ## A value only text can carry is a separate cell, and null in Arrow
 
 A `type_mix` share such as 0.1% `string` in an integer column cannot be an Arrow value. The batch

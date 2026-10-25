@@ -24,7 +24,7 @@ const ROWS: u64 = 2 * BLOCK_ROWS + 4_321;
 /// The stream version the fixture's values were generated under, and a SHA-256 over them. A release
 /// freezes the pair: once released, a change to any value raises STREAM_VERSION.
 const PINNED_STREAM_VERSION: u32 = 1;
-const PINNED_VALUES: &str = "988ba6426e0945d9343ce4c88abc4d00368065127fae4560cc5a85f5b51551af";
+const PINNED_VALUES: &str = "51fed23e6acf2da915e4ea1fd7931001b3b5e367aae725d255154d4450bb5689";
 
 fn document(path: &Path) -> serde_json::Value {
     let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));

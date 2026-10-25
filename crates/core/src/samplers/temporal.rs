@@ -178,8 +178,36 @@ struct WeightedDays {
     granules_per_day: u64,
     granules_per_hour: u32,
     ticks_per_hour: i64,
+    /// The first and last day by index, where the extremes leave part of the day out.
+    edges: Vec<(usize, EdgeDay)>,
     low: i64,
     high: i64,
+}
+
+/// The offsets within a first or last day that lie inside the extremes, as runs of granules. The
+/// day's weight is scaled by the share of its weighted granules inside them.
+#[derive(Debug, Clone)]
+struct EdgeDay {
+    /// Each run's first offset from the day's start, and its granules.
+    runs: Vec<(i64, u64)>,
+    /// Which run, by `by_hour` times its granules, when there is more than one.
+    choice: Option<WeightedAliasIndex<f64>>,
+}
+
+impl EdgeDay {
+    fn offset(&self, rng: &mut ChaCha8Rng, granule: i64) -> i64 {
+        let (first, granules) = self.runs[self.choice.as_ref().map_or(0, |choice| choice.sample(rng))];
+        first + rng.random_range(0..granules) as i64 * granule
+    }
+}
+
+/// The granules `first + k · granule`, for `k` in `0..granules`, that lie in `low..=high`, as the
+/// first one's offset from `first` and their count.
+fn granules_inside(first: i64, granules: u64, granule: i64, low: i64, high: i64) -> (i64, u64) {
+    let earliest = if low > first { -(first - low).div_euclid(granule) } else { 0 };
+    let latest = (high - first).div_euclid(granule).min(granules as i64 - 1);
+    let count = (latest - earliest + 1).max(0) as u64;
+    (earliest * granule, count)
 }
 
 #[derive(Debug, Clone)]
@@ -229,25 +257,76 @@ impl TemporalSampler {
         } else {
             (low.div_euclid(ticks_per_day), high.div_euclid(ticks_per_day))
         };
+        let unusable = |what: &'static str| move |error| Refusal::new(ColumnFault::UnusableRates, format!("{what} are unusable: {error}"));
+        let hours = match by_hour {
+            Some(by_hour) => Some(WeightedAliasIndex::new(by_hour.iter().map(|r| r.0).collect()).map_err(unusable("by_hour's rates"))?),
+            None => None,
+        };
+        let ticks_per_hour = ticks_per_day / 24;
+        let granules_per_day = (ticks_per_day / granule).max(1) as u64;
+        let granules_per_hour = (ticks_per_hour / granule).max(1) as u32;
+        let day_starts: Vec<i64> = (first_day..=last_day).map(|day| day * ticks_per_day).collect();
+        // The share of each day's weighted granules inside the extremes, below 1 on an edge day.
+        let mut inside = vec![1.0; day_starts.len()];
+        let mut edges = Vec::new();
+        if !whole_days {
+            let last = day_starts.len() - 1;
+            for index in if last == 0 { vec![0] } else { vec![0, last] } {
+                let start = day_starts[index];
+                if start >= low && start + ticks_per_day - 1 <= high {
+                    continue;
+                }
+                let (runs, run_weights): (Vec<(i64, u64)>, Vec<f64>) = match by_hour {
+                    Some(by_hour) => (0..24)
+                        .filter_map(|hour| {
+                            let hour_start = hour as i64 * ticks_per_hour;
+                            let (first, count) = granules_inside(start + hour_start, u64::from(granules_per_hour), granule, low, high);
+                            let weight = by_hour.get(hour).map_or(0.0, |r| r.0) * count as f64;
+                            (weight > 0.0).then_some(((hour_start + first, count), weight))
+                        })
+                        .unzip(),
+                    None => {
+                        let (first, count) = granules_inside(start, granules_per_day, granule, low, high);
+                        ((count > 0).then_some(((first, count), count as f64))).into_iter().unzip()
+                    }
+                };
+                let whole_day = match by_hour {
+                    Some(by_hour) => by_hour.iter().map(|r| r.0).sum::<f64>() * f64::from(granules_per_hour),
+                    None => granules_per_day as f64,
+                };
+                inside[index] = run_weights.iter().sum::<f64>() / whole_day;
+                if runs.is_empty() {
+                    continue;
+                }
+                let choice = match runs.len() {
+                    1 => None,
+                    _ => Some(WeightedAliasIndex::new(run_weights).map_err(unusable("by_hour's rates"))?),
+                };
+                edges.push((index, EdgeDay { runs, choice }));
+            }
+        }
         let calendar: Vec<(usize, usize)> = (first_day..=last_day)
             .map(|day| {
                 let date = DateTime::from_timestamp(day * SECONDS_PER_DAY, 0).map(|d| d.date_naive());
                 date.map_or((0, 0), |d| (d.month0() as usize, d.weekday().num_days_from_monday() as usize))
             })
             .collect();
-        let share = |weights: Option<&Vec<crate::profile::Rate>>, index: usize, slots: &[usize]| match weights {
-            Some(weights) if slots[index] > 0 => weights.get(index).map_or(0.0, |r| r.0) / slots[index] as f64,
+        // A month's or weekday's share is spread over its days by how much of each lies inside the
+        // extremes, so a partial edge day holds less than a whole one and the shares stay as stored.
+        let mut months = [0.0; 12];
+        let mut weekdays = [0.0; 7];
+        for (&(month, weekday), &inside) in calendar.iter().zip(&inside) {
+            months[month] += inside;
+            weekdays[weekday] += inside;
+        }
+        let share = |weights: Option<&Vec<crate::profile::Rate>>, index: usize, slots: &[f64]| match weights {
+            Some(weights) if slots[index] > 0.0 => weights.get(index).map_or(0.0, |r| r.0) / slots[index],
             _ => 1.0,
         };
-        let mut months = [0usize; 12];
-        let mut weekdays = [0usize; 7];
-        for &(month, weekday) in &calendar {
-            months[month] += 1;
-            weekdays[weekday] += 1;
-        }
         let mut weights: Vec<f64> = calendar
             .iter()
-            .map(|&(month, weekday)| share(by_month, month, &months) * share(by_dow, weekday, &weekdays))
+            .zip(&inside)
+            .map(|(&(month, weekday), &inside)| inside * share(by_month, month, &months) * share(by_dow, weekday, &weekdays))
             .collect();
         let gaps = ((gap_rate * weights.len() as f64).round() as usize).min(weights.len().saturating_sub(1));
         if gaps > 0 {
@@ -259,24 +338,19 @@ impl TemporalSampler {
                 weights[order[at]] = 0.0;
             }
         }
-        let unusable = |what: &'static str| move |error| Refusal::new(ColumnFault::UnusableRates, format!("{what} are unusable: {error}"));
         let days = WeightedAliasIndex::new(weights).map_err(unusable("the day weights"))?;
-        let hours = match by_hour {
-            Some(by_hour) => Some(WeightedAliasIndex::new(by_hour.iter().map(|r| r.0).collect()).map_err(unusable("by_hour's rates"))?),
-            None => None,
-        };
-        let ticks_per_hour = ticks_per_day / 24;
         Ok(Self {
             output,
             draw: TemporalDraw::Weighted(Box::new(WeightedDays {
-                day_starts: (first_day..=last_day).map(|day| day * ticks_per_day).collect(),
+                day_starts,
                 days,
                 hours,
                 whole_days,
                 granule,
-                granules_per_day: (ticks_per_day / granule).max(1) as u64,
-                granules_per_hour: (ticks_per_hour / granule).max(1) as u32,
+                granules_per_day,
+                granules_per_hour,
                 ticks_per_hour,
+                edges,
                 low,
                 high,
             })),
@@ -293,9 +367,12 @@ impl TemporalSampler {
                 self.output.build(rows, nulls, || low + rng.random_range(0..count) as i64 * granule)
             }
             TemporalDraw::Weighted(days) => self.output.build(rows, nulls, || {
-                let start = days.day_starts[days.days.sample(rng)];
+                let index = days.days.sample(rng);
+                let start = days.day_starts[index];
                 let offset = if days.whole_days {
                     0
+                } else if let Some((_, edge)) = days.edges.iter().find(|(edge, _)| *edge == index) {
+                    edge.offset(rng, days.granule)
                 } else if let Some(hours) = &days.hours {
                     hours.sample(rng) as i64 * days.ticks_per_hour + i64::from(below(rng, days.granules_per_hour)) * days.granule
                 } else {
