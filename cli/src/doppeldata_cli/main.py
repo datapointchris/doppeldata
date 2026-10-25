@@ -241,7 +241,7 @@ def loaded_profile(name: str, param_hint: str) -> Profile:
     if path.is_file():
         try:
             return Profile.load(path)
-        except InvalidProfile as error:
+        except (OSError, InvalidProfile) as error:
             raise typer.BadParameter(str(error), param_hint=param_hint) from error
     if name in example_names():
         return Profile.example(name)
