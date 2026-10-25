@@ -56,7 +56,7 @@ MOMENT_DIGITS = 6
 SHAPE_MOMENT_DECIMALS = 6
 # A fit's parameters can cancel, as a near-normal lognorm's loc and scale do, so they keep more digits than a moment.
 FIT_PARAMETER_DIGITS = 8
-TRIMMED_STATISTICS = frozenset({'trimmed_low', 'trimmed_high', 'length_trimmed_low', 'length_trimmed_high'})
+TRIMMED_STATISTICS = frozenset({'trimmed_low', 'trimmed_high', 'length_trimmed_low', 'length_trimmed_high', 'distinct_days'})
 # Equal-depth bins carry a skewed column's shape in fewer bins than equal-width ones.
 HISTOGRAM_BINS = 32
 EQUAL_DEPTH_LEVELS = tuple(index / HISTOGRAM_BINS for index in range(1, HISTOGRAM_BINS))
@@ -81,6 +81,19 @@ LOGICAL_TYPES = {
     ColumnKind.DATETIME: 'timestamp',
 }
 CONTAINER_LOGICAL_TYPES = {'list': 'array', 'fixed_size_list': 'array', 'struct': 'object'}
+
+
+def profiled_kind(column: dict[str, Any]) -> ColumnKind:
+    """The kind a profile column was profiled as, read back from the logical type `LOGICAL_TYPES` gave it.
+
+    Float and decimal share the logical type `number`, so an Arrow decimal type tells them apart.
+    """
+    kinds = [kind for kind, logical in LOGICAL_TYPES.items() if logical == column.get('logical_type')]
+    if len(kinds) > 1:
+        decimal = (column.get('physical_type') or '').startswith('decimal')
+        kinds = [kind for kind in kinds if (kind is ColumnKind.DECIMAL) == decimal]
+    return kinds[0] if kinds else ColumnKind.OTHER
+
 
 # Each answer by its column, None for the table, and its statistic's name.
 Answers = dict[tuple[str | None, str], Any]
@@ -627,8 +640,10 @@ def temporal_section(spec: ColumnSpec, stat: Stat, values: int, text: TextColumn
             shares = floored_shares(stat(counts), k_min)
             if shares:
                 section[field] = shares
-    days = (day_of(stat('max')) - day_of(stat('min'))).days + 1
-    section['gap_rate'] = significant(1 - stat('distinct_days') / days, RATE_DIGITS)
+    # The generator empties this share of the days between the extremes, so it is counted between them.
+    if has_trimmed_extremes(values, k_min):
+        days = (day_of(stat('trimmed_high')) - day_of(stat('trimmed_low'))).days + 1
+        section['gap_rate'] = significant(1 - stat('distinct_days') / days, RATE_DIGITS)
     return section
 
 

@@ -132,7 +132,7 @@ POLARS_STATISTICS: dict[str, Translation] = {
     'month_counts': lambda months, _: counts_by(months, range(1, 13)),
     'weekday_counts': lambda weekdays, _: counts_by(weekdays, range(1, 8)),
     'hour_counts': lambda hours, _: counts_by(hours, range(24)),
-    'distinct_days': lambda c, _: c.dt.date().drop_nulls().n_unique(),
+    'distinct_days': lambda c, k: c.filter(c.is_between(c.bottom_k(k).max(), c.top_k(k).min())).dt.date().n_unique(),
     **{f'whole_{unit}': whole(nanoseconds) for unit, nanoseconds, _ in TIME_UNITS},
     'raw_type_counts': lambda codes, _: counts_by(codes, range(len(READ_AS))),
     'padded_digits': lambda c, _: c.str.contains(PADDED_DIGITS_TEXT).sum(),

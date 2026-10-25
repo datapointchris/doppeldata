@@ -4,8 +4,13 @@
 
 The inverse CDF is a list of (level, value) knots. The stored quantiles are the frame, with the
 extremes at levels 0 and 1. A histogram's edges, at their cumulative shares, fill the body between
-the outermost quantiles. `zero_rate` adds a flat run at zero, starting at `negative_rate`. A knot
-that would put a value out of order is dropped, so the quantiles win where sources disagree.
+the outermost quantiles. A knot that would put a value out of order is dropped, so the quantiles
+win where sources disagree.
+
+`zero_rate` adds a flat run at zero, from `negative_rate` to `negative_rate + zero_rate`. The run
+is clamped between the last knot below zero and the first above it, so it stays in order and is
+always kept. The rates are stored rounded, so their sum can land just past the share at the next
+edge. Clamping there keeps the zeros a column holds, short of the rounding.
 
 An edge's share counts every row, the histogram's `overflow` included. Edge `i` sits at level
 `(below + counts[0] + … + counts[i - 1]) / (below + sum(counts) + above)`, so edge 0 sits at

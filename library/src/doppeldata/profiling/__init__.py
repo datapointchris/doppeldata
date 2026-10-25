@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from doppeldata.errors import ColumnsNotFrozen
+from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import ProfilingEnginesMissing
 from doppeldata.errors import ProfilingWarning
 from doppeldata.profile_format import DERIVED_FROM
@@ -46,7 +47,7 @@ def profile(
     `edges_from` is an earlier profile of the same table. Where its source fingerprint matches the files
     listed now, and it was made by this doppeldata, scipy and detector packs with the same engine, `k_min`
     and sampling, it is returned unchanged, so a reviewer's edits survive a re-run. Otherwise a
-    `ProfilingWarning` names what differs, each column it holds a histogram or value list for is counted
+    `EarlierProfileNotReused` names what differs, each column it holds a histogram or value list for is counted
     against those, and the rows outside them are written as the column's `overflow`. A column only one of
     the two tables holds issues `ColumnsNotFrozen`.
     """
@@ -69,13 +70,7 @@ def profile(
         changed = what_changed(edges_from, source.fingerprint, engine=engine, sample=sample, k_min=k_min, packs=enabled)
         if changed is None:
             return edges_from
-        warnings.warn(
-            ProfilingWarning(
-                f'the earlier profile is not returned unchanged, because {changed}; '
-                'each column it holds histogram edges or a value list for is counted against them'
-            ),
-            stacklevel=2,
-        )
+        warnings.warn(EarlierProfileNotReused(changed), stacklevel=2)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
     profiled = Profile(table_profile.profile_table(backend, source, sample=sample, k_min=k_min, packs=enabled, frozen=frozen))
     sources.check_unchanged(source)

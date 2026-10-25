@@ -1,27 +1,37 @@
+import contextlib
 import dataclasses as dc
 import importlib.metadata
 import json
 import math
 import signal
+import traceback
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
 from typing import Any
 
 import doppeldata
 import typer
+from doppeldata import CheckFailed
 from doppeldata import DetectorPackError
 from doppeldata import DoppeldataError
 from doppeldata import InvalidProfile
+from doppeldata import InvalidThresholds
 from doppeldata import Profile
+from doppeldata import ProfilesDrifted
 from doppeldata import ProfilingWarning
 from doppeldata import SourceError
 from doppeldata import StoppedWrite
+from doppeldata import Thresholds
 from doppeldata import _core
+from doppeldata import check
+from doppeldata import diff
 from doppeldata import profile
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_text
+from doppeldata.profile_comparison.metrics import METRICS
 from doppeldata.profiling import DEFAULT_K_MIN
 from doppeldata.published_schemas import output_formats
 from doppeldata.published_schemas import partition_styles
@@ -62,7 +72,9 @@ class DoppeldataGroup(TyperGroup):
 app = typer.Typer(no_args_is_help=True, cls=DoppeldataGroup)
 profile_app = typer.Typer(no_args_is_help=True, help='Profiles: reviewable files that describe a dataset without holding its rows.')
 app.add_typer(profile_app, name='profile')
-data_app = typer.Typer(no_args_is_help=True, help='Synthetic datasets generated from a profile, written as files with a manifest.')
+data_app = typer.Typer(
+    no_args_is_help=True, help='Synthetic datasets generated from a profile, written as files with a manifest, and checked against it.'
+)
 app.add_typer(data_app, name='data')
 schemas_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas of the files doppeldata reads and writes.')
 app.add_typer(schemas_app, name='schemas')
@@ -126,6 +138,18 @@ WriterOption = Annotated[
         help='The format\'s settings to change, as a JSON object such as \'{"compression":"snappy"}\'. schemas show manifest names them.',
     ),
 ]
+ThresholdsOption = Annotated[
+    Path | None,
+    typer.Option(
+        '--thresholds',
+        metavar='FILE',
+        help="Each metric's threshold, as YAML or JSON: {defaults: {ks: 0.03}, columns: {amount: {ks: 0.08}}}. The metrics are below.",
+    ),
+]
+METRIC_DEFINITIONS = '\n\n'.join(
+    f'{metric.name}: {metric.summary}. Passes at {metric.bound.value.removeprefix("at_")} {metric.threshold:g} by default.'
+    for metric in METRICS
+)
 
 
 @profile_app.command('list')
@@ -201,17 +225,119 @@ def profile_create(
     except InvalidProfile:
         typer.echo('doppeldata: the profile it wrote fails its own schema, which is a bug in doppeldata:', err=True)
         raise
-    for notice in caught:
-        if issubclass(notice.category, ProfilingWarning):
-            typer.echo(f'doppeldata: {notice.message}', err=True)
-        else:
-            warnings.showwarning(notice.message, notice.category, notice.filename, notice.lineno)
+    print_notices(caught)
     if earlier is not None and profiled is earlier:
         typer.echo(f'doppeldata: {edges_from} was made from these files with these settings, so it is written unchanged', err=True)
     if out is None:
         typer.echo(profiled.to_yaml(), nl=False)
         return
     profiled.save(out)
+
+
+def print_notices(caught: list[warnings.WarningMessage]) -> None:
+    """Print each profiling warning as one line on stderr, and any other warning as Python shows it."""
+    for notice in caught:
+        if issubclass(notice.category, ProfilingWarning):
+            typer.echo(f'doppeldata: {notice.message}', err=True)
+        else:
+            warnings.showwarning(notice.message, notice.category, notice.filename, notice.lineno)
+
+
+def loaded_profile(name: str, param_hint: str) -> Profile:
+    """A profile file, or an example doppeldata ships, refused with exit 2 when it is neither or does not validate."""
+    path = Path(name)
+    if path.is_file():
+        try:
+            return Profile.load(path)
+        except (OSError, InvalidProfile) as error:
+            raise typer.BadParameter(str(error), param_hint=param_hint) from error
+    if name in example_names():
+        return Profile.example(name)
+    message = f'{name!r} is neither a profile file nor an example; name a file, or one of {", ".join(example_names())}'
+    raise typer.BadParameter(message, param_hint=param_hint)
+
+
+@contextlib.contextmanager
+def failure_exits_3() -> Iterator[None]:
+    """End a check verb on 3 when what it wraps fails, so its 1 means drift and nothing else. A usage error keeps 2, and no answer 4."""
+    try:
+        yield
+    except DoppeldataError as error:
+        if error.exit_code == 1:
+            error.exit_code = 3
+        raise
+    except Exception as error:
+        traceback.print_exc()
+        typer.echo(f'doppeldata: the comparison stopped on {type(error).__name__}, which is a bug in doppeldata', err=True)
+        raise typer.Exit(3) from error
+
+
+def loaded_thresholds(path: Path | None) -> Thresholds | None:
+    try:
+        return Thresholds.load(path) if path is not None else None
+    except InvalidThresholds as error:
+        raise typer.BadParameter(str(error), param_hint='--thresholds') from error
+
+
+@profile_app.command('diff', no_args_is_help=True, epilog=METRIC_DEFINITIONS)
+def profile_diff(
+    a: Annotated[str, typer.Argument(metavar='A', help='The earlier profile, a file or an example name.')],
+    b: Annotated[str, typer.Argument(metavar='B', help='The later profile, made with --edges-from A to measure overflow.')],
+    thresholds: ThresholdsOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Report how far B drifted from A, two profiles of one table: doppeldata profile diff march.profile.yaml april.profile.yaml
+
+    Exits 0 when the profiles agree, 1 when a metric misses its threshold or a field changed, and 3 when the diff could not finish.
+    """
+    earlier, later = loaded_profile(a, 'A'), loaded_profile(b, 'B')
+    chosen = loaded_thresholds(thresholds)
+    try:
+        with failure_exits_3():
+            report = diff(earlier, later, thresholds=chosen)
+            shown = report.to_json() if as_json else report.to_markdown()
+    except InvalidThresholds as error:
+        raise typer.BadParameter(str(error), param_hint='--thresholds') from error
+    typer.echo(shown, nl=False)
+    unmeasured = sum(result.unmeasured is not None for result in report.metrics)
+    if unmeasured:
+        message = f'{counted(unmeasured, "metric")} unmeasured and passed, because B holds nothing to compare them with'
+        typer.echo(f'doppeldata: {message}; a B profiled with --edges-from A carries the overflow boundary_adherence reads', err=True)
+    if report.drifted:
+        raise ProfilesDrifted(report)
+
+
+@data_app.command('check', no_args_is_help=True, epilog=METRIC_DEFINITIONS)
+def data_check(
+    profile_name: Annotated[
+        str, typer.Argument(metavar='PROFILE', help='The profile the data was generated from, a file or an example name.')
+    ],
+    data: Annotated[str, typer.Argument(metavar='DATA', help='A file, directory or s3:// prefix holding the generated table.')],
+    thresholds: ThresholdsOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Check generated data against its profile, without the real data: doppeldata data check orders.profile.yaml out/orders/
+
+    DATA is profiled with PROFILE's histogram edges and value lists, and each metric compares the two profiles.
+    Exits 0 when every metric and column passes, and 3 when one does not or the check could not finish.
+    """
+    source = loaded_profile(profile_name, 'PROFILE')
+    chosen = loaded_thresholds(thresholds)
+    try:
+        with failure_exits_3(), warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always', ProfilingWarning)
+            report = check(source, data, thresholds=chosen)
+            shown = report.to_json() if as_json else report.to_markdown()
+    except InvalidThresholds as error:
+        raise typer.BadParameter(str(error), param_hint='--thresholds') from error
+    except SourceError as error:
+        if error.exit_code != 2:
+            raise
+        raise typer.BadParameter(str(error), param_hint='DATA') from error
+    print_notices(caught)
+    typer.echo(shown, nl=False)
+    if not (report.passed and report.verified):
+        raise CheckFailed(report)
 
 
 @profile_app.command('show', no_args_is_help=True)
@@ -268,19 +394,9 @@ def data_choices(
             raise typer.BadParameter(f'{writer!r} is not JSON: {error}', param_hint='--writer') from error
         if not isinstance(settings, dict):
             raise typer.BadParameter(f'{writer!r} is not a JSON object', param_hint='--writer')
-    path = Path(profile_name)
-    if path.is_file():
-        try:
-            loaded = Profile.load(path)
-        except InvalidProfile as error:
-            raise typer.BadParameter(str(error), param_hint='PROFILE') from error
-    elif profile_name in example_names():
-        loaded = Profile.example(profile_name)
-    else:
-        message = f'{profile_name!r} is neither a profile file nor an example; name a file, or one of {", ".join(example_names())}'
-        raise typer.BadParameter(message, param_hint='PROFILE')
     keys = [] if no_partitions else partition_by or None
-    return DataChoices(loaded, rows, seed, out, WriteChoices(file_format, file_rows, keys, partition_style, settings))
+    write = WriteChoices(file_format, file_rows, keys, partition_style, settings)
+    return DataChoices(loaded_profile(profile_name, 'PROFILE'), rows, seed, out, write)
 
 
 def size(count: int) -> str:

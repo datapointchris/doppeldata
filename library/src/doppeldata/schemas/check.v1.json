@@ -1,0 +1,327 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "doppeldata check report v1",
+  "description": "Generated data measured against the profile it was generated from, by profiling the data with\nthat profile's histogram edges and value lists frozen.",
+  "type": "object",
+  "properties": {
+    "changes": {
+      "description": "Columns the data adds or drops, or holds as another kind or semantic type. A change a writer\nalone causes is listed and passes: an Arrow type, which a writer may store at another width\nor unit, and a decimal read back from text as a float. So does a semantic type no detector\npack both profiles ran declares.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FieldChange"
+      }
+    },
+    "check_version": {
+      "type": "integer",
+      "format": "uint64",
+      "const": 1,
+      "minimum": 0
+    },
+    "data": {
+      "$ref": "#/$defs/CheckedData"
+    },
+    "expectations": {
+      "description": "The scenario's declared expectations, empty when no scenario applies.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ExpectationResult"
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MetricResult"
+      }
+    },
+    "passed": {
+      "description": "Whether every metric and every column change passed. A metric the profile states and the\ndata cannot supply fails, because a check vouches for the data.",
+      "type": "boolean"
+    },
+    "profile": {
+      "description": "The profile the data was generated from.",
+      "$ref": "#/$defs/ReportedProfile"
+    },
+    "scenario": {
+      "description": "The scenario applied to the profile, or null for none.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReportedScenario"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "verified": {
+      "description": "Whether every declared expectation held. True when no scenario declares any.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "check_version",
+    "profile",
+    "data",
+    "passed",
+    "verified",
+    "metrics",
+    "changes",
+    "expectations"
+  ],
+  "$defs": {
+    "Bound": {
+      "oneOf": [
+        {
+          "description": "The value passes at or below the threshold.",
+          "type": "string",
+          "const": "at_most"
+        },
+        {
+          "description": "The value passes at or above the threshold.",
+          "type": "string",
+          "const": "at_least"
+        }
+      ]
+    },
+    "ChangeKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "column_added",
+            "column_dropped",
+            "semantic_type_changed",
+            "csv_dialect_changed",
+            "partition_key_added"
+          ]
+        },
+        {
+          "description": "The column kind the profiler read the column as, from its logical type and an Arrow\ndecimal type.",
+          "type": "string",
+          "const": "kind_changed"
+        },
+        {
+          "description": "The Arrow type, such as `int32` becoming `int64`.",
+          "type": "string",
+          "const": "physical_type_changed"
+        },
+        {
+          "description": "More rows than the diff allows fall outside the histogram edges or value list frozen from A.",
+          "type": "string",
+          "const": "overflow"
+        }
+      ]
+    },
+    "CheckedData": {
+      "description": "The data that was profiled and measured.",
+      "type": "object",
+      "properties": {
+        "fingerprint": {
+          "description": "The profile's `source_fingerprint` of the files read, or null for an in-memory table.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "The data as the caller named it, such as `s3://bucket/orders/`.",
+          "type": "string"
+        },
+        "rows": {
+          "description": "The rows profiled.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "rows"
+      ]
+    },
+    "ExpectationResult": {
+      "description": "A scenario's declared expectation and the value the data holds.",
+      "type": "object",
+      "properties": {
+        "at_least": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "at_most": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "column": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metric": {
+          "description": "The statistic expected, such as `hot_keys.share`.",
+          "type": "string"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "metric",
+        "value",
+        "passed"
+      ]
+    },
+    "FieldChange": {
+      "description": "A field that differs between the two profiles, outside what the metrics measure.",
+      "type": "object",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/ChangeKind"
+        },
+        "column": {
+          "description": "The column the change is in, or null for a table-level field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected": {
+          "description": "The field's value in the source profile, or A, and null where it holds none."
+        },
+        "field": {
+          "description": "An RFC 6901 pointer to the field: in the source profile, or A, for a dropped column, and in\nthe other profile for every other change.",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "observed": {
+          "description": "The field's value in the profile of the data checked, or B, and null where it holds none."
+        },
+        "passed": {
+          "description": "False when the change fails the check or counts as drift.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "change",
+        "field",
+        "passed",
+        "message"
+      ]
+    },
+    "MetricResult": {
+      "description": "One metric's value for one column, or for the table where `column` is null.",
+      "type": "object",
+      "properties": {
+        "bound": {
+          "description": "Whether `value` passes at or below `threshold`, or at or above it.",
+          "$ref": "#/$defs/Bound"
+        },
+        "column": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected": {
+          "description": "The statistic the metric compares, as the source profile holds it: A's, in a diff.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "metric": {
+          "description": "The metric's name, such as `ks`, as `--thresholds` keys it.",
+          "type": "string"
+        },
+        "observed": {
+          "description": "The same statistic in the profile of the data checked: B's, in a diff.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "threshold": {
+          "type": "number",
+          "format": "double"
+        },
+        "unmeasured": {
+          "description": "Why the metric has no value: the source profile states what it compares, and the other\nprofile holds nothing to compare it with, as a column under `k_min` values holds no\nquantiles.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "The metric's value, or null where `unmeasured` says why the other profile cannot supply it.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "metric",
+        "threshold",
+        "bound",
+        "passed"
+      ]
+    },
+    "ReportedProfile": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The profile's `name`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The profile's path as the caller gave it, or null when it came from memory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "digest"
+      ]
+    },
+    "ReportedScenario": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "description": "`sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "digest"
+      ]
+    }
+  }
+}

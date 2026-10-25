@@ -499,7 +499,7 @@ pub struct TemporalStats {
     /// The share of rows in each hour of the day, from 00.
     #[schemars(length(equal = 24))]
     pub by_hour: Option<Vec<Rate>>,
-    /// The share of days in the range holding no rows.
+    /// The share of days between the extremes holding no rows.
     pub gap_rate: Option<Rate>,
 }
 

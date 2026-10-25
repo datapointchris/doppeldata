@@ -26,6 +26,8 @@ from doppeldata.s3_access import s3_session
 SUFFIX_FORMATS = {suffix: source_format for source_format, traits in FORMAT_TRAITS.items() for suffix in traits.suffixes}
 # DuckDB reads a text file through any of these, so the format is the suffix before it.
 COMPRESSION_SUFFIXES = ('.gz', '.zst', '.bz2')
+# A doppeldata write claims its destination with this file, and removes it once every file is written.
+UNFINISHED_WRITE = PurePosixPath('_manifest.partial.json')
 
 
 def resolve(data: Any) -> Source:
@@ -81,10 +83,19 @@ def local_files(path: Path) -> list[SourceFile]:
         for candidate in path.rglob('*')
         if candidate.is_file() and format_of(candidate.name)
     )
+    if any(relative == UNFINISHED_WRITE for _, relative in found):
+        raise SourceError(unfinished(str(path)))
     kept = [local_file(candidate, relative) for candidate, relative in found if not is_hidden(relative)]
     if not kept:
         raise SourceError(f'{path} holds no file doppeldata reads, one ending in {", ".join(SUFFIX_FORMATS)}')
     return kept
+
+
+def unfinished(root: str) -> str:
+    return (
+        f'{root} holds {UNFINISHED_WRITE}, so the doppeldata write there stopped or is still running and its files are incomplete; '
+        'once no write is running there, generate the dataset again, replacing what it left'
+    )
 
 
 def local_file(path: Path, relative: PurePosixPath) -> SourceFile:
@@ -158,5 +169,7 @@ def s3_objects(client: Any, bucket: str, prefix: str) -> Iterator[SourceFile]:
     for page in client.get_paginator('list_objects_v2').paginate(Bucket=bucket, Prefix=prefix):
         for entry in page.get('Contents', []):
             relative = PurePosixPath(entry['Key'].removeprefix(prefix))
+            if relative == UNFINISHED_WRITE:
+                raise SourceError(unfinished(f's3://{bucket}/{prefix}'))
             if format_of(entry['Key']) and not is_hidden(relative):
                 yield SourceFile(f's3://{bucket}/{entry["Key"]}', entry['Size'], entry['ETag'], partition_keys(relative))

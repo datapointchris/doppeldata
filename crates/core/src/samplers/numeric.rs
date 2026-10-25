@@ -3,9 +3,9 @@
 //!
 //! The knots are the stored quantiles, with the extremes at levels 0 and 1. A histogram's edges at
 //! their cumulative shares of every row, its overflow included, fill the body between the
-//! outermost quantiles, and `zero_rate` adds a flat run at zero. Beyond the outermost quantile, a
-//! fitted family's conditional tail, truncated at the extremes, is tabulated into dense knots;
-//! without a usable fit the tail is linear.
+//! outermost quantiles, and `zero_rate` adds a flat run at zero, clamped between the knots beside
+//! it. Beyond the outermost quantile, a fitted family's conditional tail, truncated at the
+//! extremes, is tabulated into dense knots; without a usable fit the tail is linear.
 
 use std::sync::Arc;
 
@@ -112,23 +112,26 @@ pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> R
         };
     }
     let (body_low, body_high) = (knots.first(), knots.last());
+    // The extreme sits beyond the body's outermost knot, so it is always in order. A tail knot
+    // the fit cannot place, such as a NaN, is left out, and the curve runs straight across it.
     if let Some((level, value)) = body_low.filter(|&(level, _)| level > 0.0) {
         let low = low.filter(|&low| low <= value);
         match fit.and_then(|fit| lower_tail(fit, low, level, value)) {
-            Some(tail) => knots.extend(tail),
+            Some(tail) => _ = knots.extend(tail),
             None => _ = knots.insert(0.0, low.unwrap_or(value)),
         }
     }
     if let Some((level, value)) = body_high.filter(|&(level, _)| level < 1.0) {
         let high = high.filter(|&high| high >= value);
         match fit.and_then(|fit| upper_tail(fit, level, value, high)) {
-            Some(tail) => knots.extend(tail),
+            Some(tail) => _ = knots.extend(tail),
             None => _ = knots.insert(1.0, high.unwrap_or(value)),
         }
     }
     if let (Some((first, _)), Some((last, _))) = (body_low, body_high) {
+        // The quantiles frame the body, so a histogram edge they contradict is left out.
         for (level, value) in interior.into_iter().filter(|&(level, _)| first < level && level < last) {
-            knots.insert(level, value);
+            _ = knots.insert(level, value);
         }
     }
     if let Some(zero_rate) = stats.zero_rate.map(|r| r.0).filter(|&r| r > 0.0) {
@@ -137,8 +140,7 @@ pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> R
             (lowest >= 0.0).then_some(0.0)
         });
         if let Some(below_zero) = below_zero {
-            knots.insert(below_zero, 0.0);
-            knots.insert((below_zero + zero_rate).min(1.0), 0.0);
+            knots.insert_run(below_zero, (below_zero + zero_rate).min(1.0), 0.0);
         }
     }
     Ok(InverseCdf::new(knots))
@@ -156,14 +158,15 @@ pub(crate) fn bounded_cdf(
     if knots.is_empty() {
         let low = low.unwrap_or(default.0);
         let high = high.unwrap_or(default.1).max(low);
-        knots.extend([(0.0, low), (1.0, high)]);
+        knots = Knots::from_sorted(vec![(0.0, low), (1.0, high)]).expect("low is at most high");
     }
+    // Each extreme is kept only where it lies beyond the outermost quantile, so both are in order.
     let (first, last) = (knots.first(), knots.last());
     if let Some((_, value)) = first {
-        knots.insert(0.0, low.filter(|&low| low <= value).unwrap_or(value));
+        _ = knots.insert(0.0, low.filter(|&low| low <= value).unwrap_or(value));
     }
     if let Some((_, value)) = last {
-        knots.insert(1.0, high.filter(|&high| high >= value).unwrap_or(value));
+        _ = knots.insert(1.0, high.filter(|&high| high >= value).unwrap_or(value));
     }
     Ok(InverseCdf::new(knots))
 }

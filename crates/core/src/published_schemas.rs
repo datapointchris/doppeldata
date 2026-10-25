@@ -2,6 +2,7 @@
 
 use crate::manifest;
 use crate::profile;
+use crate::profile_comparison;
 
 pub struct PublishedSchema {
     /// The name `doppeldata schemas show` takes.
@@ -21,6 +22,16 @@ pub fn all() -> Vec<PublishedSchema> {
             name: "manifest",
             file_name: format!("manifest.v{}.json", manifest::MANIFEST_VERSION),
             derive: manifest::json_schema,
+        },
+        PublishedSchema {
+            name: "check",
+            file_name: format!("check.v{}.json", profile_comparison::CHECK_VERSION),
+            derive: profile_comparison::check_json_schema,
+        },
+        PublishedSchema {
+            name: "diff",
+            file_name: format!("diff.v{}.json", profile_comparison::DIFF_VERSION),
+            derive: profile_comparison::diff_json_schema,
         },
     ]
 }

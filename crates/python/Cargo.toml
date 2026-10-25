@@ -24,7 +24,7 @@ doppeldata-writers = { path = "../writers" }
 # cloud-base exports the HTTP error a store's retries end on, which tells a store that stopped
 # answering from one that answered with a failure.
 object_store = { version = "0.14.2", features = ["cloud-base"] }
-pyo3 ={ version = "0.30", features = ["experimental-inspect"] }
+pyo3 = { version = "0.30", features = ["experimental-inspect"] }
 # Tables and readers cross into Python as pyo3-arrow's own classes, which carry the Arrow PyCapsule
 # interface, so the library needs no Arrow package installed. Its major must build on the arrow the
 # engine pins. Its default buffer_protocol feature stays on, because the crate does not build without it.

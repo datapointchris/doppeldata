@@ -8,6 +8,7 @@ pub mod manifest;
 mod physical_type;
 mod plan;
 pub mod profile;
+pub mod profile_comparison;
 pub mod published_schemas;
 mod rng;
 mod samplers;
