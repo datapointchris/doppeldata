@@ -46,6 +46,8 @@ FORMAT_TRAITS = {
     SourceFormat.NDJSON: FormatTraits(('.ndjson', '.jsonl'), text=True),
 }
 TEXT_FORMATS = frozenset(source_format for source_format, traits in FORMAT_TRAITS.items() if traits.text)
+# The codec a text file is compressed with, by the suffix after its format's. DuckDB reads each.
+TEXT_CODEC_SUFFIXES = {'.gz': 'gzip', '.zst': 'zstd', '.bz2': 'bzip2'}
 
 unspelled = sorted({source_format.value for source_format in SourceFormat} - set(published_enum('SourceFormat')))
 if unspelled:
@@ -54,12 +56,114 @@ if unspelled:
 
 @dc.dataclass(frozen=True)
 class CsvDialect:
-    """How a delimited text file is read. The default is RFC 4180 with a header row."""
+    """How a delimited text file is read. The default is RFC 4180 with a header row.
+
+    An empty `quote` reads no field as quoted. `encoding` is spelled as DuckDB's `read_csv` takes it.
+    """
 
     delimiter: str = ','
     quote: str = '"'
     escape: str = '"'
     header: bool = True
+    encoding: str = 'utf-8'
+    # The columns' names, from the header row or numbered where there is none.
+    names: tuple[str, ...] = ()
+
+
+@dc.dataclass(frozen=True)
+class DialectFound:
+    """A delimited source's dialect, how each sniffer read the first block, and what that block's bytes hold."""
+
+    dialect: CsvDialect
+    # Each sniffer's delimiter, quote and escape by its name, the one read first leading, or None where it found no
+    # dialect. A quote or escape it named none of is empty.
+    named: dict[str, tuple[str, str, str] | None]
+    # Whether the two read the same delimiter and quote, a quote neither names being read as `"`.
+    agreed: bool
+    # The sniffer whose dialect was read, or `default` where neither named one.
+    chosen: str
+    # The share of the block's records that split into the most common number of fields under `dialect`.
+    confidence: float
+    # charset-normalizer's name for the block's encoding, such as `ascii` or `cp1252`.
+    detected_encoding: str | None
+    bom: bool
+    # The block's line breaks counted by terminator, `lf` and `crlf`.
+    line_terminators: dict[str, int]
+    # `always`, `non_numeric` or `necessary`, as the block's quoted fields show.
+    quoting: str
+    trailing_delimiter: bool
+
+
+@dc.dataclass(frozen=True)
+class ParquetFooter:
+    """What one Parquet file's footer says of how it was written. It holds no value statistic."""
+
+    rows: int
+    created_by: str | None
+    format_version: str
+    spark_version: str | None
+    # Each row group's rows and its column chunks' compressed bytes.
+    row_groups: tuple[tuple[int, int], ...]
+    # The codec most column chunks use, as Parquet names it, such as `SNAPPY`.
+    codec: str | None
+    # Every leaf column's dotted path, and those whose chunks in every row group carry a dictionary page.
+    columns: tuple[str, ...]
+    dictionary_columns: tuple[str, ...]
+    # Whether most column chunks record statistics, and whether most have a column and offset index.
+    statistics: bool
+    page_index: bool
+    # The columns every row group declares itself sorted by, in order.
+    sorting_columns: tuple[str, ...]
+    # Each timestamp column's stored unit, `ms`, `us`, `ns` or `int96`.
+    timestamp_units: dict[str, str]
+    # Each decimal column's scale.
+    decimal_scales: dict[str, int]
+
+
+@dc.dataclass(frozen=True)
+class SourceRead:
+    """A source's table, and what reading its files found beside the rows."""
+
+    table: 'Table'
+    dialect: DialectFound | None = None
+    # The rows a reader rejected by DuckDB's error type, in snake case, each row counted once.
+    rejected: dict[str, int] = dc.field(default_factory=dict)
+    # Each file's rows, where the reader counts them per file.
+    file_rows: tuple[int, ...] = ()
+    footers: tuple[ParquetFooter, ...] = ()
+    json: 'JsonRead | None' = None
+
+
+@dc.dataclass(frozen=True)
+class JsonRead:
+    """A JSON source's path tree, a table of each array's elements by the array's `path`, and whether a record ends each line."""
+
+    paths: 'JsonNode'
+    elements: dict[str, 'Table']
+    lines: bool
+
+
+@dc.dataclass(frozen=True)
+class JsonNode:
+    """One path of a JSON record: an object's fields, an array's element, or a scalar.
+
+    `kind` is `object`, `array` or `scalar`. `column` names the path's flat column in its table, the record's or an
+    array's elements', and `path` is the dotted path from the record, unique across every table.
+    """
+
+    column: str
+    path: str
+    kind: str
+    fields: tuple[tuple[str, 'JsonNode'], ...] = ()
+    element: 'JsonNode | None' = None
+
+
+HIDDEN_COLUMN_PREFIX = '__doppeldata'
+
+
+def is_hidden(column: str) -> bool:
+    """Whether a column is one the reader added, such as a JSON value's type, which no profile column describes."""
+    return column.startswith(HIDDEN_COLUMN_PREFIX)
 
 
 @dc.dataclass(frozen=True)
@@ -132,6 +236,10 @@ class ParsedType:
 
     raw_type: str
     format: str | None = None
+    # Text tokens read as null, such as `NULL`.
+    missing: tuple[str, ...] = ()
+    # The column holding each JSON value's JSON type, which decides its raw type in place of its text.
+    json_type_column: str | None = None
 
 
 class Backend(Protocol):
@@ -140,6 +248,10 @@ class Backend(Protocol):
     name: str
 
     def scan(self, source: Source) -> Table: ...
+
+    def read(self, source: Source) -> SourceRead:
+        """The source's table, with what reading its files found beside the rows."""
+        ...
 
     def schema(self, table: Table) -> list[ColumnSpec]: ...
 

@@ -29,7 +29,7 @@ style = "semver"
 # The CLI and the library release from one tag, so the CLI requires the library
 # at exactly its own version.
 [tool.hatch.metadata.hooks.uv-dynamic-versioning]
-dependencies = ["boto3>=1.43.118", "doppeldata=={{ version }}", "duckdb>=2.0.0", "polars>=2.0.0", "pyarrow>=26.0.0", "scipy>=1.18.1", "typer>=0.27"]
+dependencies = ["boto3>=1.43.118", "charset-normalizer>=3.5.2", "clevercsv>=0.8.5", "doppeldata=={{ version }}", "duckdb>=2.0.0", "polars>=2.0.0", "pyarrow>=26.0.0", "scipy>=1.18.1", "typer>=0.27"]
 
 # Inside the workspace the library is the checkout beside this one, whatever
 # version either reports.

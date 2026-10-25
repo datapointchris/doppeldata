@@ -1,0 +1,167 @@
+# Hand-written: a clickstream export as newline-delimited JSON, nested the way an event collector writes it.
+# A quarter of the producers write `user_id` as a string, and a quarter of the events carry a referrer.
+# No data was read, so it has no `generated` block.
+profile_version: 1
+kind: table
+name: events-json
+privacy:
+  policy: default
+  k_min: 11
+source:
+  format: ndjson
+  compression: gzip
+  layout:
+    files:
+      count: 24
+      size_bytes: {min: 2100000, p50: 2400000, max: 2900000, total: 57600000}
+    rows_per_file: {p05: 9000, p50: 10000, p95: 11200}
+    partitioning:
+      style: hive
+      keys:
+        - name: event_date
+          type: date32[day]
+          values: {count: 24}
+  json:
+    explicit_nulls: false
+    compression: gzip
+    max_depth: 3
+dataset:
+  row_count: 240000
+  duplicate_row_rate: 0.0
+columns:
+  - name: event_id
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 240000, ratio: 1.0}
+    string:
+      length: {min: 36, max: 36, mean: 36}
+      shapes: [{shape: "99a99a99-9999-9a99-a999-a99a9999a9a9", rate: 1.0}]
+    semantic: {type: uuid, confidence: 0.99, detectors: [pattern], sensitivity: identifier, generator_hint: {provider: uuid}}
+  - name: user_id
+    physical_type: int64
+    logical_type: integer
+    nullable: false
+    null_rate: 0.0
+    type_mix: {integer: 0.75, string: 0.25}
+    distinct: {approx: 25000, ratio: 0.1042}
+    numeric:
+      integral: true
+      extremes: {low: 1, high: 25000}
+      quantiles: {p05: 1250, p25: 6250, p50: 12500, p75: 18750, p95: 23750}
+      fit: {family: randint, params: {low: 1, high: 25001}}
+      monotonic: none
+    semantic: {type: customer_id, confidence: 0.9, detectors: [name_hint], sensitivity: identifier}
+  - name: event_type
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 4, ratio: 0.00002}
+    string:
+      top_values:
+        - {value: page_view, rate: 0.62}
+        - {value: click, rate: 0.27}
+        - {value: add_to_cart, rate: 0.08}
+        - {value: purchase, rate: 0.03}
+      other_rate: 0.0
+  - name: occurred_at
+    physical_type: "timestamp[us, tz=UTC]"
+    logical_type: timestamp
+    nullable: false
+    null_rate: 0.0
+    temporal:
+      timezone: UTC
+      extremes: {low: "2025-06-01T00:00:00Z", high: "2025-06-24T23:59:59Z", granularity: second}
+  - name: event_date
+    physical_type: date32[day]
+    logical_type: date
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 24, ratio: 0.0001}
+    temporal:
+      extremes: {low: "2025-06-01", high: "2025-06-24", granularity: day}
+  - name: context
+    physical_type: "struct<page: string, referrer: string, device: struct<os: string, mobile: bool>>"
+    logical_type: object
+    nullable: false
+    null_rate: 0.0
+    struct:
+      presence: {page: 1.0, referrer: 0.25, device: 1.0}
+      fields:
+        - name: page
+          path: context.page
+          physical_type: string
+          logical_type: string
+          nullable: false
+          null_rate: 0.0
+          string:
+            top_values:
+              - {value: /, rate: 0.35}
+              - {value: /search, rate: 0.25}
+              - {value: /product, rate: 0.3}
+              - {value: /cart, rate: 0.1}
+            other_rate: 0.0
+        - name: referrer
+          path: context.referrer
+          physical_type: string
+          logical_type: string
+          nullable: true
+          null_rate: 0.0
+          string:
+            top_values:
+              - {value: "https://www.google.com/", rate: 0.6}
+              - {value: "https://www.bing.com/", rate: 0.15}
+              - {value: "https://t.co/", rate: 0.25}
+            other_rate: 0.0
+        - name: device
+          path: context.device
+          physical_type: "struct<os: string, mobile: bool>"
+          logical_type: object
+          nullable: false
+          null_rate: 0.0
+          struct:
+            presence: {os: 1.0, mobile: 1.0}
+            fields:
+              - name: os
+                path: context.device.os
+                physical_type: string
+                logical_type: string
+                nullable: false
+                null_rate: 0.0
+                string:
+                  top_values:
+                    - {value: ios, rate: 0.38}
+                    - {value: android, rate: 0.34}
+                    - {value: windows, rate: 0.18}
+                    - {value: macos, rate: 0.1}
+                  other_rate: 0.0
+              - name: mobile
+                path: context.device.mobile
+                physical_type: bool
+                logical_type: boolean
+                nullable: false
+                null_rate: 0.0
+                boolean: {true_rate: 0.72}
+  - name: tags
+    physical_type: "list<item: string>"
+    logical_type: array
+    nullable: true
+    null_rate: 0.1
+    list:
+      length: {p05: 0, p50: 1, p95: 3}
+      empty_rate: 0.4
+      element:
+        name: element
+        path: tags.element
+        physical_type: string
+        logical_type: string
+        nullable: false
+        null_rate: 0.0
+        string:
+          top_values:
+            - {value: promo, rate: 0.45}
+            - {value: returning, rate: 0.35}
+            - {value: beta, rate: 0.2}
+          other_rate: 0.0

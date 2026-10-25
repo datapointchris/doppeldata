@@ -187,7 +187,7 @@ def profile_create(
             help=(
                 "Count each column against FILE's histogram edges and value list, writing the rows outside them as overflow. "
                 'FILE is returned unchanged when nothing it was made from has changed: the files, the settings, '
-                'and the versions of the tools and detector packs that wrote it.'
+                'and the versions of the tools, readers and detector packs that made it.'
             ),
         ),
     ] = None,

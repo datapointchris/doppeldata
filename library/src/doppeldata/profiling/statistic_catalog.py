@@ -97,7 +97,9 @@ COUNTING_STATISTICS = (
     Statistic('listed_value_counts', frozenset({ColumnKind.STRING})),
 )
 
-TABLE_STATISTICS = (Statistic('rows', frozenset()),)
+# `unparsed_rows` carries each column's name and `ParsedType`, and answers with the rows holding a
+# non-null value that does not parse as its column's type, which a typed reader rejects as `cast`.
+TABLE_STATISTICS = (Statistic('rows', frozenset()), Statistic('unparsed_rows', frozenset()))
 
 # The types a text source's raw value may parse as, in the order a value is tried and a tie between
 # two types' shares is broken. A value parsing as none of them is a string.
@@ -114,6 +116,10 @@ TEXT_TYPE_STATISTICS = (
     # Digit runs with a leading zero, such as ZIP codes. Padding means the digits are a code, so a
     # column holding one is read as text whatever its other values parse as.
     Statistic('padded_digits', frozenset({ColumnKind.STRING})),
+    # A JSON path's values counted as `raw_type_counts` counts them, except that a number or a
+    # boolean is its JSON type and a JSON string is a date, a timestamp or a string. The argument
+    # pairs the layouts with the column holding each value's JSON type.
+    Statistic('json_raw_type_counts', frozenset({ColumnKind.STRING})),
 )
 
 ALL_STATISTICS = (*COLUMN_STATISTICS, *COUNTING_STATISTICS, *TABLE_STATISTICS, *TEXT_TYPE_STATISTICS)

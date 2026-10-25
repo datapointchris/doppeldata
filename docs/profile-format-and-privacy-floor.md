@@ -12,6 +12,10 @@ is accepted on input. One JSON Schema validates both.
   library refuses to load and names its version.
 - **Every section is optional.** A profile imported from a data catalog or a data contract has types
   and no statistics, and the generator falls back to defaults for what is missing.
+- **Every section of a profile accepts a key it does not know.** A job pinned to an earlier library
+  still loads a profile a later release wrote. That is what lets an added field keep
+  `profile_version`. The settings a caller hands a writer are not a profile, and refuse an unknown
+  key.
 - **Unknown fields survive a read and a rewrite.** An older tool never strips what a newer one wrote.
   The file is written back through ruamel.yaml, which also keeps a reviewer's comments and key order.
 

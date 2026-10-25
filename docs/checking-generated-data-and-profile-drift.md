@@ -102,6 +102,25 @@ Every kind of column is measured. A float column whose source holds cents, gener
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.
 
+## Three metrics measure the files against the source's layout, scaled to the rows checked
+
+A source profile with a `source.layout` gets three metrics, one statistic each. Each value is a
+relative change, as `distinct_ratio_delta`'s is, and each defaults to at most 0.10.
+
+- **`file_count_delta` is the file count's change.** The count expected is the source's scaled to
+  the rows checked. So a check at the profile's row count holds the source's file count, and one at
+  a tenth of it holds a tenth.
+- **The file count expected is never under one file for each partition the rows can fill.** A
+  partitioned writer writes a file for every combination of the keys' values. So the count is at
+  least the product of each key's value count, or the rows checked where those are fewer.
+- **`rows_per_file_delta` is the median rows per file's change**, against the source's, or the
+  rows checked over the files expected where that is fewer.
+- **`partition_share_delta` has a row per Hive key the source lists value shares of.** Its value is
+  the largest change in one value's share of rows. A value the data lacks has a share of 0, so its
+  change is 1.
+- **Data whose profile records no layout leaves each of the three unmeasured**, as a table in
+  memory does. A source profile with no layout, as a hand-written one may be, gets none of them.
+
 ## A metric the other profile cannot supply is a row with no value
 
 Where the source states what a metric compares and the other profile holds nothing to compare it
@@ -133,9 +152,11 @@ Arrow decimal type telling a decimal from a float.
   that does not.
 - **A diff fails on every other changed field.** That covers a changed Arrow type or kind, which
   there means the source itself changed. It also covers a column with more than `OVERFLOW_SHARE`
-  of its values outside the edges or value list frozen from A, a CSV dialect setting that changed,
-  and a partition key B adds. The tool versions and packs a profile records are how it was made,
-  so a diff compares none of them.
+  of its values outside the edges or value list frozen from A, a CSV dialect setting a writer takes
+  that changed, and a partition key B adds. The rest of `source.csv`, such as the malformed rows
+  and the sniffers' confidence, describes the files rather than a setting a writer takes, so a diff
+  does not compare it. The tool versions and packs a profile records are how it was made, so a diff
+  compares none of them.
 
 ## A failed check exits 3, drift exits 1, and a verb that could not finish exits 3
 

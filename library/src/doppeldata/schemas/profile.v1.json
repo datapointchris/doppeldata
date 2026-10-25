@@ -424,6 +424,160 @@
         "cramers_v"
       ]
     },
+    "CsvSource": {
+      "description": "A delimited source's dialect, as a writer takes it, and how it was found.",
+      "type": "object",
+      "properties": {
+        "bom": {
+          "description": "Whether the file starts with a UTF-8 byte order mark.",
+          "type": "boolean",
+          "default": false
+        },
+        "compression": {
+          "$ref": "#/$defs/TextCompression",
+          "default": "none"
+        },
+        "compression_level": {
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        },
+        "date_format": {
+          "description": "A chrono format for date columns. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "delimiter": {
+          "description": "Null takes the format's own: `,` for CSV, a tab for TSV.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "detected_encoding": {
+          "description": "The encoding charset-normalizer named for the first block, such as `ascii`, `utf_8` or\n`cp1252`. `encoding` holds the nearest one a writer writes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DialectDetection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "encoding": {
+          "$ref": "#/$defs/TextEncoding",
+          "default": "utf8"
+        },
+        "escape": {
+          "description": "The character that escapes a quote inside a quoted field. Null doubles the quote instead.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "header": {
+          "description": "Whether the first line names the columns.",
+          "type": "boolean",
+          "default": true
+        },
+        "line_terminator": {
+          "$ref": "#/$defs/LineTerminator",
+          "default": "lf"
+        },
+        "line_terminator_mix": {
+          "description": "The share of the first block's line breaks that end in each terminator.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "crlf": {
+              "$ref": "#/$defs/Rate"
+            },
+            "lf": {
+              "$ref": "#/$defs/Rate"
+            }
+          },
+          "additionalProperties": false
+        },
+        "malformed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MalformedRows"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "null": {
+          "description": "What a null prints where the column's profile gives no missing token for it. When it is\nempty, an empty string is quoted so the two read back apart.",
+          "type": "string",
+          "default": ""
+        },
+        "quote": {
+          "type": "string",
+          "default": "\"",
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "quoting": {
+          "$ref": "#/$defs/Quoting",
+          "default": "necessary"
+        },
+        "time_format": {
+          "description": "A chrono format for time columns. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timestamp_format": {
+          "description": "A chrono format for timestamp columns without a time zone. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timestamp_tz_format": {
+          "description": "A chrono format for timestamp columns with a time zone. Null writes ISO 8601 with the offset.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "trailing_delimiter": {
+          "description": "Whether every sampled line ends in a delimiter, which a reader takes as one more empty column.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
     "Dataset": {
       "description": "Facts about the table as a whole.",
       "type": "object",
@@ -484,111 +638,6 @@
           "minimum": 0
         }
       }
-    },
-    "DelimitedSettings": {
-      "description": "A CSV or TSV dialect. Every character must be ASCII.",
-      "type": "object",
-      "properties": {
-        "bom": {
-          "description": "Whether the file starts with a UTF-8 byte order mark.",
-          "type": "boolean",
-          "default": false
-        },
-        "compression": {
-          "$ref": "#/$defs/TextCompression",
-          "default": "none"
-        },
-        "compression_level": {
-          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32",
-          "default": null
-        },
-        "date_format": {
-          "description": "A chrono format for date columns. Null writes ISO 8601.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "delimiter": {
-          "description": "Null takes the format's own: `,` for CSV, a tab for TSV.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null,
-          "maxLength": 1,
-          "minLength": 1
-        },
-        "encoding": {
-          "$ref": "#/$defs/TextEncoding",
-          "default": "utf8"
-        },
-        "escape": {
-          "description": "The character that escapes a quote inside a quoted field. Null doubles the quote instead.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null,
-          "maxLength": 1,
-          "minLength": 1
-        },
-        "header": {
-          "description": "Whether the first line names the columns.",
-          "type": "boolean",
-          "default": true
-        },
-        "line_terminator": {
-          "$ref": "#/$defs/LineTerminator",
-          "default": "lf"
-        },
-        "null": {
-          "description": "What a null prints where the column's profile gives no missing token for it. When it is\nempty, an empty string is quoted so the two read back apart.",
-          "type": "string",
-          "default": ""
-        },
-        "quote": {
-          "type": "string",
-          "default": "\"",
-          "maxLength": 1,
-          "minLength": 1
-        },
-        "quoting": {
-          "$ref": "#/$defs/Quoting",
-          "default": "necessary"
-        },
-        "time_format": {
-          "description": "A chrono format for time columns. Null writes ISO 8601.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "timestamp_format": {
-          "description": "A chrono format for timestamp columns without a time zone. Null writes ISO 8601.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "timestamp_tz_format": {
-          "description": "A chrono format for timestamp columns with a time zone. Null writes ISO 8601 with the offset.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        }
-      },
-      "additionalProperties": false
     },
     "Dependency": {
       "type": "object",
@@ -651,6 +700,86 @@
           "description": "A check of the value other than a regular expression, such as a lookup or a parse.",
           "type": "string",
           "const": "validator"
+        }
+      ]
+    },
+    "DialectDetection": {
+      "description": "How the dialect was found. DuckDB's sniffer reads the files first, and CleverCSV confirms its\ndialect on the first block. DuckDB's is read where the two agree or CleverCSV names none, and\nCleverCSV's where they disagree.",
+      "type": "object",
+      "properties": {
+        "agreed": {
+          "description": "Whether the two found the same delimiter and quote.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "chosen": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DialectSniffer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "description": "The share of the first block's records that split into the most common number of fields\nunder the chosen dialect.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confirm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DialectSniffer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DialectSniffer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sniffed": {
+          "description": "What each sniffer named, the one read first leading. So a quote read where neither named\none shows as the format's own rather than a sniffer's.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/SniffedDialect"
+          }
+        }
+      }
+    },
+    "DialectSniffer": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "duckdb",
+            "clevercsv"
+          ]
+        },
+        {
+          "description": "Neither sniffer named a dialect, so the format's own was read.",
+          "type": "string",
+          "const": "default"
         }
       ]
     },
@@ -915,6 +1044,16 @@
             "null"
           ]
         },
+        "readers": {
+          "description": "Each package that read or sniffed the source files, by its distribution name, with its\ninstalled version.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "sample": {
           "anyOf": [
             {
@@ -1124,7 +1263,8 @@
         "name"
       ]
     },
-    "JsonSettings": {
+    "JsonSource": {
+      "description": "A JSON source's writer settings and its nesting.",
       "type": "object",
       "properties": {
         "compression": {
@@ -1144,9 +1284,17 @@
           "description": "Whether a null field is written as `null` rather than left out.",
           "type": "boolean",
           "default": false
+        },
+        "max_depth": {
+          "description": "The deepest nesting of objects and arrays, counting the record as 1.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
-      },
-      "additionalProperties": false
+      }
     },
     "Key": {
       "type": "object",
@@ -1335,6 +1483,32 @@
         "array",
         "boolean"
       ]
+    },
+    "MalformedRows": {
+      "description": "The data rows a reader rejects, as shares of every data row the files hold. A type held by\nfewer than `k_min` rows is left out, and `rate` is the sum of the rest.",
+      "type": "object",
+      "properties": {
+        "by_type": {
+          "description": "Each rejected row is counted once, under its first error.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
+        },
+        "rate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     },
     "Monotonic": {
       "type": "string",
@@ -1525,7 +1699,8 @@
         }
       ]
     },
-    "ParquetSettings": {
+    "ParquetSource": {
+      "description": "A Parquet source's writer settings, read from its files' footers, and what the footers say of\nthe writer. No value statistic is read from a footer.",
       "type": "object",
       "properties": {
         "compression": {
@@ -1541,6 +1716,13 @@
           "format": "int32",
           "default": null
         },
+        "decimal_scale_drift": {
+          "description": "Whether a decimal column's scale differs between files.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "dictionary_columns": {
           "description": "The columns written with a dictionary. Null gives every column one.",
           "type": [
@@ -1552,12 +1734,45 @@
             "type": "string"
           }
         },
+        "footers_read": {
+          "description": "How many files' footers were read: every file's, or a seeded sample's.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "format_version": {
+          "description": "The format version most footers declare, such as `1.0` or `2.6`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "row_group_rows": {
           "description": "The most rows a row group holds.",
           "type": "integer",
           "format": "uint64",
           "default": 1048576,
           "minimum": 0
+        },
+        "row_groups": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RowGroups"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spark_version": {
+          "description": "`org.apache.spark.version` from the key-value metadata, where Spark wrote the files.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "statistics": {
           "$ref": "#/$defs/ParquetStatistics",
@@ -1574,9 +1789,25 @@
             }
           ],
           "default": null
+        },
+        "timestamp_units": {
+          "description": "Each timestamp column's unit as stored. `int96` is the legacy encoding no writer reproduces.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/StoredTimestampUnit"
+          }
+        },
+        "writer": {
+          "description": "The `created_by` most footers name, such as `parquet-mr version 1.13.1 (build ...)`.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
-      },
-      "additionalProperties": false
+      }
     },
     "ParquetStatistics": {
       "description": "How much of the min, max and null count each column chunk records.",
@@ -1885,6 +2116,43 @@
         "to"
       ]
     },
+    "RowGroups": {
+      "type": "object",
+      "properties": {
+        "compressed_bytes": {
+          "description": "Each row group's bytes on disk, the sum of its column chunks' compressed sizes.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quantiles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "per_file": {
+          "description": "Row groups in each file.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quantiles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rows": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quantiles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "Sample": {
       "type": "object",
       "properties": {
@@ -2015,8 +2283,42 @@
         "rate"
       ]
     },
+    "SniffedDialect": {
+      "description": "One sniffer's dialect. Each part it named none of is null, and all are where it found no\ndialect.",
+      "type": "object",
+      "properties": {
+        "delimiter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "escape": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quote": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sniffer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DialectSniffer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "Source": {
-      "description": "The files the data came from. `csv`, `parquet` and `json` take the keys a manifest's `writer`\ntakes for that format, so a generated dataset can be written the way its source was.",
+      "description": "The files the data came from. `csv`, `parquet` and `json` take the keys a manifest's `writer`\ntakes for that format, so a generated dataset can be written the way its source was. Beside them\neach holds what the profiler observed of the files that no writer setting reproduces.",
       "type": "object",
       "properties": {
         "compression": {
@@ -2032,7 +2334,7 @@
         "csv": {
           "anyOf": [
             {
-              "$ref": "#/$defs/DelimitedSettings"
+              "$ref": "#/$defs/CsvSource"
             },
             {
               "type": "null"
@@ -2052,7 +2354,7 @@
         "json": {
           "anyOf": [
             {
-              "$ref": "#/$defs/JsonSettings"
+              "$ref": "#/$defs/JsonSource"
             },
             {
               "type": "null"
@@ -2072,7 +2374,7 @@
         "parquet": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ParquetSettings"
+              "$ref": "#/$defs/ParquetSource"
             },
             {
               "type": "null"
@@ -2092,6 +2394,15 @@
         "arrow",
         "orc",
         "avro"
+      ]
+    },
+    "StoredTimestampUnit": {
+      "type": "string",
+      "enum": [
+        "ms",
+        "us",
+        "ns",
+        "int96"
       ]
     },
     "StringStats": {
@@ -2462,6 +2773,27 @@
           ],
           "format": "uint64",
           "minimum": 0
+        },
+        "other_rate": {
+          "description": "The share of rows under a non-null value `shares` does not list.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shares": {
+          "description": "The share of rows under each value at least `k_min` rows hold, written where the key takes\nno more values than a string column's top values list.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
         }
       }
     },

@@ -134,7 +134,10 @@ profile generates the body it describes. Reading `overflow` raised the stream ve
 
 A second statistics backend would translate the catalog twice and need a test pinning the two
 engines' agreement. So DuckDB reads CSV, TSV and JSON with every column as text, and hands Polars
-the result. A profile records `generated.engine: polars` whichever reader ran.
+the result. pyarrow reads Parquet footers, for the layout alone. A profile records
+`generated.engine: polars` whichever reader ran. `generated.readers` names each package that read or
+sniffed the files, with its version, because a DuckDB or CleverCSV upgrade can change what a
+profile of the same files says.
 
 DuckDB runs with extension installing and autoloading off. Its wheel links the CSV and JSON readers
 in, so nothing downloads at run time. Its `httpfs` extension would download itself at first use, so
@@ -178,20 +181,23 @@ identity.
 
 ## The library declares no engine, so a job that only generates installs none
 
-polars, duckdb, pyarrow and boto3 are imported only by the modules that profile, and boto3 also by
-a write to S3. `ENGINES` names each engine's packages, and `LISTING_PACKAGES` names boto3, which
-listing S3 needs whatever the engine.
-`profile()` checks for every one of them before it imports one, and raises
-`ProfilingEnginesMissing` naming each missing package. `doppeldata-cli` declares them, because
-`profile create` is one of its verbs.
+The profiling packages are imported only by the modules that profile, and boto3 also by a write to
+S3. `ENGINES` in `doppeldata.profiling` names each engine's packages, each with the formats whose
+files it reads or sniffs, and whether a source of any format needs it. CleverCSV, for one, is
+needed only for CSV and TSV. `LISTING_PACKAGES` names the ones listing S3 needs whatever the engine.
+`profile()` checks those any source needs before it imports one, and a format's own once the source
+is listed. Either check raises `ProfilingEnginesMissing` naming each missing distribution.
+`generated.readers` records the version of each package that reads the source's format, from the
+same table. `doppeldata-cli` declares every one, because `profile create` is one of its verbs.
 
 ## A text column is read as the type most of its values parse as
 
 Each non-null raw value is classified as the first of `RAW_TYPES` it parses as, in one chain, so the
-counts are disjoint. A value parsing as none of them is a string. The shares become `type_mix`, and
-the largest one is the column's type. A value of another type is null in the parsed column, and the
-generator prints it back as text from `type_mix`. In a decimal column an integer is a decimal, so it
-counts as one.
+counts are disjoint. A value parsing as none of them is a string. The shares become `type_mix`. The
+type that reads the most values is the column's, and a decimal column reads every integer too, so
+decimal's count includes them. A value of another type is null in the parsed column, and the
+generator prints it back as text from `type_mix`. In a decimal column the integers' share folds into
+decimal's.
 
 A digit run with a leading zero, such as a ZIP code, parses as no number. A column holding one is
 read as text whatever its other values parse as, because padding means the digits are a code. A run
@@ -203,6 +209,132 @@ sample of `LAYOUT_TRIAL_ROWS` rows. The layout that reads the most sampled value
 exceeds 12, the month-first one wins.
 
 The null rate comes from the raw text, so an unparsed value counts as a value rather than a null.
+
+A delimited source's null tokens are null before any column is typed. Each column's empty fields and
+its fields holding one of `NULL_TOKENS` are counted. The token the file writes most across all its
+columns becomes `csv.null`. Each column's other tokens become its `missing_tokens`, each a share of
+all rows, and one is kept only where `k_min` rows hold it.
+
+A JSON value is typed by its JSON type rather than its text. `json_type` makes a number an integer or
+a decimal and a boolean a boolean, and a JSON string is tried only as a date or a timestamp. So `"3"`
+is a string in JSON, where in CSV it is an integer. A Hive key read from the path is text, and is
+typed as a CSV field is.
+
+## A delimited file's dialect is DuckDB's sniff, or CleverCSV's where the two disagree
+
+The dialect comes from the first `FIRST_BLOCK_BYTES` of the first file holding a record,
+decompressed. A block cut mid-record is trimmed at its last line break. A source none of whose
+files holds a record is refused with a `SourceError` naming them.
+
+- **A block that decodes as UTF-8 is read as UTF-8, and any other as Latin-1.** A UTF-8 BOM is
+  recorded as `bom` and stripped. charset-normalizer's name for the block is recorded as
+  `detected_encoding`, and decides nothing, because it names a short Latin-1 block `cp1250` or
+  `cp775`.
+- **DuckDB's `sniff_csv` and CleverCSV each name a delimiter, a quote and an escape.** CleverCSV is
+  held to `GLUE_DELIMITERS`, the ones Glue's CSV classifier tries, as the AWS Glue Developer Guide's
+  "Defining and managing classifiers" lists them. DuckDB's dialect is read where the two agree on
+  the delimiter and the quote, or where CleverCSV finds none. Otherwise CleverCSV's is, and where
+  neither names one, `chosen` is `default` and the format's own is read.
+- **A quote neither sniffer names is read as `"`.** A block quoting no field names none, and a
+  later file of the source may quote one. Reading `"` keeps that file's quoted delimiters inside
+  their fields, where reading no quote splits them. An escape neither names doubles the quote.
+- **`detector` records the two sniffers, whether they agreed, and which was read.** Its `sniffed`
+  holds what each named, so a quote neither named shows as null there. Its `confidence` is the share
+  of the block's records splitting into the most common number of fields.
+- **Every other file's first record is checked against the dialect**, up to `FILES_CHECKED` of
+  them, a sample seeded by `FILES_CHECKED_SEED` beyond that. Where there is a header, each file must
+  start with the same one. Where there is none, its first record must split into as many fields. A
+  file that does not is named in a `SourceError`, because the files are read as one table.
+- **DuckDB misreads a file whose rows disagree.** On a pipe-delimited file holding a quoted comma, a
+  stray quote, a short row and a long one, DuckDB 2.0.0 names `;` and one column. CleverCSV 0.8.5
+  names `|` with no quote. `cli/tests/test_profile_file_traits.py` profiles that file.
+- **The header is decided as Glue's CSV classifier decides it**, by the rules "Defining and managing
+  classifiers" gives. That needs two columns and two data rows. Every name in the first record must
+  be text, neither a number nor a boolean. Each but the last must be shorter than
+  `GLUE_HEADER_FIELD_LENGTH`. Every one must match `GLUE_COLUMN_NAME`, the "Single-line string
+  pattern" of the AWS Glue API's "Common data types". Some later record must hold a field that is
+  not text. Where Glue would classify no CSV, DuckDB's sniffed header is read. So is it where every
+  field is text, because Glue then reads none, and an all-text table's names would become a row.
+- **`quoting` is read from the block's fields.** It is `always` where every field is quoted, and
+  `non_numeric` where exactly the fields that are not numbers are. Otherwise it is `necessary`,
+  including where no field is quoted, because a writer that never quotes writes that block alike.
+- **`line_terminator_mix` gives each terminator's share of the block's line breaks.** The commoner
+  one is `line_terminator`. `trailing_delimiter` is true where every record ends in an empty field.
+
+*Rejected:* DuckDB's sniffer alone. It is the reader, so its dialect is right on clean files, but
+on the file above it reads every row as one column and rejects nothing.
+
+## A malformed row is counted by DuckDB's first error, and a value that does not parse by Polars
+
+DuckDB reads every column as text, in the detected dialect, with `store_rejects`. A row it rejects
+is left out of the table, and counted once, under its first error by position.
+
+- **`cast` counts rows holding a value that does not parse as its column's type.** Polars counts it
+  as `unparsed_rows`, because a read with every column as text casts nothing.
+- **Each type's rate is a share of the data rows**, those read and those rejected. A type fewer
+  than `k_min` rows give is left out, and `malformed.rate` is the sum of the rest.
+- **A sampled profile's rates are still shares of every row read.** DuckDB rejects rows over the
+  whole read, before the sample is drawn. `cast` is counted in the sample, so its share of the
+  sample is scaled to the rows read.
+- **The profiler reads in DuckDB's strict mode, which rejects a stray quote as `unquoted_value`.**
+  With quote `"`, the field `"bad "quote"` gives `UNQUOTED VALUE` in DuckDB 2.0.0, where
+  `strict_mode = false` gives `MISSING COLUMNS`. `read_delimited` passes `strict_mode = true`.
+
+## A Parquet footer gives the layout, and never a value
+
+A footer's min and max are single rows' values, so no column statistic comes from one. Every
+statistic is taken from the rows, under the floor below.
+
+- **At most `FOOTERS_READ` footers are read**, a sample seeded by `FOOTER_SEED` beyond that, on
+  `FOOTER_THREADS` threads.
+- **An S3 footer is read through the boto3 client that lists the source.** One ranged read of the
+  last `TAIL_BYTES` holds most footers, and a longer one takes a second. So the listing's
+  timeouts, retries and region redirects apply, and a failure exits as a listing's does, with 4
+  where no answer came.
+- **`source.parquet` holds the settings that reproduce the files**: the commonest codec, the
+  largest row group as `row_group_rows`, page or chunk `statistics`, and `dictionary_columns`. The
+  last is null where every column carries a dictionary.
+- **It records the writer beside them**: `writer` from `created_by`, `spark_version` from Spark's
+  `org.apache.spark.version` key, `format_version`, and quantiles of row groups per file, rows per
+  group and bytes per group.
+- **`timestamp_units` gives each timestamp column's stored unit.** `timestamp_unit` is set only where
+  they agree and none is INT96. The writers cannot write INT96.
+- **`decimal_scale_drift` is true where one decimal column's scale differs between files.**
+
+## A dataset's layout is its files, their rows, its Hive keys and its sort order
+
+- **`files` gives the count and the sizes** from the listing. `rows_per_file` gives quantiles of each
+  file's rows, from its footer or from the rows read.
+- **A Hive key stays a column.** The writers partition by a column, so a key the profile drops could
+  not be written again. Its type is the column's.
+- **A key's `values.shares` is each value's share of rows**, kept where `k_min` rows hold it, as a
+  top value is. `other_rate` holds the rest. They are written where the key takes no more than
+  `TOP_VALUES_THRESHOLD` values.
+- **`sort_order` is the sorting columns every footer declares.** Without them, it is the first
+  integer column whose values never fall in read order.
+
+## A JSON source is profiled path by path
+
+DuckDB's `json_group_structure` merges every record's structure into one tree. Each scalar path is
+read as text beside its `json_type`, and each array path as its length. An array's elements are a
+table of their own, profiled as a table is.
+
+- **A file is NDJSON where every whole line of its first block holds one JSON value**, whatever its
+  suffix. `source.format` then says `ndjson`.
+- **Any other `.json` file is read with DuckDB's `auto` format, unless it opens with `[`.** That
+  reads objects concatenated with no delimiter, as Kinesis Data Firehose writes them unless its
+  newline delimiter is turned on, and pretty-printed ones.
+
+- **A field's `presence` is the share of its parent's objects holding its key.** Three records with
+  an `addr` object, one holding `apt`, give `addr.apt` 0.333. The generator draws a field only where
+  its parent is an object, so a share of all rows would shrink twice.
+- **A nested field's `null_rate` is over the objects holding its key.** A field any object lacks is
+  `nullable`, because Arrow holds it as null.
+- **A nested field's `type_mix` is recorded as the files hold it.** `data generate` refuses it with
+  `NotGeneratedYet`, because a text cell names a top-level row and has nowhere to sit inside a struct
+  or a list.
+- **`source.json` records `max_depth` and `explicit_nulls`**, which is true where any path holds a
+  JSON null.
 
 ## A value a profile cannot hold is written as the nearest one it can
 

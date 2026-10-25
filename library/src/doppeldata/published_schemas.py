@@ -42,6 +42,11 @@ def published_fields(definition: str) -> dict[str, list[str] | None]:
     return fields
 
 
+def writer_fields(definition: str) -> list[str]:
+    """The keys one of the writers' settings, such as `DelimitedSettings`, takes, as the manifest schema publishes them."""
+    return list(json.loads(schema_text('manifest'))['$defs'][definition]['properties'])
+
+
 def profile_definitions() -> dict[str, Any]:
     definitions: dict[str, Any] = json.loads(schema_text('profile'))['$defs']
     return definitions

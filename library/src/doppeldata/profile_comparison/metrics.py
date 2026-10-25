@@ -7,6 +7,7 @@ added to `METRICS` reaches the reports, `--thresholds` and the CLI's help with n
 import dataclasses as dc
 import enum
 import itertools
+import math
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
@@ -259,6 +260,88 @@ def boundary_adherence(source: Column, observed: Column) -> Compared | Unmeasure
     return Compared(1 - outside / total) if total else Unmeasured('the other profile counts no values for the column')
 
 
+def relative_change(expected: float, observed: float | None, missing: str) -> Compared | Unmeasured:
+    if observed is None:
+        return Unmeasured(missing, expected)
+    return Compared(abs(observed - expected) / expected, expected, observed)
+
+
+NO_LAYOUT = 'the other profile records no file layout, as a profile of a table in memory does'
+
+
+def layouts(source: Document, observed: Document) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Each profile's `source.layout`, empty where it records none."""
+    ours, theirs = (((document.get('source') or {}).get('layout') or {}) for document in (source, observed))
+    return ours, theirs
+
+
+def expected_files(source: Document, observed: Document) -> float:
+    """The files the source's layout gives the rows checked: its count scaled to them, and at least one file for each
+    combination of the partition keys' values those rows can fill.
+    """
+    ours, _ = layouts(source, observed)
+    source_rows, rows = ((document.get('dataset') or {}).get('row_count') for document in (source, observed))
+    scale = rows / source_rows if source_rows and rows is not None else 1.0
+    combinations = math.prod((key.get('values') or {}).get('count') or 1 for key in partition_keys(ours))
+    count = (ours.get('files') or {}).get('count') or 1
+    return max(1.0, count * scale, min(combinations, rows) if rows is not None else combinations)
+
+
+def partition_keys(layout: dict[str, Any]) -> list[dict[str, Any]]:
+    keys: list[dict[str, Any]] = (layout.get('partitioning') or {}).get('keys') or []
+    return keys
+
+
+def file_count_change(source: Document, observed: Document) -> Iterator[Measurement]:
+    """The file count's change, relative to the count `expected_files` gives."""
+    ours, theirs = layouts(source, observed)
+    if not (ours.get('files') or {}).get('count'):
+        return
+    if not theirs:
+        yield Measurement(None, Unmeasured(NO_LAYOUT))
+        return
+    expected = expected_files(source, observed)
+    yield Measurement(None, relative_change(expected, (theirs.get('files') or {}).get('count'), 'the other profile counts no files'))
+
+
+def rows_per_file_change(source: Document, observed: Document) -> Iterator[Measurement]:
+    """The median rows per file's change, relative to the source's, or to the rows checked over the files expected where
+    that is fewer.
+    """
+    ours, theirs = layouts(source, observed)
+    median = (ours.get('rows_per_file') or {}).get('p50')
+    if not median:
+        return
+    if not theirs:
+        yield Measurement(None, Unmeasured(NO_LAYOUT))
+        return
+    rows = (observed.get('dataset') or {}).get('row_count')
+    expected = min(median, rows / expected_files(source, observed)) if rows else median
+    held = (theirs.get('rows_per_file') or {}).get('p50')
+    yield Measurement(None, relative_change(expected, held, 'the other profile counts no rows per file'))
+
+
+def partition_share_change(source: Document, observed: Document) -> Iterator[Measurement]:
+    """For each Hive key the source lists value shares of, the largest change in one value's share of rows, relative to it."""
+    ours, theirs = layouts(source, observed)
+    keyed = [key for key in partition_keys(ours) if (key.get('values') or {}).get('shares')]
+    if keyed and not theirs:
+        yield Measurement(None, Unmeasured(NO_LAYOUT))
+        return
+    keys = {key['name']: key for key in partition_keys(theirs)}
+    for key in keyed:
+        shares = key['values']['shares']
+        held = ((keys.get(key['name']) or {}).get('values') or {}).get('shares')
+        if held is None:
+            yield Measurement(key['name'], Unmeasured(f"the other profile's files hold no shares of {key['name']}'s values"))
+            continue
+        changes = [
+            Compared(abs(held.get(value, 0.0) - share) / share, share, held.get(value, 0.0)) for value, share in shares.items() if share
+        ]
+        if changes:
+            yield Measurement(key['name'], max(changes, key=lambda compared: compared.value))
+
+
 METRICS = (
     Metric(
         'ks',
@@ -295,6 +378,27 @@ METRICS = (
         Bound.AT_LEAST,
         0.99,
         per_column(boundary_adherence),
+    ),
+    Metric(
+        'file_count_delta',
+        "the change in the file count, relative to the source's scaled to the rows checked",
+        Bound.AT_MOST,
+        0.10,
+        file_count_change,
+    ),
+    Metric(
+        'rows_per_file_delta',
+        "the change in the median rows per file, relative to the source's",
+        Bound.AT_MOST,
+        0.10,
+        rows_per_file_change,
+    ),
+    Metric(
+        'partition_share_delta',
+        "the largest change in one of a Hive key's values' share of rows, relative to the source's",
+        Bound.AT_MOST,
+        0.10,
+        partition_share_change,
     ),
 )
 METRICS_BY_NAME = {metric.name: metric for metric in METRICS}

@@ -1,6 +1,8 @@
 """Profiling a dataset into a profile. The library declares no engine, so a job that only generates installs none."""
 
+import dataclasses as dc
 import importlib
+import importlib.metadata
 import importlib.util
 import warnings
 from collections.abc import Sequence
@@ -14,15 +16,53 @@ from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import table_profile
+from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
 
 DEFAULT_K_MIN = 11
-# Each engine's backend class, as its module and name, and the packages that module imports, which install under the same names.
-ENGINES = {'polars': ('doppeldata.profiling.polars_backend', 'PolarsBackend', ('polars', 'duckdb', 'pyarrow'))}
-# The module that lists what was named, and what it imports to list S3, which profiling needs whatever the engine.
+
+
+@dc.dataclass(frozen=True)
+class EnginePackage:
+    """A package an engine imports, by its distribution and module names, and the formats whose files it reads or sniffs.
+
+    One `everywhere` is imported to profile any source, and any other only to profile a source of a format it reads.
+    `generated.readers` records the version of each that reads the source's format.
+    """
+
+    distribution: str
+    module: str
+    reads: frozenset[SourceFormat]
+    everywhere: bool = True
+
+
+@dc.dataclass(frozen=True)
+class Engine:
+    """An engine's backend class, as its module and name, and the packages that module imports."""
+
+    module: str
+    backend: str
+    packages: tuple[EnginePackage, ...]
+
+
+DELIMITED = frozenset({SourceFormat.CSV, SourceFormat.TSV})
+ENGINES = {
+    'polars': Engine(
+        'doppeldata.profiling.polars_backend',
+        'PolarsBackend',
+        (
+            EnginePackage('polars', 'polars', frozenset({SourceFormat.PARQUET, SourceFormat.ARROW})),
+            EnginePackage('duckdb', 'duckdb', DELIMITED | {SourceFormat.JSON, SourceFormat.NDJSON}),
+            EnginePackage('pyarrow', 'pyarrow', frozenset({SourceFormat.PARQUET})),
+            EnginePackage('clevercsv', 'clevercsv', DELIMITED, everywhere=False),
+            EnginePackage('charset-normalizer', 'charset_normalizer', DELIMITED, everywhere=False),
+        ),
+    )
+}
+# The module that lists what was named, and the packages it imports to list S3, which profiling needs whatever the engine.
 SOURCES_MODULE = 'doppeldata.profiling.sources'
-LISTING_PACKAGES = ('boto3',)
+LISTING_PACKAGES = (EnginePackage('boto3', 'boto3', frozenset()),)
 
 
 def profile(
@@ -45,9 +85,10 @@ def profile(
     that is not installed or does not load.
 
     `edges_from` is an earlier profile of the same table. Where its source fingerprint matches the files
-    listed now, and it was made by this doppeldata, scipy and detector packs with the same engine, `k_min`
-    and sampling, it is returned unchanged, so a reviewer's edits survive a re-run. Otherwise a
-    `EarlierProfileNotReused` names what differs, each column it holds a histogram or value list for is counted
+    listed now, and it was made by this doppeldata, scipy, detector packs and readers, such as DuckDB and
+    CleverCSV, with the same engine, `k_min` and sampling, it is returned unchanged, so a reviewer's edits
+    survive a re-run. Otherwise an `EarlierProfileNotReused` names what differs, each column it holds a
+    histogram or value list for is counted
     against those, and the rows outside them are written as the column's `overflow`. A column only one of
     the two tables holds issues `ColumnsNotFrozen`.
     """
@@ -57,22 +98,29 @@ def profile(
         raise ValueError(f'sample must be a positive number of rows, not {sample}')
     if k_min < 1:
         raise ValueError(f'k_min must be at least 1, not {k_min}')
-    module_name, class_name, packages = ENGINES[engine]
-    missing = [package for package in (*packages, *LISTING_PACKAGES) if importlib.util.find_spec(package) is None]
+    chosen = ENGINES[engine]
+    missing = uninstalled([package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
     if missing:
         raise ProfilingEnginesMissing(engine, missing)
     # Imported by name, because each imports packages a library-only install lacks.
-    backend = getattr(importlib.import_module(module_name), class_name)()
+    backend = getattr(importlib.import_module(chosen.module), chosen.backend)()
     enabled = enabled_packs(packs)
     sources = importlib.import_module(SOURCES_MODULE)
     source = sources.resolve(data)
+    reading = [package for package in chosen.packages if source.format in package.reads]
+    missing = uninstalled(reading)
+    if missing:
+        raise ProfilingEnginesMissing(engine, missing)
+    readers = {package.distribution: importlib.metadata.version(package.distribution) for package in reading}
     if edges_from is not None:
-        changed = what_changed(edges_from, source.fingerprint, engine=engine, sample=sample, k_min=k_min, packs=enabled)
+        changed = what_changed(edges_from, source.fingerprint, engine=engine, sample=sample, k_min=k_min, packs=enabled, readers=readers)
         if changed is None:
             return edges_from
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=2)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
-    profiled = Profile(table_profile.profile_table(backend, source, sample=sample, k_min=k_min, packs=enabled, frozen=frozen))
+    profiled = Profile(
+        table_profile.profile_table(backend, source, sample=sample, k_min=k_min, packs=enabled, readers=readers, frozen=frozen)
+    )
     sources.check_unchanged(source)
     issues = profiled.validate()
     if issues:
@@ -85,12 +133,23 @@ def profile(
     return profiled
 
 
+def uninstalled(packages: Sequence[EnginePackage]) -> list[str]:
+    return [package.distribution for package in packages if importlib.util.find_spec(package.module) is None]
+
+
 def column_names(document: dict[str, Any]) -> list[str]:
     return [column['name'] for column in document.get('columns') or []]
 
 
 def what_changed(
-    previous: Profile, fingerprint: str | None, *, engine: str, sample: int | None, k_min: int, packs: list[EnabledPack]
+    previous: Profile,
+    fingerprint: str | None,
+    *,
+    engine: str,
+    sample: int | None,
+    k_min: int,
+    packs: list[EnabledPack],
+    readers: dict[str, str],
 ) -> str | None:
     """What keeps `previous` from being what profiling the listed source with these settings would give, or None.
 
@@ -105,7 +164,7 @@ def what_changed(
     if recorded_k_min != k_min:
         return f'it was made with k_min {recorded_k_min}, and this run uses {k_min}'
     fitting, _ = table_profile.fitting_module()
-    now = table_profile.derivation(engine, fingerprint, fitting.FITTER if fitting else None, packs)
+    now = table_profile.derivation(engine, fingerprint, fitting.FITTER if fitting else None, packs, readers)
     for field in DERIVED_FROM:
         if generated.get(field) != now.get(field):
             return f'its generated.{field} is {described(generated.get(field))}, and this run writes {described(now.get(field))}'

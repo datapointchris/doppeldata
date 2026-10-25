@@ -9,8 +9,12 @@ the format settings are the engine's, in `doppeldata_core::manifest` and
 are serde and schemars types with no I/O.
 
 - **A profile's `source.csv`, `source.parquet` and `source.json` take the keys a manifest's `writer`
-  takes.** One settings type serves both, and an unknown key is refused. So `profile.v1.json`
-  publishes exactly the keys the writers read.
+  takes, beside what the profiler saw of the files.** Each flattens the writer's settings type into a
+  profile-only struct, such as `CsvSource`, whose other keys record a detected encoding, malformed
+  rows or a footer's writer. The writers read the settings alone. The profile's copy reads past a key
+  neither takes, as every profile section does, through `recorded_settings`. A caller's settings
+  are read as the writer's own type, which refuses one. `profile.v1.json` publishes every key either
+  takes.
 - **`WriteOptions::from_profile` turns a profile into write settings.** The format is the caller's,
   then the profile's recorded one, then Parquet. A recorded codec applies only when the format is the
   recorded one. `override_writer` lays a caller's keys over the result, and `partition_by` sets the
@@ -27,6 +31,9 @@ print the files a run will write before a byte is written.
 - **A range's size is `file_rows`, or drawn from the profile's `source.layout.rows_per_file`
   quantiles.** The engine's `file_rows_draws` makes the draw, through the quantile interpolation the
   samplers use. Its stream is keyed by the seed alone, so the split is the same on every run.
+- **A drawn split's last range folds in a remainder under half the range before it.** Otherwise a
+  draw just short of the rows leaves a sliver range, and a partitioned one writes a tiny second file
+  into every partition.
 - **The split never moves a value.** Blocks are a fixed `BLOCK_ROWS`, so a range cut mid-block takes
   a slice of the block. Two neighboring ranges each generate the block they share.
 - **`planned_ranges` gives each range with the path its files take.** A partitioned range becomes
