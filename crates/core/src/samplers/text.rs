@@ -120,7 +120,10 @@ fn push_provided(provider: Provider, rng: &mut ChaCha8Rng, out: &mut String) {
         Provider::City => address::CityName().fake_with_rng(rng),
         Provider::State => address::StateName().fake_with_rng(rng),
         Provider::StateAbbr => address::StateAbbr().fake_with_rng(rng),
-        Provider::ZipCode => address::ZipCode().fake_with_rng(rng),
+        Provider::ZipCode => {
+            push_digits(rng, ZIP_CODE_DIGITS, out);
+            return;
+        }
         Provider::PostCode => address::PostCode().fake_with_rng(rng),
         Provider::Country => address::CountryName().fake_with_rng(rng),
         Provider::CountryCode => address::CountryCode().fake_with_rng(rng),
@@ -149,6 +152,10 @@ const ICD10CM_EXTENSION_PER_MILLE: [u32; 5] = [19, 103, 149, 205, 524];
 const ICD10CM_EXTENSION_LETTER_AT: usize = 3;
 /// An HCPCS Level II code's letter is one of A to V.
 const HCPCS_LEVEL2_LETTERS: u32 = 22;
+/// A US ZIP code's digits, and the codes they spell. fake's `ZipCode` draws three and four as often
+/// as five.
+const ZIP_CODE_DIGITS: usize = 5;
+const ZIP_CODES: f64 = 100_000.0;
 
 fn push_upper(rng: &mut ChaCha8Rng, letters: u32, out: &mut String) {
     out.push(char::from(UPPER[below(rng, letters) as usize]));
@@ -224,7 +231,8 @@ fn push_email(rng: &mut ChaCha8Rng, out: &mut String) {
 }
 
 /// How many strings a provider draws. A provider choosing one entry of one list draws each
-/// equally often, and `email` is a first name, a last name and a domain. fake's `city` is a
+/// equally often, `email` is a first name, a last name and a domain, and `zip_code` is five
+/// digits. fake's `city` is a
 /// suffixed last name in three draws of five, a suffixed first name in one, and a prefixed,
 /// suffixed full name in the last. Every other provider is uncounted.
 fn provider_variety(provider: Provider) -> Variety {
@@ -240,6 +248,7 @@ fn provider_variety(provider: Provider) -> Variety {
         Provider::CountryCode => entries(EN::ADDRESS_COUNTRY_CODE),
         Provider::Icd10cm => return icd10cm_variety(),
         Provider::HcpcsLevel2 => f64::from(HCPCS_LEVEL2_LETTERS) * 10_000.0,
+        Provider::ZipCode => ZIP_CODES,
         Provider::City => {
             let suffixed = |names: f64| names * entries(EN::ADDRESS_CITY_SUFFIX);
             let stratum = |values, share| Stratum { values, share };
@@ -263,7 +272,6 @@ fn provider_variety(provider: Provider) -> Variety {
         | Provider::StreetAddress
         | Provider::StreetName
         | Provider::BuildingNumber
-        | Provider::ZipCode
         | Provider::PostCode
         | Provider::CreditCard
         | Provider::Uuid => return Variety::Uncounted,
