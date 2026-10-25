@@ -1,0 +1,69 @@
+# How each column kind is drawn from its profile
+
+## A numeric column is one uniform draw through a piecewise-linear inverse CDF
+
+The inverse CDF is a list of (level, value) knots. The stored quantiles are the frame, with the
+extremes at levels 0 and 1. A histogram's edges, at their cumulative shares, fill the body between
+the outermost quantiles. `zero_rate` adds a flat run at zero, starting at `negative_rate`. A knot
+that would put a value out of order is dropped, so the quantiles win where sources disagree.
+
+Every value is one uniform draw, whatever the knots came from. So a profiler that adds a histogram
+changes the values but not the draw order, and the samplers need no change to read it.
+
+`integral` rounds the value. `precision` and `scale` quantize it, or become a decimal type. A
+`sequence` emits `start + step · row` and draws nothing.
+
+## Beyond the outermost quantile, a fitted tail replaces the straight line
+
+A trimmed extreme sits far past p99 in any right-skewed column. A straight line from p99 to it puts
+too much weight in the tail. On the `eight-columns` example's `amount`, a lognormal with a stored
+mean of 33.12:
+
+| Construction | Mean |
+| --- | --- |
+| linear across every knot | 44.34 |
+| the p99-to-extreme segment's share of that | 11.03 |
+| the true lognormal's share above p99 | 3.06 |
+| generated, with the fitted tail, from 1M rows | 36.35 |
+
+The generated standard deviation is 46.51, against a stored 43.41.
+
+- **Where `fit` names a family with a closed form, the tail is that family's conditional tail.** It
+  is conditioned on the range from the outermost quantile to the extreme, and truncated there. The
+  body stays on the quantiles.
+- **The tail is tabulated at plan time into dense knots**, each leaving a geometrically smaller share
+  of the tail beyond it. A draw then costs one uniform and one lookup, whatever the family.
+- **A discrete family's tail includes the stored quantile's own mass**, so an integral column's
+  generated quantile still lands on the stored value.
+- **The remaining lift is the body.** Below p99, linear interpolation across seven knots gives 33.31
+  against 30.06 for the true lognormal. A histogram's many knots shrink it.
+
+## A string column takes the most specific source its profile holds
+
+1. **`top_values`**: an alias table over the rates. A draw of `other_rate` generates a value from
+   the next source down.
+2. **`semantic.generator_hint.provider`**: a named generator, such as `email` or `city`. The names
+   are doppeldata's own, held in one table in `crates/core/src/samplers/text.rs`, so replacing the
+   faker library breaks no profile. An unknown name fails and lists the names it accepts.
+3. **A pattern**, from `generator_hint.pattern` or `string.pattern`. A line anchor is dropped,
+   because a value is the whole line, and `\d` and the other classes are ASCII.
+4. **`shapes`**: a shape is drawn by rate, then each `A` becomes an upper-case letter, each `a` a
+   lower-case one, and each `9` a digit.
+5. **Characters** of `charset.classes`, at a length drawn from `length`.
+
+`generator_hint.check_digit: luhn` writes the Luhn digit over a value's last digit, wrong on a
+`quality.invalid_rate` share of values. *Rejected:* the `luhn` crate. Its `checksum` allocates on
+every call, and it panics on lower-case input and on a `u8` overflow past about 28 digits.
+
+## A temporal column is uniform over its range unless the profile weights it
+
+With no `by_month`, `by_dow` or `by_hour` and no `gap_rate`, a value is uniform over the extremes at
+the column's granularity, from one draw. Otherwise a day is drawn with weight `by_month` times
+`by_dow`, each spread over the days holding it, with `gap_rate`'s share of days left empty. Then an
+hour is drawn by `by_hour`, and an offset within it.
+
+## A value only text can carry is a separate cell, and null in Arrow
+
+A `type_mix` share such as 0.1% `string` in an integer column cannot be an Arrow value. The batch
+holds a null there, and `Plan::text_cells` returns the text a CSV or JSON writer prints in its place.
+A null row in a column with `missing_tokens` gets one of the tokens, by rate, the same way.
