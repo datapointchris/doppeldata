@@ -1,5 +1,6 @@
 """One table's profile, computed through a backend's calls. No literal it stores rests on fewer than k_min rows."""
 
+import collections
 import dataclasses as dc
 import datetime as dt
 import importlib
@@ -18,13 +19,19 @@ from doppeldata.errors import FitsSkipped
 from doppeldata.errors import PoorFits
 from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
+from doppeldata.profiling import file_traits
+from doppeldata.profiling import json_paths
 from doppeldata.profiling import text_types
 from doppeldata.profiling.backend import TEXT_FORMATS
 from doppeldata.profiling.backend import Backend
 from doppeldata.profiling.backend import ColumnSpec
+from doppeldata.profiling.backend import JsonNode
+from doppeldata.profiling.backend import ParsedType
 from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
+from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import Table
+from doppeldata.profiling.backend import is_hidden
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.statistic_catalog import COLUMN_STATISTICS
 from doppeldata.profiling.statistic_catalog import NUMERIC
@@ -163,24 +170,112 @@ def profile_table(
     The detectors of `packs` type each column `semantic_types.detected_columns` names. With `frozen`, each column it
     names is counted against the earlier profile's edges and value list.
     """
-    table = backend.scan(source)
+    read = backend.read(source)
+    table = read.table
     first = [Request(None, 'rows')]
     if sample is not None:
         # A distinct ratio does not scale from a sample to the whole table, so a sampled profile counts distinct values in every row.
-        first += [Request(spec.name, 'distinct_count') for spec in backend.schema(table) if spec.kind in PROFILED]
+        first += [Request(spec.name, 'distinct_count') for spec in visible_specs(backend, table) if spec.kind in PROFILED]
     counted = answered(backend, table, first)
     rows = counted.pop((None, 'rows'))
     whole_distinct: dict[str, int] = {column: count for (column, _), count in counted.items() if column is not None}
     if sample is not None and rows > sample:
         table = backend.scan(Source(format=None, table=backend.sample(table, sample, SAMPLE_SEED)))
+    settings = ColumnSettings(source.format, k_min, packs, frozen or FrozenLayout(), read.json.elements if read.json else {})
+    profiled = profile_columns(backend, table, settings, rows, whole_distinct, read.json.paths if read.json else None)
+    fitting, _ = fitting_module()
+    generated: dict[str, Any] = {
+        'tool': TOOL,
+        'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
+    } | derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None, packs, backend.readers(source.format))
+    generated['sample'] = {'strategy': 'reservoir', 'rows_read': profiled.described} if profiled.described < rows else {'strategy': 'full'}
+    document: dict[str, Any] = {
+        'profile_version': _core.FORMAT_VERSION,
+        'kind': 'table',
+        'name': source.name,
+        'generated': generated,
+        'privacy': {'k_min': k_min},
+    }
+    if source.format:
+        document['source'] = file_traits.source_section(backend, source, read, profiled, k_min)
+    document['dataset'] = {'row_count': rows}
+    document['columns'] = profiled.columns
+    return reviewable(document)
+
+
+def visible_specs(backend: Backend, table: Table) -> list[ColumnSpec]:
+    """The table's columns a profile describes, leaving out those the reader added."""
+    return [spec for spec in backend.schema(table) if not is_hidden(spec.name)]
+
+
+@dc.dataclass(frozen=True)
+class ColumnSettings:
+    """What every table of one source is profiled with: its format, the floor, the detector packs, an earlier profile's
+    edges and value lists, and a JSON source's element tables by array path.
+    """
+
+    source_format: SourceFormat | None
+    k_min: int
+    packs: list[EnabledPack]
+    frozen: FrozenLayout
+    elements: dict[str, Table]
+
+
+@dc.dataclass(frozen=True)
+class ProfiledColumns:
+    """One table's columns profiled. `table` is parsed, `described` counts the rows read, and `unparsed_rows` the rows
+    holding a value that does not parse as its column's type. `null_token` is what a delimited source writes most for a
+    missing value, and a JSON table's paths and type counts are in `json`.
+    """
+
+    columns: list[dict[str, Any]]
+    table: Table
+    specs: list[ColumnSpec]
+    stats: Answers
+    described: int
+    unparsed_rows: int = 0
+    null_token: str = text_types.EMPTY
+    json: json_paths.ProfiledTable | None = None
+
+
+def profile_columns(
+    backend: Backend, table: Table, settings: ColumnSettings, rows: int, whole_distinct: dict[str, int], json_root: JsonNode | None
+) -> ProfiledColumns:
+    """Every column of `table`, which holds `rows` rows, or the records or elements `json_root` heads in a JSON source.
+
+    A delimited source's null tokens are read as null before its columns are typed, and each column's own are kept.
+    """
+    k_min, packs, layout = settings.k_min, settings.packs, settings.frozen
     text: dict[str, TextColumn] = {}
-    if source.format in TEXT_FORMATS:
-        text = text_types.type_text_columns(backend, table, backend.schema(table), SAMPLE_SEED)
+    unparsed_rows, null_token = 0, text_types.EMPTY
+    paths: set[str] = set()
+    if settings.source_format in TEXT_FORMATS:
+        visible = visible_specs(backend, table)
+        delimited = json_root is None
+        tokens = text_types.null_tokens(backend, table, visible) if delimited else {}
+        nulled = {
+            name: ParsedType('string', missing=missing)
+            for name, found in tokens.items()
+            if (missing := tuple(set(found) - {text_types.EMPTY}))
+        }
+        if nulled:
+            table = backend.parse(table, nulled)
+        # A column outside the JSON tree, such as a Hive key read from the path, is typed by its text alone.
+        paths = {node.column for node in json_paths.table_nodes(json_root)} if json_root else paths
+        from_text = [spec for spec in visible if spec.name not in paths]
+        from_json = [spec for spec in visible if spec.name in paths]
+        text = text_types.type_text_columns(backend, table, from_text, SAMPLE_SEED) if from_text else {}
+        if from_json:
+            text |= text_types.type_text_columns(backend, table, from_json, SAMPLE_SEED, json=True)
+        if delimited:
+            null_token = most_written_token(tokens)
+            text = {name: dc.replace(column, missing_tokens=column_tokens(tokens[name], null_token)) for name, column in text.items()}
+            parsing = tuple((name, column.parsed) for name, column in text.items())
+            unparsed_rows = answered(backend, table, [Request(None, 'unparsed_rows', parsing)])[(None, 'unparsed_rows')]
         table = backend.parse(table, {name: column.parsed for name, column in text.items()})
-    specs = backend.schema(table)
+    specs = visible_specs(backend, table)
     stats = answered(backend, table, pass_one_requests(specs, k_min))
     described = stats[(None, 'rows')]
-    layout = frozen or FrozenLayout()
     binnings = {}
     for spec in specs:
         binning = histogram_binning(spec, column_stat(stats, spec.name), described, k_min, layout)
@@ -224,32 +319,71 @@ def profile_table(
         )
         for spec in specs
     ]
-    generated: dict[str, Any] = {
-        'tool': TOOL,
-        'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
-    } | derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None, packs)
-    generated['sample'] = {'strategy': 'reservoir', 'rows_read': described} if described < rows else {'strategy': 'full'}
-    document: dict[str, Any] = {
-        'profile_version': _core.FORMAT_VERSION,
-        'kind': 'table',
-        'name': source.name,
-        'generated': generated,
-        'privacy': {'k_min': k_min},
-    }
-    if source.format:
-        document['source'] = {'format': source.format.value}
-    document['dataset'] = {'row_count': rows}
-    document['columns'] = columns
-    return reviewable(document)
+    profiled = ProfiledColumns(columns, table, specs, stats, described, unparsed_rows, null_token)
+    if json_root is None:
+        return profiled
+    json_table = json_profiled(backend, profiled, settings, json_root)
+    if json_root.path:
+        return dc.replace(profiled, json=json_table)
+    outside = [entry for entry in columns if entry['name'] not in paths]
+    return dc.replace(profiled, columns=json_paths.assembled(json_root, json_table, rate) + outside, json=json_table)
 
 
-def derivation(engine: str, fingerprint: str | None, fitter: str | None, packs: list[EnabledPack]) -> dict[str, Any]:
-    """The `DERIVED_FROM` fields a profile made now with this engine, listing, fitter and detector packs writes."""
+def json_profiled(backend: Backend, profiled: ProfiledColumns, settings: ColumnSettings, root: JsonNode) -> json_paths.ProfiledTable:
+    """One JSON table's scalar entries, each path's rows by JSON type, each array's lengths, and its elements profiled."""
+    table, k_min = profiled.table, settings.k_min
+    nodes = json_paths.table_nodes(root)
+    requests = []
+    for node in nodes:
+        typed = json_paths.type_column(node.column)
+        requests += [Request(typed, 'null_count'), Request(typed, 'listed_value_counts', json_paths.COUNTED_TYPES)]
+        if node.kind == 'array':
+            length = json_paths.length_column(node.column)
+            requests += [Request(length, 'quantiles', LENGTH_LEVELS), Request(length, 'listed_value_counts', (0,))]
+    stats = answered(backend, table, requests)
+    counts, lengths, elements = {}, {}, {}
+    for node in nodes:
+        typed = json_paths.type_column(node.column)
+        null, objects, arrays = stats[(typed, 'listed_value_counts')]
+        counts[node.column] = json_paths.TypeCounts(stats[(typed, 'null_count')], null, objects, arrays)
+        if node.kind == 'array' and node.element is not None:
+            length = json_paths.length_column(node.column)
+            at_level = dict(zip(LENGTH_LEVELS, stats[(length, 'quantiles')], strict=True))
+            quantiles = {name: int(at_level[level]) for name, level in QUANTILES.items() if clear_of_the_ends(level, arrays, k_min)}
+            lengths[node.column] = json_paths.ArrayLengths(stats[(length, 'listed_value_counts')][0], quantiles)
+            items = settings.elements[node.path]
+            item_rows = answered(backend, items, [Request(None, 'rows')])[(None, 'rows')]
+            item_settings = dc.replace(settings, frozen=FrozenLayout())
+            elements[node.path] = profile_columns(backend, items, item_settings, item_rows, {}, node.element).json
+    entries = {column['name']: column for column in profiled.columns}
+    return json_paths.ProfiledTable(
+        profiled.described, entries, counts, lengths, {path: table for path, table in elements.items() if table}
+    )
+
+
+def most_written_token(tokens: dict[str, dict[str, int]]) -> str:
+    """The null token a delimited source writes most across its columns, the empty field where none is written more."""
+    written: collections.Counter[str] = collections.Counter({text_types.EMPTY: 0})
+    for found in tokens.values():
+        written.update(found)
+    return max(written, key=lambda token: (written[token], token == text_types.EMPTY))
+
+
+def column_tokens(found: dict[str, int], null_token: str) -> dict[str, int]:
+    """A column's null tokens other than the source's own, which a writer prints in place of the null it writes."""
+    return {token: rows for token, rows in found.items() if token != null_token}
+
+
+def derivation(
+    engine: str, fingerprint: str | None, fitter: str | None, packs: list[EnabledPack], readers: dict[str, str]
+) -> dict[str, Any]:
+    """The `DERIVED_FROM` fields a profile made now with this engine, listing, fitter, detector packs and readers writes."""
     values = {
         'tool': TOOL,
         'engine': engine,
         'fitter': fitter,
         'detector_packs': {enabled.pack.name: enabled.provided_by for enabled in packs},
+        'readers': readers or None,
         'source_fingerprint': fingerprint,
     }
     return {field: values[field] for field in DERIVED_FROM if values[field] is not None}
@@ -316,6 +450,9 @@ def column_entry(
     nulls = text.null_count if text else stat('null_count')
     entry['nullable'] = nulls > 0
     entry['null_rate'] = rate(nulls, described)
+    tokens = {token: rate(rows, described) for token, rows in sorted(text.missing_tokens.items()) if rows >= k_min} if text else {}
+    if tokens:
+        entry['missing_tokens'] = tokens
     if text and text.non_null:
         entry['type_mix'] = {raw: rate(count, text.non_null) for raw, count in text.counts.items() if count}
     if spec.kind is ColumnKind.OTHER:

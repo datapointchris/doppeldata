@@ -12,7 +12,7 @@ A scenario file layered on a profile is meant to bend the data on purpose: a hot
 malformed rows, a flood of small files. The same profile, scenario and seed must always produce the
 same data.
 
-doppeldata is experimental. So far it profiles a table's columns, generates a table from a profile,
+doppeldata is experimental. So far it profiles a table's columns and its files, generates a table from a profile,
 and ships the profile format and its hand-written example profiles:
 
 ```bash
@@ -58,6 +58,12 @@ value it stores, such as a top value or an extreme, rests on fewer than `--k-min
 identifier column does not remove its values from the profile, so profile only data that is already
 synthetic or public.
 
+A profile's `source` section records how the files were written. For a CSV, that is its dialect,
+encoding and line endings, and its malformed rows by kind. For Parquet, it is the footer's writer,
+Spark version, codec and row groups, and never a footer's min or max. For JSON, it is each path's
+type mix and presence. Every format gets the file sizes, the rows per file, and each Hive key's
+values. `data generate` writes the dialect and the Parquet settings back.
+
 A string column is given a semantic type where enough of its values pass a type's validator. Fewer
 need to pass where its name hints the type. An integer column is typed only where its name hints
 the type and a validator agrees. The general pack covers common identifiers, such as emails, card
@@ -68,8 +74,8 @@ names what the generator draws for it, and the failing share becomes `quality.in
 Each numeric column gets an equal-depth histogram, and each with enough distinct values gets the
 distribution family that fits it best. `--edges-from` counts a new profile against an earlier one's
 bin edges and value lists, so the two compare bin for bin, and the rows outside them are written as
-overflow. Where the files, the run's settings, the doppeldata and scipy versions and the detector
-packs match the ones the earlier profile was made with, it is kept as it is, with any edits a
+overflow. Where the files, the run's settings, the doppeldata, scipy and reader versions and the
+detector packs match the ones the earlier profile was made with, it is kept as it is, with any edits a
 reviewer made. Otherwise `profile create` says what differs.
 
 `data check` profiles generated data with its profile's edges frozen, and never reads the real data.
@@ -110,7 +116,7 @@ The library installs no profiling engine, so a job that only generates carries n
 `doppeldata.profile()` installs them beside it:
 
 ```bash
-uv add polars duckdb pyarrow boto3
+uv add polars duckdb pyarrow clevercsv charset-normalizer boto3
 uv add scipy     # optional: without it, no column is fitted to a distribution family
 ```
 

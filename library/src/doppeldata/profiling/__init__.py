@@ -19,7 +19,13 @@ from doppeldata.profiling.detector_packs import enabled_packs
 
 DEFAULT_K_MIN = 11
 # Each engine's backend class, as its module and name, and the packages that module imports, which install under the same names.
-ENGINES = {'polars': ('doppeldata.profiling.polars_backend', 'PolarsBackend', ('polars', 'duckdb', 'pyarrow'))}
+ENGINES = {
+    'polars': (
+        'doppeldata.profiling.polars_backend',
+        'PolarsBackend',
+        ('polars', 'duckdb', 'pyarrow', 'clevercsv', 'charset_normalizer'),
+    )
+}
 # The module that lists what was named, and what it imports to list S3, which profiling needs whatever the engine.
 SOURCES_MODULE = 'doppeldata.profiling.sources'
 LISTING_PACKAGES = ('boto3',)
@@ -45,9 +51,10 @@ def profile(
     that is not installed or does not load.
 
     `edges_from` is an earlier profile of the same table. Where its source fingerprint matches the files
-    listed now, and it was made by this doppeldata, scipy and detector packs with the same engine, `k_min`
-    and sampling, it is returned unchanged, so a reviewer's edits survive a re-run. Otherwise a
-    `EarlierProfileNotReused` names what differs, each column it holds a histogram or value list for is counted
+    listed now, and it was made by this doppeldata, scipy, detector packs and readers, such as DuckDB and
+    CleverCSV, with the same engine, `k_min` and sampling, it is returned unchanged, so a reviewer's edits
+    survive a re-run. Otherwise an `EarlierProfileNotReused` names what differs, each column it holds a
+    histogram or value list for is counted
     against those, and the rows outside them are written as the column's `overflow`. A column only one of
     the two tables holds issues `ColumnsNotFrozen`.
     """
@@ -67,7 +74,8 @@ def profile(
     sources = importlib.import_module(SOURCES_MODULE)
     source = sources.resolve(data)
     if edges_from is not None:
-        changed = what_changed(edges_from, source.fingerprint, engine=engine, sample=sample, k_min=k_min, packs=enabled)
+        readers = backend.readers(source.format)
+        changed = what_changed(edges_from, source.fingerprint, engine=engine, sample=sample, k_min=k_min, packs=enabled, readers=readers)
         if changed is None:
             return edges_from
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=2)
@@ -90,7 +98,14 @@ def column_names(document: dict[str, Any]) -> list[str]:
 
 
 def what_changed(
-    previous: Profile, fingerprint: str | None, *, engine: str, sample: int | None, k_min: int, packs: list[EnabledPack]
+    previous: Profile,
+    fingerprint: str | None,
+    *,
+    engine: str,
+    sample: int | None,
+    k_min: int,
+    packs: list[EnabledPack],
+    readers: dict[str, str],
 ) -> str | None:
     """What keeps `previous` from being what profiling the listed source with these settings would give, or None.
 
@@ -105,7 +120,7 @@ def what_changed(
     if recorded_k_min != k_min:
         return f'it was made with k_min {recorded_k_min}, and this run uses {k_min}'
     fitting, _ = table_profile.fitting_module()
-    now = table_profile.derivation(engine, fingerprint, fitting.FITTER if fitting else None, packs)
+    now = table_profile.derivation(engine, fingerprint, fitting.FITTER if fitting else None, packs, readers)
     for field in DERIVED_FROM:
         if generated.get(field) != now.get(field):
             return f'its generated.{field} is {described(generated.get(field))}, and this run writes {described(now.get(field))}'
