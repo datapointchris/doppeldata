@@ -648,12 +648,14 @@ def numeric_section(
     kept = counted.kept if counted else []
     zero_point = [(0, zeros)] if zeros and not any(value == 0 for value, _ in kept) else []
     stated = StatedCounts((*kept, *zero_point), negatives)
-    if layout.binning:
-        histogram = floored_histogram(layout.binning, stat('histogram_counts'), k_min, stated)
+    histogram = floored_histogram(layout.binning, stat('histogram_counts'), k_min, stated) if layout.binning else None
+    if layout.binning and histogram is None and negatives:
+        # The rows below zero are one rate and the bins are several counts, so the rate gives way first.
+        histogram = floored_histogram(layout.binning, stat('histogram_counts'), k_min, StatedCounts((*kept, *zero_point)))
         if histogram:
-            section['histogram'] = histogram
-    else:
-        histogram = None
+            section['negative_rate'] = None
+    if histogram:
+        section['histogram'] = histogram
     if histogram is None and small_cell(stated.unaccounted([Region(-math.inf, math.inf, False, values)]), k_min):
         # With no bin to merge, a count stated beside the list that leaves a small cell is left out.
         section['negative_rate'] = None

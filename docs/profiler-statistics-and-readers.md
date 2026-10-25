@@ -20,21 +20,33 @@ counted in string columns holding at most `TOP_VALUES_THRESHOLD` distinct values
 `DEFAULT_CARDINALITY_THRESHOLD` of Deequ's column profiler. Every string column's shapes are counted.
 
 A numeric column's values are counted where it holds at most `NUMERIC_TOP_VALUES_THRESHOLD`
-distinct values, and is neither a `sequence` nor typed `identifier`. The cut sits between a code
-and a measurement. Location ids, rate codes and payment types hold a few hundred values at most,
-and drawn from quantiles they land on the wrong codes. A fare, tip or toll in cents holds
-thousands, and its quantiles carry it. On the NYC yellow taxi trips for February to April 2024,
-generated at 10M rows:
+distinct values, and is not a `sequence`. `VALUE_LISTS` in the statistic catalog names each kind
+that lists its values, the section holding the list and its cut. A column a detector marks
+`sensitivity: identifier` lists none, whatever its kind.
 
-| Cut | Profile lines | Failed `data check` metrics | Location ids' value distance |
+The numeric cut sits between a code and a measurement. Location ids, rate codes and payment types
+hold a few hundred values at most, and drawn from quantiles they land on the wrong codes. A fare,
+tip or toll in cents holds thousands, and its quantiles carry it. On the NYC yellow taxi trips for
+February to April 2024, generated at 10M rows:
+
+| Numeric cut | Profile lines | Failed `data check` metrics | Location ids' value distance |
 | --- | --- | --- | --- |
-| no numeric column listed | 453 | 3 of 89 | 0.43 and 0.39 |
-| 120, the string cut | 545 | 0 of 98 | 0.43 and 0.39 |
-| 1,000 | 1,056 | 0 of 100 | 0.001 and 0.001 |
+| 0, no numeric column listed | 476 | 2 of 91 | 0.43 and 0.39 |
+| `TOP_VALUES_THRESHOLD` | 568 | 0 of 100 | 0.43 and 0.39 |
+| `NUMERIC_TOP_VALUES_THRESHOLD` | 1,079 | 0 of 102 | 0.001 and 0.001 |
 
-The value distance is the total variation distance between the source's and the generated values.
-`PULocationID` and `DOLocationID` hold 262 and 261 values. The next column up, `tolls_amount`,
-holds 1,938.
+Each row sets the numeric entries of `VALUE_LISTS` to its cut, then runs:
+
+```bash
+doppeldata profile create yellow_tripdata_2024-02.parquet yellow_tripdata_2024-03.parquet \
+  yellow_tripdata_2024-04.parquet --out taxi.profile.yaml
+doppeldata data generate taxi.profile.yaml --rows 10000000 --out taxi-generated/
+doppeldata data check taxi.profile.yaml taxi-generated/
+```
+
+The value distance is the total variation distance between the source's values and the generated
+ones, each value's share counted by Polars. `PULocationID` and `DOLocationID` hold 262 and 261
+values. The next column up, `tolls_amount`, holds 1,938.
 
 A float column's `scale` is the fewest decimal places every value equals itself rounded to, up to
 `DECIMAL_PLACES_TRIED`. A column needing more is left without one and generates unrounded.
@@ -69,6 +81,21 @@ Each bin holds the rows from its lower edge up to the next, and the last one hol
 too. The counts come from every row the profile describes, never from the fitting sample, because
 the `k_min` floor is a promise about real rows. Rows below or above the trimmed extremes number fewer
 than `k_min`, so they join the outermost bins.
+
+A bin is floored on what the profile states beside it too. A reader can subtract a bin's listed
+values, its zero rows and its rows below zero from its count, so each cell left must hold 0 rows or
+at least `k_min`.
+
+- **A bin leaving a smaller cell merges into its smaller neighbor**, as a bin under `k_min` rows
+  does.
+- **Where one bin still leaves one, `negative_rate` is left out and the bins merged again.**
+  It is one rate, and the bins are several counts. A listed column whose few unlisted negative
+  values fall under `k_min` keeps its bins this way.
+- **Where that fails too, the histogram is left out.** With no histogram, a cell the stated counts
+  leave across the whole column drops `negative_rate`, then `zero_rate`.
+- **The arithmetic is exact.** Rates keep `RATE_DIGITS` significant digits, which hide a few rows
+  only at large counts, so the floor never rests on that rounding.
+- **`zero_rate` and `negative_rate` under `k_min` rows are written as 0.**
 
 An integer column's edges sit half a unit below the least integer of each bin, and its last edge
 half a unit above the trimmed high. An interior quantile equal to the trimmed high is a boundary
@@ -135,11 +162,14 @@ parameters write two profiles, and those generate different tails.
   prints. No cache directory is written, because the library runs inside Glue executors.
 - **Otherwise each column is counted against the earlier histogram edges and value list.** Values
   outside the edges are written as `histogram.overflow`, `below` and `above`. A column only one of
-  the two tables holds issues one `ColumnsNotFrozen` warning naming it.
-- **`string.overflow.new_value_rows` is the growth of `other_rate` since the list was first
-  frozen.** It is the rows `other_rate` holds now, less the share it held then: the earlier
-  profile's `other_rate`, less that profile's own `new_value_rows`. So an unchanged column writes
-  about 0, and drift is reported against the first profile however long the chain of re-profiles.
+  the two tables holds issues one `ColumnsNotFrozen` warning naming it. So does a column whose list
+  would move to another section, such as a code read as integers before and as strings now. It is
+  profiled afresh.
+- **`overflow.new_value_rows` is the growth of `other_rate` since the list was first frozen**, in
+  `string.overflow` or `numeric.overflow`. It is the rows `other_rate` holds now, less the share it
+  held then: the earlier profile's `other_rate`, less that profile's own `new_value_rows`. So an
+  unchanged column writes about 0, and drift is reported against the first profile however long
+  the chain of re-profiles.
   With 5% of rows already outside the list, giving 10% of rows a new value writes 9.5% of rows: the
   0.5% already outside add nothing.
 - **`new_value_rows` is counted from `other_rate`'s own rows**, so it discloses nothing that rate
@@ -147,8 +177,10 @@ parameters write two profiles, and those generate different tails.
   growth with the rest. Counting only the rows outside the list would give that value's count away,
   as `other_rate` less the count. The earlier profile holds no value outside its list, so a value
   never seen before cannot be told from a rare one that grew.
-- **A numeric column's frozen list writes no `new_value_rows`.** A new value lands in a histogram
-  bin, or beyond the edges in `overflow`, which already measure it.
+- **A numeric column needs its own `new_value_rows` beside the histogram's overflow.** A new value
+  between the outer edges lands in a bin beside the listed values, and the bins cannot tell it from
+  their growth. Re-profiling `[1, 2, 3, 4]` as `[1.5, 2, 3, 4]` writes `other_rate` 0.25 and
+  `new_value_rows` 500 of 2,000 rows, and `profile diff` reports it.
 - **Two profiles of one table then compare bin for bin**, which the round-trip check and drift
   detection read. Rebinning stays explicit, by profiling again without `edges_from`.
 
