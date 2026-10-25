@@ -75,15 +75,18 @@ The guarantees, strongest first:
 2. File bytes, and the split drawn from `rows_per_file`, are identical for one tool version and one
    set of writer settings.
 
-Any change to a sampler's draw order raises the stream version. The stream version is part of a
-dataset's identity, so a dataset generated before the change is still named exactly. An encoder
-upgrade or a change to the file-size draw moves bytes and leaves every value alone. The manifest's
-`tool` names the version that wrote the bytes. `regenerate()` compares every file it writes with the
+Any change to a sampler's draw order raises the stream version. So does the engine starting to read
+a profile field it ignored before, because a profile that carries the field then generates
+different values. The stream version is part of a dataset's identity, so a dataset generated
+before the change is still named exactly. An encoder upgrade or a change to the file-size draw
+moves bytes and leaves every value alone. The manifest's `tool` names the version that wrote the
+bytes. `regenerate()` compares every file it writes with the
 manifest, and names any whose bytes moved.
 
 A test pins a SHA-256 beside the stream version, as one pair. The hash covers the values and text
-cells of a fixture holding one column of every kind, fitted family and provider. A change that moves
-a value fails it until both are updated together. The fixture is the test's own, so editing a
+cells of a fixture holding one column of every kind, fitted family and provider, and of every
+profile field the engine reads. A change that moves a value fails it until both are updated
+together. The fixture is the test's own, so editing a
 bundled example moves no pin.
 
 ## Every exp, log and pow that feeds a value is libm's, so values match on every platform
@@ -97,7 +100,7 @@ could differ in its last bit on another machine, and "reproduce anywhere" would 
   inverse CDFs a fitted tail is tabulated from at plan time. Clippy refuses std's transcendentals
   in the workspace's own code.
 - **A fitted family is used only where its CDF and inverse are closed forms over libm.**
-  `FittedFamily::from_fit` in `crates/core/src/samplers/fitted_family.rs` names them. `norm` uses
+  `FITTED_FAMILIES` in `crates/core/src/samplers/fitted_family.rs` names them. `norm` uses
   Wichura's AS 241, which needs only `log` and `sqrt`. A family with no closed form, such as `gamma`
   or `poisson`, leaves the column with a linear tail.
 - *Rejected:* statrs's inverse CDFs. They call std's functions, and a dependency's `num-traits`
