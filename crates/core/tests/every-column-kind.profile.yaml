@@ -38,6 +38,16 @@ columns:
       zero_rate: 0.3
       quantiles: {p25: 0.0, p50: 2.0, p75: 5.0}
       extremes: {low: 0.0, high: 10.0}
+  # The rounded rates end the zero run at 0.4611, past edge 1.0's share of 0.461, and start it
+  # before p01, so the run is narrowed at both ends.
+  - name: zero_run_past_its_edge
+    physical_type: double
+    numeric:
+      negative_rate: 0.006
+      zero_rate: 0.4551
+      quantiles: {p01: -3.0, p25: 0.0, p50: 1.0, p75: 2.5, p99: 10.0}
+      extremes: {low: -7.5, high: 12.5}
+      histogram: {kind: equal_depth, edges: [-7.5, 0.0, 1.0, 2.5, 12.5], counts: [6, 455, 400, 139]}
   - name: decimal_amount
     physical_type: "decimal128(12, 2)"
     numeric:

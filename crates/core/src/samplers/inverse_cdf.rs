@@ -25,15 +25,16 @@ impl Knots {
         self.0.is_empty()
     }
 
-    /// Adds a knot where it keeps every value in order, and reports whether it did. A knot already
-    /// present is left as it is.
+    /// Adds a knot where it keeps every value in order, and reports whether the knot is in place,
+    /// added now or already present. A refused knot leaves the others as they were.
+    #[must_use = "a refused knot is missing from the distribution"]
     pub(crate) fn insert(&mut self, level: f64, value: f64) -> bool {
         if !(0.0..=1.0).contains(&level) || !value.is_finite() {
             return false;
         }
         let at = self.0.partition_point(|&(l, v)| l < level || (l == level && v < value));
         if self.0.get(at) == Some(&(level, value)) {
-            return false;
+            return true;
         }
         let after_previous = at == 0 || self.0[at - 1].1 <= value;
         let before_next = self.0.get(at).is_none_or(|&(_, next)| value <= next);
@@ -43,11 +44,22 @@ impl Knots {
         after_previous && before_next
     }
 
-    /// Inserts each knot as [`Knots::insert`] does, dropping any that would put a value out of order.
-    pub(crate) fn extend(&mut self, knots: impl IntoIterator<Item = (f64, f64)>) {
-        for (level, value) in knots {
-            self.insert(level, value);
-        }
+    /// Inserts each knot as [`Knots::insert`] does, and returns how many it refused.
+    #[must_use = "a refused knot is missing from the distribution"]
+    pub(crate) fn extend(&mut self, knots: impl IntoIterator<Item = (f64, f64)>) -> usize {
+        knots.into_iter().filter(|&(level, value)| !self.insert(level, value)).count()
+    }
+
+    /// Adds a flat run at `value` from level `start` to `end`, narrowed to lie between the last knot
+    /// below `value` and the first above it. Stored rates are rounded, so a run they place can reach
+    /// past a neighboring knot by the rounding, and narrowing keeps it rather than refusing it.
+    pub(crate) fn insert_run(&mut self, start: f64, end: f64, value: f64) {
+        let floor = self.0.iter().filter(|&&(_, v)| v < value).map(|&(l, _)| l).fold(0.0, f64::max);
+        let ceiling = self.0.iter().filter(|&&(_, v)| v > value).map(|&(l, _)| l).fold(1.0, f64::min);
+        let end = end.clamp(floor, ceiling);
+        let start = start.clamp(floor, end);
+        let placed = self.insert(start, value) && self.insert(end, value);
+        debug_assert!(placed, "a run between its neighbors keeps every value in order");
     }
 }
 
