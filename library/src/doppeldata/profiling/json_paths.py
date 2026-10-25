@@ -7,12 +7,12 @@ each object its fields and their presence, and each array its length and element
 """
 
 import dataclasses as dc
-from collections.abc import Callable
 from typing import Any
 
 from doppeldata.errors import SourceError
 from doppeldata.profiling.backend import HIDDEN_COLUMN_PREFIX
 from doppeldata.profiling.backend import JsonNode
+from doppeldata.profiling.recorded_counts import rate
 
 ELEMENT = 'element'
 # DuckDB's `json_type` for each JSON number and boolean, by the raw type it counts as.
@@ -120,15 +120,12 @@ class ProfiledTable:
     elements: dict[str, 'ProfiledTable']
 
 
-Rate = Callable[[int, int], float]
-
-
-def assembled(root: JsonNode, profiled: ProfiledTable, rate: Rate) -> list[dict[str, Any]]:
+def assembled(root: JsonNode, profiled: ProfiledTable) -> list[dict[str, Any]]:
     """The profile's columns, one per record key, each object with its fields and each array with its element."""
-    return [entry_of(key, node, profiled, rate, nested=False) for key, node in root.fields]
+    return [entry_of(key, node, profiled, nested=False) for key, node in root.fields]
 
 
-def entry_of(key: str, node: JsonNode, profiled: ProfiledTable, rate: Rate, *, nested: bool) -> dict[str, Any]:
+def entry_of(key: str, node: JsonNode, profiled: ProfiledTable, *, nested: bool) -> dict[str, Any]:
     """One path's column. A nested field's null rate is its share of the rows holding its key, and its presence is
     the share of its parent's object rows holding the key, as the generator reads both.
     """
@@ -148,13 +145,13 @@ def entry_of(key: str, node: JsonNode, profiled: ProfiledTable, rate: Rate, *, n
     nullable = held < present or (nested and counts.missing > 0)
     entry |= {'physical_type': '', 'logical_type': node.kind, 'nullable': nullable, 'null_rate': rate(present - held, present)}
     if node.kind == 'object':
-        fields = [entry_of(field, child, profiled, rate, nested=True) for field, child in node.fields]
+        fields = [entry_of(field, child, profiled, nested=True) for field, child in node.fields]
         presence = {field: rate(profiled.rows - profiled.counts[child.column].missing, counts.object) for field, child in node.fields}
         entry['physical_type'] = 'struct<' + ', '.join(f'{field["name"]}: {field["physical_type"]}' for field in fields) + '>'
         entry['struct'] = {'fields': fields, 'presence': presence}
     elif node.element is not None:
         elements = profiled.elements[node.path]
-        element = entry_of(ELEMENT, node.element, elements, rate, nested=False)
+        element = entry_of(ELEMENT, node.element, elements, nested=False)
         lengths = profiled.lengths[node.column]
         listed: dict[str, Any] = {'length': lengths.quantiles} if lengths.quantiles else {}
         entry['physical_type'] = f'list<item: {element["physical_type"]}>'

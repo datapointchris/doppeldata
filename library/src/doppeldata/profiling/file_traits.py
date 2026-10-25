@@ -15,19 +15,24 @@ from doppeldata.profiling.backend import ParquetFooter
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import SourceRead
+from doppeldata.profiling.recorded_counts import TOP_VALUES_THRESHOLD
+from doppeldata.profiling.recorded_counts import kept_values
+from doppeldata.profiling.recorded_counts import rate
+from doppeldata.profiling.recorded_counts import significant
 from doppeldata.profiling.statistic_catalog import QUANTILES
 from doppeldata.profiling.statistic_catalog import ColumnKind
+from doppeldata.published_schemas import published_enum
 
 if TYPE_CHECKING:
     from doppeldata.profiling.table_profile import ProfiledColumns
 
 # A text file's codec, by its suffix.
 TEXT_CODECS = {'.gz': 'gzip', '.zst': 'zstd', '.bz2': 'bzip2'}
-# The codecs a text writer writes, which a profile's `csv` and `json` settings take.
-WRITTEN_TEXT_CODECS = frozenset({'gzip', 'zstd'})
+# The codecs a text writer writes, which a profile's `csv` and `json` settings take, as the profile schema publishes them.
+WRITTEN_TEXT_CODECS = frozenset(published_enum('TextCompression'))
 # Each Parquet codec, as a footer names it, by the `source.compression` and writer setting it is.
 PARQUET_CODECS = {'UNCOMPRESSED': 'none', 'SNAPPY': 'snappy', 'GZIP': 'gzip', 'ZSTD': 'zstd', 'LZ4': 'lz4', 'LZ4_RAW': 'lz4', 'LZO': 'lzo'}
-WRITTEN_PARQUET_CODECS = frozenset({'none', 'snappy', 'gzip', 'zstd', 'lz4'})
+WRITTEN_PARQUET_CODECS = frozenset(published_enum('ParquetCompression'))
 
 
 def source_section(backend: Backend, source: Source, read: SourceRead, profiled: 'ProfiledColumns', k_min: int) -> dict[str, Any]:
@@ -82,10 +87,6 @@ def layout_section(backend: Backend, source: Source, read: SourceRead, profiled:
 
 def partition_key(backend: Backend, profiled: 'ProfiledColumns', key: str, k_min: int) -> dict[str, Any]:
     """A Hive key's type and values. Its shares are of every row, each held by at least k_min rows, as top values are."""
-    from doppeldata.profiling.table_profile import TOP_VALUES_THRESHOLD
-    from doppeldata.profiling.table_profile import kept_values
-    from doppeldata.profiling.table_profile import rate
-
     spec = next(spec for spec in profiled.specs if spec.name == key)
     distinct = profiled.stats[(key, 'distinct_count')]
     values: dict[str, Any] = {'count': distinct}
@@ -111,9 +112,6 @@ def sort_order(footers: tuple[ParquetFooter, ...], profiled: 'ProfiledColumns') 
 
 def csv_section(found: DialectFound, rejected: dict[str, int], profiled: 'ProfiledColumns', k_min: int) -> dict[str, Any]:
     """The writer's dialect, what the first block's bytes hold, how the two sniffers read it, and the malformed rows."""
-    from doppeldata.profiling.table_profile import rate
-    from doppeldata.profiling.table_profile import significant
-
     dialect = found.dialect
     breaks = sum(found.line_terminators.values())
     data_rows = profiled.described + sum(rejected.values())
@@ -143,8 +141,6 @@ def csv_section(found: DialectFound, rejected: dict[str, int], profiled: 'Profil
 
 def malformed_rows(rejected: dict[str, int], data_rows: int, k_min: int) -> dict[str, Any]:
     """Each reason's share of the data rows, leaving out a reason fewer than k_min rows give, and their sum."""
-    from doppeldata.profiling.table_profile import rate
-
     kept = {reason: rows for reason, rows in sorted(rejected.items()) if rows >= k_min}
     return {'rate': rate(sum(kept.values()), data_rows), 'by_type': {reason: rate(rows, data_rows) for reason, rows in kept.items()}}
 

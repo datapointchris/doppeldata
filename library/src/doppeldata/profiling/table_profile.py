@@ -33,6 +33,11 @@ from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import Table
 from doppeldata.profiling.backend import is_hidden
 from doppeldata.profiling.detector_packs import EnabledPack
+from doppeldata.profiling.recorded_counts import RATE_DIGITS
+from doppeldata.profiling.recorded_counts import TOP_VALUES_THRESHOLD
+from doppeldata.profiling.recorded_counts import kept_values
+from doppeldata.profiling.recorded_counts import rate
+from doppeldata.profiling.recorded_counts import significant
 from doppeldata.profiling.statistic_catalog import COLUMN_STATISTICS
 from doppeldata.profiling.statistic_catalog import NUMERIC
 from doppeldata.profiling.statistic_catalog import PROFILED
@@ -48,8 +53,6 @@ if TYPE_CHECKING:
 
     from doppeldata.profiling.semantic_types import Typing
 
-# Deequ's DEFAULT_CARDINALITY_THRESHOLD: a column with no more distinct values than this has its values counted.
-TOP_VALUES_THRESHOLD = 120
 SHAPES_KEPT = 20
 SAMPLE_SEED = 0
 # One seeded sample of this many rows feeds grex and the semantic detectors.
@@ -58,7 +61,6 @@ PATTERN_VALUES = 1_000
 # A pattern stands for the dominant shape, and the generator prefers it to the shapes, so it is
 # stored only where that shape holds most of the values.
 PATTERN_SHAPE_SHARE = 0.5
-RATE_DIGITS = 4
 MOMENT_DIGITS = 6
 SHAPE_MOMENT_DECIMALS = 6
 # A fit's parameters can cancel, as a near-normal lognorm's loc and scale do, so they keep more digits than a moment.
@@ -326,7 +328,7 @@ def profile_columns(
     if json_root.path:
         return dc.replace(profiled, json=json_table)
     outside = [entry for entry in columns if entry['name'] not in paths]
-    return dc.replace(profiled, columns=json_paths.assembled(json_root, json_table, rate) + outside, json=json_table)
+    return dc.replace(profiled, columns=json_paths.assembled(json_root, json_table) + outside, json=json_table)
 
 
 def json_profiled(backend: Backend, profiled: ProfiledColumns, settings: ColumnSettings, root: JsonNode) -> json_paths.ProfiledTable:
@@ -631,17 +633,6 @@ def string_section(
     return section
 
 
-def kept_values(counted: list[tuple[Any, int]], values: int, k_min: int) -> tuple[list[tuple[Any, int]], int]:
-    """The values at least k_min rows hold, and the rows of the rest, which are also never 1 to k_min - 1."""
-    kept = [(value, count) for value, count in counted if count >= k_min]
-    other = values - sum(count for _, count in kept)
-    while kept and 0 < other < k_min:
-        # The least held value folds in, and the last of them where several tie.
-        smallest = min(range(len(kept)), key=lambda at: (kept[at][1], -at))
-        other += kept.pop(smallest)[1]
-    return kept, other
-
-
 def top_values(kept: list[tuple[Any, int]], other: int, values: int) -> dict[str, Any]:
     if not kept:
         return {}
@@ -810,14 +801,6 @@ def clear_of_the_ends(level: float, values: int, k_min: int) -> bool:
     """Whether the quantile sits at least k_min rows from both ends, so it is not an extreme in disguise."""
     position = level * (values - 1)
     return position >= k_min - 1 and values - 1 - position >= k_min - 1
-
-
-def rate(count: int, total: int) -> float:
-    return significant(count / total, RATE_DIGITS) if total else 0.0
-
-
-def significant(value: float, digits: int) -> float:
-    return float(f'{value:.{digits}g}')
 
 
 def is_finite(value: Any) -> bool:
