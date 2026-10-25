@@ -1217,6 +1217,13 @@
             "null"
           ]
         },
+        "imported_from": {
+          "description": "The schema an `import` profile was read from, as `glue:<region>/<database>/<table>` or a\nkind of file and the file's name, such as `odcs:orders.odcs.yaml#orders`. A file's directory\nis not recorded.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "readers": {
           "description": "Each package that read or sniffed the source files, by its distribution name, with its\ninstalled version.",
           "type": [

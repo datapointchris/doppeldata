@@ -1,0 +1,81 @@
+# Extended from the Open Data Contract Standard's enum example, docs/examples/all/enum.odcs.yaml.
+# Copyright 2026 The Bitol Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+version: 1.0.0
+kind: DataContract
+id: a3e8e1f9-1c8b-4f2e-9a7d-3c5e7b6a9f12
+apiVersion: v3.2.0
+status: active
+name: orders_with_enums
+
+schema:
+  - name: orders
+    physicalType: table
+    quality:
+      - metric: rowCount
+        mustBeGreaterOrEqualTo: 1000
+    properties:
+      - name: order_id
+        primaryKey: true
+        primaryKeyPosition: 1
+        logicalType: string
+        physicalType: VARCHAR(36)
+        required: true
+        logicalTypeOptions:
+          format: uuid
+      - name: status
+        logicalType: string
+        physicalType: VARCHAR(32)
+        required: true
+        enum:
+          - value: pending
+          - value: processing
+          - value: shipped
+          - value: cancelled
+      - name: priority
+        logicalType: integer
+        physicalType: INT
+        required: false
+        enum:
+          - value: 1
+          - value: 2
+          - value: 3
+      - name: customer_email
+        logicalType: string
+        required: true
+        classification: restricted
+        logicalTypeOptions:
+          format: email
+      - name: sku
+        logicalType: string
+        physicalType: VARCHAR(8)
+        required: true
+        logicalTypeOptions:
+          pattern: '^[A-Z]{3}-[0-9]{4}$'
+      - name: amount
+        logicalType: number
+        physicalType: decimal(12,2)
+        required: true
+        logicalTypeOptions:
+          minimum: 0
+          maximum: 10000
+      - name: order_date
+        logicalType: date
+        physicalType: date
+        required: true
+        partitioned: true
+        partitionKeyPosition: 1
+      - name: shipped_at
+        logicalType: timestamp
+        required: false
+        quality:
+          - metric: nullValues
+            mustBeLessThan: 20
+            unit: percent
+      - name: note
+        logicalType: string
+        required: false
+      - name: total_value
+        logicalType: number
+        semanticType: measure

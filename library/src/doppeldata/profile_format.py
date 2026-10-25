@@ -14,6 +14,7 @@ import json
 import math
 from collections.abc import Iterator
 from collections.abc import Mapping
+from collections.abc import Sequence
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,8 @@ GENERATED_FIELDS = {
     'source_fingerprint': GeneratedField(hashed=False, derived_from=True),
     'at': GeneratedField(hashed=False, derived_from=False),
     'sample': GeneratedField(hashed=True, derived_from=False),
+    # Left out, so a schema imported again from a copy elsewhere keeps the seed's identity.
+    'imported_from': GeneratedField(hashed=False, derived_from=False),
 }
 UNHASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if not field.hashed)
 DERIVED_FROM = tuple(name for name, field in GENERATED_FIELDS.items() if field.derived_from)
@@ -405,12 +408,62 @@ class Profile:
 
         `columns` is a list of column names, each taking the fake its name hints, or a dict of each name to a column such as
         `sd.fakes.email`, `sd.integers(18, 90)` or None. It may also be a short YAML file of `rows` and a `columns` map, a
-        profile file, an example's name, or a Profile. `rows` is the row count the profile records, in place of the source's.
+        profile file, an example's name, a Profile, or a schema: a pandera `DataFrameModel` or `DataFrameSchema`, a
+        dataframely `Schema`, or a Spark `StructType`. `rows` is the row count the profile records, in place of the source's.
         A name that hints no fake raises InvalidProfile naming the closest. `generate`, `write` and the rest take the same.
         """
         from doppeldata.short_profiles import expanded_profile
 
         return expanded_profile(columns, rows)
+
+    @classmethod
+    def from_glue(
+        cls, database: str, table: str, *, region: str | None = None, detected_entities: Mapping[str, Sequence[str]] | None = None
+    ) -> 'Profile':
+        """A seed of a Glue Data Catalog table: its columns, format, CSV dialect and header, and partition keys drawing
+        the values the catalog lists.
+
+        Reads `glue:GetTable` and `glue:GetPartitions` through boto3, which doppeldata-cli installs, in `region` or the
+        AWS environment's. `detected_entities` maps a column to the Glue entity types `classifyColumns` found in it, such
+        as `{'email': ['EMAIL']}`, and gives it the type the shipped detector pack declares for the first. The packs
+        import pyarrow, so `detected_entities` needs it installed.
+        """
+        from doppeldata.seed_profiles.glue_catalog import glue_profile
+
+        return glue_profile(database, table, region=region, detected_entities=detected_entities)
+
+    @classmethod
+    def from_odcs(cls, path: str | Path, *, table: str | None = None) -> 'Profile':
+        """A seed of one schema object in an Open Data Contract Standard v3 contract, named by `table` where it holds
+        several. A property's types, `logicalTypeOptions`, `enum`, `required`, keys and quality checks shape its column.
+        """
+        from doppeldata.seed_profiles.odcs_contracts import odcs_profile
+
+        return odcs_profile(path, table=table)
+
+    @classmethod
+    def from_json_schema(cls, path: str | Path) -> 'Profile':
+        """A seed of the record a JSON Schema describes, each property a column and a nested object a struct."""
+        from doppeldata.seed_profiles.json_schemas import json_schema_profile
+
+        return json_schema_profile(path)
+
+    @classmethod
+    def from_table_schema(cls, path: str | Path) -> 'Profile':
+        """A seed of the table a Frictionless Table Schema describes, its first missing value written as a CSV's null."""
+        from doppeldata.seed_profiles.table_schemas import table_schema_profile
+
+        return table_schema_profile(path)
+
+    @classmethod
+    def from_data_package(cls, path: str | Path, *, table: str | None = None) -> 'Profile':
+        """A seed of one resource of a Frictionless Data Package, named by `table` where it holds several.
+
+        `Bundle.from_data_package` reads every resource, and their foreign keys.
+        """
+        from doppeldata.seed_profiles.table_schemas import data_package_profile
+
+        return data_package_profile(path, table=table)
 
     def validate(self) -> list[Issue]:
         """Every reason the profile is invalid. Empty when it is valid."""
@@ -488,6 +541,15 @@ class Bundle:
                 raise InvalidProfile(str(index), [Issue('table-name-mismatch', pointer(('tables', name)), message)])
             tables[name] = table
         return cls(document, index, tables)
+
+    @classmethod
+    def from_data_package(cls, path: str | Path) -> 'Bundle':
+        """A bundle of a seed for each resource of a Frictionless Data Package, and a relationship for each foreign key
+        of one field. It has no file of its own, so its `save` needs a path.
+        """
+        from doppeldata.seed_profiles.table_schemas import data_package_bundle
+
+        return data_package_bundle(path)
 
     def to_plain(self) -> dict[str, Any]:
         """The bundle with every table inline, as a single-file bundle would hold it."""

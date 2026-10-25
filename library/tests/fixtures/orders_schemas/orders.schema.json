@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/orders.schema.json",
+  "title": "Order",
+  "type": "object",
+  "required": ["order_id", "status", "customer_email", "sku", "amount", "order_date"],
+  "properties": {
+    "order_id": {"type": "integer", "minimum": 1},
+    "status": {"enum": ["pending", "processing", "shipped", "cancelled"]},
+    "priority": {"type": ["integer", "null"], "enum": [1, 2, 3, null]},
+    "customer_email": {"type": "string", "format": "email"},
+    "sku": {"type": "string", "pattern": "^[A-Z]{3}-[0-9]{4}$"},
+    "amount": {"type": "number", "minimum": 0, "maximum": 10000, "multipleOf": 0.01},
+    "order_date": {"type": "string", "format": "date"},
+    "shipped_at": {"type": "string", "format": "date-time"},
+    "note": {"type": "string"},
+    "batch_ref": {"type": "string"},
+    "shipping": {"$ref": "#/$defs/address"},
+    "tags": {"type": "array", "items": {"type": "string", "maxLength": 12}, "maxItems": 3}
+  },
+  "$defs": {
+    "address": {
+      "type": "object",
+      "required": ["city"],
+      "properties": {
+        "city": {"type": "string"},
+        "postcode": {"type": "string", "pattern": "^[0-9]{5}$"}
+      }
+    }
+  }
+}

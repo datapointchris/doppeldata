@@ -50,6 +50,10 @@ pub struct Generated {
     /// disk, or its S3 ETag. It tells two listings apart, and never hashes the content.
     pub source_fingerprint: Option<String>,
     pub sample: Option<Sample>,
+    /// The schema an `import` profile was read from, as `glue:<region>/<database>/<table>` or a
+    /// kind of file and the file's name, such as `odcs:orders.odcs.yaml#orders`. A file's directory
+    /// is not recorded.
+    pub imported_from: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
