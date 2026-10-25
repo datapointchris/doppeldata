@@ -44,16 +44,23 @@ engine='spark')`.
 ## Profile over a Spark Connect session
 
 Over Spark Connect, the client runs the profiler and the session computes every statistic. The
-client lists the source, sniffs a CSV's dialect and builds the profile, so it holds the library, its
-CSV packages and `pyspark[connect]` at the server's Spark version. `pyspark[connect]` 3.5 pins a
-numpy below 2, which pyarrow 26 refuses, so the client holds pyarrow 22:
+client lists the source, sniffs a CSV's dialect and builds the profile. The client reads S3 with its
+own credentials to list and sniff, and the session reads the rows with its role.
+
+- **The executors run each pass's code as their own.** The client pickles the `mapInArrow` passes
+  by reference, so the executors need the client's Python minor version and the client's
+  doppeldata. The profile runs one task first and is refused before any read where they differ.
+- **A server `SPARK_REMOTE` names that takes no connection is refused with exit 4**, after
+  `CONNECT_ATTEMPTS` tries of `CONNECT_TIMEOUT_SECONDS` each. The client's own retries would wait
+  about ten minutes before failing.
+
+From Python, the client holds the library at the session wheel's version, its CSV packages and
+`pyspark[connect]` at the server's Spark version. `pyspark[connect]` 3.5 pins a numpy below 2,
+which pyarrow 26 refuses, so the client holds pyarrow 22:
 
 ```bash
-uv pip install --index https://pypi.ichrisbirch.com/simple/ doppeldata 'pyspark[connect]==3.5.6' pyarrow==22.0.0 boto3 scipy duckdb clevercsv charset-normalizer
-SPARK_REMOTE=sc://spark-host:15002 doppeldata profile create s3://your-bucket/claims/ --engine spark --out claims.profile.yaml
+uv pip install --index https://pypi.ichrisbirch.com/simple/ 'doppeldata==<version>' 'pyspark[connect]==3.5.6' pyarrow==22.0.0 boto3 scipy duckdb clevercsv charset-normalizer
 ```
-
-From Python, name the session:
 
 ```python
 spark = SparkSession.builder.remote('sc://spark-host:15002').getOrCreate()
@@ -61,8 +68,13 @@ profile = sd.profile('s3://your-bucket/claims/', engine='spark', spark=spark)
 profile.save('claims.profile.yaml')
 ```
 
-The client reads S3 with its own credentials to list and sniff, and the session reads the rows with
-its role.
+The CLI needs Python 3.13 or later, so it profiles over a server whose executors run that Python.
+Glue 5.x executors run Python 3.11, so a Glue 5.1 session is profiled from Python, as below.
+
+```bash
+uv tool install --index https://pypi.ichrisbirch.com/simple/ 'doppeldata-cli==<version>' --with 'pyspark[connect]==<server Spark version>'
+SPARK_REMOTE=sc://spark-host:15002 doppeldata profile create s3://your-bucket/claims/ --engine spark --out claims.profile.yaml
+```
 
 ## Profile over a Glue 5.1 Spark Connect session
 
@@ -306,7 +318,7 @@ The file's path is left out of its place, so the same files read from a local pa
 placed alike. A Spark DataFrame has no files, so its rows are placed by their values, and its
 identical rows are kept or dropped together.
 
-## The backend runs under four session settings, and restores each one
+## The backend runs under the session settings below, and restores each one
 
 | Setting | Value | Why |
 | --- | --- | --- |
@@ -318,6 +330,14 @@ identical rows are kept or dropped together.
 Spark 4 casts through `Column.try_cast`, which gives null under ANSI mode too, so ANSI is left as
 the session sets it. Spark 3.5 has no `try_cast` on a column, so the backend turns ANSI off and
 casts.
+
+- **The settings are set on the session itself.** Another thread's queries on that session run
+  under them until the profile ends. A Spark Connect session is its client's own, so the other
+  clients of one server are untouched. `newSession()` would keep them apart, but Spark Connect has
+  none, and a DataFrame's queries run under its own session's settings.
+- **Each setting is restored, and each persisted frame released, on its own.** One that fails is
+  noted on the profile's error, or warned of as a `ProfilingWarning` where the profile succeeded.
+  So a session ended mid-profile shows the profile's own error, not the cleanup's.
 
 ## Spark reads Parquet, CSV and TSV, and refuses JSON and Arrow
 

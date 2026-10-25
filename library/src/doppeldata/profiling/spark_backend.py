@@ -12,6 +12,10 @@ import dataclasses as dc
 import datetime as dt
 import importlib
 import io
+import os
+import socket
+import time
+import warnings
 import zoneinfo
 from collections.abc import Callable
 from collections.abc import Iterator
@@ -27,6 +31,8 @@ from pyspark.sql import Column
 from pyspark.sql import DataFrame
 from pyspark.sql import SparkSession
 
+from doppeldata._core import VERSION
+from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
 from doppeldata.profiling import parquet_footers
 from doppeldata.profiling.backend import HIDDEN_COLUMN_PREFIX
@@ -52,6 +58,7 @@ from doppeldata.profiling.statistic_catalog import SHAPE_TO
 from doppeldata.profiling.statistic_catalog import TIME_UNITS
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
+from doppeldata.spark import PYTHON_ERROR_LINE
 
 # HyperLogLog++'s relative standard deviation. At 0.01 each column's sketch holds 2^14 registers, and a count of a few
 # thousand values is linear counting's, close to exact.
@@ -73,6 +80,11 @@ SESSION_SETTINGS = {
     'spark.sql.legacy.timeParserPolicy': 'CORRECTED',
     'spark.sql.codegen.maxFields': '10000',
 }
+# A Spark Connect server's port where `SPARK_REMOTE` names none, and the tries and seconds it is given to take a
+# connection before the profile is refused.
+CONNECT_PORT = 15002
+CONNECT_ATTEMPTS = 3
+CONNECT_TIMEOUT_SECONDS = 10
 # Spark 3.5 has no try_cast on a column, and a cast with ANSI off gives null where a value does not parse.
 ANSI_OFF = {'spark.sql.ansi.enabled': 'false'}
 FILE_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_file'
@@ -491,6 +503,21 @@ class EndValues:
             yield pa.record_batch([pa.array(requests, pa.int32()), pa.array(texts, pa.string())], names=['request', 'value'])
 
 
+@dc.dataclass(frozen=True)
+class DriverBuild:
+    """What one Spark task runs to check its executor imports the doppeldata the driver runs, because each pass's code is
+    pickled by reference and run as the executor's."""
+
+    version: str
+
+    def __call__(self, batches: Iterator[Any]) -> Iterator[Any]:
+        for _ in batches:
+            pass
+        if self.version != VERSION:
+            raise RuntimeError(f'this executor runs doppeldata {VERSION}, and the driver {self.version}; install one build on both')
+        yield from ()
+
+
 SPLIT_STEPS_SCHEMA = 'file string, block long, part int, column string, first long, last long, low long, high long'
 
 
@@ -570,7 +597,33 @@ def session_for(data: Any, spark: SparkSession | None) -> SparkSession:
     if is_spark_frame(data):
         frame_session: SparkSession = data.sparkSession
         return frame_session
-    return SparkSession.getActiveSession() or SparkSession.builder.getOrCreate()
+    active = SparkSession.getActiveSession()
+    if active is not None:
+        return active
+    remote = os.environ.get('SPARK_REMOTE')
+    if remote:
+        refuse_silent_server(remote)
+    return SparkSession.builder.getOrCreate()
+
+
+def refuse_silent_server(remote: str) -> None:
+    """Refuse a Spark Connect server that takes no connection in `CONNECT_ATTEMPTS` tries with a SourceError at exit 4,
+    where the client's own retries would wait about ten minutes before failing."""
+    parsed_url = urlparse(remote)
+    if parsed_url.scheme != 'sc' or not parsed_url.hostname:
+        return
+    host, port = parsed_url.hostname, parsed_url.port or CONNECT_PORT
+    failure: OSError | None = None
+    for attempt in range(CONNECT_ATTEMPTS):
+        if attempt:
+            time.sleep(attempt)
+        try:
+            socket.create_connection((host, port), timeout=CONNECT_TIMEOUT_SECONDS).close()
+            return
+        except OSError as error:
+            failure = error
+    message = f'no answer from the Spark Connect server at {host}:{port}, which SPARK_REMOTE names, in {CONNECT_ATTEMPTS} tries: {failure}'
+    raise SourceError(message, exit_code=4)
 
 
 class SparkBackend:
@@ -589,23 +642,57 @@ class SparkBackend:
 
     @contextlib.contextmanager
     def profiling(self) -> Iterator[None]:
-        """Run inside the session settings the translations assume, then restore them and release what was persisted."""
+        """Run inside the session settings the translations assume, on executors that run this doppeldata, then restore
+        the settings and release what was persisted.
+
+        The settings are set on the session itself, so its other queries run under them until the profile ends. A setting
+        or frame that cannot be restored or released is noted on the error the profile raised, and warned of where it
+        raised none.
+        """
         settings = SESSION_SETTINGS | (ANSI_OFF if self.major < 4 else {})
-        before = {key: self.spark.conf.get(key, None) for key in settings}
-        for key, value in settings.items():
-            self.spark.conf.set(key, value)
+        before: dict[str, str | None] = {}
         try:
+            for key, value in settings.items():
+                before[key] = self.spark.conf.get(key, None)
+                self.spark.conf.set(key, value)
+            self.refuse_unlike_executors()
             yield
-        finally:
-            for key, value in before.items():
+        except BaseException as error:
+            for failure in self.cleaned_up(before):
+                error.add_note(failure)
+            raise
+        for failure in self.cleaned_up(before):
+            warnings.warn(failure, ProfilingWarning, stacklevel=3)
+
+    def cleaned_up(self, before: dict[str, str | None]) -> list[str]:
+        """Restore each setting and release each persisted frame, each apart, and say what could not be."""
+        failures = []
+        for key, value in before.items():
+            try:
                 if value is None:
                     self.spark.conf.unset(key)
                 else:
                     self.spark.conf.set(key, value)
-            for frame in self.persisted:
+            except Exception as error:
+                failures.append(f'the session setting {key} could not be restored to {value}: {error}')
+        for frame in self.persisted:
+            try:
                 frame.unpersist()
-            self.persisted.clear()
-            self.parsed.clear()
+            except Exception as error:
+                failures.append(f'a frame persisted on disk could not be released: {error}')
+        self.persisted.clear()
+        self.parsed.clear()
+        return failures
+
+    def refuse_unlike_executors(self) -> None:
+        """Refuse a session whose executors cannot run the passes this driver pickles, as one on another Python minor or
+        another doppeldata, before any source is read."""
+        try:
+            self.spark.range(1, numPartitions=1).mapInArrow(DriverBuild(VERSION), 'version string').collect()
+        except Exception as error:
+            causes = PYTHON_ERROR_LINE.findall(str(error))
+            cause = ': '.join(causes[-1]) if causes else next(iter(str(error).strip().splitlines()), type(error).__name__)
+            raise SourceError(f'the Spark executors cannot run the profiling passes: {cause}', exit_code=1) from error
 
     def scan(self, source: Source) -> DataFrame:
         return self.read(source).table
