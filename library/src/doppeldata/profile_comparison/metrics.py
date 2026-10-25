@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from typing import Any
 from typing import NamedTuple
 
+from doppeldata.profile_format import quantile_level
+
 Document = dict[str, Any]
 Column = dict[str, Any]
 Shares = tuple[float, float]
@@ -75,23 +77,14 @@ class Stated:
     through: Shares
 
 
-def quantile_level(name: str) -> float | None:
-    """The level a quantile's name stands for: `p05` is 0.05, `p999` is 0.999."""
-    digits = name.removeprefix('p')
-    return int(digits) / 10 ** len(digits) if name.startswith('p') and digits.isdigit() else None
-
-
 def stated_points(numeric: dict[str, Any]) -> list[Stated]:
     """Every point a numeric block states its CDF at: each quantile, each histogram edge its counts pin, and zero.
 
     A p-quantile q states only that the share below q is at most p and the share through q at least p, so a value
     several quantiles share is a jump they all sit on. Every rate is a share of the non-null values, as the counts are.
     """
-    points = [
-        Stated(value, (0.0, level), (level, 1.0))
-        for name, value in (numeric.get('quantiles') or {}).items()
-        if (level := quantile_level(name)) is not None
-    ]
+    quantiles = {quantile_level(name): value for name, value in (numeric.get('quantiles') or {}).items()}
+    points = [Stated(value, (0.0, level), (level, 1.0)) for level, value in quantiles.items()]
     histogram = numeric.get('histogram') or {}
     edges, counts, overflow = histogram.get('edges') or [], histogram.get('counts') or [], histogram.get('overflow')
     below, above = (overflow['below'], overflow['above']) if overflow else (0, 0)
