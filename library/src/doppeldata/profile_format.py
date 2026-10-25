@@ -33,8 +33,32 @@ from doppeldata.published_schemas import schema_text
 
 FORMAT_VERSION = _core.FORMAT_VERSION
 BUNDLE_INDEX = 'bundle.yaml'
-# Left out of the digest, so profiling unchanged data again keeps the profile's identity.
-UNHASHED_GENERATED_FIELDS = ('at', 'tool', 'fitter', 'detector_packs', 'source_fingerprint')
+
+
+@dc.dataclass(frozen=True)
+class GeneratedField:
+    """What one `generated` field takes part in.
+
+    `hashed` puts it in the profile's digest, so a field left out lets profiling unchanged data again keep the
+    profile's identity. `derived_from` makes it one of the values an earlier profile must match to be returned
+    unchanged, beside the rows, `k_min` and the sampling.
+    """
+
+    hashed: bool
+    derived_from: bool
+
+
+GENERATED_FIELDS = {
+    'tool': GeneratedField(hashed=False, derived_from=True),
+    'engine': GeneratedField(hashed=True, derived_from=True),
+    'fitter': GeneratedField(hashed=False, derived_from=True),
+    'detector_packs': GeneratedField(hashed=False, derived_from=True),
+    'source_fingerprint': GeneratedField(hashed=False, derived_from=True),
+    'at': GeneratedField(hashed=False, derived_from=False),
+    'sample': GeneratedField(hashed=True, derived_from=False),
+}
+UNHASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if not field.hashed)
+DERIVED_FROM = tuple(name for name, field in GENERATED_FIELDS.items() if field.derived_from)
 # Stored rates are rounded, so a set meant to sum to 1 is allowed this far off.
 RATE_SUM_TOLERANCE = 0.01
 # RFC 8785 writes numbers as IEEE 754 doubles, which hold every integer only up to this magnitude.
@@ -286,6 +310,12 @@ def column_ordering_issues(column: dict[str, Any], at: PointerParts) -> Iterator
         yield from column_ordering_issues(listed['element'], (*at, 'list', 'element'))
     for index, field in enumerate((column.get('struct') or {}).get('fields') or []):
         yield from column_ordering_issues(field, (*at, 'struct', 'fields', index))
+    stored = (column.get('string') or {}).get('pattern')
+    hinted = ((column.get('semantic') or {}).get('generator_hint') or {}).get('pattern')
+    for path, pattern in ((('string', 'pattern'), stored), (('semantic', 'generator_hint', 'pattern'), hinted)):
+        problem = _core.pattern_problem(pattern) if isinstance(pattern, str) else None
+        if problem:
+            yield Issue('invalid-pattern', pointer((*at, *path)), problem)
 
 
 def quantile_level(name: str) -> float:

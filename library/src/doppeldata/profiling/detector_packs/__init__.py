@@ -1,11 +1,13 @@
-"""Detector packs: the protocol a pack implements, the packs the library ships, and the entry points that add others.
+"""Detector packs: the detectors a pack holds, the packs the library ships, and the entry points that add others.
 
-A third party adds semantic types without forking by registering a pack under the `doppeldata.detector_packs`
-entry-point group. The entry point's name is the pack's name, which a run enables it by, and it points at an
-object implementing `DetectorPack`:
+A third party adds semantic types without forking by registering a `DetectorPack` under the
+`doppeldata.detector_packs` entry-point group. The entry point's name is the pack's name, which a run enables it by:
 
     [project.entry-points."doppeldata.detector_packs"]
     acme = "acme_detectors:PACK"
+
+A pack is code the profiler imports and runs, and its validators are handed the sampled values of the columns it may
+type. So enable only a pack trusted with the data. The profile holds none of those values.
 """
 
 import dataclasses as dc
@@ -15,15 +17,13 @@ import re
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
-from collections.abc import Sequence
 from typing import TYPE_CHECKING
 from typing import Any
-from typing import Literal
-from typing import Protocol
 
 from doppeldata import _core
 from doppeldata.errors import DetectorPackError
 from doppeldata.published_schemas import published_enum
+from doppeldata.published_schemas import published_fields
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -35,60 +35,47 @@ GENERAL = 'general'
 BUILT_IN = {GENERAL: 'doppeldata.profiling.detector_packs.general:PACK'}
 # A pack's name and a semantic type are lowercase snake identifiers, which stay stable when Glue renames a type.
 IDENTIFIER = re.compile(r'[a-z][a-z0-9_]*')
-# The generator hint's keys that name one of the profile format's enums. `pattern` takes any regular expression.
-HINT_ENUMS = {'provider': 'Provider', 'check_digit': 'CheckDigit'}
+# An upper-case run before a capitalized word, a capitalized or lower-case word, or a run of digits.
+NAME_WORD = re.compile(r'[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+')
 
-Sensitivity = Literal['identifier', 'quasi_identifier', 'sensitive', 'none']
-
-
-class Detector(Protocol):
-    """One semantic type: the values it accepts, the column names that hint it, and what the generator draws for it."""
-
-    @property
-    def type(self) -> str:
-        """The semantic type a column is given, such as `email`."""
-        ...
-
-    @property
-    def sensitivity(self) -> Sensitivity:
-        """How much a column of this type says about a person, which the privacy policy decides from.
-
-        A class attribute is annotated as `Sensitivity`, because a bare string is inferred as `str`.
-        """
-        ...
-
-    @property
-    def glue_type(self) -> str | None:
-        """The AWS Glue sensitive-data managed type, such as `EMAIL`, or None where Glue has none."""
-        ...
-
-    @property
-    def name_hints(self) -> tuple[str, ...]:
-        """Column-name words that hint the type, in snake case: `e_mail` hints a column named `customerEMail`."""
-        ...
-
-    @property
-    def generator_hint(self) -> Mapping[str, str]:
-        """What the generator draws: `{'provider': 'email'}`, or `{'pattern': '…', 'check_digit': 'luhn'}`."""
-        ...
-
-    @property
-    def validate(self) -> 'Callable[[pa.Array], pa.BooleanArray] | None':
-        """Whether each value is of the type, given a string array holding no nulls.
-
-        None where the type has no validator, such as a person's name, so only a name hint assigns it.
-        """
-        ...
+Validator = Callable[['pa.Array'], 'pa.BooleanArray']
 
 
-class DetectorPack(Protocol):
+@dc.dataclass(frozen=True)
+class Detector:
+    """One semantic type: the values it accepts, the column names that hint it, and what the generator draws for it.
+
+    `type` is the semantic type a column is given, a lowercase snake identifier such as `email`. `sensitivity` is a
+    value of the profile format's `Sensitivity`, which the privacy policy decides from. `name_hints` are words a
+    column's name holds where it hints the type, in any case convention: `e_mail` hints `customerEMail`.
+
+    `generator_hint` is what the generator draws, such as `{'provider': 'email'}` or a `pattern`. Where it names a
+    `check_digit`, the profiler tests each value's check digit, so `validate` need not.
+
+    `validate` says whether each value of a string array holding no nulls is of the type, and `method` is how it
+    decides, as `semantic.detectors` names it: `pattern` for a regular expression alone, otherwise `validator`.
+    With `hint_required`, only a column whose name hints the type takes it, and the validator confirms the hint.
+    A type with no validator is assigned by its name hints alone.
+
+    `glue_type` is the AWS Glue sensitive-data managed type, such as `EMAIL`. The profile does not write it.
+    """
+
+    type: str
+    sensitivity: str
+    name_hints: tuple[str, ...]
+    generator_hint: Mapping[str, str]
+    validate: Validator | None = None
+    method: str = 'validator'
+    hint_required: bool = False
+    glue_type: str | None = None
+
+
+@dc.dataclass(frozen=True)
+class DetectorPack:
     """A named set of detectors, such as `general` or a domain's own."""
 
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def detectors(self) -> Sequence[Detector]: ...
+    name: str
+    detectors: tuple[Detector, ...]
 
 
 @dc.dataclass(frozen=True)
@@ -99,13 +86,26 @@ class EnabledPack:
     provided_by: str
 
 
+def name_words(name: str) -> tuple[str, ...]:
+    """A column name's or a name hint's words, lower-cased: `customerEMail` and `customer_e_mail` are each customer, e, mail."""
+    return tuple(word.lower() for word in NAME_WORD.findall(name))
+
+
 def enabled_packs(names: Iterable[str]) -> list[EnabledPack]:
     """The general pack, then each other pack named, by name, so the order a run names them in changes nothing.
 
-    A pack the library ships is found first. Any other is the entry point of that name in `ENTRY_POINT_GROUP`.
+    A pack the library ships is found first. Any other is the entry point of that name in `ENTRY_POINT_GROUP`. Two
+    packs may not declare one type, because the privacy policy reads a type's sensitivity from one pack.
     """
     requested = sorted(set(names) - {GENERAL})
-    return [load(name) for name in (GENERAL, *requested)]
+    enabled = [load(name) for name in (GENERAL, *requested)]
+    owners: dict[str, str] = {}
+    for each in enabled:
+        for kind in dict.fromkeys(detector.type for detector in each.pack.detectors):
+            if kind in owners:
+                raise DetectorPackError(f'the detector packs {owners[kind]!r} and {each.pack.name!r} both declare the type {kind}')
+            owners[kind] = each.pack.name
+    return enabled
 
 
 def load(name: str) -> EnabledPack:
@@ -136,29 +136,53 @@ def provider(entry: importlib.metadata.EntryPoint) -> str:
 
 
 def checked(name: str, pack: Any) -> DetectorPack:
-    """The pack, once every field a profile writes from it is one the profile format accepts.
+    """The pack, once every field a profile writes from it is one the profile format accepts and the generator draws.
 
-    A third party's mistake is then named at the pack that made it, rather than as the written profile failing its schema.
+    A third party's mistake is then named at the pack that made it, rather than as the written profile failing its
+    schema, or as generation failing wherever it runs.
     """
 
     def refuse(problem: str) -> DetectorPackError:
         return DetectorPackError(f'the detector pack {name!r} {problem}')
 
-    if getattr(pack, 'name', None) != name:
-        raise refuse(f'is registered as {name!r} but names itself {getattr(pack, "name", None)!r}')
-    sensitivities = set(published_enum('Sensitivity'))
-    drawn = {key: set(published_enum(definition)) for key, definition in HINT_ENUMS.items()}
+    if not isinstance(pack, DetectorPack):
+        raise refuse(f'is a {type(pack).__name__}, not a doppeldata DetectorPack')
+    if pack.name != name:
+        raise refuse(f'is registered as {name!r} but names itself {pack.name!r}')
+    if not IDENTIFIER.fullmatch(name):
+        raise refuse('is not named by a lowercase snake identifier')
+    if not isinstance(pack.detectors, tuple | list):
+        raise refuse(f'holds its detectors in a {type(pack.detectors).__name__}, not a tuple')
+    sensitivities, methods, hint_fields = published_enum('Sensitivity'), published_enum('Detector'), published_fields('GeneratorHint')
+    first_of_type: dict[str, Detector] = {}
     for detector in pack.detectors:
-        kind = getattr(detector, 'type', None)
+        if not isinstance(detector, Detector):
+            raise refuse(f'holds a {type(detector).__name__}, not a doppeldata Detector')
+        kind = detector.type
         if not isinstance(kind, str) or not IDENTIFIER.fullmatch(kind):
             raise refuse(f'has a detector whose type {kind!r} is not a lowercase snake identifier')
         if detector.sensitivity not in sensitivities:
-            raise refuse(f'gives {kind} the sensitivity {detector.sensitivity!r}; choose from {", ".join(sorted(sensitivities))}')
+            raise refuse(f'gives {kind} the sensitivity {detector.sensitivity!r}; choose from {", ".join(sensitivities)}')
+        if detector.method not in methods:
+            raise refuse(f'gives {kind} the method {detector.method!r}; choose from {", ".join(methods)}')
+        if detector.validate is not None and not callable(detector.validate):
+            raise refuse(f'gives {kind} a validator that is a {type(detector.validate).__name__}, not a callable')
+        if not isinstance(detector.name_hints, tuple | list) or not all(
+            isinstance(hint, str) and name_words(hint) for hint in detector.name_hints
+        ):
+            raise refuse(f'gives {kind} the name hints {detector.name_hints!r}; each is a string holding a word')
+        if (detector.validate is None or detector.hint_required) and not detector.name_hints:
+            raise refuse(f'gives {kind} no name hint, and only a name hint can assign it')
         for key, value in detector.generator_hint.items():
-            if key not in (*HINT_ENUMS, 'pattern'):
-                raise refuse(f"gives {kind} the generator hint {key!r}; a hint takes 'provider', 'pattern' and 'check_digit'")
-            if key in drawn and value not in drawn[key]:
+            if key not in hint_fields:
+                raise refuse(f'gives {kind} the generator hint {key!r}; a hint takes {", ".join(map(repr, hint_fields))}')
+            allowed = hint_fields[key]
+            if not isinstance(value, str) or (allowed is not None and value not in allowed):
                 raise refuse(f'hints {kind} with the {key} {value!r}, which the generator does not draw')
-        if detector.validate is None and not detector.name_hints:
-            raise refuse(f'gives {kind} neither a validator nor a name hint, so nothing can assign it')
+            problem = _core.pattern_problem(value) if key == 'pattern' else None
+            if problem:
+                raise refuse(f'hints {kind} with a pattern the generator cannot draw from: {problem}')
+        first = first_of_type.setdefault(kind, detector)
+        if (first.sensitivity, first.glue_type) != (detector.sensitivity, detector.glue_type):
+            raise refuse(f'gives {kind} two sensitivities or Glue types; the detectors of one type agree on both')
     return pack

@@ -64,7 +64,6 @@ def luhn_completed(payload: str) -> str:
 
 def test_the_general_pack_types_each_column_of_the_mixed_fixture(tmp_path):
     rows, draw = 10_000, random.Random(11)
-    # 30 of the 10,000 cards, 0.3%, carry a wrong check digit.
     corrupted = set(draw.sample(range(rows), 30))
     cards = [luhn_completed(draw.choice(['4', '51', '37']) + ''.join(draw.choices('0123456789', k=13))) for _ in range(rows)]
     cards = [card[:-1] + str((int(card[-1]) + 1) % 10) if index in corrupted else card for index, card in enumerate(cards)]
@@ -77,6 +76,7 @@ def test_the_general_pack_types_each_column_of_the_mixed_fixture(tmp_path):
             'client_ip': ['.'.join(str(draw.randrange(256)) for _ in range(4)) for _ in range(rows)],
             'ship_zip': [f'{draw.randrange(100_000):05d}' for _ in range(rows)],
             'state': [draw.choice(['CA', 'NY', 'TX', 'WA', 'FL', 'MA', 'IL', 'OH']) for _ in range(rows)],
+            'last_name_id': draw.sample(range(10**6), rows),
         }
     )
     table.write_parquet(tmp_path / 'mixed.parquet')
@@ -85,7 +85,7 @@ def test_the_general_pack_types_each_column_of_the_mixed_fixture(tmp_path):
     assert result.exit_code == 0, result.output
 
     columns = {column['name']: column for column in Profile.load(out).to_plain()['columns']}
-    assert {name: column['semantic']['type'] for name, column in columns.items()} == {
+    assert {name: (column.get('semantic') or {}).get('type') for name, column in columns.items()} == {
         'contact': 'email',
         'card_number': 'credit_card',
         'ssn': 'us_ssn',
@@ -93,6 +93,7 @@ def test_the_general_pack_types_each_column_of_the_mixed_fixture(tmp_path):
         'client_ip': 'ipv4_address',
         'ship_zip': 'us_zip',
         'state': 'us_state',
+        'last_name_id': None,
     }
     assert columns['card_number']['quality']['invalid_rate'] == pytest.approx(0.003, abs=0.001)
 

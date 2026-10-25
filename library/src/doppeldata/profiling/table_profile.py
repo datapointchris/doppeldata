@@ -16,6 +16,7 @@ from ruamel.yaml.comments import CommentedSeq
 from doppeldata import _core
 from doppeldata.errors import FitsSkipped
 from doppeldata.errors import PoorFits
+from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
 from doppeldata.profiling import text_types
 from doppeldata.profiling.backend import TEXT_FORMATS
@@ -70,8 +71,6 @@ FITTED_FAMILIES_MODULE = 'doppeldata.profiling.fitted_families'
 # Imported by name, because it imports pyarrow, which a library-only install lacks.
 SEMANTIC_TYPES_MODULE = 'doppeldata.profiling.semantic_types'
 TOOL = f'doppeldata {_core.VERSION}'
-# The `generated` fields that, beside the rows, `k_min` and the sampling, decide what profiling writes.
-DERIVED_FROM = ('tool', 'engine', 'fitter', 'detector_packs', 'source_fingerprint')
 LOGICAL_TYPES = {
     ColumnKind.INTEGER: 'integer',
     ColumnKind.FLOAT: 'number',
@@ -187,7 +186,7 @@ def profile_table(
     detected = detection.detected_columns(specs, packs)
     value_sample = backend.sample(table, VALUE_SAMPLE_ROWS, SAMPLE_SEED) if detected else None
     patterns = generalized_patterns(value_sample, shapes, stats, described, k_min)
-    typings = detection.column_typings(value_sample, detected, packs, k_min) if value_sample else {}
+    typings = detection.column_typings(value_sample, detected, patterns, k_min) if value_sample else {}
     distinct: dict[str, tuple[int, int]] = {
         spec.name: (whole_distinct[spec.name] if spec.name in whole_distinct else stats[(spec.name, 'distinct_count')], rows)
         for spec in specs
@@ -233,9 +232,14 @@ def profile_table(
 
 def derivation(engine: str, fingerprint: str | None, fitter: str | None, packs: list[EnabledPack]) -> dict[str, Any]:
     """The `DERIVED_FROM` fields a profile made now with this engine, listing, fitter and detector packs writes."""
-    recorded_packs = {enabled.pack.name: enabled.provided_by for enabled in packs}
-    values = (TOOL, engine, fitter, recorded_packs, fingerprint)
-    return {field: value for field, value in zip(DERIVED_FROM, values, strict=True) if value is not None}
+    values = {
+        'tool': TOOL,
+        'engine': engine,
+        'fitter': fitter,
+        'detector_packs': {enabled.pack.name: enabled.provided_by for enabled in packs},
+        'source_fingerprint': fingerprint,
+    }
+    return {field: values[field] for field in DERIVED_FROM if values[field] is not None}
 
 
 def fitting_module() -> tuple[Any, str | None]:
@@ -499,16 +503,16 @@ def top_values(kept: list[tuple[Any, int]], other: int, values: int) -> dict[str
 
 def semantic_sections(typing: 'Typing') -> dict[str, Any]:
     """A typed column's `semantic` section, and its `quality` where a validator counted the values failing it."""
-    detector = typing.detector
+    detector = typing.candidate.detector
     semantic: dict[str, Any] = {
         'type': detector.type,
-        'pack': typing.pack,
+        'pack': typing.candidate.pack,
         'confidence': significant(typing.confidence, RATE_DIGITS),
         'detectors': typing.methods,
         'sensitivity': detector.sensitivity,
     }
-    if detector.generator_hint:
-        semantic['generator_hint'] = dict(detector.generator_hint)
+    if typing.generator_hint:
+        semantic['generator_hint'] = typing.generator_hint
     sections: dict[str, Any] = {'semantic': semantic}
     if typing.passed is not None:
         sections['quality'] = {'invalid_rate': rate(typing.sampled - typing.passed, typing.sampled)}
