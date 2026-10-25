@@ -1,4 +1,4 @@
-from doppeldata.profile import schema_text
+from doppeldata.published_schemas import schema_text
 from doppeldata_cli.main import app
 from typer.testing import CliRunner
 

@@ -12,14 +12,21 @@ A scenario file layered on a profile is meant to bend the data on purpose: a hot
 malformed rows, a flood of small files. The same profile, scenario and seed must always produce the
 same data.
 
-doppeldata is experimental. So far it ships the profile format and its hand-written example
-profiles:
+doppeldata is experimental. So far it profiles a table's columns, and ships the profile format and
+its hand-written example profiles:
 
 ```bash
+doppeldata profile create data/orders/ --out orders.profile.yaml   # profile a directory of one table
+doppeldata profile create s3://bucket/orders/ --sample 1000000     # a seeded sample, printed as YAML
 doppeldata profile list                # the example profiles
 doppeldata profile show orders         # one of them, as YAML to start a profile from
 doppeldata schemas show profile        # the JSON Schema every profile validates against
 ```
+
+`profile create` reads Parquet and Arrow locally or from S3, with the credentials and endpoint the
+AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files. No data
+value it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. Profile only
+data that is already synthetic or public until identifier columns are detected and suppressed.
 
 Each release's notes list what it does. Its commands and its profile format change without notice
 until 1.0.
@@ -45,6 +52,13 @@ The library, for code that profiles or generates data itself:
 
 ```bash
 uv add --index https://pypi.ichrisbirch.com/simple/ doppeldata
+```
+
+The library installs no profiling engine, so a job that only generates carries none. Code that calls
+`doppeldata.profile()` installs them beside it:
+
+```bash
+uv add polars duckdb pyarrow boto3
 ```
 
 The library runs on Python 3.11 and later, and the command line on 3.13 and later. The command line

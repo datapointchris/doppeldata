@@ -39,6 +39,7 @@ use self::text::Shape;
 use self::text::StringOutput;
 use self::text::TextSampler;
 use self::text::TextSource;
+pub use self::text::shape_of;
 pub use self::text_cells::TextCell;
 use self::text_cells::TextOnlyValues;
 use crate::physical_type;

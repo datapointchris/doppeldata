@@ -8,12 +8,12 @@ which the library alone computes and hands to the generator.
 import dataclasses as dc
 import hashlib
 import importlib.resources
+import io
 import json
 import math
 from collections.abc import Iterator
 from collections.abc import Mapping
 from functools import cache
-from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any
 
@@ -27,12 +27,14 @@ from ruamel.yaml.nodes import ScalarNode
 from ruamel.yaml.representer import RoundTripRepresenter
 
 from doppeldata import _core
+from doppeldata.errors import DoppeldataError
+from doppeldata.example_profiles import example_resource
+from doppeldata.published_schemas import schema_text
 
 FORMAT_VERSION = _core.FORMAT_VERSION
 BUNDLE_INDEX = 'bundle.yaml'
-EXAMPLE_SUFFIX = '.profile.yaml'
 # Left out of the digest, so profiling unchanged data again keeps the profile's identity.
-UNHASHED_GENERATED_FIELDS = ('at', 'tool')
+UNHASHED_GENERATED_FIELDS = ('at', 'tool', 'source_fingerprint')
 # Stored rates are rounded, so a set meant to sum to 1 is allowed this far off.
 RATE_SUM_TOLERANCE = 0.01
 # RFC 8785 writes numbers as IEEE 754 doubles, which hold every integer only up to this magnitude.
@@ -57,54 +59,12 @@ class Issue:
     message: str
 
 
-class InvalidProfile(ValueError):
+class InvalidProfile(DoppeldataError, ValueError):
     def __init__(self, source: str, issues: list[Issue]) -> None:
         self.source = source
         self.issues = issues
         listed = '\n'.join(f'  {issue.field or "/"}: {issue.message} [{issue.code}]' for issue in issues)
         super().__init__(f'{source} is not a valid profile:\n{listed}')
-
-
-@dc.dataclass(frozen=True)
-class SchemaSummary:
-    """One JSON Schema the library ships: the name `doppeldata schemas show` takes, and the schema's own title and description."""
-
-    name: str
-    title: str
-    description: str
-
-
-def schema_names() -> list[str]:
-    """The names of the JSON Schemas the library ships, as `doppeldata schemas show` takes them."""
-    return list(_core.schema_file_names())
-
-
-def schema_text(name: str) -> str:
-    """A JSON Schema the library ships, as committed in the package."""
-    return importlib.resources.files('doppeldata').joinpath('schemas', _core.schema_file_names()[name]).read_text()
-
-
-def schema_summaries() -> list[SchemaSummary]:
-    """Every JSON Schema the library ships, by name, with the title and description each document carries."""
-    documents = {name: json.loads(schema_text(name)) for name in schema_names()}
-    return [SchemaSummary(name, document['title'], document['description']) for name, document in documents.items()]
-
-
-def example_names() -> list[str]:
-    """The hand-written example profiles the library ships, by the name `Profile.example` and `doppeldata profile show` take."""
-    examples = importlib.resources.files('doppeldata').joinpath('examples')
-    return sorted(entry.name.removesuffix(EXAMPLE_SUFFIX) for entry in examples.iterdir() if entry.name.endswith(EXAMPLE_SUFFIX))
-
-
-def example_resource(name: str) -> Traversable:
-    if name not in example_names():
-        raise ValueError(f'{name!r} is not an example profile doppeldata ships; choose from {", ".join(example_names())}')
-    return importlib.resources.files('doppeldata').joinpath('examples', name + EXAMPLE_SUFFIX)
-
-
-def example_text(name: str) -> str:
-    """An example profile's YAML as shipped, comments included."""
-    return example_resource(name).read_text()
 
 
 def integer_format_checker() -> jsonschema.FormatChecker:
@@ -377,6 +337,12 @@ class Profile:
 
     def to_plain(self) -> dict[str, Any]:
         return to_plain(self.document)
+
+    def to_yaml(self) -> str:
+        """The profile as the YAML `save` writes."""
+        text = io.StringIO()
+        yaml().dump(self.document, text)
+        return text.getvalue()
 
     def canonical(self) -> bytes:
         """The RFC 8785 canonical JSON the digest is taken over, without the unhashed generated fields."""

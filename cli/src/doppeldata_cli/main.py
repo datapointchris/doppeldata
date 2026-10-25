@@ -1,15 +1,21 @@
 import dataclasses as dc
 import importlib.metadata
 import json
+from pathlib import Path
 from typing import Annotated
 
 import typer
-from doppeldata.profile import Profile
-from doppeldata.profile import example_names
-from doppeldata.profile import example_text
-from doppeldata.profile import schema_names
-from doppeldata.profile import schema_summaries
-from doppeldata.profile import schema_text
+from doppeldata import DoppeldataError
+from doppeldata import InvalidProfile
+from doppeldata import Profile
+from doppeldata import SourceError
+from doppeldata import profile
+from doppeldata.example_profiles import example_names
+from doppeldata.example_profiles import example_text
+from doppeldata.profiling import DEFAULT_K_MIN
+from doppeldata.published_schemas import schema_names
+from doppeldata.published_schemas import schema_summaries
+from doppeldata.published_schemas import schema_text
 
 app = typer.Typer(no_args_is_help=True)
 profile_app = typer.Typer(no_args_is_help=True, help='Profiles: reviewable files that describe a dataset without holding its rows.')
@@ -31,6 +37,42 @@ def profile_list(as_json: JsonOption = False) -> None:
     width = max(len(row['name']) for row in rows)
     for row in rows:
         typer.echo(f'{row["name"]:<{width}}  {row["columns"]} columns, {row["row_count"]:,} rows')
+
+
+@profile_app.command('create', no_args_is_help=True)
+def profile_create(
+    data: Annotated[
+        list[str],
+        typer.Argument(metavar='DATA...', help='Files, directories or s3:// prefixes holding one table, all of one format.'),
+    ],
+    out: Annotated[
+        Path | None,
+        typer.Option('--out', metavar='FILE', help='Write the profile to FILE, as JSON when it ends in .json, rather than print its YAML.'),
+    ] = None,
+    sample: Annotated[int | None, typer.Option('--sample', metavar='N', min=1, help='Profile a seeded random sample of N rows.')] = None,
+    k_min: Annotated[
+        int, typer.Option('--k-min', metavar='N', min=1, help='Store no data value that fewer than N rows hold.')
+    ] = DEFAULT_K_MIN,
+) -> None:
+    """Profile a dataset into a file holding no rows: doppeldata profile create data/orders/ --out orders.profile.yaml
+
+    Each file is read as its suffix's format. S3 is read with the AWS environment's credentials, and text formats from local files only.
+    """
+    if out is not None and not out.parent.is_dir():
+        raise typer.BadParameter(f'{out.parent} is not a directory; create it, or name a FILE in one that exists', param_hint='--out')
+    try:
+        profiled = profile(data, sample=sample, k_min=k_min)
+    except DoppeldataError as error:
+        if isinstance(error, SourceError) and error.exit_code == 2:
+            raise typer.BadParameter(str(error), param_hint='DATA') from error
+        if isinstance(error, InvalidProfile):
+            typer.echo('doppeldata: the profile it wrote fails its own schema, which is a bug in doppeldata:', err=True)
+        typer.echo(f'doppeldata: {error}', err=True)
+        raise typer.Exit(error.exit_code) from error
+    if out is None:
+        typer.echo(profiled.to_yaml(), nl=False)
+        return
+    profiled.save(out)
 
 
 @profile_app.command('show', no_args_is_help=True)

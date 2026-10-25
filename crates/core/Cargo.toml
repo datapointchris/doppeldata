@@ -16,6 +16,7 @@ arrow-buffer = "59"
 arrow-schema = "59"
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 fake = { version = "5.1.0", default-features = false }
+grex = { version = "1.4.6", default-features = false }
 # Every exp, log and pow that feeds a generated value is libm's, because std's are allowed to round
 # differently by platform and Rust version, and a dataset must regenerate the same anywhere.
 libm = "0.2.16"
