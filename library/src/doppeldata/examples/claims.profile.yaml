@@ -1,0 +1,255 @@
+# Hand-written: a medical claims table under the healthcare policy, which adds HIPAA Safe Harbor to
+# the default floor. No data was read, so it holds no real value and has no `generated` block.
+profile_version: 1
+kind: table
+name: claims
+privacy:
+  policy: healthcare
+  k_min: 11
+  suppressed:
+    - {column: claim_id, reason: identifier, semantic: claim_number}
+    - {column: member_id, reason: identifier, semantic: health_plan_beneficiary_number}
+    - {column: member_dob, reason: date_to_year}
+    - {column: member_age, reason: age_over_89}
+    - {column: member_zip, reason: zip_prefix, semantic: us_zip}
+    - {column: rendering_npi, reason: identifier, semantic: npi}
+    - {column: service_date, reason: date_to_year}
+  # Every field holding a literal, the rule that admits it, and the fewest rows any of its values or cells rests on.
+  audit:
+    - {field: /columns/0/string/shapes, column: claim_id, values: 1, rule: "count >= k_min", min_count: 250000}
+    - {field: /columns/0/string/pattern, column: claim_id, values: 1, rule: "generalized"}
+    - {field: /columns/2/temporal/extremes, column: member_dob, values: 2, rule: "trimmed_k", min_count: 11}
+    - {field: /columns/2/temporal/by_month, column: member_dob, values: 12, rule: "cell >= k_min", min_count: 19200}
+    - {field: /columns/2/temporal/by_dow, column: member_dob, values: 7, rule: "cell >= k_min", min_count: 35625}
+    - {field: /columns/3/numeric/extremes, column: member_age, values: 2, rule: "trimmed_k", min_count: 11}
+    - {field: /columns/3/numeric/quantiles, column: member_age, values: 7, rule: "k_min rows from each end", min_count: 2501}
+    - {field: /columns/3/numeric/histogram, column: member_age, values: 8, rule: "cell >= k_min", min_count: 7000}
+    - {field: /columns/4/string/top_values, column: member_zip, values: 11, rule: "count >= k_min", min_count: 3000}
+    - {field: /columns/4/string/shapes, column: member_zip, values: 1, rule: "count >= k_min", min_count: 250000}
+    - {field: /columns/5/string/shapes, column: rendering_npi, values: 1, rule: "count >= k_min", min_count: 250000}
+    - {field: /columns/6/temporal/extremes, column: service_date, values: 2, rule: "trimmed_k", min_count: 11}
+    - {field: /columns/6/temporal/by_month, column: service_date, values: 12, rule: "cell >= k_min", min_count: 19475}
+    - {field: /columns/6/temporal/by_dow, column: service_date, values: 7, rule: "cell >= k_min", min_count: 10000}
+    - {field: /columns/7/string/top_values, column: diagnosis_code, values: 8, rule: "count >= k_min", min_count: 5000}
+    - {field: /columns/7/string/shapes, column: diagnosis_code, values: 3, rule: "count >= k_min", min_count: 35000}
+    - {field: /columns/8/string/top_values, column: procedure_code, values: 6, rule: "count >= k_min", min_count: 5000}
+    - {field: /columns/8/string/shapes, column: procedure_code, values: 1, rule: "count >= k_min", min_count: 250000}
+    - {field: /columns/9/numeric/extremes, column: paid_amount, values: 2, rule: "trimmed_k", min_count: 11}
+    - {field: /columns/9/numeric/quantiles, column: paid_amount, values: 7, rule: "k_min rows from each end", min_count: 2501}
+    - {field: /columns/9/numeric/fit, column: paid_amount, values: 3, rule: "fitted within the trimmed extremes"}
+    - {field: /columns/10/string/top_values, column: claim_status, values: 4, rule: "count >= k_min", min_count: 10000}
+source:
+  format: parquet
+  compression: zstd
+dataset:
+  row_count: 250000
+  duplicate_row_rate: 0.0
+  keys:
+    primary: {columns: [claim_id], uniqueness: 1.0}
+columns:
+  # An identifier keeps its format and no value.
+  - name: claim_id
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 250000, ratio: 1.0}
+    string:
+      length: {min: 12, max: 12, mean: 12, quantiles: {p50: 12}}
+      whitespace_edge_rate: 0.0
+      shapes: [{shape: AAA999999999, rate: 1.0}]
+      pattern: '^CLM\d{9}$'
+    semantic: {type: claim_number, pack: healthcare, confidence: 0.97, detectors: [validator, name_hint], sensitivity: identifier}
+    quality: {invalid_rate: 0.0}
+  # An integer identifier's extremes are the bounds of its digit counts, so it holds no literal at all.
+  - name: member_id
+    physical_type: int64
+    logical_type: integer
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 61000, ratio: 0.244}
+    numeric:
+      integral: true
+      extremes: {low: 10000000, high: 99999999, method: digit_bounds}
+      monotonic: none
+    semantic: {type: health_plan_beneficiary_number, pack: healthcare, confidence: 0.96, detectors: [validator, name_hint], sensitivity: identifier}
+  # A date tied to a person keeps the years of its extremes.
+  - name: member_dob
+    physical_type: date32[day]
+    logical_type: date
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 24500, ratio: 0.098}
+    temporal:
+      extremes: {low: '1934-01-01', high: '2008-12-31', granularity: day}
+      by_month: [0.0841, 0.0768, 0.0849, 0.0815, 0.0843, 0.0824, 0.0862, 0.0868, 0.0841, 0.0829, 0.0792, 0.0868]
+      by_dow: [0.1431, 0.1425, 0.1428, 0.1426, 0.1430, 0.1432, 0.1428]
+      gap_rate: 0.1056
+  # Every age over 89 is counted in the last bin, from 89.5 to 90.5, and drawn as 90.
+  - name: member_age
+    physical_type: int32
+    logical_type: integer
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 73, ratio: 0.000292}
+    numeric:
+      integral: true
+      extremes: {low: 18, high: 90, method: trimmed_k}
+      mean: 55.8
+      std: 18.9
+      skew: -0.15
+      kurtosis: -0.8
+      zero_rate: 0.0
+      negative_rate: 0.0
+      quantiles: {p01: 19, p05: 24, p25: 41, p50: 58, p75: 71, p95: 84, p99: 90}
+      histogram:
+        kind: equal_depth
+        edges: [17.5, 29.5, 39.5, 49.5, 59.5, 69.5, 79.5, 89.5, 90.5]
+        counts: [30000, 28000, 32000, 40000, 45000, 40000, 28000, 7000]
+      monotonic: none
+  # A ZIP code keeps three-digit prefixes, and a prefix of 20,000 or fewer people is written as 000.
+  - name: member_zip
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 9000, ratio: 0.036}
+    string:
+      length: {min: 5, max: 5, mean: 5, quantiles: {p50: 5}}
+      whitespace_edge_rate: 0.0
+      shapes: [{shape: '99999', rate: 1.0}]
+      top_values:
+        - {value: '100', rate: 0.06}
+        - {value: '021', rate: 0.05}
+        - {value: '606', rate: 0.045}
+        - {value: '941', rate: 0.04}
+        - {value: '770', rate: 0.04}
+        - {value: '303', rate: 0.035}
+        - {value: '191', rate: 0.035}
+        - {value: '850', rate: 0.03}
+        - {value: '980', rate: 0.03}
+        - {value: '331', rate: 0.03}
+        - {value: '000', rate: 0.012}
+      other_rate: 0.593
+      top_value_suffix: '\d{2}'
+    semantic: {type: us_zip, pack: general, confidence: 1.0, detectors: [pattern, name_hint], sensitivity: quasi_identifier}
+    quality: {invalid_rate: 0.0}
+  - name: rendering_npi
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 4200, ratio: 0.0168}
+    string:
+      length: {min: 10, max: 10, mean: 10, quantiles: {p50: 10}}
+      whitespace_edge_rate: 0.0
+      shapes: [{shape: '9999999999', rate: 1.0}]
+    semantic:
+      type: npi
+      pack: healthcare
+      confidence: 1.0
+      detectors: [pattern, check_digit, name_hint]
+      sensitivity: identifier
+      generator_hint: {pattern: '[12]\d{9}', check_digit: npi}
+    quality: {invalid_rate: 0.0}
+  - name: service_date
+    physical_type: date32[day]
+    logical_type: date
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 365, ratio: 0.00146}
+    temporal:
+      extremes: {low: '2025-01-01', high: '2025-12-31', granularity: day}
+      by_month: [0.0832, 0.0791, 0.0874, 0.0843, 0.0851, 0.0822, 0.0815, 0.0866, 0.0838, 0.0869, 0.0820, 0.0779]
+      by_dow: [0.18, 0.19, 0.19, 0.18, 0.17, 0.05, 0.04]
+      gap_rate: 0.0
+  - name: diagnosis_code
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 110, ratio: 0.00044}
+    string:
+      length: {min: 3, max: 6, mean: 5.1, quantiles: {p50: 5}}
+      whitespace_edge_rate: 0.0
+      shapes:
+        - {shape: A99.9, rate: 0.62}
+        - {shape: A99.99, rate: 0.24}
+        - {shape: A99, rate: 0.14}
+      top_values:
+        - {value: I10, rate: 0.11}
+        - {value: E11.9, rate: 0.09}
+        - {value: E78.5, rate: 0.07}
+        - {value: Z00.00, rate: 0.05}
+        - {value: J06.9, rate: 0.04}
+        - {value: M54.50, rate: 0.03}
+        - {value: F41.9, rate: 0.025}
+        - {value: R05.9, rate: 0.02}
+      other_rate: 0.565
+    semantic:
+      type: icd10cm
+      pack: healthcare
+      confidence: 1.0
+      detectors: [validator, name_hint]
+      sensitivity: sensitive
+      generator_hint: {pattern: '[A-Z]\d{2}(?:\.\d{1,2})?'}
+    quality: {invalid_rate: 0.0}
+  - name: procedure_code
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 60, ratio: 0.00024}
+    string:
+      length: {min: 5, max: 5, mean: 5, quantiles: {p50: 5}}
+      whitespace_edge_rate: 0.0
+      shapes: [{shape: A9999, rate: 1.0}]
+      top_values:
+        - {value: G0439, rate: 0.14}
+        - {value: G0008, rate: 0.11}
+        - {value: J1100, rate: 0.07}
+        - {value: A0425, rate: 0.06}
+        - {value: J3420, rate: 0.04}
+        - {value: E0114, rate: 0.02}
+      other_rate: 0.56
+    semantic:
+      type: hcpcs_level2
+      pack: healthcare
+      confidence: 1.0
+      detectors: [validator, name_hint]
+      sensitivity: sensitive
+      generator_hint: {pattern: '[A-V]\d{4}'}
+    quality: {invalid_rate: 0.0}
+  - name: paid_amount
+    physical_type: "decimal128(10, 2)"
+    logical_type: number
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 84000, ratio: 0.336}
+    numeric:
+      integral: false
+      precision: 10
+      scale: 2
+      extremes: {low: 4.12, high: 18250.0, method: trimmed_k}
+      mean: 412.3
+      std: 1290.5
+      zero_rate: 0.0
+      negative_rate: 0.0
+      quantiles: {p01: 8.4, p05: 17.9, p25: 61.2, p50: 158.0, p75: 402.5, p95: 1475.0, p99: 4810.0}
+      fit: {family: lognorm, params: {s: 1.4, loc: 0.0, scale: 160.0}}
+      monotonic: none
+  - name: claim_status
+    physical_type: string
+    logical_type: string
+    nullable: false
+    null_rate: 0.0
+    distinct: {approx: 4, ratio: 0.000016}
+    string:
+      length: {min: 4, max: 8, mean: 4.6, quantiles: {p50: 4}}
+      whitespace_edge_rate: 0.0
+      top_values:
+        - {value: paid, rate: 0.82}
+        - {value: denied, rate: 0.09}
+        - {value: pending, rate: 0.05}
+        - {value: adjusted, rate: 0.04}
+      other_rate: 0.0
