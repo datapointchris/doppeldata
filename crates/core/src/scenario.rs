@@ -2,8 +2,8 @@
 //!
 //! A merge patch changes what a profile can express as a value. An ordered list of perturbations
 //! applies faults a profile cannot express. `expect` declares what the scenario promises, which a
-//! check certifies. The library applies the patch and owns the scenario's digest. The engine reads
-//! the perturbations.
+//! check certifies. The engine applies the patch and the perturbations, so the stream version
+//! governs both. The library computes the scenario's digest.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -13,7 +13,12 @@ use schemars::Schema;
 use schemars::SchemaGenerator;
 use schemars::json_schema;
 use serde::Deserialize;
+use serde_json::Map;
+use serde_json::Value;
 
+use crate::perturbations::ScenarioFault;
+use crate::perturbations::pointer_token;
+use crate::plan::PlanError;
 use crate::profile::Rate;
 
 /// The scenario format version the engine reads, which names the published schema's file.
@@ -41,7 +46,7 @@ pub struct Scenario {
 /// column patched to null is removed. A column the profile does not hold is refused.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(transparent)]
-pub struct ProfilePatch(pub serde_json::Map<String, serde_json::Value>);
+pub struct ProfilePatch(pub Map<String, Value>);
 
 impl JsonSchema for ProfilePatch {
     fn schema_name() -> Cow<'static, str> {
@@ -382,8 +387,8 @@ pub struct PartitionSkew {
 #[serde(deny_unknown_fields)]
 pub struct Expectation {
     pub metric: ExpectedMetric,
-    /// The column measured, for a metric of one column.
-    pub column: Option<String>,
+    /// The column measured.
+    pub column: String,
     pub at_least: Option<f64>,
     pub at_most: Option<f64>,
 }
@@ -395,16 +400,30 @@ pub enum ExpectedMetric {
     /// column's `hot_keys` perturbation.
     #[serde(rename = "hot_keys.share")]
     HotKeysShare,
-    /// The share of rows repeating an earlier row: in `column`, or in every column without one.
+    /// The share of rows whose `column`, a key each copy shares with its source, repeats an earlier
+    /// row's. A later perturbation writing that column is refused, because a copy's key would then
+    /// differ from its source's.
     #[serde(rename = "duplicates.rate")]
     DuplicatesRate,
     /// The share of rows whose `column` is earlier than the `ingest` column of its `late_arrival`
     /// perturbation.
     #[serde(rename = "late_arrival.rate")]
     LateArrivalRate,
-    /// The share of rows whose `column` is null.
+    /// The share of rows whose `column` is null, the profile's own nulls included.
     #[serde(rename = "missingness.rate")]
     MissingnessRate,
+}
+
+impl ExpectedMetric {
+    /// The op whose perturbation the metric measures.
+    pub fn op(self) -> &'static str {
+        match self {
+            Self::HotKeysShare => "hot_keys",
+            Self::DuplicatesRate => "duplicates",
+            Self::LateArrivalRate => "late_arrival",
+            Self::MissingnessRate => "missingness",
+        }
+    }
 }
 
 impl Perturbation {
@@ -465,11 +484,105 @@ impl Perturbation {
             Self::Duplicates(_) | Self::SchemaDrift(_) | Self::SmallFiles(_) => "table".into(),
         }
     }
+
+    /// The columns the op writes, adds, drops or renames, by the names the profile and the
+    /// scenario give them.
+    pub fn written_columns(&self) -> Vec<&str> {
+        match self {
+            Self::HotKeys(HotKeys { column, .. })
+            | Self::Missingness(Missingness { column, .. })
+            | Self::OutOfRange(OutOfRange { column, .. })
+            | Self::CategoricalShift(CategoricalShift { column, .. })
+            | Self::Noise(Noise { column, .. })
+            | Self::Scaling(Scaling { column, .. })
+            | Self::BrokenCharacters(BrokenCharacters { column, .. })
+            | Self::Outliers(Outliers { column, .. })
+            | Self::PartitionSkew(PartitionSkew { column, .. }) => vec![column],
+            Self::LateArrival(LateArrival { column, ingest, .. }) => {
+                [Some(column), ingest.as_ref()].into_iter().flatten().map(String::as_str).collect()
+            }
+            Self::SwappedValues(SwappedValues { columns, .. }) => columns.iter().map(String::as_str).collect(),
+            Self::SchemaDrift(drift) => (drift.drop.iter())
+                .chain(drift.rename.keys())
+                .chain(drift.rename.values())
+                .chain(drift.widen.keys())
+                .chain(drift.add.iter().map(|added| &added.name))
+                .map(String::as_str)
+                .collect(),
+            Self::Duplicates(_) | Self::SmallFiles(_) => Vec::new(),
+        }
+    }
+
+    /// Whether the op shapes the files a write makes rather than the rows, so a run writing no
+    /// files cannot apply it.
+    pub fn shapes_files(&self) -> bool {
+        match self {
+            Self::SchemaDrift(_) | Self::SmallFiles(_) => true,
+            Self::HotKeys(_)
+            | Self::Duplicates(_)
+            | Self::LateArrival(_)
+            | Self::Missingness(_)
+            | Self::OutOfRange(_)
+            | Self::SwappedValues(_)
+            | Self::CategoricalShift(_)
+            | Self::Noise(_)
+            | Self::Scaling(_)
+            | Self::BrokenCharacters(_)
+            | Self::Outliers(_)
+            | Self::PartitionSkew(_) => false,
+        }
+    }
 }
 
-/// The ops that shape the files a write makes rather than the rows, so a run writing no files
-/// cannot apply them.
-pub const FILE_SHAPING_OPS: [&str; 2] = ["schema_drift", "small_files"];
+/// `profile` with `patch` applied as RFC 7396 does, its `columns` matched by name, and each column
+/// the patch names that the profile does not hold.
+pub fn patched_profile(profile: &Value, patch: &ProfilePatch) -> (Value, Vec<String>) {
+    let mut patched = profile.clone();
+    let mut rest = patch.0.clone();
+    let columns = rest.remove("columns");
+    merge_patch(&mut patched, &Value::Object(rest));
+    let Some(Value::Object(columns)) = columns else {
+        return (patched, Vec::new());
+    };
+    let name_of = |column: &Value| column.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+    let held: Vec<String> = profile
+        .get("columns")
+        .and_then(Value::as_array)
+        .map(|listed| listed.iter().map(name_of).collect())
+        .unwrap_or_default();
+    let unknown = columns.keys().filter(|name| !held.contains(name)).cloned().collect();
+    if let Some(Value::Array(listed)) = patched.get_mut("columns") {
+        listed.retain(|column| !columns.get(&name_of(column)).is_some_and(Value::is_null));
+        for column in listed.iter_mut() {
+            if let Some(change) = columns.get(&name_of(column)) {
+                merge_patch(column, change);
+            }
+        }
+    }
+    (patched, unknown)
+}
+
+/// `patch` applied to `target`: a mapping merges key by key, null removes a key, and anything else
+/// replaces.
+fn merge_patch(target: &mut Value, patch: &Value) {
+    let Value::Object(changes) = patch else {
+        *target = patch.clone();
+        return;
+    };
+    if !target.is_object() {
+        *target = Value::Object(Map::new());
+    }
+    let Value::Object(fields) = target else {
+        unreachable!("the target was made a mapping above");
+    };
+    for (key, change) in changes {
+        if change.is_null() {
+            fields.remove(key);
+        } else {
+            merge_patch(fields.entry(key.clone()).or_insert(Value::Null), change);
+        }
+    }
+}
 
 /// Two perturbations would share an id, and so a stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -479,6 +592,23 @@ pub struct DuplicateId {
 }
 
 impl Scenario {
+    /// The profile the engine generates from: `profile` as given, with the scenario's patch
+    /// applied. A patched column the profile does not hold is refused.
+    pub fn patched_profile(&self, profile: &Value) -> Result<Value, PlanError> {
+        let Some(patch) = &self.patch else {
+            return Ok(profile.clone());
+        };
+        let (patched, unknown) = patched_profile(profile, patch);
+        match unknown.first() {
+            None => Ok(patched),
+            Some(name) => Err(PlanError::Scenario {
+                code: ScenarioFault::UnknownColumn,
+                field: format!("/patch/columns/{}", pointer_token(name)),
+                message: format!("{name} is not a column of the profile, so the patch cannot change it"),
+            }),
+        }
+    }
+
     /// Each perturbation's id, in list order: the one given, or `<op>:<subject>:<n>`, where n
     /// counts earlier entries of the same op and subject.
     pub fn resolved_ids(&self) -> Result<Vec<String>, DuplicateId> {

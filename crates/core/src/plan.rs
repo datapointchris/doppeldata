@@ -36,8 +36,6 @@ use crate::samplers::ColumnSite;
 use crate::samplers::PlanContext;
 use crate::samplers::TextCell;
 use crate::samplers::column_plan;
-use crate::scenario::DuplicateScope;
-use crate::scenario::Duplicates;
 use crate::scenario::Perturbation;
 use crate::scenario::Scenario;
 
@@ -179,8 +177,9 @@ pub struct Plan {
     stages: Vec<PlannedStage>,
     drift: Option<SchemaDriftPlan>,
     file_rows: Option<Quantiles>,
-    /// The `scope` pointer of each perturbation copying rows from across the dataset.
-    across_files: Vec<String>,
+    /// Each perturbation copying rows from across the dataset: the pointer to the parameter that
+    /// sets it, and the fewest dataset rows between a copy's home and its source.
+    across_files: Vec<(String, u64)>,
 }
 
 /// One perturbation applied to every block, and the schema its rows carry after it.
@@ -277,8 +276,9 @@ pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Re
     plan_with_scenario(profile, profile_digest, None, seed, rows)
 }
 
-/// As [`plan`], with `scenario`'s perturbations applied to every block. `profile` is the profile
-/// the scenario's patch already made, and `profile_digest` is its digest.
+/// As [`plan`], with `scenario`'s perturbations applied to every block. `profile` is the one
+/// [`Scenario::patched_profile`] made. `profile_digest` is the digest of the profile before the
+/// patch, because the scenario's digest covers the patch.
 pub fn plan_with_scenario(
     profile: &Profile,
     profile_digest: &str,
@@ -408,15 +408,11 @@ impl Plan {
                 }
                 continue;
             }
-            if let Perturbation::Duplicates(Duplicates {
-                scope: DuplicateScope::AcrossFiles,
-                ..
-            }) = perturbation
-            {
-                self.across_files.push(format!("/perturbations/{index}/scope"));
-            }
             match plan_perturbation(perturbation, &planning)? {
                 Planned::Rows { op, schema: output } => {
+                    if let Some((parameter, rows)) = op.source_reach() {
+                        self.across_files.push((format!("/perturbations/{index}{parameter}"), rows));
+                    }
                     self.stages.push(PlannedStage {
                         op,
                         schema: output.clone(),
@@ -466,12 +462,26 @@ impl Plan {
         self.file_rows.as_ref()
     }
 
-    /// Where a perturbation copies rows from across the dataset: its `scope` pointer, and the fewest
-    /// dataset rows that lie between a copy's home and its source. A file holding more rows than
-    /// that could hold both.
+    /// Where a perturbation copies rows from across the dataset: the pointer to the parameter
+    /// that sets it, and the fewest dataset rows that lie between a copy's home and its source. A
+    /// file holding more rows than that could hold both. Of several, the nearest.
     pub fn across_files_reach(&self) -> Option<(&str, u64)> {
-        let field = self.across_files.first()?;
-        Some((field, self.block_count / 2 * BLOCK_ROWS))
+        let (field, rows) = self.across_files.iter().min_by_key(|(_, rows)| *rows)?;
+        Some((field, *rows))
+    }
+
+    /// The rows the files hold: those generated, and every copy a perturbation plans for each
+    /// block.
+    pub fn rows_written(&self) -> u64 {
+        let seed = self.identity.seed();
+        (0..self.block_count)
+            .map(|block| {
+                let generated = (self.identity.rows() - block * BLOCK_ROWS).min(BLOCK_ROWS) as usize;
+                self.stages
+                    .iter()
+                    .fold(generated, |rows, stage| rows + stage.op.added_rows(seed, block, rows)) as u64
+            })
+            .sum()
     }
 
     pub fn identity(&self) -> &DatasetIdentity {

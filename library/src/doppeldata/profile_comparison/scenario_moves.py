@@ -1,18 +1,24 @@
 """What each of a scenario's perturbations moves in a check: the metrics it skips, and the column changes it makes pass."""
 
 import dataclasses as dc
-import json
-from typing import Any
 
-from doppeldata import _core
 from doppeldata.profile_comparison.field_changes import FieldChange
+from doppeldata.profile_comparison.metrics import METRICS_BY_NAME
 from doppeldata.profile_comparison.reports import MetricResult
 from doppeldata.scenario_format import Scenario
+from doppeldata.scenario_format import perturbation_facts
 
-# The metrics each op moves on every column or on the table, beside every metric on a column it writes.
+
+def registered(*names: str) -> frozenset[str]:
+    """`names`, each looked up in the metric registry, so a renamed metric fails at import rather than silently ending a skip."""
+    return frozenset(METRICS_BY_NAME[name].name for name in names)
+
+
+# The metrics each op moves on every column or on the table, beside every metric on a column it writes. A partition key's
+# metric is named for its column, so an op writing the key moves it.
 MOVED_METRICS = {
-    'duplicates': frozenset({'distinct_ratio_delta', 'rows_per_file_delta'}),
-    'small_files': frozenset({'file_count_delta', 'rows_per_file_delta'}),
+    'duplicates': registered('distinct_ratio_delta', 'rows_per_file_delta'),
+    'small_files': registered('file_count_delta', 'rows_per_file_delta'),
 }
 
 
@@ -28,26 +34,11 @@ class Move:
         return column in self.columns or metric in self.metrics
 
 
-def written_columns(entry: dict[str, Any]) -> list[str]:
-    """The columns a perturbation writes, adds, drops or renames. A partition key's metric is named for its column."""
-    match entry['op']:
-        case 'swapped_values':
-            return list(entry['columns'])
-        case 'late_arrival':
-            return [entry['column'], *([entry['ingest']] if entry.get('ingest') else [])]
-        case 'schema_drift':
-            renamed = entry.get('rename') or {}
-            added = [column['name'] for column in entry.get('add') or []]
-            return [*(entry.get('drop') or []), *renamed, *renamed.values(), *(entry.get('widen') or {}), *added]
-    return [entry['column']] if 'column' in entry else []
-
-
 def moves(scenario: Scenario) -> list[Move]:
     plain = scenario.to_plain()
-    ids, _ = _core.scenario_ids(json.dumps(plain, allow_nan=False))
     return [
-        Move(id, frozenset(written_columns(entry)), MOVED_METRICS.get(entry['op'], frozenset()))
-        for entry, id in zip(plain.get('perturbations') or [], ids, strict=True)
+        Move(facts.id, frozenset(facts.writes), MOVED_METRICS.get(entry['op'], frozenset()))
+        for entry, facts in zip(plain.get('perturbations') or [], perturbation_facts(plain), strict=True)
     ]
 
 

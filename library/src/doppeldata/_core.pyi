@@ -15,11 +15,6 @@ DEFAULT_FILE_ROWS: Final[int]
 The rows in each file a write makes when neither the caller nor the profile sizes them.
 """
 
-DEFAULT_K_MIN: Final[int]
-"""
-The fewest rows a stored literal or cell rests on, where a profile states no `privacy.k_min`.
-"""
-
 FORMAT_VERSION: Final[int]
 """
 The profile format version the engine reads.
@@ -41,7 +36,7 @@ class Plan:
     A table profile resolved for generation: ``rows`` rows from ``seed``. ``source`` names the
     profile in an error. ``scenario``, where given, is the scenario applied: its JSON with each
     perturbation's id resolved, its digest, and the name an error gives it. The profile is the
-    one its patch made.
+    one given, and the engine applies the scenario's patch to it.
     """
     def __new__(cls, /, profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, source: str, scenario: tuple[str, str, str] |None = None) -> Plan: ...
     @property
@@ -90,6 +85,11 @@ class Plan:
         Each row range the write would make, as a JSON list of objects keyed as the manifest
         keys its files: ``path``, ``range``, ``first_row`` and ``range_rows``, with
         ``objects_at_most``. A partitioned range's path holds ``*`` for each partition value.
+        """
+    @property
+    def rows_written(self, /) -> int:
+        """
+        The rows the files hold: those generated, and every copy the scenario plans.
         """
     def stream(self, /, *, threads: SupportsIndex) -> Any:
         """
@@ -152,9 +152,10 @@ def determinism_values_digest(profile_json: str, profile_digest: str, seed: Supp
     contract pins.
     """
 
-def file_shaping_ops() -> list[str]:
+def expected_metric_op(metric: str) -> str:
     """
-    The scenario ops that shape the files a write makes rather than the rows.
+    The op whose perturbation an expectation's metric measures, such as ``hot_keys`` for
+    ``hot_keys.share``.
     """
 
 def fitted_families() -> dict[str, bool]:
@@ -169,17 +170,22 @@ def generalize_pattern(values: SupportsGetItem[int, str]) -> str |None:
     class, or None when it would hold a literal or a character class only some values have.
     """
 
-def pattern_is_generalized(pattern: str) -> bool |None:
+def patched_profile(profile_json: str, scenario_json: str) -> tuple[str, list[str]]:
     """
-    Whether ``pattern`` holds no literal only some values have, as the privacy floor admits a
-    stored pattern: every class is ``\d`` or whole ASCII digit and letter ranges. None when it
-    does not parse.
+    ``profile_json`` with the scenario's patch applied as the engine applies it, and each column
+    the patch names that the profile does not hold.
     """
 
 def pattern_problem(pattern: str) -> str |None:
     """
     Why the engine cannot generate from ``pattern``, as planning a profile that stores it
     refuses it, or None when it can.
+    """
+
+def perturbation_facts(scenario_json: str) -> list[tuple[str, list[str], bool]]:
+    """
+    Each of a valid scenario's perturbations, in list order: its id, the columns it writes, adds,
+    drops or renames, and whether it shapes the files a write makes rather than the rows.
     """
 
 def scenario_ids(scenario_json: str) -> tuple[list[str], tuple[int, str] |None]:

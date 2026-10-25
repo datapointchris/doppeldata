@@ -18,7 +18,7 @@ from typing import Any
 
 import doppeldata as sd
 import pyarrow as pa
-from doppeldata import _core
+from doppeldata.scenario_format import perturbation_facts
 from doppeldata.spark import spark_holds
 from pyspark.sql import SparkSession
 from pyspark.sql.pandas.types import from_arrow_schema
@@ -98,8 +98,8 @@ def row_ops(scenario: sd.Scenario | None) -> sd.Scenario | None:
     if scenario is None:
         return None
     plain = scenario.to_plain()
-    shaping = set(_core.file_shaping_ops())
-    return sd.Scenario(plain | {'perturbations': [entry for entry in plain.get('perturbations') or [] if entry['op'] not in shaping]})
+    entries = zip(plain.get('perturbations') or [], perturbation_facts(plain), strict=True)
+    return sd.Scenario(plain | {'perturbations': [entry for entry, facts in entries if not facts.shapes_files]})
 
 
 def main(local_manifest_path: str, out: str, fixture: str, scenario_path: str = '') -> int:

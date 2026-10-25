@@ -99,11 +99,8 @@
           "format": "double"
         },
         "column": {
-          "description": "The column measured, for a metric of one column.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "The column measured.",
+          "type": "string"
         },
         "metric": {
           "$ref": "#/$defs/ExpectedMetric"
@@ -111,7 +108,8 @@
       },
       "additionalProperties": false,
       "required": [
-        "metric"
+        "metric",
+        "column"
       ]
     },
     "ExpectedMetric": {
@@ -123,7 +121,7 @@
           "const": "hot_keys.share"
         },
         {
-          "description": "The share of rows repeating an earlier row: in `column`, or in every column without one.",
+          "description": "The share of rows whose `column`, a key each copy shares with its source, repeats an earlier\nrow's. A later perturbation writing that column is refused, because a copy's key would then\ndiffer from its source's.",
           "type": "string",
           "const": "duplicates.rate"
         },
@@ -133,7 +131,7 @@
           "const": "late_arrival.rate"
         },
         {
-          "description": "The share of rows whose `column` is null.",
+          "description": "The share of rows whose `column` is null, the profile's own nulls included.",
           "type": "string",
           "const": "missingness.rate"
         }

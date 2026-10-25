@@ -31,10 +31,12 @@ from doppeldata.profile_comparison.scenario_moves import skipped
 from doppeldata.profile_comparison.thresholds import Thresholds
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import profile as profile_data
+from doppeldata.profiling import sources
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
+from doppeldata.scenario_format import refuse_other_scenario
 
 # A report's values keep this many significant digits, and each verdict is taken on the value as written.
 REPORT_DIGITS = 6
@@ -55,8 +57,14 @@ def check(
     With `scenario`, a Scenario or a list composed in order, the data is measured against the profile its patch makes. Each
     metric on what a perturbation moves is listed as skipped by it, and a change on a column one writes passes. Each
     expectation it declares is measured, and the report's `verified` is False when any misses its bounds.
+
+    Where `data` names a directory or prefix a doppeldata write left `_manifest.json` in, InvalidScenario refuses a
+    `scenario` other than the one it records, and no `scenario` where it records one.
     """
     applied = composed(scenario)
+    written = sources.written_manifest(data)
+    if written is not None:
+        refuse_other_scenario(applied, written, data_named(data))
     effective = applied.apply(profile) if applied is not None else profile
     source = effective.to_plain()
     thresholds = thresholds or Thresholds()

@@ -39,7 +39,8 @@ pub mod provenance {
     pub const SEED: &str = "doppeldata.seed";
     /// The engine's stream version. An identity key.
     pub const STREAM_VERSION: &str = "doppeldata.stream_version";
-    /// The dataset's row count in decimal, which no one file of it holds. An identity key.
+    /// The rows generated in decimal, before any copies a scenario adds, which no one file of it
+    /// holds. An identity key.
     pub const DATASET_ROWS: &str = "doppeldata.dataset_rows";
     /// The digest of the dataset's identity, a quick equality check beside the five values.
     pub const DATASET_DIGEST: &str = "doppeldata.dataset_digest";

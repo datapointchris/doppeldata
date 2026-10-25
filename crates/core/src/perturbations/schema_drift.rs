@@ -1,5 +1,5 @@
 //! Files whose first row lies at or past `after_fraction` of the rows carry a new shape: columns
-//! dropped, renamed, widened, added and moved to the front, in that order. The writers apply it to
+//! dropped, widened, renamed, added and moved to the front, in that order. The writers apply it to
 //! each block a drifted file takes rows from, after every op that writes rows.
 
 use std::sync::Arc;
@@ -63,9 +63,14 @@ impl SchemaDriftPlan {
         self.first_row
     }
 
+    /// The pointer to the drift's entry in the scenario.
+    pub fn field(&self) -> String {
+        format!("/perturbations/{}", self.index)
+    }
+
     /// The pointer to the drift's `after_fraction`, which sets where its files begin.
     pub fn cut_field(&self) -> String {
-        format!("/perturbations/{}/after_fraction", self.index)
+        format!("{}/after_fraction", self.field())
     }
 
     /// The pointer to the scenario entry that drops or renames `column`, where one does.

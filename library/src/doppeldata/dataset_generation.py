@@ -63,8 +63,9 @@ class PlannedRange:
 class WritePlan:
     """What `write` would do with the same arguments, known before anything is generated.
 
-    `identity` and `dataset_digest` are what the manifest will record. `estimated_bytes` comes from the write's first blocks
-    encoded with its own settings, and leaves the manifest out. The shape of `to_json` may change before 1.0.
+    `identity` and `dataset_digest` are what the manifest will record. `rows_written` is the identity's `dataset_rows` and
+    every copy a scenario's `duplicates` adds. `estimated_bytes` comes from the write's first blocks encoded with its own
+    settings, and leaves the manifest out. The shape of `to_json` may change before 1.0.
     """
 
     destination: str
@@ -76,6 +77,7 @@ class WritePlan:
     columns: list[ColumnSampler]
     ranges: list[PlannedRange]
     files_at_most: int
+    rows_written: int
     estimated_bytes: int
 
     def to_json(self) -> dict[str, Any]:
@@ -128,8 +130,8 @@ def destination_of(out: str | os.PathLike[str]) -> tuple[str, str, str | None]:
 class EngineArguments:
     """Everything the engine's plan is built from, so a process holding only these, such as a Spark executor, builds the same plan.
 
-    `profile_json` is the profile a scenario's patch makes, and `profile_digest` the digest of the profile it was applied to,
-    because the scenario's digest names the patch. `scenario` is the scenario's JSON, digest and source, or None.
+    `profile_json` is the profile as given, and the engine applies the scenario's patch to it. `scenario` is the scenario's
+    JSON, digest and source, or None.
     """
 
     profile_json: str
@@ -144,8 +146,8 @@ class EngineArguments:
 
 
 def engine_arguments(profile: Profile, rows: int | None, seed: int, scenario: Scenario | None = None) -> EngineArguments:
-    """The engine's arguments for `rows` rows of `profile` under `scenario` from `seed`. No `rows` takes the row count the
-    profile records, as the scenario's patch leaves it."""
+    """The engine's arguments for `rows` rows of `profile` under `scenario` from `seed`, refusing a patch the profile cannot
+    take. No `rows` takes the row count the profile records, as the scenario's patch leaves it."""
     if not isinstance(profile, Profile):
         raise TypeError(f'generation takes a Profile, such as Profile.load(path), not {type(profile).__name__}')
     source = str(profile.path) if profile.path else f'profile {profile.document.get("name")!r}'
@@ -160,7 +162,7 @@ def engine_arguments(profile: Profile, rows: int | None, seed: int, scenario: Sc
     if not 0 <= seed <= LARGEST_SEED:
         raise ValueError(f'seed must be between 0 and 2^64 - 1, not {seed}')
     applied = (json.dumps(scenario.to_plain(), allow_nan=False), scenario.digest, scenario.source) if scenario is not None else None
-    return EngineArguments(json.dumps(effective.to_plain(), allow_nan=False), profile.digest, seed, rows, source, applied)
+    return EngineArguments(json.dumps(profile.to_plain(), allow_nan=False), profile.digest, seed, rows, source, applied)
 
 
 def engine_plan(profile: Profile, rows: int | None, seed: int, scenario: Scenario | None = None) -> '_core.Plan':
@@ -228,7 +230,8 @@ def generate(
 
     The values are a pure function of the profile, the scenario, `seed` and `rows`, whatever `threads` is. `scenario` is a
     Scenario or a list composed in order. One that shapes files, as schema_drift and small_files do, is refused as
-    InvalidScenario, because nothing here writes files.
+    InvalidScenario, because nothing here writes files. `rows` counts the rows generated, so a scenario's `duplicates`
+    returns more.
     """
     table: ArrowStreamExportable = engine_plan(profile, rows, seed, rows_only(scenario, 'generate')).generate(threads=threads)
     return table
@@ -284,6 +287,7 @@ def plan(
         columns=[ColumnSampler(*column) for column in engine.column_samplers()],
         ranges=ranges,
         files_at_most=sum(planned.objects_at_most for planned in ranges),
+        rows_written=engine.rows_written,
         estimated_bytes=engine.estimate_bytes(options),
     )
 
@@ -314,7 +318,8 @@ def write(
     StoppedWrite. Once the write has claimed its destination, either leaves `_manifest.partial.json` listing the files it completed.
 
     `scenario`, a Scenario or a list composed in order, bends the data: its patch applies to the profile, and its perturbations
-    to the rows and the files. The manifest records it, and a layout that cannot hold it raises InvalidScenario.
+    to the rows and the files. The manifest records it, and a layout that cannot hold it raises InvalidScenario. `rows` counts
+    the rows generated, so a scenario's `duplicates` writes more.
     """
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
     prepared = prepared_write(profile, out, rows, seed, choices, scenario)

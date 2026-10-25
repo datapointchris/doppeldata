@@ -70,13 +70,18 @@ pub struct Manifest {
 /// JSON, so a reader rebuilds `dataset_digest` from them with no mapping.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ManifestIdentity {
-    /// The dataset's row count, in decimal.
+    /// The rows generated, in decimal, before any copies a scenario's `duplicates` adds. `files`
+    /// gives the rows each file holds.
     #[serde(with = "decimal")]
     #[schemars(with = "Decimal")]
     pub dataset_rows: u64,
-    /// `sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON.
+    /// `sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON, as given, before a
+    /// scenario's patch.
     pub profile_digest: String,
-    /// The scenario's digest, or null for none.
+    /// `sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON, or null for none.
+    /// The JSON is taken with each perturbation's `id` resolved, and with `description` and
+    /// `expect` left out. A composition's is its composed document's: the patches merged in order,
+    /// the perturbations concatenated, and the names joined with `+`.
     pub scenario_digest: Option<String>,
     /// The seed, in decimal.
     #[serde(with = "decimal")]
@@ -139,6 +144,9 @@ pub struct ManifestScenario {
     /// The scenario's path as the caller gave it, or null when it came from memory or composes
     /// several.
     pub path: Option<String>,
+    /// The canonical document `identity.scenario_digest` is taken over, so the dataset regenerates
+    /// with no scenario file.
+    pub document: serde_json::Map<String, serde_json::Value>,
     /// The scenarios composed, in order, present only for a composition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composed_of: Option<Vec<ScenarioMember>>,
@@ -150,6 +158,8 @@ pub struct ScenarioMember {
     pub name: String,
     /// The scenario's path as the caller gave it, or null when it came from memory.
     pub path: Option<String>,
+    /// The scenario's own digest, taken as `identity.scenario_digest` is.
+    pub digest: String,
 }
 
 /// One object the run wrote. A row or byte count is a JSON number, exact to 2^53 rows, which no

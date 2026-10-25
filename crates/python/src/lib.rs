@@ -79,10 +79,51 @@ mod _core {
             .collect()
     }
 
-    /// The scenario ops that shape the files a write makes rather than the rows.
+    /// Each of a valid scenario's perturbations, in list order: its id, the columns it writes, adds,
+    /// drops or renames, and whether it shapes the files a write makes rather than the rows.
     #[pyfunction]
-    fn file_shaping_ops() -> Vec<&'static str> {
-        doppeldata_core::scenario::FILE_SHAPING_OPS.to_vec()
+    fn perturbation_facts(scenario_json: &str) -> PyResult<Vec<(String, Vec<String>, bool)>> {
+        let scenario = read_scenario(scenario_json)?;
+        let ids = scenario
+            .resolved_ids()
+            .map_err(|duplicate| PyValueError::new_err(format!("two perturbations have the id {:?}", duplicate.id)))?;
+        Ok(scenario
+            .perturbations
+            .iter()
+            .zip(ids)
+            .map(|(perturbation, id)| {
+                let written = perturbation.written_columns().into_iter().map(String::from).collect();
+                (id, written, perturbation.shapes_files())
+            })
+            .collect())
+    }
+
+    /// The op whose perturbation an expectation's metric measures, such as ``hot_keys`` for
+    /// ``hot_keys.share``.
+    #[pyfunction]
+    fn expected_metric_op(metric: &str) -> PyResult<&'static str> {
+        serde_json::from_value::<doppeldata_core::scenario::ExpectedMetric>(metric.into())
+            .map(|metric| metric.op())
+            .map_err(|_| PyValueError::new_err(format!("{metric:?} is not a metric an expectation can name")))
+    }
+
+    /// ``profile_json`` with the scenario's patch applied as the engine applies it, and each column
+    /// the patch names that the profile does not hold.
+    #[pyfunction]
+    fn patched_profile(profile_json: &str, scenario_json: &str) -> PyResult<(String, Vec<String>)> {
+        let scenario = read_scenario(scenario_json)?;
+        let profile: serde_json::Value =
+            serde_json::from_str(profile_json).map_err(|error| PyValueError::new_err(format!("the profile is not JSON: {error}")))?;
+        let (patched, unknown) = match &scenario.patch {
+            Some(patch) => doppeldata_core::scenario::patched_profile(&profile, patch),
+            None => (profile, Vec::new()),
+        };
+        Ok((patched.to_string(), unknown))
+    }
+
+    fn read_scenario(scenario_json: &str) -> PyResult<Scenario> {
+        serde_json::from_str(scenario_json)
+            .map_err(|error| PyValueError::new_err(format!("the scenario does not match the engine's scenario model: {error}")))
     }
 
     /// Whether each scipy.stats family a profile's ``fit`` can name is discrete, by its name. Any
@@ -151,7 +192,7 @@ mod _core {
     /// A table profile resolved for generation: ``rows`` rows from ``seed``. ``source`` names the
     /// profile in an error. ``scenario``, where given, is the scenario applied: its JSON with each
     /// perturbation's id resolved, its digest, and the name an error gives it. The profile is the
-    /// one its patch made.
+    /// one given, and the engine applies the scenario's patch to it.
     #[pyclass(frozen)]
     struct Plan {
         profile: Arc<Profile>,
@@ -172,8 +213,6 @@ mod _core {
             source: &str,
             scenario: Option<(String, String, String)>,
         ) -> PyResult<Self> {
-            let profile: Profile = serde_json::from_str(profile_json)
-                .map_err(|error| PyValueError::new_err(format!("{source} does not match the engine's profile model: {error}")))?;
             let read: Option<(Scenario, String, String)> = scenario
                 .map(|(json, digest, scenario_source)| {
                     serde_json::from_str(&json)
@@ -183,6 +222,16 @@ mod _core {
                         })
                 })
                 .transpose()?;
+            let not_the_model =
+                |error: serde_json::Error| PyValueError::new_err(format!("{source} does not match the engine's profile model: {error}"));
+            let document: serde_json::Value = serde_json::from_str(profile_json).map_err(not_the_model)?;
+            let document = match &read {
+                Some((scenario, _, scenario_source)) => scenario
+                    .patched_profile(&document)
+                    .map_err(|error| scenario_refused(py, scenario_source, error.code(), error.field(), &plan_message(&error)))?,
+                None => document,
+            };
+            let profile: Profile = serde_json::from_value(document).map_err(not_the_model)?;
             let applied = read.as_ref().map(|(scenario, digest, _)| AppliedScenario { scenario, digest });
             let scenario_source = read.as_ref().map(|(_, _, scenario_source)| scenario_source.clone());
             match py.detach(|| doppeldata_core::plan_with_scenario(&profile, profile_digest, applied, seed, rows)) {
@@ -218,6 +267,12 @@ mod _core {
         #[getter]
         fn block_count(&self) -> u64 {
             self.plan.block_count()
+        }
+
+        /// The rows the files hold: those generated, and every copy the scenario plans.
+        #[getter]
+        fn rows_written(&self) -> u64 {
+            self.plan.rows_written()
         }
 
         /// Each top-level column's name, type as a profile's ``physical_type`` spells it, what draws
@@ -661,8 +716,7 @@ mod _core {
     /// one's, the list is empty and the second item is its index and id.
     #[pyfunction]
     fn scenario_ids(scenario_json: &str) -> PyResult<ResolvedIds> {
-        let scenario: Scenario = serde_json::from_str(scenario_json)
-            .map_err(|error| PyValueError::new_err(format!("the scenario does not match the engine's scenario model: {error}")))?;
+        let scenario = read_scenario(scenario_json)?;
         Ok(match scenario.resolved_ids() {
             Ok(ids) => (ids, None),
             Err(duplicate) => (Vec::new(), Some((duplicate.index, duplicate.id))),
@@ -678,7 +732,7 @@ mod _core {
     /// ``interrupted`` says a signal arrived, which raises ``WriteInterrupted`` instead. A layout
     /// the scenario named ``scenario_source`` cannot hold raises its ``InvalidScenario``.
     fn write_failed(py: Python<'_>, failure: WriteFailure, interrupted: bool, scenario_source: Option<&str>) -> PyErr {
-        if let WriteError::Layout(LayoutError::Scenario { field, message }) = &failure.error {
+        if let WriteError::Layout(LayoutError::Scenario { field, message, .. }) = &failure.error {
             let (code, _) = failure.error.code();
             return scenario_refused(py, scenario_source.unwrap_or("the scenario"), code, field, message);
         }

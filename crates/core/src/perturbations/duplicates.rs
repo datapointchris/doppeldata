@@ -92,9 +92,14 @@ impl CopyRows {
         (self.rows - block * BLOCK_ROWS).min(BLOCK_ROWS)
     }
 
-    /// The block whose rows `block`'s copies come from: half the dataset away, wrapping round.
+    /// How many blocks away an `across_files` copy's source lies: half the dataset.
+    fn partner_distance(&self) -> u64 {
+        self.block_count / 2
+    }
+
+    /// The block whose rows `block`'s copies come from, wrapping round.
     fn partner(&self, block: u64) -> u64 {
-        (block + self.block_count / 2) % self.block_count
+        (block + self.partner_distance()) % self.block_count
     }
 }
 
@@ -104,6 +109,13 @@ impl BlockPerturbation for CopyRows {
         let whole = expected.floor();
         let mut count = rng_for(seed, self.count_key, block);
         whole as usize + usize::from(Bernoulli::new(expected - whole).draw(&mut count))
+    }
+
+    fn source_reach(&self) -> Option<(&'static str, u64)> {
+        match self.scope {
+            DuplicateScope::WithinFile => None,
+            DuplicateScope::AcrossFiles => Some(("/scope", self.partner_distance() * BLOCK_ROWS)),
+        }
     }
 
     fn apply(&self, stage: &Stage<'_>, block: Block) -> Block {

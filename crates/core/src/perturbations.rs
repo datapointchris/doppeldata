@@ -58,6 +58,9 @@ pub enum ScenarioFault {
     InvalidParameter,
     /// Two perturbations with one id, which would share a stream.
     DuplicatePerturbationId,
+    /// An op the output format cannot hold, such as a schema drift in CSV files, which read as one
+    /// table only under one header.
+    OpNotForFormat,
 }
 
 impl ScenarioFault {
@@ -67,6 +70,7 @@ impl ScenarioFault {
             Self::OpNotForColumn => "op-not-for-column",
             Self::InvalidParameter => "invalid-parameter",
             Self::DuplicatePerturbationId => "duplicate-perturbation-id",
+            Self::OpNotForFormat => "op-not-for-format",
         }
     }
 }
@@ -130,6 +134,12 @@ pub(crate) trait BlockPerturbation: Debug + Send + Sync {
     /// planned before any row is drawn, so block boundaries never move.
     fn added_rows(&self, _seed: u64, _block: u64, _rows: usize) -> usize {
         0
+    }
+
+    /// Where the op copies rows from across the dataset: the parameter that sets it, as a pointer
+    /// under the op's entry, and the fewest dataset rows between a copy's home and its source.
+    fn source_reach(&self) -> Option<(&'static str, u64)> {
+        None
     }
 
     fn apply(&self, stage: &Stage<'_>, block: Block) -> Block;

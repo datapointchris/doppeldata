@@ -2,7 +2,10 @@
 # Fails when a values hash the determinism contract test pins differs from
 # the last release's while its pinned stream version is the same. A released
 # stream version's values never change, so a new hash needs a raised version.
-# A pin the release did not hold yet has nothing to compare.
+# A pin the release did not hold yet has nothing to compare. Where a pin's
+# fixture changed since the release at the same stream version, its hash
+# cannot be compared, so this build generates the release's own fixtures and
+# must reach the release's hash, which needs cargo.
 # Needs the release tags, so the checkout fetches the full history.
 # Usage: crates/check-stream-version-raised.sh
 set -eu
@@ -14,6 +17,31 @@ scenario_fixture=crates/core/tests/every-column-kind.scenario.yaml
 
 pinned() {
   sed -nE "s/^const $1: [^=]+ = \"?([0-9a-f]+)\"?;$/\1/p"
+}
+
+number() {
+  sed -nE "s/^const $1: u64 = ([0-9_]+);$/\1/p" | tr -d _
+}
+
+# Generates the release's own fixtures, a profile and an optional scenario, with this build, and
+# requires the hash the release pinned for them.
+generate_released() {
+  pin=$1
+  shift
+  dir=$(mktemp -d)
+  trap 'rm -rf "$dir"' EXIT
+  git show "$tag:$1" >"$dir/profile.yaml"
+  scenario=
+  if [ "$#" -gt 1 ]; then
+    git show "$tag:$2" >"$dir/scenario.yaml"
+    scenario=$dir/scenario.yaml
+  fi
+  DOPPELDATA_RELEASED_PROFILE=$dir/profile.yaml DOPPELDATA_RELEASED_SCENARIO=$scenario \
+    DOPPELDATA_RELEASED_SEED=$(printf '%s\n' "$released" | number SEED) \
+    DOPPELDATA_RELEASED_ROWS=$(printf '%s\n' "$released" | number ROWS) \
+    DOPPELDATA_RELEASED_VALUES=$pin \
+    cargo test --manifest-path crates/Cargo.toml -p doppeldata-core --test determinism_contract -- \
+    --ignored --exact a_released_fixture_generates_the_values_its_release_pinned
 }
 
 if ! tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null); then
@@ -44,7 +72,13 @@ compare() {
     return 0
   fi
   if ! git diff --quiet "$tag" -- "$@"; then
-    echo "check-stream-version-raised: a fixture of $name changed since $tag, so its hash cannot be compared"
+    if [ "$version" != "$released_version" ]; then
+      echo "check-stream-version-raised: a fixture of $name changed since $tag, and the stream version was raised"
+      return 0
+    fi
+    echo "check-stream-version-raised: a fixture of $name changed since $tag, so this build generates $tag's own"
+    generate_released "$released_values" "$@"
+    echo "check-stream-version-raised: $tag's fixtures generate its pinned $name with this build"
     return 0
   fi
   values=$(pinned "$name" <"$test_file")

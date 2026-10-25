@@ -181,7 +181,7 @@
           ]
         },
         "value": {
-          "description": "The metric's value, or null where `unmeasured` says why the other profile cannot supply it.",
+          "description": "The metric's value. It is null where `unmeasured` says why the other profile cannot supply\nit, and where `skipped_by` names the perturbation that moves it.",
           "type": [
             "number",
             "null"

@@ -1,6 +1,13 @@
 # Every op that writes rows, over the determinism fixture, whose generated values the contract
-# test pins. An op the engine gains adds an entry here.
+# test pins. An op the engine gains adds an entry here. The patch removes a column, merges into a
+# nested field and sets a field the profile lacks, so the pin covers how a patch merges.
 scenario: every-row-op
+patch:
+  dataset: {row_count: 1000000}
+  columns:
+    provider_job_title: null
+    flag: {boolean: {true_rate: 0.6}}
+    status: {null_rate: 0.2}
 perturbations:
   - {op: hot_keys, column: fit_randint, keys: 3, share: 0.3}
   - {op: categorical_shift, column: status, to: {pending: 0.5, cancelled: 0.1}}

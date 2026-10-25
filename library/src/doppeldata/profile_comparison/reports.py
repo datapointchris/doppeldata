@@ -49,24 +49,31 @@ class ExpectationResult:
     """One expectation a scenario declares, and the value the data holds."""
 
     metric: str
-    column: str | None
+    column: str
     at_least: float | None
     at_most: float | None
-    value: float
+    value: float | None
     passed: bool
+    # Why the data holds no value, such as a column it lacks.
+    unmeasured: str | None = None
 
     def to_plain(self) -> dict[str, Any]:
-        return {key: value for key, value in dc.asdict(self).items() if value is not None or key not in ('at_least', 'at_most')}
+        return {
+            key: value for key, value in dc.asdict(self).items() if value is not None or key not in ('at_least', 'at_most', 'unmeasured')
+        }
 
     def bounds(self) -> str:
         """`≥ 0.55`, `≤ 0.06`, or `≥ 0.04 and ≤ 0.06`."""
         given = ((Bound.AT_LEAST, self.at_least), (Bound.AT_MOST, self.at_most))
         return ' and '.join(f'{BOUND_SIGNS[bound]} {value:g}' for bound, value in given if value is not None)
 
+    def measured(self) -> str:
+        """The value, or why there is none."""
+        return f'{self.value:g}' if self.value is not None else (self.unmeasured or 'unmeasured')
+
     def named(self) -> str:
         """`hot_keys.share on customer_id (0.41, expected ≥ 0.55)`."""
-        where = f' on {self.column}' if self.column else ''
-        return f'{self.metric}{where} ({self.value:g}, expected {self.bounds()})'
+        return f'{self.metric} on {self.column} ({self.measured()}, expected {self.bounds()})'
 
 
 @dc.dataclass(frozen=True)
@@ -255,7 +262,7 @@ def expected(expectations: list[ExpectationResult]) -> list[str]:
     lines = [f'{failed} of {len(expectations)} expectations failed.', '']
     lines += ['| Expectation | Column | Value | Bounds | Passed |', '| --- | --- | --- | --- | --- |']
     for result in sorted(expectations, key=lambda result: result.passed):
-        lines.append(f'| {result.metric} | {result.column or ""} | {result.value:.6g} | {result.bounds()} | {verdict(result.passed)} |')
+        lines.append(f'| {result.metric} | {result.column} | {result.measured()} | {result.bounds()} | {verdict(result.passed)} |')
     return [*lines, '']
 
 

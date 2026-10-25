@@ -7,6 +7,7 @@ use std::collections::btree_map::Entry;
 use arrow_schema::DataType;
 use arrow_schema::SchemaRef;
 use doppeldata_core::Plan;
+use doppeldata_core::ScenarioFault;
 use doppeldata_core::file_rows_draws;
 use doppeldata_core::format_settings::Output;
 use doppeldata_core::manifest::FileRows;
@@ -38,8 +39,12 @@ pub enum LayoutError {
     ManifestRanges(String),
     /// A scenario's perturbation the files cannot hold. `field` is its RFC 6901 JSON Pointer into
     /// the scenario.
-    #[error("{field}: {message}")]
-    Scenario { field: String, message: String },
+    #[error("{field}: {message} [{fault}]")]
+    Scenario {
+        fault: ScenarioFault,
+        field: String,
+        message: String,
+    },
 }
 
 /// The contiguous rows one file holds. A partitioned range writes one object per value it holds.
@@ -89,7 +94,7 @@ pub fn layout(plan: &Plan, settings: &LayoutSettings, output: &Output) -> Result
         FileRows::Drawn(quantiles) => drawn_sizes(rows, plan.identity().seed(), quantiles, scale)?,
     };
     let ranges = ranges_from_sizes(sizes);
-    check_scenario(plan, &settings.partition_by, &ranges)?;
+    check_scenario(plan, &settings.partition_by, &ranges, output)?;
     Ok(FileLayout {
         ranges,
         partition_by: settings.partition_by.clone(),
@@ -143,7 +148,7 @@ pub fn layout_from_manifest(plan: &Plan, manifest: &Manifest) -> Result<FileLayo
         )));
     }
     let ranges: Vec<FileRange> = ranges.into_values().collect();
-    check_scenario(plan, &manifest.layout.partition_by, &ranges)?;
+    check_scenario(plan, &manifest.layout.partition_by, &ranges, &manifest.output)?;
     Ok(FileLayout {
         ranges,
         partition_by: manifest.layout.partition_by.clone(),
@@ -174,13 +179,28 @@ fn check_partition_keys(schema: &SchemaRef, keys: &[String]) -> Result<(), Layou
     Ok(())
 }
 
-/// Refuses a layout the plan's scenario cannot hold: a partition key its schema drift drops or
-/// renames, or an `across_files` copy whose source could share its file.
-fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange]) -> Result<(), LayoutError> {
+/// Refuses a layout the plan's scenario cannot hold: a schema drift written in a format that reads
+/// as one table only under one schema, a partition key the drift drops or renames, a drift no file
+/// starts past, or an `across_files` copy whose source could share its file.
+fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange], output: &Output) -> Result<(), LayoutError> {
+    let one_schema = match output {
+        Output::Csv(_) => Some("CSV files, which read as one table only under one header"),
+        Output::Tsv(_) => Some("TSV files, which read as one table only under one header"),
+        Output::Arrow(_) => Some("Arrow files, which read as one table only under one schema"),
+        Output::Parquet(_) | Output::Json(_) | Output::Ndjson(_) => None,
+    };
+    if let (Some(drift), Some(format)) = (plan.drift(), one_schema) {
+        return Err(LayoutError::Scenario {
+            fault: ScenarioFault::OpNotForFormat,
+            field: drift.field(),
+            message: format!("schema_drift gives later files other columns, and the write makes {format}; write parquet, json or ndjson"),
+        });
+    }
     if let Some(drift) = plan.drift()
         && let Some((key, field)) = partition_by.iter().find_map(|key| drift.moves(key).map(|field| (key, field)))
     {
         return Err(LayoutError::Scenario {
+            fault: ScenarioFault::InvalidParameter,
             field,
             message: format!("the write is partitioned by {key:?}, which schema_drift drops or renames in the files past its cut"),
         });
@@ -190,6 +210,7 @@ fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange]) ->
         && ranges.iter().all(|range| range.first_row < drift.first_row())
     {
         return Err(LayoutError::Scenario {
+            fault: ScenarioFault::InvalidParameter,
             field: drift.cut_field(),
             message: format!(
                 "no file starts at or past row {}, where schema_drift's files begin, so none would drift; write smaller files, or lower after_fraction",
@@ -208,6 +229,7 @@ fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange]) ->
             ),
         };
         return Err(LayoutError::Scenario {
+            fault: ScenarioFault::InvalidParameter,
             field: field.to_string(),
             message,
         });
