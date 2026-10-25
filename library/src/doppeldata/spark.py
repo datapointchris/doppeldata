@@ -33,14 +33,15 @@ from doppeldata.dataset_generation import EngineArguments
 from doppeldata.dataset_generation import PreparedWrite
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.dataset_generation import engine_arguments
+from doppeldata.dataset_generation import one_file_of
 from doppeldata.dataset_generation import prepared_write
 from doppeldata.dataset_generation import rows_only
 from doppeldata.dataset_generation import s3_store_of
 from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
 from doppeldata.manifest import Manifest
-from doppeldata.profile_format import Profile
 from doppeldata.scenario_format import Scenario
+from doppeldata.short_profiles import ProfileSource
 
 # The engine blocks each Spark task generates in turn. The chunk is a unit of work and never of values, so its size moves no value.
 CHUNK_BLOCKS = 16
@@ -129,7 +130,7 @@ class RangeWrites:
         yield pa.record_batch([pa.array(records, pa.string())], names=['file'])
 
 
-def executor_plan(profile: Profile, rows: int | None, seed: int, scenario: Scenario | None) -> tuple[ExecutorPlan, '_core.Plan']:
+def executor_plan(profile: ProfileSource, rows: int | None, seed: int, scenario: Scenario | None) -> tuple[ExecutorPlan, '_core.Plan']:
     """What executors build the plan from, and the plan built on the driver, which refuses an ungenerable profile before a task runs."""
     planned = ExecutorPlan(engine_arguments(profile, rows, seed, scenario), _core.VERSION, _core.STREAM_VERSION)
     return planned, planned.plan()
@@ -211,7 +212,7 @@ def spark_holds(data_type: Any) -> bool:
     return any(holds(data_type) for holds in SPARK_HOLDS)
 
 
-def struct_type(profile: Profile, *, scenario: Scenario | Sequence[Scenario] | None = None) -> 'st.StructType':
+def struct_type(profile: ProfileSource, *, scenario: Scenario | Sequence[Scenario] | None = None) -> 'st.StructType':
     """The Spark schema of the DataFrame `generate` returns for `profile` under `scenario`.
 
     A timestamp with no time zone is a TimestampNTZType, and one with a zone a TimestampType. A column of a type `spark_holds`
@@ -223,7 +224,7 @@ def struct_type(profile: Profile, *, scenario: Scenario | Sequence[Scenario] | N
 
 def generate(
     spark: SparkSession,
-    profile: Profile,
+    profile: ProfileSource,
     *,
     rows: int | None = None,
     seed: int = 0,
@@ -245,7 +246,7 @@ def generate(
 
 def write(
     spark: SparkSession,
-    profile: Profile,
+    profile: ProfileSource,
     out: str | os.PathLike[str],
     *,
     rows: int | None = None,
@@ -272,6 +273,9 @@ def write(
     `doppeldata.write` takes it, and the files are the ones it writes.
     """
     started = time.monotonic()
+    if one_file_of(out) is not None:
+        message = f'{os.fspath(out)} names one file, which doppeldata.write writes; the executors write a directory, such as "people/"'
+        raise WriteFailed('one-file-from-executors', message, kind='refused')
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
     prepared = prepared_write(profile, out, rows, seed, choices, scenario)
     destination = executors_destination(spark, prepared)
