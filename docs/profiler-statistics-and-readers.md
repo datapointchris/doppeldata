@@ -21,8 +21,11 @@ counted in string columns holding at most `TOP_VALUES_THRESHOLD` distinct values
 
 A numeric column's values are counted where it holds at most `NUMERIC_TOP_VALUES_THRESHOLD`
 distinct values, and is not a `sequence`. `VALUE_LISTS` in the statistic catalog names each kind
-that lists its values, the section holding the list and its cut. A column a detector marks
-`sensitivity: identifier` lists none, whatever its kind.
+that lists its values, the section holding the list and its cut. A column whose privacy treatment
+refuses top values lists none, whatever its kind, so no zero rate, negative rate or histogram bin
+gives way to a list the profile would then withhold. Under every policy but `none`, that is each
+identifier. It is also each quasi-identifier under `strict`, and each free-text, ZIP or age column
+under the policy that treats it so.
 
 The numeric cut sits between a code and a measurement. Location ids, rate codes and payment types
 hold a few hundred values at most, and drawn from quantiles they land on the wrong codes. A fare,

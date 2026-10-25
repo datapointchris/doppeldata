@@ -26,6 +26,8 @@ from doppeldata.privacy_policy import restricted_zip_prefixes
 from doppeldata.privacy_policy import withheld
 from doppeldata.privacy_policy.column_treatment import OLDEST_AGE
 from doppeldata.privacy_policy.column_treatment import ValueFamily
+from doppeldata.privacy_policy.literal_fields import FieldKind
+from doppeldata.privacy_policy.treatment_rules import REFUSED
 from doppeldata.privacy_policy.treatment_rules import ZIP_PREFIX
 from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
@@ -520,8 +522,9 @@ def column_entry(
 ) -> dict[str, Any]:
     """One column's entry. `distinct` holds each column's distinct count and the rows it was counted over.
 
-    `treatment` decides what the statistics pass computes differently: a ZIP code's prefixes, and a date's extremes and
-    gap rate to the year. What it withholds from the computed entry is left to `withheld`.
+    `treatment` decides what the statistics pass computes differently: a ZIP code's prefixes, no value list where it
+    refuses one, and a date's extremes and gap rate to the year. What it withholds from the computed entry is left to
+    `withheld`.
     """
     entry: dict[str, Any] = {'name': spec.name, 'physical_type': spec.physical_type}
     logical = LOGICAL_TYPES.get(spec.kind) or CONTAINER_LOGICAL_TYPES.get(spec.physical_type.split('<')[0])
@@ -550,7 +553,7 @@ def column_entry(
     # A statistic of fewer than k_min values can give one of them away, as the mean of one value does.
     if values < k_min:
         return entry
-    listing = value_list(spec, typing)
+    listing = value_list(spec, treatment)
     if spec.kind in NUMERIC:
         entry['numeric'] = numeric_section(backend, table, spec, stat, values, layout, listing, k_min)
     elif spec.kind is ColumnKind.STRING:
@@ -576,9 +579,12 @@ def column_entry(
     return entry
 
 
-def value_list(spec: ColumnSpec, typing: 'Typing | None') -> ValueList | None:
-    """How `spec`'s values are listed, or None for a kind that lists none and for a column typed as an identifier."""
-    if typing is not None and typing.candidate.detector.sensitivity == 'identifier':
+def value_list(spec: ColumnSpec, treatment: Treatment) -> ValueList | None:
+    """How `spec`'s values are listed, or None for a kind that lists none and for a column whose treatment refuses a list.
+
+    A list the policy would withhold is never counted, so nothing stated beside it gives way to it.
+    """
+    if FieldKind.TOP_VALUES in REFUSED.get(treatment, frozenset()):
         return None
     return VALUE_LISTS.get(spec.kind)
 
