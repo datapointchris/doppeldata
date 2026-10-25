@@ -1,11 +1,13 @@
 import dataclasses as dc
 import importlib.metadata
 import json
+import warnings
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from doppeldata import DoppeldataError
+from doppeldata import FitsSkipped
 from doppeldata import InvalidProfile
 from doppeldata import Profile
 from doppeldata import SourceError
@@ -53,6 +55,17 @@ def profile_create(
     k_min: Annotated[
         int, typer.Option('--k-min', metavar='N', min=1, help='Store no data value that fewer than N rows hold.')
     ] = DEFAULT_K_MIN,
+    edges_from: Annotated[
+        Path | None,
+        typer.Option(
+            '--edges-from',
+            metavar='FILE',
+            help=(
+                "Count each column against FILE's histogram edges and value list, writing the rows outside them as overflow. "
+                'FILE is returned unchanged when the files and settings match the ones it was made from.'
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Profile a dataset into a file holding no rows: doppeldata profile create data/orders/ --out orders.profile.yaml
 
@@ -61,7 +74,13 @@ def profile_create(
     if out is not None and not out.parent.is_dir():
         raise typer.BadParameter(f'{out.parent} is not a directory; create it, or name a FILE in one that exists', param_hint='--out')
     try:
-        profiled = profile(data, sample=sample, k_min=k_min)
+        earlier = Profile.load(edges_from) if edges_from is not None else None
+    except (OSError, InvalidProfile) as error:
+        raise typer.BadParameter(str(error), param_hint='--edges-from') from error
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always', FitsSkipped)
+            profiled = profile(data, sample=sample, k_min=k_min, edges_from=earlier)
     except DoppeldataError as error:
         if isinstance(error, SourceError) and error.exit_code == 2:
             raise typer.BadParameter(str(error), param_hint='DATA') from error
@@ -69,6 +88,11 @@ def profile_create(
             typer.echo('doppeldata: the profile it wrote fails its own schema, which is a bug in doppeldata:', err=True)
         typer.echo(f'doppeldata: {error}', err=True)
         raise typer.Exit(error.exit_code) from error
+    for notice in caught:
+        if issubclass(notice.category, FitsSkipped):
+            typer.echo(f'doppeldata: {notice.message}', err=True)
+        else:
+            warnings.showwarning(notice.message, notice.category, notice.filename, notice.lineno)
     if out is None:
         typer.echo(profiled.to_yaml(), nl=False)
         return

@@ -1,4 +1,6 @@
 import datetime as dt
+import math
+import random
 
 import polars as pl
 from doppeldata import Profile
@@ -51,3 +53,17 @@ def test_parquet_through_polars_and_csv_through_duckdb_profile_to_the_same_field
     assert {path: value for path, value in parquet.items() if path[-1] not in MOMENTS} == {
         path: value for path, value in csv.items() if path[-1] not in MOMENTS
     }
+
+
+def test_a_log_uniform_column_is_fitted_as_the_loguniform_the_generator_reads(tmp_path):
+    draw = random.Random(5)
+    amounts = [math.exp(draw.uniform(0, 5)) for _ in range(100_000)]
+    pl.DataFrame({'amount': amounts}).write_parquet(tmp_path / 'amounts.parquet')
+    out = tmp_path / 'amounts.profile.yaml'
+    result = CliRunner().invoke(app, ['profile', 'create', str(tmp_path / 'amounts.parquet'), '--out', str(out)])
+    assert result.exit_code == 0, result.output
+
+    fit = Profile.load(out).to_plain()['columns'][0]['numeric']['fit']
+    # `FittedFamily::from_fit` in the core crate reads these scipy names.
+    assert (fit['family'], set(fit['params'])) == ('loguniform', {'a', 'b', 'loc', 'scale'})
+    assert fit['ks'] < 0.02

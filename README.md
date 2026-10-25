@@ -18,6 +18,7 @@ its hand-written example profiles:
 ```bash
 doppeldata profile create data/orders/ --out orders.profile.yaml   # profile a directory of one table
 doppeldata profile create s3://bucket/orders/ --sample 1000000     # a seeded sample, printed as YAML
+doppeldata profile create data/orders/ --edges-from orders.profile.yaml --out orders.profile.yaml  # keep its bin edges
 doppeldata profile list                # the example profiles
 doppeldata profile show orders         # one of them, as YAML to start a profile from
 doppeldata schemas show profile        # the JSON Schema every profile validates against
@@ -27,6 +28,11 @@ doppeldata schemas show profile        # the JSON Schema every profile validates
 AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files. No data
 value it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. Profile only
 data that is already synthetic or public until identifier columns are detected and suppressed.
+
+Each numeric column gets an equal-depth histogram and the distribution family that fits it best.
+`--edges-from` counts a new profile against an earlier one's bin edges and value lists, so the two
+compare bin for bin, and the rows outside them are written as overflow. Where the files have not
+changed since the earlier profile, it is kept as it is, with any edits a reviewer made.
 
 Each release's notes list what it does. Its commands and its profile format change without notice
 until 1.0.
@@ -59,6 +65,7 @@ The library installs no profiling engine, so a job that only generates carries n
 
 ```bash
 uv add polars duckdb pyarrow boto3
+uv add scipy     # optional: without it, no column is fitted to a distribution family
 ```
 
 The library runs on Python 3.11 and later, and the command line on 3.13 and later. The command line
