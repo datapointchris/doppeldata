@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "python"]
+members = ["core", "python", "writers"]
 resolver = "3"
 
 # The release tag is the version. Git carries 0.0.0, and the release job sets

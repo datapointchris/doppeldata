@@ -20,7 +20,7 @@ from doppeldata.published_schemas import schema_text
 app = typer.Typer(no_args_is_help=True)
 profile_app = typer.Typer(no_args_is_help=True, help='Profiles: reviewable files that describe a dataset without holding its rows.')
 app.add_typer(profile_app, name='profile')
-schemas_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas doppeldata validates its files against.')
+schemas_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas of the files doppeldata reads and writes.')
 app.add_typer(schemas_app, name='schemas')
 
 JsonOption = Annotated[bool, typer.Option('--json', help='Print JSON instead of a table.')]

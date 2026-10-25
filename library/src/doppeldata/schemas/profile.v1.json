@@ -485,6 +485,111 @@
         }
       }
     },
+    "DelimitedSettings": {
+      "description": "A CSV or TSV dialect. Every character must be ASCII.",
+      "type": "object",
+      "properties": {
+        "bom": {
+          "description": "Whether the file starts with a UTF-8 byte order mark.",
+          "type": "boolean",
+          "default": false
+        },
+        "compression": {
+          "$ref": "#/$defs/TextCompression",
+          "default": "none"
+        },
+        "compression_level": {
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        },
+        "date_format": {
+          "description": "A chrono format for date columns. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "delimiter": {
+          "description": "Null takes the format's own: `,` for CSV, a tab for TSV.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "encoding": {
+          "$ref": "#/$defs/TextEncoding",
+          "default": "utf8"
+        },
+        "escape": {
+          "description": "The character that escapes a quote inside a quoted field. Null doubles the quote instead.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "header": {
+          "description": "Whether the first line names the columns.",
+          "type": "boolean",
+          "default": true
+        },
+        "line_terminator": {
+          "$ref": "#/$defs/LineTerminator",
+          "default": "lf"
+        },
+        "null": {
+          "description": "What a null prints where the column's profile gives no missing token for it. When it is\nempty, an empty string is quoted so the two read back apart.",
+          "type": "string",
+          "default": ""
+        },
+        "quote": {
+          "type": "string",
+          "default": "\"",
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "quoting": {
+          "$ref": "#/$defs/Quoting",
+          "default": "necessary"
+        },
+        "time_format": {
+          "description": "A chrono format for time columns. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timestamp_format": {
+          "description": "A chrono format for timestamp columns without a time zone. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timestamp_tz_format": {
+          "description": "A chrono format for timestamp columns with a time zone. Null writes ISO 8601 with the offset.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
     "Dependency": {
       "type": "object",
       "properties": {
@@ -940,6 +1045,30 @@
         "name"
       ]
     },
+    "JsonSettings": {
+      "type": "object",
+      "properties": {
+        "compression": {
+          "$ref": "#/$defs/TextCompression",
+          "default": "none"
+        },
+        "compression_level": {
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        },
+        "explicit_nulls": {
+          "description": "Whether a null field is written as `null` rather than left out.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
     "Key": {
       "type": "object",
       "properties": {
@@ -1070,6 +1199,13 @@
           ]
         }
       }
+    },
+    "LineTerminator": {
+      "type": "string",
+      "enum": [
+        "lf",
+        "crlf"
+      ]
     },
     "ListStats": {
       "type": "object",
@@ -1292,6 +1428,98 @@
         }
       }
     },
+    "ParquetCompression": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none",
+            "snappy",
+            "gzip",
+            "zstd"
+          ]
+        },
+        {
+          "description": "LZ4_RAW, the LZ4 codec current readers expect.",
+          "type": "string",
+          "const": "lz4"
+        }
+      ]
+    },
+    "ParquetSettings": {
+      "type": "object",
+      "properties": {
+        "compression": {
+          "$ref": "#/$defs/ParquetCompression",
+          "default": "zstd"
+        },
+        "compression_level": {
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        },
+        "dictionary_columns": {
+          "description": "The columns written with a dictionary. Null gives every column one.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "row_group_rows": {
+          "description": "The most rows a row group holds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1048576,
+          "minimum": 0
+        },
+        "statistics": {
+          "$ref": "#/$defs/ParquetStatistics",
+          "default": "page"
+        },
+        "timestamp_unit": {
+          "description": "The unit every timestamp column is cast to. Null keeps each column's own. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimestampUnit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "ParquetStatistics": {
+      "description": "How much of the min, max and null count each column chunk records.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "description": "Per column chunk.",
+          "type": "string",
+          "const": "chunk"
+        },
+        {
+          "description": "Per page too, with the page index.",
+          "type": "string",
+          "const": "page"
+        }
+      ]
+    },
     "PartitionKey": {
       "type": "object",
       "properties": {
@@ -1485,6 +1713,32 @@
         "pattern": "^p[0-9]{2}([0-9]*[1-9])?$"
       }
     },
+    "Quoting": {
+      "description": "Which fields are quoted. A null is never quoted.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "always"
+          ]
+        },
+        {
+          "description": "Only a field holding the delimiter, the quote or a line break, and an empty string where a\nnull prints empty.",
+          "type": "string",
+          "const": "necessary"
+        },
+        {
+          "description": "Every field that does not parse as a number.",
+          "type": "string",
+          "const": "non_numeric"
+        },
+        {
+          "description": "None, even where a field needs it.",
+          "type": "string",
+          "const": "never"
+        }
+      ]
+    },
     "Rate": {
       "description": "A share of rows, from 0 to 1.",
       "type": "number",
@@ -1676,7 +1930,7 @@
       ]
     },
     "Source": {
-      "description": "The files the data came from.",
+      "description": "The files the data came from. `csv`, `parquet` and `json` take the keys a manifest's `writer`\ntakes for that format, so a generated dataset can be written the way its source was.",
       "type": "object",
       "properties": {
         "compression": {
@@ -1690,11 +1944,14 @@
           ]
         },
         "csv": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DelimitedSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "format": {
           "anyOf": [
@@ -1707,11 +1964,14 @@
           ]
         },
         "json": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "layout": {
           "anyOf": [
@@ -1724,11 +1984,14 @@
           ]
         },
         "parquet": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParquetSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -2044,6 +2307,38 @@
           ]
         }
       }
+    },
+    "TextCompression": {
+      "type": "string",
+      "enum": [
+        "none",
+        "gzip",
+        "zstd"
+      ]
+    },
+    "TextEncoding": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "utf8"
+          ]
+        },
+        {
+          "description": "windows-1252, the superset of ISO-8859-1 every decoder applies to a `latin1` label.",
+          "type": "string",
+          "const": "latin1"
+        }
+      ]
+    },
+    "TimestampUnit": {
+      "type": "string",
+      "enum": [
+        "s",
+        "ms",
+        "us",
+        "ns"
+      ]
     },
     "TopValue": {
       "type": "object",

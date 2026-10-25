@@ -3,6 +3,7 @@
 
 mod categorical;
 mod distinct_values;
+mod file_rows;
 mod fitted_family;
 mod inverse_cdf;
 mod nested;
@@ -25,6 +26,7 @@ use rand_distr::weighted::WeightedAliasIndex;
 
 use self::categorical::CategoricalSampler;
 use self::distinct_values::ValueIndex;
+pub use self::file_rows::file_rows_draws;
 use self::fitted_family::FittedFamily;
 use self::nested::ListSampler;
 use self::nested::StructSampler;

@@ -8,7 +8,8 @@ the privacy policy, the generator's streams or what the library installs.
 
 ```text
 pyproject.toml  the uv workspace, the release config, and every Python tool's config for both members
-crates/         the cargo workspace: core (the engine, no Python) and python (the pyo3 extension)
+crates/         the cargo workspace: core (the engine, no Python), writers (files, object stores and
+                the manifest) and python (the pyo3 extension)
 library/        doppeldata: imported as `doppeldata`, built by maturin, no scripts
 cli/            doppeldata-cli: imported as `doppeldata_cli`, the `doppeldata` command
 docs/           the design pages
@@ -22,6 +23,9 @@ docs/           the design pages
   `library/src/doppeldata/_core.pyi`, from the crate's pyo3 introspection. mypy reads the stub in
   place of the compiled module. The extension is an inline `#[pymodule] mod`, the only form maturin
   generates a stub from.
+- **`crates/writers` holds every I/O dependency, and blocks on tokio only from threads it spawns.**
+  Its callers include Python threads with no runtime and async code that already runs one. So
+  nothing in it may assume an ambient runtime or `block_on` from the caller's thread.
 - **The JSON Schemas are derived from the Rust model, never edited.** `published_schemas::all()` in
   `crates/core` lists each one with its file name, and `task generate` writes them into
   `library/src/doppeldata/schemas/`. `task check-generated` fails when a schema or the stub differs

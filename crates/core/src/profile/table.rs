@@ -6,9 +6,9 @@ use serde::Deserialize;
 use super::values::ProfileVersion;
 use super::values::Quantiles;
 use super::values::Rate;
-
-/// An object whose fields format v1 leaves open. Its fields are kept as written and checked by nothing.
-pub type OpenObject = serde_json::Map<String, serde_json::Value>;
+use crate::format_settings::DelimitedSettings;
+use crate::format_settings::JsonSettings;
+use crate::format_settings::ParquetSettings;
 
 /// One table's profile. Every section is optional, and the generator falls back to defaults.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
@@ -105,15 +105,16 @@ pub struct AuditEntry {
     pub rule: String,
 }
 
-/// The files the data came from.
+/// The files the data came from. `csv`, `parquet` and `json` take the keys a manifest's `writer`
+/// takes for that format, so a generated dataset can be written the way its source was.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Source {
     pub format: Option<SourceFormat>,
     pub compression: Option<Compression>,
     pub layout: Option<Layout>,
-    pub csv: Option<OpenObject>,
-    pub parquet: Option<OpenObject>,
-    pub json: Option<OpenObject>,
+    pub csv: Option<DelimitedSettings>,
+    pub parquet: Option<ParquetSettings>,
+    pub json: Option<JsonSettings>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -169,10 +170,11 @@ pub struct Partitioning {
     pub keys: Option<Vec<PartitionKey>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, serde::Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PartitionStyle {
     /// `key=value` directories.
+    #[default]
     Hive,
     /// Bare value directories, one level per key.
     Directory,

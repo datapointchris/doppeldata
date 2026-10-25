@@ -1,0 +1,44 @@
+[package]
+name = "doppeldata-writers"
+description = "Writes doppeldata's generated blocks as Parquet, Arrow IPC, CSV and JSON files to any object store, with a manifest."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# chrono-tz lets a timestamp column whose zone has a name, such as UTC, format as text.
+arrow-array = { version = "59", features = ["chrono-tz"] }
+arrow-cast = "59"
+arrow-ipc = { version = "59", features = ["lz4", "zstd"] }
+arrow-json = "59"
+arrow-schema = "59"
+arrow-select = "59"
+bytes = "1.1"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+# The csv crate's own writer, driven field by field, because the csv crate quotes per file and an
+# empty string must be quoted where a null is not.
+csv-core = "0.1.13"
+doppeldata-core = { path = "../core" }
+encoding_rs = "0.8.42"
+# zlib-rs is the backend parquet's own gzip uses, so one build carries one deflate implementation.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+futures = "0.3"
+# No store feature: the caller builds the store, so a consumer takes only the stores it names.
+object_store = "0.14.2"
+# parquet's own `object_store` feature stays off. The writers drive the sync ArrowWriter into their
+# own byte sink, which uploads through object_store, so the feature would buy nothing. It would also
+# pin the object_store parquet was built against, which need not be the one this crate takes.
+parquet = { version = "59", default-features = false, features = ["arrow", "snap", "zstd", "lz4", "flate2-zlib-rs", "simdutf8"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "time"] }
+zstd = { version = "0.13", default-features = false }
+
+[dev-dependencies]
+object_store = { version = "0.14.2", features = ["aws"] }
+serde-saphyr = "2.0.0"
