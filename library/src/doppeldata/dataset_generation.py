@@ -27,6 +27,7 @@ from doppeldata.name_hinted_types import with_type_hints
 from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import UngenerableProfile
+from doppeldata.published_schemas import output_formats
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
 from doppeldata.scenario_format import manifest_record
@@ -135,26 +136,24 @@ def destination_of(out: str | os.PathLike[str]) -> tuple[str, str, str | None]:
     return destination, scheme, bucket
 
 
-# A local path ending in one of these, and naming no directory, is written as that one file, in the format it names.
-ONE_FILE_SUFFIXES = {'.parquet': 'parquet', '.arrow': 'arrow', '.csv': 'csv', '.tsv': 'tsv', '.json': 'json', '.ndjson': 'ndjson'}
 # The rows a write to one file asks each file to hold, so its layout makes one range of every row.
 EVERY_ROW = 2**63 - 1
 
 
 def one_file_of(out: str | os.PathLike[str]) -> Path | None:
-    """The file `out` names where it is a local path ending in a format's suffix and naming no directory, else None."""
+    """The file `out` names where it is a local path whose suffix is a format's name, and naming no directory, else None."""
     destination = os.fspath(out)
     if '://' in destination or COLLAPSED_URL.match(destination) or destination.endswith('/'):
         return None
     path = Path(destination)
-    if path.suffix.lower() not in ONE_FILE_SUFFIXES or path.is_dir():
+    if path.suffix.lower().removeprefix('.') not in output_formats() or path.is_dir():
         return None
     return path
 
 
 def one_file_choices(choices: WriteChoices, target: Path) -> WriteChoices:
     """`choices` for a write of the one file `target`: the format its suffix names, every row in one range, and no partitions."""
-    named = ONE_FILE_SUFFIXES[target.suffix.lower()]
+    named = target.suffix.lower().removeprefix('.')
     if choices.format not in (None, named):
         message = f'{target.name} names the {named} format, not {choices.format}; name the file for its format, or write to a directory'
         raise WriteFailed('suffix-names-another-format', message, kind='refused')
@@ -173,50 +172,59 @@ def one_file_scenario(scenario: Scenario | Sequence[Scenario] | None) -> Scenari
     return applied
 
 
-def write_one_file(
-    profile: ProfileSource,
-    target: Path,
-    rows: int | None,
-    seed: int,
-    choices: WriteChoices,
-    scenario: Scenario | Sequence[Scenario] | None,
-    *,
-    threads: int,
-    replace: bool,
-    manifest: bool,
-) -> Manifest:
+def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, replace: bool, manifest: bool) -> Manifest:
     """Write the dataset as the one file `target`, and `_manifest.json` beside it only where `manifest` asks.
 
     The engine writes into a directory made beside `target`, and the file is moved into place whole, so a write that stops
-    leaves nothing. The manifest returned names `target`'s directory as its destination, and `target` as its one file. No rows
-    write no file, as they write none in a directory.
+    before the move leaves nothing. A manifest beside `target` recording it alone describes the rows this write replaces, so
+    it goes before the file moves, whether or not `manifest` writes another. One recording other files belongs to them: it is
+    left alone, and refuses `manifest`. The manifest returned names `target`'s directory as its destination, and `target` as
+    its one file. No rows write no file, as they write none in a directory.
     """
-    prepared = prepared_write(profile, target.parent, rows, seed, one_file_choices(choices, target), one_file_scenario(scenario))
     recorded = target.parent / MANIFEST_FILE_NAME
-    for existing in (target, recorded) if manifest else (target,):
-        if existing.exists() and not replace:
-            raise WriteFailed('destination-not-empty', f'{existing} already exists', kind='refused')
-    target.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f'.{target.name}.', dir=target.parent))
+    listed = [file['path'] for file in Manifest.from_json(recorded.read_text()).files] if recorded.is_file() else None
+    others = sorted(set(listed or ()) - {target.name})
+    if manifest and others:
+        message = f'{recorded} records {", ".join(others)}, so it cannot record {target.name} too; write {target.name} to another directory'
+        raise WriteFailed('manifest-records-another-file', message, kind='refused')
+    stale = listed is not None and not others
+    held = [path for path, holds in ((target, target.exists()), (recorded, stale)) if holds]
+    if held and not replace:
+        raise WriteFailed('destination-not-empty', f'{held[0]} already exists', kind='refused')
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f'.{target.name}.', dir=target.parent))
+    except OSError as error:
+        raise unwritable(target, error) from error
     try:
         written = Manifest.from_json(prepared.engine.write(prepared.options, str(staging), threads=threads, replace=False))
-        files = []
-        for file in written.files:
-            os.replace(staging / file['path'], target)
-            files.append({**file, 'path': target.name})
-        if not files:
-            target.unlink(missing_ok=True)
+        files = [{**file, 'path': target.name} for file in written.files]
         moved = Manifest({**written.document, 'destination': str(target.parent), 'files': files})
         if manifest:
             (staging / MANIFEST_FILE_NAME).write_text(json.dumps(moved.document, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+        if stale:
+            recorded.unlink()
+        for file in written.files:
+            os.replace(staging / file['path'], target)
+        if not files:
+            target.unlink(missing_ok=True)
+        if manifest:
             os.replace(staging / MANIFEST_FILE_NAME, recorded)
     except StoppedWrite as error:
         # The partial manifest was in the staging directory, which goes with everything else the write made.
         error.manifest_stored = False
         raise
+    except OSError as error:
+        raise unwritable(target, error) from error
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return moved
+
+
+def unwritable(target: Path, error: OSError) -> WriteFailed:
+    """A one-file write's failure on the local filesystem, coded as the writers code a directory write's."""
+    code = 'store-refused' if isinstance(error, PermissionError) else 'io'
+    return WriteFailed(code, f'{target} could not be written: {error.strerror or error}', kind='failed')
 
 
 @dc.dataclass(frozen=True)
@@ -277,7 +285,10 @@ def rows_only(scenario: Scenario | Sequence[Scenario] | None, run: str) -> Scena
 
 @dc.dataclass(frozen=True)
 class PreparedWrite:
-    """A write's destination and the engine's options for it, resolved from the arguments `plan` and `write` take."""
+    """A write's destination and the engine's options for it, resolved from the arguments `plan` and `write` take.
+
+    `one_file` is the file a write to one local file makes, and `destination` is then its directory.
+    """
 
     destination: str
     scheme: str
@@ -286,6 +297,7 @@ class PreparedWrite:
     engine: '_core.Plan'
     choices_json: str
     options: '_core.WriteOptions'
+    one_file: Path | None = None
 
 
 def prepared_write(
@@ -297,14 +309,19 @@ def prepared_write(
     scenario: Scenario | Sequence[Scenario] | None = None,
 ) -> PreparedWrite:
     """What a write of `rows` rows of a profile under `scenario` from `seed` to `out` with `choices` runs on, refusing what the
-    engine would refuse."""
+    engine would refuse. A local `out` naming one file is resolved here, so every write and plan reads the one answer."""
+    one_file = one_file_of(out)
+    if one_file is None:
+        applied = composed(scenario)
+    else:
+        out, choices, applied = one_file.parent, one_file_choices(choices, one_file), one_file_scenario(scenario)
     destination, scheme, bucket = destination_of(out)
     profile = profile_from(source)
-    applied = composed(scenario)
     arguments = engine_arguments(profile, rows, seed, applied)
     engine = arguments.plan()
     choices_json = choices.engine_json(profile, applied)
-    return PreparedWrite(destination, scheme, bucket, arguments, engine, choices_json, engine.write_options(choices_json))
+    options = engine.write_options(choices_json)
+    return PreparedWrite(destination, scheme, bucket, arguments, engine, choices_json, options, one_file)
 
 
 def s3_store_of(destination: str, bucket: str | None) -> dict[str, Any] | None:
@@ -375,12 +392,8 @@ def plan(
     It reads nothing at `out`, and refuses what `write` would refuse from its arguments alone.
     """
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
-    target = one_file_of(out)
-    if target is None:
-        prepared = prepared_write(profile, out, rows, seed, choices, scenario)
-    else:
-        prepared = prepared_write(profile, target.parent, rows, seed, one_file_choices(choices, target), one_file_scenario(scenario))
-    engine, options = prepared.engine, prepared.options
+    prepared = prepared_write(profile, out, rows, seed, choices, scenario)
+    engine, options, target = prepared.engine, prepared.options, prepared.one_file
     settings = json.loads(options.settings_json)
     ranges = [PlannedRange(**planned) for planned in json.loads(engine.ranges_json(options))]
     if target is not None:
@@ -436,10 +449,9 @@ def write(
     the rows generated, so a scenario's `duplicates` writes more.
     """
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
-    target = one_file_of(out)
-    if target is not None:
-        return write_one_file(profile, target, rows, seed, choices, scenario, threads=threads, replace=replace, manifest=manifest)
     prepared = prepared_write(profile, out, rows, seed, choices, scenario)
+    if prepared.one_file is not None:
+        return write_one_file(prepared, prepared.one_file, threads=threads, replace=replace, manifest=manifest)
     s3_store = s3_store_of(prepared.destination, prepared.bucket)
     written = prepared.engine.write(prepared.options, prepared.destination, threads=threads, replace=replace, s3_store=s3_store)
     return Manifest.from_json(written)

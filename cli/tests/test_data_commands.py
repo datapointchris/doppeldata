@@ -21,10 +21,17 @@ def test_data_plan_names_the_identity_and_ranges_data_generate_writes(tmp_path):
     assert sorted(path.name for path in (tmp_path / 'orders').iterdir()) == ['_manifest.json', *(path for _, path, _ in planned_ranges)]
 
 
-def test_data_generate_writes_columns_named_on_the_command_line_as_one_file_and_nothing_beside_it(tmp_path):
+def test_data_generate_to_one_file_with_manifest_then_with_replace_alone_leaves_the_file_and_no_stale_manifest(tmp_path):
+    """`--out h.csv --manifest --seed 5`, then `--out h.csv --replace --seed 9`: the first manifest names rows h.csv no longer holds."""
     out = tmp_path / 'people.csv'
-    generated = CliRunner().invoke(app, ['data', 'generate', '--columns', 'name,street,zip', '--rows', '1000', '--out', str(out)])
-    assert generated.exit_code == 0, generated.output
+    flags = ['data', 'generate', '--columns', 'name,street,zip', '--rows', '1000', '--out', str(out)]
+    runner = CliRunner()
+    first = runner.invoke(app, [*flags, '--manifest', '--seed', '5'])
+    assert first.exit_code == 0, first.output
+    assert sorted(path.name for path in tmp_path.iterdir()) == ['_manifest.json', 'people.csv']
+
+    second = runner.invoke(app, [*flags, '--replace', '--seed', '9'])
+    assert second.exit_code == 0, second.output
     assert list(tmp_path.iterdir()) == [out]
     assert out.read_text().splitlines()[0] == 'name,street,zip'
 

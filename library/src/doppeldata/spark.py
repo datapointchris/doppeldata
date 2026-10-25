@@ -33,7 +33,6 @@ from doppeldata.dataset_generation import EngineArguments
 from doppeldata.dataset_generation import PreparedWrite
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.dataset_generation import engine_arguments
-from doppeldata.dataset_generation import one_file_of
 from doppeldata.dataset_generation import prepared_write
 from doppeldata.dataset_generation import rows_only
 from doppeldata.dataset_generation import s3_store_of
@@ -273,11 +272,11 @@ def write(
     `doppeldata.write` takes it, and the files are the ones it writes.
     """
     started = time.monotonic()
-    if one_file_of(out) is not None:
-        message = f'{os.fspath(out)} names one file, which doppeldata.write writes; the executors write a directory, such as "people/"'
-        raise WriteFailed('one-file-from-executors', message, kind='refused')
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
     prepared = prepared_write(profile, out, rows, seed, choices, scenario)
+    if prepared.one_file is not None:
+        message = f'{os.fspath(out)} names one file, which doppeldata.write writes; the executors write a directory, such as "people/"'
+        raise WriteFailed('one-file-from-executors', message, kind='refused')
     destination = executors_destination(spark, prepared)
     engine, options = prepared.engine, prepared.options
     ranges = len(json.loads(engine.ranges_json(options)))
