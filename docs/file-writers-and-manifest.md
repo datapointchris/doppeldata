@@ -116,7 +116,7 @@ so it never reads as data. Its schema is `doppeldata schemas show manifest`.
 
 The population is 10M rows of the `eight-columns` example in 1M-row files, seed 42. The instrument
 is the manifest's `elapsed_ms`, which covers preparing the destination, every file and the manifest.
-The machine is a 16-thread Ryzen 9 6900HX with other work running at a load average near 5:
+The machine is a 16-thread Ryzen 9 6900HX with other work running at a load average of 2.5 to 5:
 
 ```bash
 cargo run --release -p doppeldata-writers --example write_dataset -- eight-columns --rows 10000000 --file-rows 1000000 --threads 16 --out memory://
@@ -124,9 +124,9 @@ cargo run --release -p doppeldata-writers --example write_dataset -- eight-colum
 
 | Codec | Threads | Rows/s, five runs into memory |
 | --- | --- | --- |
-| ZSTD level 1 | 16 | 18.1M to 19.5M |
-| ZSTD level 1 | 1 | 3.29M to 3.53M |
-| Snappy | 16 | 21.7M to 22.3M |
+| ZSTD level 1 | 16 | 18.7M to 19.5M |
+| ZSTD level 1 | 1 | 3.37M to 3.41M |
+| Snappy | 16 | 20.8M to 21.2M |
 
 Ten files feed ten workers, so six of the sixteen threads sit idle. Written to a local disk instead,
 ZSTD on 16 threads ran from 9.8M to 19.7M rows/s over ten runs. The disk's writeback and the
