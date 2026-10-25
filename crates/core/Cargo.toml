@@ -9,6 +9,30 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+# arrow stays on 59 while pyo3-arrow 0.20, the extension's PyCapsule export, builds on it: the
+# RecordBatch built here must be the type the extension exports. It moves when pyo3-arrow moves,
+# and `cargo info pyo3-arrow` names that arrow.
+arrow-array = "59"
+arrow-buffer = "59"
+arrow-schema = "59"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+fake = { version = "5.1.0", default-features = false }
+# Every exp, log and pow that feeds a generated value is libm's, because std's are allowed to round
+# differently by platform and Rust version, and a dataset must regenerate the same anywhere.
+libm = "0.2.16"
+rand = "0.10.3"
+rand_chacha = "0.10.0"
+rand_distr = "0.6.0"
+rand_regex = "0.19.0"
+regex-syntax = "0.8.9"
 schemars = "1.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+arrow-data = "59"
+arrow-ipc = "59"
+rayon = "1.12.0"
+serde-saphyr = "2.0.0"

@@ -20,13 +20,20 @@ pub use values::ProfileVersion;
 pub use values::Quantiles;
 pub use values::Rate;
 
-/// The schema-level metadata keys the generator is to write into every Parquet and Arrow file.
+/// The schema-level metadata keys the generator writes into every Arrow schema it builds, so every
+/// Parquet and Arrow file names its profile and its whole dataset identity. A scenario key is left
+/// out when no scenario applies.
 pub mod provenance {
     pub const PROFILE_NAME: &str = "doppeldata.profile_name";
     pub const PROFILE_VERSION: &str = "doppeldata.profile_version";
     pub const PROFILE_DIGEST: &str = "doppeldata.profile_digest";
     pub const SCENARIO_NAME: &str = "doppeldata.scenario_name";
+    pub const SCENARIO_DIGEST: &str = "doppeldata.scenario_digest";
     pub const SEED: &str = "doppeldata.seed";
+    pub const STREAM_VERSION: &str = "doppeldata.stream_version";
+    /// The dataset's rows, which no one file of it holds.
+    pub const DATASET_ROWS: &str = "doppeldata.dataset_rows";
+    pub const DATASET_DIGEST: &str = "doppeldata.dataset_digest";
 }
 
 /// A profile file: one table, or a bundle of tables and their relationships.
