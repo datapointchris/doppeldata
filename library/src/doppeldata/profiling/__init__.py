@@ -44,8 +44,9 @@ class EnginePackage:
     """A package an engine imports, by its distribution and module names, and the formats whose files it reads or sniffs.
 
     One `everywhere` is imported to profile any source, and any other only to profile a source of a format it reads.
-    `generated.readers` records the version of each that reads the source's format. `cli_declares` says whether
-    doppeldata-cli installs it.
+    `generated.readers` records the version of each that reads the source's format. That is the session's version for
+    one `read_by_session`, because the session reads the files, and a Spark Connect client's package or one a
+    launcher leaves in site-packages need not be its version. `cli_declares` says whether doppeldata-cli installs it.
     """
 
     distribution: str
@@ -53,6 +54,7 @@ class EnginePackage:
     reads: frozenset[SourceFormat]
     everywhere: bool = True
     cli_declares: bool = True
+    read_by_session: bool = False
 
 
 @dc.dataclass(frozen=True)
@@ -89,7 +91,7 @@ ENGINES = {
         'doppeldata.profiling.spark_backend',
         'SparkBackend',
         (
-            EnginePackage('pyspark', 'pyspark', DELIMITED | {SourceFormat.PARQUET}, cli_declares=False),
+            EnginePackage('pyspark', 'pyspark', DELIMITED | {SourceFormat.PARQUET}, cli_declares=False, read_by_session=True),
             EnginePackage('pyarrow', 'pyarrow', frozenset({SourceFormat.PARQUET})),
             EnginePackage('duckdb', 'duckdb', DELIMITED, everywhere=False),
             EnginePackage('clevercsv', 'clevercsv', DELIMITED, everywhere=False),
@@ -167,7 +169,13 @@ def profile(
         grouping = f'{", ".join(source.roots)} groups into {len(tables)} tables'
         message = f"edges_from is one table's profile, and {grouping}; profile each table's folder on its own"
         raise SourceError(message)
-    readers = {package.distribution: installed_version(package) for package in reading}
+    backend = engine_backend(engine, data, spark)
+    readers = {
+        package.distribution: backend.session_version
+        if package.read_by_session and backend.session_version
+        else importlib.metadata.version(package.distribution)
+        for package in reading
+    }
     if edges_from is not None:
         changed = what_changed(
             edges_from,
@@ -184,7 +192,6 @@ def profile(
             return edges_from
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=2)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
-    backend = engine_backend(engine, data, spark)
     profiled = {}
     with backend.profiling():
         for table in tables:
@@ -283,15 +290,6 @@ def sampled_table(data: Any, rows: int, *, engine: str = 'polars', seed: int = t
         sampled = SampledTable(backend.sample(table, rows, seed), held, source.fingerprint)
     importlib.import_module(SOURCES_MODULE).check_unchanged(source)
     return sampled
-
-
-def installed_version(package: EnginePackage) -> str:
-    """The installed version of a package, from its distribution's metadata, or its module's own where a runtime such as
-    Glue's puts pyspark on the path with no metadata."""
-    try:
-        return importlib.metadata.version(package.distribution)
-    except importlib.metadata.PackageNotFoundError:
-        return str(importlib.import_module(package.module).__version__)
 
 
 def refuse_uninstalled(engine: str, packages: Sequence[EnginePackage]) -> None:

@@ -572,6 +572,7 @@ class SparkBackend:
 
     def __init__(self, spark: SparkSession) -> None:
         self.spark = spark
+        self.session_version: str | None = spark.version
         self.major = int(spark.version.split('.')[0])
         # Each table's row count once counted, by the table's identity, holding the table so the identity is not reused.
         self.rows: dict[int, tuple[DataFrame, int]] = {}

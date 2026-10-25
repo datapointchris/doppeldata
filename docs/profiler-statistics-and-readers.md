@@ -261,7 +261,9 @@ needed only for CSV and TSV. `LISTING_PACKAGES` names the ones listing S3 needs 
 is listed. Either check raises `ProfilingEnginesMissing` naming each missing distribution, and a
 command it stops exits 2.
 `generated.readers` records the version of each package that reads the source's format, from the
-same table. `doppeldata-cli` declares every one but pyspark, because `profile create` is one of its
+same table. pyspark's is the session's Spark version, because the session reads the files. A Spark
+Connect client's pyspark can differ from it, and so can one a launcher leaves in site-packages, as
+the Glue 5.0 image's 3.5.2 sits beside its Spark 3.5.4. `doppeldata-cli` declares every one but pyspark, because `profile create` is one of its
 verbs. pyspark comes with the Spark install it runs in, whose version is the cluster's, so a missing
 pyspark is refused with that said.
 

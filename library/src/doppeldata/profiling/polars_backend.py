@@ -287,6 +287,7 @@ def ancestor_partition_keys(source: Source) -> list[str]:
 
 class PolarsBackend:
     name = 'polars'
+    session_version: str | None = None
 
     def scan(self, source: Source) -> pl.LazyFrame:
         return self.read(source).table

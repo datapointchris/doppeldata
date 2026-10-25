@@ -249,6 +249,8 @@ class Backend(Protocol):
     """A profiling engine. `aggregate` answers every request it is given in one query."""
 
     name: str
+    # The version of the session that reads the files, as a Spark cluster's, or None for an engine running in this process.
+    session_version: str | None
 
     def scan(self, source: Source) -> Table: ...
 
