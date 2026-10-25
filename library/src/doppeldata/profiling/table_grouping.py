@@ -20,7 +20,6 @@ from doppeldata.errors import SourceError
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFile
 from doppeldata.profiling.backend import SourceFormat
-from doppeldata.profiling.first_blocks import first_block
 
 # Folders are one table where each shares more than this share of the (name, type) pairs in its and the first folder's
 # schemas together, a Glue crawler's 70 percent.
@@ -32,7 +31,9 @@ FILES_READ = 16
 FILES_SEED = 0
 # A crawler reads a text file's first thousand records.
 RECORDS_READ = 1000
+# Imported by name, because each imports pyarrow, which a library-only install lacks.
 DELIMITED_DIALECT_MODULE = 'doppeldata.profiling.delimited_dialect'
+FIRST_BLOCKS_MODULE = 'doppeldata.profiling.first_blocks'
 PARQUET_FOOTERS_MODULE = 'doppeldata.profiling.parquet_footers'
 # The folder of the files directly under the root.
 ROOT_FOLDER = ''
@@ -144,7 +145,7 @@ def arrow_schema(file: SourceFile) -> Schema | None:
 def delimited_schema(file: SourceFile, delimiter: str | None) -> Schema | None:
     """A delimited file's column names, from its header as Glue decides one, or numbered as Glue numbers them."""
     dialect = importlib.import_module(DELIMITED_DIALECT_MODULE)
-    raw = first_block(file.path)
+    raw = importlib.import_module(FIRST_BLOCKS_MODULE).first_block(file.path)
     if not raw.strip():
         return None
     text = dialect.block_text(raw, 'utf-8')
@@ -160,7 +161,7 @@ def delimited_schema(file: SourceFile, delimiter: str | None) -> Schema | None:
 
 def json_schema(file: SourceFile) -> Schema | None:
     """The keys of the first records a JSON file's first block holds."""
-    raw = first_block(file.path).decode('utf-8', errors='replace')
+    raw = importlib.import_module(FIRST_BLOCKS_MODULE).first_block(file.path).decode('utf-8', errors='replace')
     keys: set[str] = set()
     for record in json_records(raw):
         if isinstance(record, dict):
