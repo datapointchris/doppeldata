@@ -29,39 +29,56 @@ pa.RecordBatchReader.from_stream(sd.stream(profile, rows=10**9, seed=7))   # pya
 - *Rejected:* arro3-core. pyo3-arrow's classes already carry the capsule interface, so arro3 would
   add a package and no reader.
 
-## The engine runs with the GIL released, and Ctrl-C stops it between blocks
+## `generate` and `write` run with the GIL released, and Ctrl-C stops them between blocks
 
-Every call leaves Python with `Python::detach` and runs the engine on threads it spawns. A
-pure-Python counting thread kept 98% of its idle rate while a 20M-row `generate` ran beside it.
+`generate`, `write` and the size estimate leave Python with `Python::detach`, and run the engine on
+threads they spawn. `stream` makes its blocks on threads it spawns, and hands them over on its
+consumer's thread.
 
 Python runs a signal handler only on the main thread, and only when that thread returns to the
-interpreter. Native code that never returns never sees Ctrl-C. So the calling thread waits in
-100 ms steps. After each one it re-attaches and calls `PyErr_CheckSignals`. A raised exception sets
-the writers' cancel flag, and the workers stop at the next block.
+interpreter. Native code that never returns never sees Ctrl-C. So the calling thread waits in steps
+of `SIGNAL_CHECK`. After each one it re-attaches and calls `PyErr_CheckSignals`. A raised exception
+sets the writers' cancel flag, and the workers stop at the next block.
 
-- **`generate` and `stream` raise the handler's exception, `KeyboardInterrupt` for Ctrl-C.**
+- **`generate` raises the handler's exception, `KeyboardInterrupt` for Ctrl-C.** A stream's threads
+  check for no signal. So Ctrl-C reaches a stream when its consumer returns to Python between
+  batches. For Polars that is after the last batch.
 - **`write` raises `WriteInterrupted`, a `KeyboardInterrupt`**, so `except Exception` never
-  swallows it. Like `WriteFailed`, it carries the partial manifest and whether it was stored.
-- **`data generate` exits 1 and names `_manifest.partial.json`.** An interrupted S3 write left a
-  partial manifest listing every object it completed, and no open multipart upload.
+  swallows it. It and `WriteFailed` are both a `StoppedWrite`, which carries the partial manifest
+  and whether it was stored.
+- **A stopped write's partial manifest lists every object it completed, and leaves no open
+  multipart upload.** A sink dropped unfinished aborts its upload.
+- **`data generate` treats SIGTERM as Ctrl-C.** A container stop or a `kill` sends SIGTERM, which
+  would otherwise end the process mid-upload.
+- **A process ended outright leaves its open multipart uploads in the bucket.** SIGKILL does that,
+  and so does SIGTERM in a Python host with no handler for it. An `AbortIncompleteMultipartUpload`
+  lifecycle rule on the bucket deletes them. The rerun is refused until `--replace`, because
+  `_manifest.partial.json` stays.
 - *Rejected:* a Rust signal handler, such as the `ctrlc` crate. It replaces Python's handler for the
   whole process, which breaks a host application's own.
 
 ## S3 credentials come from boto3, handed to object_store as a callable
 
 object_store reads credentials from environment keys, web identity, ECS and the instance metadata
-service. It cannot read an SSO profile or a `credential_process`. Given only those, it fell through
-to the metadata service and stalled in retries.
+service. It cannot read an SSO profile or a `credential_process`. Given only those, it falls
+through to the instance metadata service.
 
-So `write()` to an `s3://` URL imports boto3, resolves its session, and builds pyo3-object_store's
-`S3Store` with a `credential_provider` callable over it. Refreshable credentials are fetched again
-every five minutes. The region comes from the bucket's `x-amz-bucket-region` header, and the
-endpoint from boto3's, such as `AWS_ENDPOINT_URL`.
+So `write()` to an `s3://` or `s3a://` URL imports boto3, resolves its session, and builds
+pyo3-object_store's `S3Store` with a `credential_provider` callable over it. The region comes from
+the bucket's `x-amz-bucket-region` header. The endpoint is the one boto3 resolves for that region.
+So an `AWS_ENDPOINT_URL_S3`, a profile's `endpoint_url` or a VPC endpoint serves boto3's checks and
+the uploads alike.
 
-- **Against a moto server and a `credential_process` profile, the process ran once.** Every
-  object's path, rows, bytes and SHA-256 equaled a local write of the same flags.
-- **boto3 is imported only for an `s3://` destination**, and declared nowhere. A missing boto3 fails
-  the write with `boto3-missing`, exit 2.
+- **Refreshable credentials are fetched again every `REFRESH_EVERY`**, which `s3_access.py` keeps
+  short of botocore's refresh window. `Boto3Credentials.refresh_threshold` is zero, so the store
+  asks once per interval rather than on every request.
+- **Credentials boto3 cannot refresh are handed over once**, such as keys in the environment. The
+  store uses them for the whole write.
+- **The uploads retry as boto3 does.** They make `S3_ATTEMPTS` attempts, and give up connecting
+  after `S3_CONNECT_TIMEOUT`.
+- **A write through boto3's chain stores the same bytes as a local write with the same flags.**
+- **boto3 is imported only for an S3 destination**, and declared nowhere. Without it, `plan` and
+  `write` both refuse with `boto3-missing`, exit 2.
 - *Rejected:* obstore. pyo3-object_store builds the same `S3Store` inside doppeldata's own extension,
   from the object_store the writers already link. obstore would be a second compiled copy in every
   job, and it takes credentials through the same callable.
@@ -73,25 +90,50 @@ doppeldata data plan orders --rows 250000 --seed 7 --file-rows 100000 --out orde
 doppeldata data generate orders --rows 250000 --seed 7 --file-rows 100000 --out orders/
 ```
 
-`PROFILE` is a profile file or a bundled example's name. `data plan` reads nothing at `--out`. It
-prints the dataset digest and identity, the format with every writer setting, each file's path and
-rows, each column's sampler and null share, and an estimate of the bytes. `--json` prints all of it
-as `doppeldata.plan()` returns it. A test runs both commands and requires the manifest's identity
-and file list to equal the plan's.
+`PROFILE` is a profile file or a bundled example's name. `--out` is a local directory, an `s3://`
+or `s3a://` URL, or `memory://`, which keeps nothing and times a write. `data plan` reads nothing at
+`--out`. It prints the dataset digest and identity, the format with every writer setting, each
+column's sampler and null share, each row range, and an estimate of the bytes. A test runs both
+commands and requires the manifest's identity and ranges to equal the plan's.
 
+- **A partitioned range becomes one file per partition value it holds.** So the plan gives each
+  range a path with `*` for each partition directory, such as `status=*/part-00000-1f2e3d4c.parquet`,
+  and the most files it can become.
+- **`--json` prints the plan as `doppeldata.plan()` returns it, and its shape may change before
+  1.0.** It has no published schema. The schemas derive from the Rust model, and the plan is
+  assembled in Python.
 - **Every choice is laid over the profile's recorded settings in one place.** The CLI and the SDK
-  pass their flags to `WriteOptions::chosen` as one JSON object, which refuses an unknown key.
+  pass a `WriteChoices` to `WriteOptions::chosen` as one JSON object, which refuses an unknown key.
+  `--no-partitions` writes no partitions whatever the profile records, as `partition_by=[]` does.
+- **A destination is parsed once, in the writers.** `plan` and `write` both ask it first, so `plan`
+  refuses what `write` would: an unknown scheme, a `Path` holding a URL, or a missing boto3.
 - **`data generate` refuses a destination holding anything, exit 2, before writing a byte.**
   `--replace` deletes only what an earlier doppeldata write recorded.
-- **A failure after the claim exits 1.** An S3 bucket check that never gets an answer exits 4.
 - *Rejected:* `data generate --dry-run`. A flag that turns a write into a read makes one command do
   two things. A rehearsal is its own verb, which cannot write.
 
-## The size estimate fits fixed and per-row bytes from four encoded blocks
+## A stopped write's kind decides its exit status
 
-`estimate_bytes` in the writers encodes the first block as one object, and the first four as
-another. The difference is what three blocks of rows add. The rest of the first object is fixed,
-such as a header, a footer and a dictionary. Nothing reaches a store, and a plan took 30 to 250 ms.
+The engine names each failure with a code, such as `destination-not-empty`, and a kind.
+`errors.py` alone turns the kind into the exit status:
+
+| Kind | Exit | Meaning |
+| --- | --- | --- |
+| `refused` | 2 | The call must change. Nothing was written. |
+| `failed` | 1 | The write was attempted and failed. |
+| `unanswered` | 4 | The store stopped answering, before the write or during it. |
+
+- **A 5xx or 429 on every retry during the write reads as `failed`.** object_store keeps the status
+  inside an error type it does not export. Before the write, boto3's bucket check reads it as
+  `unanswered`.
+- **The CLI reports every doppeldata error in its root group.** So each verb exits on the same
+  table, and a new verb needs no handler of its own.
+
+## The size estimate fits fixed and per-row bytes from the first encoded blocks
+
+`estimate_bytes` in the writers encodes the first block as one object, and the first
+`SAMPLE_BLOCKS` as another. The difference is what the added blocks' rows bring. The rest of the
+first object is fixed, such as a header, a footer and a dictionary. Nothing reaches a store.
 
 Estimated over written bytes, for both bundled examples at 5M rows in 1M-row files and at 1M rows
 in 100,000-row files:
@@ -104,13 +146,21 @@ in 100,000-row files:
 | Parquet, partitioned by `eight-columns`' `category` into 50 objects | 1.170 |
 | CSV, partitioned the same way | 0.993 |
 
-Parquet compresses a whole file's row group better than four blocks of it. A partitioned estimate
+Each ratio is the plan's `estimated_bytes` over the bytes the manifest records:
+
+```bash
+doppeldata data plan eight-columns --rows 5000000 --format F --out out/ --json | jq .estimated_bytes
+doppeldata data generate eight-columns --rows 5000000 --format F --out out/ --replace
+jq '[.files[].bytes] | add' out/_manifest.json
+```
+
+Parquet compresses a whole file's row group better than a few blocks of it. A partitioned estimate
 counts one object per value in every range, and a skewed key makes some of those small.
 
-## A 10M-row table generates at about 60M rows a second on sixteen threads
+## Generation scales with threads, and a write runs at its encoder's rate
 
 The population is 10M rows of the `eight-columns` example, seed 42. Each row is five runs on a
-16-thread Ryzen 9 6900HX with other work running:
+16-thread Ryzen 9 6900HX with other work running. A rate is rows over the call's wall time.
 
 | Call | Threads | Rows/s |
 | --- | --- | --- |
@@ -120,4 +170,4 @@ The population is 10M rows of the `eight-columns` example, seed 42. Each row is 
 | the same | 1 | 3.50M to 3.55M |
 
 The write is ZSTD Parquet, which the encoder dominates. Its rates match the writers' own into
-memory, so the CLI and the SDK add nothing measurable to a write.
+memory, which `--out memory://` measures. So the CLI and the SDK add nothing measurable to a write.

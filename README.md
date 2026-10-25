@@ -28,7 +28,7 @@ doppeldata data generate orders --rows 1000000 --seed 7 --out orders/   # write 
 doppeldata data generate orders.profile.yaml --rows 100000000 --format csv --out s3://bucket/orders/
 ```
 
-`data generate` writes Parquet, Arrow, CSV, TSV, JSON or NDJSON, to a local directory or to S3.
+`data generate` writes every format `doppeldata schemas show manifest` lists, to a local directory or to S3.
 `_manifest.json` records the profile's digest, the seed, the row count and the engine's stream
 version. Those regenerate the same values in any format. From Python, a table arrives through the Arrow PyCapsule interface, so
 Polars, DuckDB and pyarrow 14 or later read it with no copy:

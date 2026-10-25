@@ -11,7 +11,7 @@ and says what was weighed and rejected.
 | [determinism-contract.md](determinism-contract.md) | what identifies a generated dataset, and why its values never change with thread count, batch size, column order or platform |
 | [column-samplers.md](column-samplers.md) | how each column kind is drawn from its profile, why a numeric tail comes from the fitted family, and how a string column holds its distinct ratio |
 | [file-writers-and-manifest.md](file-writers-and-manifest.md) | how blocks become Parquet, Arrow, CSV and JSON files on any object store, how a run claims its destination, what the manifest records to regenerate them, what was rejected, and how fast it writes |
-| [generating-from-python-and-the-cli.md](generating-from-python-and-the-cli.md) | how a generated table reaches Python with no Arrow dependency, how Ctrl-C stops the engine, why S3 credentials come from boto3, what `data plan` prints and how close its size estimate lands, and how fast both generate |
+| [generating-from-python-and-the-cli.md](generating-from-python-and-the-cli.md) | how a generated table reaches Python with no Arrow dependency, how Ctrl-C and SIGTERM stop the engine, why S3 credentials come from boto3, what `data plan` prints, which exit status each kind of stopped write takes, how close the size estimate lands, and how fast both generate |
 | [prior-art-and-licenses.md](prior-art-and-licenses.md) | which existing generators and checkers doppeldata borrows ideas from, and why none of them is a dependency |
 | [aws-glue-support.md](aws-glue-support.md) | which AWS Glue versions run the library, and why Glue 4.0 does not |
 

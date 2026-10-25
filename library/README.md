@@ -18,7 +18,8 @@ table = sd.generate(sd.Profile.load('orders.profile.yaml'), rows=1_000_000, seed
 
 The table crosses through the Arrow PyCapsule interface, so Polars, DuckDB and pyarrow 14 or later
 read it with no copy, and none of them is needed to generate. `sd.stream()` returns a
-RecordBatchReader for data larger than memory. `sd.write()` writes files with a manifest.
+RecordBatchReader for data larger than memory. `sd.write()` writes files with a manifest, and
+`sd.plan()` says what it would write. A write that stops raises a `StoppedWrite`.
 
 The library installs no profiling engine, so a job that only generates carries none.
 `doppeldata.profile()` needs polars, duckdb, pyarrow and boto3 installed beside it, and names any
