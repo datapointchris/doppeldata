@@ -56,7 +56,7 @@ doppeldata scenario list               # the ops a scenario applies, its metrics
 doppeldata scenario check hot-key orders                            # a scenario against a profile, generating nothing
 doppeldata data generate orders --scenario hot-key --out orders/    # five customers place 60% of the orders
 doppeldata data check orders orders/ --scenario hot-key             # and the check verifies that share
-doppeldata data generate orders --scenario bad-csv --out orders-bad/  # CSV with 2% of rows broken, each one in _faults.ndjson
+doppeldata data generate orders --scenario bad-csv --out orders-bad/  # CSV with broken rows and files, each fault in _faults.ndjson
 ```
 
 `data generate` writes every format `doppeldata schemas show manifest` lists, to a local directory, a

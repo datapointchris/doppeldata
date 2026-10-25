@@ -258,5 +258,8 @@ Every other kind's `detail` is empty.
   it whole. A failed or cancelled run stores none.
 - **A split write's `commit` stores it** from the faults each `write_ranges` returned. So
   `doppeldata.spark.write` lists the faults a local write of the same plan does.
+- **A run holds every record in memory until it stores the list.** A local write holds them in
+  its process, and `doppeldata.spark.write` collects them to the driver. So the process storing the
+  list bounds how many faults one write can place.
 - **A write to one file keeps it beside the file**, every time, with each record's `file` naming
   that file. One already there is held as the manifest is.

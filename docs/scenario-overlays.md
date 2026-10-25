@@ -29,11 +29,12 @@ misspelled column would then generate a new column from a fragment. It is refuse
 ## `malformed_rows` writes broken files, and `_faults.ndjson` names every fault in them
 
 A pipeline's bad-row handling is tested against files broken on purpose. The `bad-csv` example
-writes any profile as CSV, breaks 2% of its rows, and gives half its files a byte order mark or a
-cut last line:
+writes any profile as CSV. It breaks the share of rows its `rate` sets, and gives the share of
+files its `files_share` sets a byte order mark or a cut last line:
 
 ```bash
 doppeldata data generate orders --scenario bad-csv --out orders-bad/
+doppeldata scenario show bad-csv     # its kinds and shares, to start a scenario of your own from
 ```
 
 A scenario of your own names the kinds. `rate` is the chance each row is broken, shared evenly by
@@ -114,9 +115,8 @@ perturbations:
 ## Strict DuckDB rejects each CSV row fault but `embedded_newline`, and Spark reads three as values
 
 `malformed-file-readers/read-every-fault-kind.sh [IMAGE...]` writes `orders` under `bad-csv`, and
-once for each kind alone in a format that holds it. Each row kind breaks 2% of the rows, and each
-file kind half the files. It then prints, per kind, what each reader caught of what
-`_faults.ndjson` names.
+once for each kind alone in a format that holds it, at the shares `write_every_fault_kind.py`
+sets. It then prints, per kind, what each reader caught of what `_faults.ndjson` names.
 
 - DuckDB reads on the host with the columns declared. Its CSV read sets `strict_mode` and
   `store_rejects`.
@@ -164,7 +164,7 @@ file kind half the files. It then prints, per kind, what each reader caught of w
   hold `type_invalid`, `truncated_line` and the `json_` kinds. Parquet holds the `parquet_` kinds,
   and Arrow none. A kind a column must exist for, such as `embedded_newline` on a table with no
   string column, is refused as `op-not-for-column`.
-- **An `invalid_utf8` fault never starts in a file's first 64 KiB.** doppeldata's profiler guesses
+- **An `invalid_utf8` fault never starts in a file's first block.** doppeldata's profiler guesses
   the encoding from that block, as many readers do. One invalid byte there reads the file as
   Latin-1, where nothing is rejected. A fault drawn there is written clean and not listed.
 - **`truncated_line` cuts the file's last record mid-field**, as a cut-off upload leaves it.
