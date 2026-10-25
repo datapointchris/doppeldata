@@ -1,0 +1,78 @@
+import datetime as dt
+import json
+import random
+
+import polars as pl
+from doppeldata import Profile
+from doppeldata.example_profiles import example_resource
+from doppeldata_cli.main import app
+from typer.testing import CliRunner
+
+MBI_LETTERS = 'ACDEFGHJKMNPQRTUVWXY'
+DIGITS = '0123456789'
+# Two prefixes on the restricted list, each among other prefixes common enough to keep.
+ZIP_CODES = ('02139', '10001', '60614', '03601', '94110', '05901', '30301')
+
+
+def npi_completed(payload: str) -> str:
+    """`payload` and its NPI check digit: the Luhn digit over `80840` and the payload."""
+    total = sum(sum(divmod(int(digit) * (2 - position % 2), 10)) for position, digit in enumerate(reversed('80840' + payload)))
+    return payload + str(-total % 10)
+
+
+def mbi(draw: random.Random) -> str:
+    either = MBI_LETTERS + DIGITS
+    classes = ('123456789', MBI_LETTERS, either, DIGITS, MBI_LETTERS, either, DIGITS, MBI_LETTERS, MBI_LETTERS, DIGITS, DIGITS)
+    return ''.join(draw.choice(chars) for chars in classes)
+
+
+def test_profile_check_passes_the_claims_example_and_points_at_a_three_row_top_value(tmp_path):
+    runner = CliRunner()
+    passed = runner.invoke(app, ['profile', 'check', 'claims'])
+    assert passed.exit_code == 0, passed.output
+
+    pending = '- {value: pending, rate: 0.05}\n'
+    edited = tmp_path / 'claims.profile.yaml'
+    edited.write_text(example_resource('claims').read_text().replace(pending, pending + '        - {value: appealed, rate: 0.000012}\n'))
+    failed = runner.invoke(app, ['profile', 'check', str(edited), '--json'])
+
+    assert failed.exit_code == 3, failed.output
+    violations = json.loads(failed.stdout)['tables'][0]['violations']
+    assert {(violation['code'], violation['field']) for violation in violations} == {
+        ('below-k-min', '/columns/10/string/top_values/3'),
+        ('audit-values-mismatch', '/privacy/audit/21/values'),
+    }
+
+
+def test_healthcare_suppresses_identifiers_caps_ages_keeps_years_and_merges_restricted_zips(tmp_path):
+    rows, draw = 2000, random.Random(7)
+    table = pl.DataFrame(
+        {
+            'dob': [dt.date(1930, 3, 1) + dt.timedelta(days=draw.randrange(365 * 69)) for _ in range(rows)],
+            'member_age': [min(104, max(18, int(draw.gauss(60, 18)))) for _ in range(rows)],
+            'member_zip': [draw.choice(ZIP_CODES) for _ in range(rows)],
+            'rendering_npi': [npi_completed(f'1{draw.randrange(10**7, 10**8)}') for _ in range(rows)],
+            'mbi': [mbi(draw) for _ in range(rows)],
+        }
+    )
+    table.write_parquet(tmp_path / 'claims.parquet')
+    out = tmp_path / 'claims.profile.yaml'
+    created = CliRunner().invoke(app, ['profile', 'create', str(tmp_path / 'claims.parquet'), '--policy', 'healthcare', '--out', str(out)])
+    assert created.exit_code == 0, created.output
+
+    profile = Profile.load(out).to_plain()
+    columns = {column['name']: column for column in profile['columns']}
+    assert {entry['column']: (entry['reason'], entry.get('semantic')) for entry in profile['privacy']['suppressed']} == {
+        'dob': ('date_to_year', None),
+        'member_age': ('age_over_89', None),
+        'member_zip': ('zip_prefix', 'us_zip'),
+        'rendering_npi': ('identifier', 'npi'),
+        'mbi': ('identifier', 'mbi'),
+    }
+    dob = columns['dob']['temporal']['extremes']
+    assert (dob['low'][4:], dob['high'][4:]) == ('-01-01', '-12-31')
+    assert columns['member_age']['numeric']['extremes']['high'] == 90
+    zip_prefixes = {entry['value'] for entry in columns['member_zip']['string']['top_values']}
+    assert zip_prefixes == {'000', '021', '100', '606', '941', '303'}
+    for identifier in ('rendering_npi', 'mbi'):
+        assert 'top_values' not in columns[identifier]['string']
