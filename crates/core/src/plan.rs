@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_array::RecordBatchOptions;
+use arrow_schema::DataType;
 use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
 
@@ -82,6 +83,17 @@ impl std::fmt::Display for ColumnFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.code())
     }
+}
+
+/// How one top-level column is drawn, as a plan reports it before generating anything.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnSampler {
+    pub name: String,
+    pub data_type: DataType,
+    /// What draws the values, such as `sequence from 1 by 1` or `50 top values`.
+    pub sampler: String,
+    /// The share of rows drawn null.
+    pub null_share: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -170,6 +182,19 @@ impl Plan {
 
     pub fn block_count(&self) -> u64 {
         self.block_count
+    }
+
+    /// How each top-level column is drawn, in schema order.
+    pub fn column_samplers(&self) -> Vec<ColumnSampler> {
+        self.columns
+            .iter()
+            .map(|column| ColumnSampler {
+                name: column.field.name().clone(),
+                data_type: column.field.data_type().clone(),
+                sampler: column.sampler.clone(),
+                null_share: column.null_share,
+            })
+            .collect()
     }
 
     fn position(&self, block: u64) -> Result<(BlockPosition, usize), BlockOutOfRange> {
