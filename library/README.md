@@ -16,6 +16,7 @@ import doppeldata as sd
 table = sd.generate(['name', 'email', 'city', 'zip'], rows=1000)   # each column takes the fake its name hints
 table = sd.generate({'age': sd.integers(18, 90), 'plan': sd.choice(['free', 'pro'])}, rows=1000)
 table = sd.generate(sd.Profile.load('orders.profile.yaml'), rows=1_000_000, seed=7)
+table = sd.generate(OrdersSchema, rows=1000)   # a pandera, dataframely or Spark schema, read as a seed profile
 ```
 
 The table crosses through the Arrow PyCapsule interface, so Polars, DuckDB and pyarrow 14 or later
@@ -26,6 +27,12 @@ manifest, or one file such as `people.csv`, and
 `sd.spark.generate()` and `sd.spark.write()` do the same inside Spark's executors, with the values
 and files a local run gives. They need PySpark 3.5 or later, with pyarrow 15 or later and the pandas
 PySpark asks for, and doppeldata installed on every executor.
+
+A schema class is read by its attributes, so none of pandera, dataframely and pyspark is needed
+beside it. `sd.Profile.from_odcs()`, `from_json_schema()`, `from_table_schema()` and
+`from_data_package()` import a seed from a schema file with nothing more installed.
+`sd.Profile.from_glue()` reads a Glue Data Catalog table, and needs boto3, with pyarrow too where
+it is given `detected_entities`.
 
 The library installs no profiling engine, so a job that only generates carries none.
 `doppeldata.profile()` needs polars, duckdb, pyarrow and boto3 installed beside it, and names any

@@ -144,6 +144,21 @@ profiles real data into the same format.
 - *Rejected:* `sd.expand`. A name on `Profile` says what it returns.
 - *Rejected:* `sd.profile` taking a dict. It profiles real data, where a dict reads as rows.
 
+## A schema a project already has generates rows, as a seed profile
+
+```python
+sd.generate(OrdersSchema, rows=1000)
+```
+
+```bash
+doppeldata profile import --from odcs orders.odcs.yaml --out orders.profile.yaml
+```
+
+A pandera, dataframely or Spark schema goes wherever a profile is taken. `profile import` writes a
+seed from an ODCS contract, a JSON Schema, a Table Schema or Data Package, or a Glue table.
+[seed-profiles-from-schemas.md](seed-profiles-from-schemas.md) says what each source's declarations
+become and what a column the schema is silent on draws.
+
 ## Tables cross into Python through the Arrow PyCapsule interface, so no Arrow library is a dependency
 
 `doppeldata.generate()` returns a table and `doppeldata.stream()` a RecordBatchReader. Both are
