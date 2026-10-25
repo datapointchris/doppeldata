@@ -17,7 +17,7 @@ class SourceError(DoppeldataError, ValueError):
         self.exit_code = exit_code
 
 
-# Each kind of stopped write, and the exit status a command ends on for it.
+# Each kind of failure, such as a stopped write's, and the exit status a command ends on for it.
 EXIT_CODES = {'failed': 1, 'refused': 2, 'unanswered': 4}
 
 
@@ -61,11 +61,15 @@ class ProfilingEnginesMissing(DoppeldataError, ImportError):
 
 
 class DetectorPackError(DoppeldataError):
-    """A detector pack named for a run is not installed, does not load, or broke the protocol while typing a column."""
+    """A detector pack named for a run is not installed, does not load, or holds what the profile format refuses.
 
-    def __init__(self, message: str, *, exit_code: int = 1) -> None:
+    `kind` is `refused` for a pack that is not installed, and `failed` for any other.
+    """
+
+    def __init__(self, message: str, *, kind: str = 'failed') -> None:
         super().__init__(message)
-        self.exit_code = exit_code
+        self.kind = kind
+        self.exit_code = EXIT_CODES[kind]
 
 
 class ProfilingWarning(UserWarning):

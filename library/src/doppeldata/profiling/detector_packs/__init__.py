@@ -118,7 +118,7 @@ def load(name: str) -> EnabledPack:
         raise DetectorPackError(
             f'no detector pack named {name!r} is installed; installed packs: {", ".join(installed)}. '
             f'A pack registers under the {ENTRY_POINT_GROUP!r} entry-point group',
-            exit_code=2,
+            kind='refused',
         )
     if len(found) > 1:
         sources = ', '.join(f'{entry.value} from {provider(entry)}' for entry in found)

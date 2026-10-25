@@ -195,7 +195,7 @@ def profile_create(
             raise
         raise typer.BadParameter(str(error), param_hint='DATA') from error
     except DetectorPackError as error:
-        if error.exit_code != 2:
+        if error.kind != 'refused':
             raise
         raise typer.BadParameter(str(error), param_hint='--pack') from error
     except InvalidProfile:

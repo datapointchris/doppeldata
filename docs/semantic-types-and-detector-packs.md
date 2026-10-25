@@ -140,8 +140,9 @@ acme = "acme_detectors:PACK"
   rather than as the written profile failing its schema, or as generation failing wherever it runs.
 - **Two enabled packs may not declare one type.** The privacy policy reads a type's sensitivity
   from one pack.
-- **A pack named but not installed exits 2.** Any other pack error exits 1, naming the pack. A
-  validator's error also names the type and the column.
+- **A pack named but not installed is `refused`, and exits 2.** Any other pack error is `failed`,
+  exits 1 and names the pack. A validator's error also names the type and the column. The kinds
+  are a stopped write's, and `errors.py` maps them to exit statuses for both.
 - **`semantic.pack` names the pack that typed each column**, so a reviewer sees whose rule assigned
   the type. `generated.detector_packs` names each pack a run enabled, with the distribution and
   version that provided it. An earlier profile stands unchanged only where those match, and they
