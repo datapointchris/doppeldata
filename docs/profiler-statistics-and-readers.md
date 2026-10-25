@@ -335,6 +335,9 @@ table of their own, profiled as a table is.
   or a list.
 - **`source.json` records `max_depth` and `explicit_nulls`**, which is true where any path holds a
   JSON null.
+- **An array's element keeps no literal under a checked policy.** Its values are counted by element,
+  so one record's eleven tags would pass a floor of rows. Its length and distinct count stay. A
+  struct field's literals are held to the rows of its parent's objects holding its key.
 
 ## A value a profile cannot hold is written as the nearest one it can
 

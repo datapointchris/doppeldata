@@ -7,6 +7,19 @@ name: events-json
 privacy:
   policy: default
   k_min: 11
+  suppressed:
+    - {column: event_id, reason: identifier, semantic: uuid}
+    - {column: user_id, reason: identifier, semantic: customer_id}
+  # Every field holding a literal, the rule that admits it, and the fewest rows any of its values or cells rests on.
+  audit:
+    - {column: event_id, field: /string/shapes, values: 1, rule: "count >= k_min", min_count: 240000}
+    - {column: event_type, field: /string/top_values, values: 4, rule: "count >= k_min", min_count: 7200}
+    - {column: occurred_at, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: event_date, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+    - {column: context.page, field: /string/top_values, values: 4, rule: "count >= k_min", min_count: 24000}
+    - {column: context.referrer, field: /string/top_values, values: 3, rule: "count >= k_min", min_count: 9000}
+    - {column: context.device.os, field: /string/top_values, values: 4, rule: "count >= k_min", min_count: 24000}
+    - {column: context.device.mobile, field: /boolean, values: 2, rule: "cell >= k_min", min_count: 67200}
 source:
   format: ndjson
   compression: gzip
@@ -46,11 +59,10 @@ columns:
     null_rate: 0.0
     type_mix: {integer: 0.75, string: 0.25}
     distinct: {approx: 25000, ratio: 0.1042}
+    # An integer identifier's extremes are the bounds of its digit counts, so it holds no literal at all.
     numeric:
       integral: true
-      extremes: {low: 1, high: 25000}
-      quantiles: {p05: 1250, p25: 6250, p50: 12500, p75: 18750, p95: 23750}
-      fit: {family: randint, params: {low: 1, high: 25001}}
+      extremes: {low: 0, high: 99999, method: digit_bounds}
       monotonic: none
     semantic: {type: customer_id, confidence: 0.9, detectors: [name_hint], sensitivity: identifier}
   - name: event_type
@@ -152,6 +164,7 @@ columns:
     list:
       length: {p05: 0, p50: 1, p95: 3}
       empty_rate: 0.4
+      # An element is counted by element rather than by row, so the floor withholds its values.
       element:
         name: element
         path: tags.element
@@ -160,8 +173,4 @@ columns:
         nullable: false
         null_rate: 0.0
         string:
-          top_values:
-            - {value: promo, rate: 0.45}
-            - {value: returning, rate: 0.35}
-            - {value: beta, rate: 0.2}
-          other_rate: 0.0
+          length: {min: 4, max: 9, mean: 6}

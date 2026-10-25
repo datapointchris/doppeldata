@@ -4,7 +4,7 @@ A literal is a data value, or a count of rows finer than the column: a top value
 token, a pattern, an extreme, a quantile, a histogram's edges and bins, a calendar share, a boolean's true and false
 counts, a fit's parameters, a sequence's start. An integer identifier's digit bounds hold no data value, so they are
 not one. The rows are recomputed from the file alone: a rate times the rows the profile describes, less the column's
-nulls.
+nulls, and for a struct field times its presence.
 """
 
 import dataclasses as dc
@@ -172,15 +172,23 @@ def column_literals(table: dict[str, Any]) -> Iterator[ColumnLiterals]:
 
 
 def nested_literals(column: dict[str, Any], at: PointerParts, rows: float | None) -> Iterator[ColumnLiterals]:
-    """The column and every field nested in it. A nested field's rows are not stated by the file."""
+    """The column and every field nested in it. `rows` are those holding the column's key.
+
+    A struct field's are its parent's objects times the field's presence. An array element's are not stated by the
+    file, which gives an array's length only by quantile, and an element's count is of elements rather than rows.
+    """
     held = rows * (1 - (column.get('null_rate') or 0.0)) if rows is not None else None
     yield ColumnLiterals(column, at, held, list(literal_fields(column, at, rows, held)))
     element = (column.get('list') or {}).get('element')
     if isinstance(element, dict):
         yield from nested_literals(element, (*at, 'list', 'element'), None)
-    for index, field in enumerate((column.get('struct') or {}).get('fields') or []):
+    struct = column.get('struct') or {}
+    presence = struct.get('presence') or {}
+    for index, field in enumerate(struct.get('fields') or []):
         if isinstance(field, dict):
-            yield from nested_literals(field, (*at, 'struct', 'fields', index), None)
+            share = presence.get(field.get('name'))
+            keyed = held * share if held is not None and isinstance(share, int | float) else None
+            yield from nested_literals(field, (*at, 'struct', 'fields', index), keyed)
 
 
 def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None, held: float | None) -> Iterator[LiteralField]:

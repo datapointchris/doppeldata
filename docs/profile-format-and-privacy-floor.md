@@ -6,19 +6,17 @@ The profile is the file between a real dataset and every synthetic copy, and it 
 the committed form, because a reviewer reads it, diffs it and comments on it in a pull request. JSON
 is accepted on input. One JSON Schema validates both.
 
-- **`profile_version` changes only when an older engine would misread a file.** A field an older
-  engine ignores must leave that engine's reading of the file valid, and keeps the version. A field
-  that changes how an existing field reads raises `profile_version`. So a ZIP column's three-digit
-  prefixes are a field of their own, `string.prefixes`: written as `top_values`, they would be read
-  as whole values. The tool records its own version separately, under `generated.tool`. A breaking
-  change must ship with `profile upgrade`, which rewrites an older file in place. A profile newer
-  than the installed library refuses to load and names its version.
+- **An older engine ignores a key it does not know, so an added field must leave its reading valid.**
+  Every section of a profile accepts an unknown key, so a job pinned to an earlier library still
+  loads a profile a later release wrote. A field that reading can skip keeps `profile_version`. A
+  field that changes how an existing field reads raises it. So a ZIP column's three-digit prefixes
+  are a field of their own, `string.prefixes`: written as `top_values`, they would be read as whole
+  values. A breaking change must ship with `profile upgrade`, which rewrites an older file in place.
+  A profile newer than the installed library refuses to load and names its version. The tool
+  records its own version separately, under `generated.tool`. The settings a caller hands a writer
+  are not a profile, and refuse an unknown key.
 - **Every section is optional.** A profile imported from a data catalog or a data contract has types
   and no statistics, and the generator falls back to defaults for what is missing.
-- **Every section of a profile accepts a key it does not know.** A job pinned to an earlier library
-  still loads a profile a later release wrote. That is what lets an added field keep
-  `profile_version`. The settings a caller hands a writer are not a profile, and refuse an unknown
-  key.
 - **Unknown fields survive a read and a rewrite.** An older tool never strips what a newer one wrote.
   The file is written back through ruamel.yaml, which also keeps a reviewer's comments and key order.
 
@@ -167,7 +165,10 @@ An integer identifier's digit bounds hold no data value, so they are not a liter
 
 `profile check PROFILE` takes a file or an example name, and reads no data. It validates the schema
 first, then the policy. The rows a rate is taken of are `generated.sample.rows_read`, or else
-`dataset.row_count`, less the column's null rate. Every literal field must have an audit entry
+`dataset.row_count`, less the column's null rate. A struct field's are its parent's objects times
+its `presence`, less its own null rate. An array element's are not stated, because the file gives
+an array's length only by quantile, and an element is counted by element rather than by row. So the
+writer withholds every literal an element holds. Every literal field must have an audit entry
 whose column, pointer, rule and value count match it, and must meet that rule. A column the policy
 withholds from must hold nothing withheld, and an audit entry naming no literal field is reported
 too. A bundle is checked table by table, each table held in its own file read as that file. A
