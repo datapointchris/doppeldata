@@ -139,7 +139,6 @@ PACK = DetectorPack(
         typed(hinted.IPV6_ADDRESS, 'identifier', refined(r'^[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*$', ipv6), glue_type='IP_ADDRESS'),
         typed(hinted.MAC_ADDRESS, 'identifier', matching(MAC), 'pattern', glue_type='MAC_ADDRESS'),
         typed(hinted.URL, 'quasi_identifier', refined(r'^[A-Za-z][A-Za-z0-9+.-]*://[^\s/?#]+\S*$', url)),
-        # A pattern, because the fake crate's post_code draws ZIP+4 codes in half its values.
         typed(hinted.US_ZIP, 'quasi_identifier', matching(r'^\d{5}(?:-\d{4})?$'), 'pattern'),
         # A ZIP code below 10000 stored as an integer loses its leading zeros, and the lowest, 00501, keeps three digits.
         typed(hinted.US_ZIP, 'quasi_identifier', matching(r'^\d{3,5}$'), 'pattern', hint_required=True),

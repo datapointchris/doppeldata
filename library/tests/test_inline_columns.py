@@ -9,9 +9,9 @@ from doppeldata.published_schemas import schema_text
 from doppeldata.short_profiles import providers
 
 
-def written_rows(columns, tmp_path, rows):
+def written_rows(columns, tmp_path, rows, name='generated.csv'):
     """The rows `columns` generates at seed 0, read back from one CSV, because the library's tests install no Arrow reader."""
-    out = tmp_path / 'generated.csv'
+    out = tmp_path / name
     sd.write(columns, out, rows=rows, seed=0)
     with out.open(newline='') as handle:
         return list(csv.DictReader(handle))
@@ -46,8 +46,12 @@ def test_a_dict_of_fakes_and_ranges_generates_each_column_within_what_it_declare
 
 
 def test_a_list_of_names_takes_each_names_fake_and_a_name_hinting_none_is_refused_naming_the_closest(tmp_path):
+    """`--columns free_email` and `--columns state` draw as `sd.fakes.free_email` and `sd.fakes.state` do."""
     rows = written_rows(['name', 'email', 'city', 'zip'], tmp_path, 100)
     assert all('@' in row['email'] and re.fullmatch(r'\d{5}', row['zip']) for row in rows)
+
+    named = written_rows(['free_email', 'state'], tmp_path, 100, 'named.csv')
+    assert named == written_rows({'free_email': sd.fakes.free_email, 'state': sd.fakes.state}, tmp_path, 100, 'fakes.csv')
 
     with pytest.raises(sd.InvalidProfile) as raised:
         sd.generate(['name', 'zipp'], rows=10)

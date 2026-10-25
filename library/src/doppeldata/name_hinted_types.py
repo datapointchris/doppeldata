@@ -16,20 +16,11 @@ from doppeldata.column_name_words import name_words
 
 @dc.dataclass(frozen=True)
 class HintedType:
-    """A semantic type, the words a column's name holds where it hints the type, and what the generator draws for it.
-
-    `fake` is the provider drawing what a pattern hint draws, offered to a name close to the hints that matches none.
-    """
+    """A semantic type, the words a column's name holds where it hints the type, and what the generator draws for it."""
 
     type: str
     name_hints: tuple[str, ...]
     generator_hint: Mapping[str, str]
-    fake: str | None = None
-
-    @property
-    def offered_fake(self) -> str | None:
-        """The provider a name close to this type's hints is offered: the hint's own, or else `fake`."""
-        return self.generator_hint.get('provider') or self.fake
 
     def ends(self, name: str) -> bool:
         """Whether one of the hints ends `name`, as a hint must where the name alone assigns the type."""
@@ -68,7 +59,7 @@ URL = HintedType(
     ('url', 'uri', 'link', 'href', 'website', 'homepage'),
     {'pattern': r'https://example\.(?:com|net|org)/[a-z0-9]{1,12}(?:/[a-z0-9]{1,12}){0,2}'},
 )
-US_ZIP = HintedType('us_zip', ZIP_HINTS, {'pattern': r'\d{5}'}, fake='zip_code')
+US_ZIP = HintedType('us_zip', ZIP_HINTS, {'provider': 'zip_code'})
 US_STATE = HintedType('us_state', ('state', 'st', 'state_code', 'state_abbr', 'province'), {'provider': 'state_abbr'})
 # Split by the part of a name the column holds, so a first-name column draws first names. A bare `name` hints none of
 # them, because a product, a company or a file has one too.
@@ -85,8 +76,8 @@ FREE_TEXT = HintedType(
     {'pattern': r'[A-Z][a-z]{1,9}(?: [a-z]{1,9}){3,11}\.'},
 )
 
-# In the order a column's name is tried against them. A type's first entry is what a column of the type draws where its
-# name hints none of the type's entries.
+# In the order a column's name is tried against them. A type's first entry is what a typed column holding no format of
+# its own draws.
 GENERAL = (
     EMAIL,
     PHONE_NUMBER,
@@ -114,13 +105,11 @@ def type_named_by(name: str) -> HintedType | None:
     return next((hinted for hinted in GENERAL if hinted.ends(name)), None)
 
 
-def type_hint(semantic_type: str, name: str) -> Mapping[str, str] | None:
-    """What a column of `semantic_type` named `name` draws: the entry its name hints, else the type's first. None for a
-    type the general pack does not declare."""
-    entries = [hinted for hinted in GENERAL if hinted.type == semantic_type]
-    if not entries:
-        return None
-    return next((hinted for hinted in entries if hinted.ends(name)), entries[0]).generator_hint
+def type_hint(semantic_type: str) -> Mapping[str, str] | None:
+    """What a column of `semantic_type` draws: its first entry's hint, None for a type the general pack does not declare.
+
+    The column's name plays no part, so a name hint added for detection moves no generated value."""
+    return next((hinted.generator_hint for hinted in GENERAL if hinted.type == semantic_type), None)
 
 
 def with_type_hints(document: dict[str, Any]) -> dict[str, Any]:
@@ -133,7 +122,7 @@ def with_type_hints(document: dict[str, Any]) -> dict[str, Any]:
         return document
     filled = copy.deepcopy(document)
     for column in every_column(filled.get('columns') or []):
-        hint = type_hint(column['semantic']['type'], column.get('name') or '') if needs_type_hint(column) else None
+        hint = type_hint(column['semantic']['type']) if needs_type_hint(column) else None
         if hint is not None:
             column['semantic']['generator_hint'] = dict(hint)
     return filled

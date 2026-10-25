@@ -54,6 +54,12 @@ PROVIDER_HINTS = {
     'state': ('state_name',),
 }
 CLOSEST_FAKES = 3
+# How near a fake's name or hint must be to a name to be offered, as difflib's ratio. Below it, `age` offers `name`.
+CLOSEST_CUTOFF = 0.7
+# What a name matching no fake is told to give instead, by where the name was written.
+PYTHON_REMEDY = 'give it one from sd.fakes, sd.integers, sd.decimals, sd.dates or sd.choice in a dict'
+SHORT_YAML_REMEDY = 'give it a fake, a low..high range such as 18..90, or a list of values'
+COMMAND_LINE_REMEDY = f'{SHORT_YAML_REMEDY}, in a short YAML'
 SHORT_KEYS = ('rows', 'columns')
 # A short YAML's range: two integers, two numbers or two ISO dates, joined by `..`.
 RANGE = re.compile(r'^\s*(?P<low>\S+?)\s*\.\.\s*(?P<high>\S+)\s*$')
@@ -183,7 +189,7 @@ def written_column(value: Any) -> InlineColumn | None:
         return Fake(value)
     bounds = RANGE.match(value)
     if bounds is None:
-        closest = tuple(difflib.get_close_matches(value, providers(), n=CLOSEST_FAKES, cutoff=0.5))
+        closest = tuple(difflib.get_close_matches(value, providers(), n=CLOSEST_FAKES, cutoff=CLOSEST_CUTOFF))
         named = f'; the closest are {", ".join(closest)}' if closest else '; doppeldata schemas show profile lists them as Provider'
         raise UnknownFake(f'{value!r} is neither a fake nor a low..high range{named}', closest)
     low, high = bounds['low'], bounds['high']
@@ -201,13 +207,12 @@ def expanded(specs: dict[str, InlineColumn | None], rows: int | None, table: str
     if not specs:
         raise InvalidProfile(source, [Issue('no-columns', '/columns', 'a profile needs at least one column')])
     issues, columns = [], []
+    remedy = PYTHON_REMEDY if source in (LIST_SOURCE, DICT_SOURCE) else SHORT_YAML_REMEDY
     for name, spec in specs.items():
         if spec is None:
             column = named_column(name)
             if column is None:
-                closest = closest_fakes(name)
-                named = f', the closest being {", ".join(closest)}' if closest else ', or a range or a choice'
-                message = f'{name!r} names no fake; give the column one from sd.fakes{named}'
+                message, closest = no_fake_message(name, remedy)
                 issues.append(Issue('no-fake-for-name', pointer(('columns', name)), message, closest))
                 continue
         elif isinstance(spec, InlineColumn):
@@ -228,24 +233,42 @@ def expanded(specs: dict[str, InlineColumn | None], rows: int | None, table: str
 
 
 def named_column(name: str) -> dict[str, Any] | None:
-    """The column a name alone gives: the general type it hints, with that type's generator hint, else a provider's fake."""
+    """The column a name alone gives: the general type it hints, with that type's generator hint, else a provider's fake.
+
+    A name that is a provider's own draws that provider where the type it hints draws another, so `free_email` and `state`
+    draw as `sd.fakes` does. A type drawn by a pattern keeps it, as `phone_number` does over fake's extensions.
+    """
     hinted = type_named_by(name)
-    if hinted is not None:
+    exact = provider_called(name)
+    if hinted is not None and (exact is None or hinted.generator_hint.get('provider', exact) == exact):
         semantic = {'type': hinted.type, 'generator_hint': dict(hinted.generator_hint)}
         return {'name': name, 'physical_type': 'string', 'logical_type': 'string', 'semantic': semantic}
     provider = provider_named_by(name)
     return Fake(provider).column(name) if provider is not None else None
 
 
+def provider_called(name: str) -> str | None:
+    """The provider `name` is, word for word, or None."""
+    words = name_words(name)
+    return next((provider for provider in providers() if name_words(provider) == words), None)
+
+
 def provider_named_by(name: str) -> str | None:
     """The provider `name` is, word for word, or else the one a hint in `PROVIDER_HINTS` that ends it names."""
-    words = name_words(name)
-    named = next((provider for provider in providers() if name_words(provider) == words), None)
+    named = provider_called(name)
     if named is not None:
         return named
+    words = name_words(name)
     return next(
         (provider for provider, hints in PROVIDER_HINTS.items() if any(hint_runs_in(words, hint, at_end=True) for hint in hints)), None
     )
+
+
+def no_fake_message(name: str, remedy: str) -> tuple[str, tuple[str, ...]]:
+    """What a column named `name` matching no fake is told, ending in the closest fakes, and those fakes."""
+    closest = closest_fakes(name)
+    named = f'; the closest are {", ".join(closest)}' if closest else ''
+    return f'{name!r} names no fake; {remedy}{named}', closest
 
 
 def closest_fakes(name: str) -> tuple[str, ...]:
@@ -257,10 +280,10 @@ def closest_fakes(name: str) -> tuple[str, ...]:
         for hint in hints:
             hinting.setdefault('_'.join(name_words(hint)), provider)
     for hinted in GENERAL:
-        fake = hinted.offered_fake
+        fake = hinted.generator_hint.get('provider')
         if fake is None:
             continue
         for hint in hinted.name_hints:
             hinting.setdefault('_'.join(name_words(hint)), fake)
-    matches = difflib.get_close_matches('_'.join(name_words(name)), hinting, n=len(hinting), cutoff=0.5)
+    matches = difflib.get_close_matches('_'.join(name_words(name)), hinting, n=len(hinting), cutoff=CLOSEST_CUTOFF)
     return tuple(dict.fromkeys(hinting[match] for match in matches))[:CLOSEST_FAKES]
