@@ -156,6 +156,13 @@ def generalize_pattern(values: SupportsGetItem[int, str]) -> str |None:
     class, or None when it would hold a literal or a character class only some values have.
     """
 
+def pattern_is_generalized(pattern: str) -> bool |None:
+    """
+    Whether ``pattern`` holds no literal only some values have, as the privacy floor admits a
+    stored pattern: every class is ``\d`` or whole ASCII digit and letter ranges. None when it
+    does not parse.
+    """
+
 def pattern_problem(pattern: str) -> str |None:
     """
     Why the engine cannot generate from ``pattern``, as planning a profile that stores it

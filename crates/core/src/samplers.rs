@@ -362,13 +362,14 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
         }
         ValueSampler::Categorical(categorical) => {
             let other = column.string.as_ref().and_then(|s| s.other_rate).is_some_and(|r| r.0 > 0.0);
+            let suffix = column.string.as_ref().and_then(|s| s.top_value_suffix.as_deref());
+            let top = match suffix {
+                Some(suffix) => format!("{} top prefixes, each followed by {suffix}", categorical.values.len()),
+                None => format!("{} top values", categorical.values.len()),
+            };
             match other {
-                true => format!(
-                    "{} top values, the rest from {}",
-                    categorical.values.len(),
-                    describe_source(&categorical.other)
-                ),
-                false => format!("{} top values", categorical.values.len()),
+                true => format!("{top}, the rest from {}", describe_source(&categorical.other)),
+                false => top,
             }
         }
         ValueSampler::Temporal(_) => {
@@ -514,9 +515,17 @@ fn value_sampler(
         let values: Vec<_> = top_values.iter().map(|top| (top.value.clone(), top.rate.0)).collect();
         let other_rate = string.and_then(|s| s.other_rate).map_or(0.0, |r| r.0);
         let other_share = other_rate / (values.iter().map(|(_, rate)| rate).sum::<f64>() + other_rate);
-        let other_index = distinct
-            .and_then(|distinct| ValueIndex::for_distinct(distinct - values.len() as f64, filled_rows * other_share, &source.variety()));
-        let sampler = CategoricalSampler::new(values, other_rate, source, other_index, output)
+        let suffix = match string.and_then(|s| s.top_value_suffix.as_deref()) {
+            Some(pattern) => Some(
+                text::compile_pattern(pattern, PATTERN_MAX_REPEAT)
+                    .map_err(site.refuse_as(ColumnFault::InvalidPattern, "/string/top_value_suffix"))?,
+            ),
+            None => None,
+        };
+        let top_strings = values.len() as f64 * suffix.as_ref().map_or(1.0, |suffix| suffix.strings);
+        let other_index =
+            distinct.and_then(|distinct| ValueIndex::for_distinct(distinct - top_strings, filled_rows * other_share, &source.variety()));
+        let sampler = CategoricalSampler::new(values, other_rate, suffix, source, other_index, output)
             .map_err(site.refuse_as(ColumnFault::UnusableRates, "/string/top_values"))?;
         return Ok(ValueSampler::Categorical(sampler));
     }

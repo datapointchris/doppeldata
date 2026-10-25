@@ -215,7 +215,14 @@ fn push_uuid(rng: &mut ChaCha8Rng, out: &mut String) {
 #[derive(Debug, Clone)]
 pub(crate) struct Pattern {
     regex: rand_regex::Regex,
-    strings: f64,
+    pub(crate) strings: f64,
+}
+
+impl Pattern {
+    pub(crate) fn push(&self, rng: &mut ChaCha8Rng, out: &mut String) {
+        let value: String = self.regex.sample(rng);
+        out.push_str(&value);
+    }
 }
 
 /// A stored pattern compiled for generation. A line anchor is dropped, because a generated value is
@@ -403,10 +410,7 @@ impl TextSource {
     pub(crate) fn push(&self, rng: &mut ChaCha8Rng, out: &mut String) {
         match self {
             Self::Provider(provider) => push_provided(*provider, rng, out),
-            Self::Pattern(pattern) => {
-                let value: String = pattern.regex.sample(rng);
-                out.push_str(&value);
-            }
+            Self::Pattern(pattern) => pattern.push(rng, out),
             Self::Shapes { choice, shapes } => {
                 for &c in &shapes[choice.sample(rng)].chars {
                     match c {
@@ -445,6 +449,19 @@ fn luhn_check_digit(payload: impl DoubleEndedIterator<Item = u8>) -> u8 {
     ((10 - sum % 10) % 10) as u8
 }
 
+/// The DEA check digit for `payload`: the last digit of the digits at odd positions from the left
+/// plus twice those at even positions.
+fn dea_check_digit(payload: impl Iterator<Item = u8>) -> u8 {
+    let sum: u32 = payload
+        .enumerate()
+        .map(|(index, digit)| u32::from(digit) * if index % 2 == 0 { 1 } else { 2 })
+        .sum();
+    (sum % 10) as u8
+}
+
+/// Every NPI is read as a card number issued under the health industry prefix 80840.
+const NPI_PREFIX: [u8; 5] = [8, 0, 8, 4, 0];
+
 /// A check digit written over a value's last digit, wrong on a share of values.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CheckDigitDraw {
@@ -471,6 +488,8 @@ fn check_digit_site(kind: CheckDigit, value: &str) -> Option<(usize, u8)> {
     let payload = value.as_bytes()[..last].iter().filter(|b| b.is_ascii_digit()).map(|b| b - b'0');
     let right = match kind {
         CheckDigit::Luhn => luhn_check_digit(payload),
+        CheckDigit::Npi => luhn_check_digit(NPI_PREFIX.into_iter().chain(payload)),
+        CheckDigit::Dea => dea_check_digit(payload),
     };
     Some((last, right))
 }

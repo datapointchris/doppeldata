@@ -101,19 +101,70 @@ pub struct DifferentialPrivacy {
     pub delta: f64,
 }
 
+/// A column some of whose literals the policy withheld.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Suppression {
     pub column: String,
-    pub reason: String,
+    pub reason: SuppressionReason,
+    /// The column's `semantic.type`, where it has one.
     pub semantic: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SuppressionReason {
+    /// Typed `identifier`, so the column keeps no literal, extreme or top value.
+    Identifier,
+    /// Typed `quasi_identifier` under `strict`, which treats it as an identifier.
+    QuasiIdentifier,
+    /// Typed `free_text`, so the column keeps its length statistics only.
+    FreeText,
+    /// A ZIP code under `healthcare`, which keeps three-digit prefixes and writes a restricted one as `000`.
+    ZipPrefix,
+    /// An age under `healthcare`, which collapses every age over 89 into one bin at 90.
+    #[serde(rename = "age_over_89")]
+    AgeOver89,
+    /// A date tied to a person under `healthcare`, whose extremes keep only their years.
+    DateToYear,
+}
+
+/// One field holding literals, and the rule that admitted them.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct AuditEntry {
+    /// The RFC 6901 pointer to the field, such as `/columns/4/string/top_values`.
+    pub field: Option<String>,
     pub column: String,
-    /// How many literals of the column the profile keeps, where the rule admits a count of them.
+    /// How many literals or cells the field holds.
     pub values: Option<u64>,
-    pub rule: String,
+    pub rule: AuditRule,
+    /// The fewest rows any literal or cell of the field rests on.
+    pub min_count: Option<u64>,
+}
+
+/// The floor a field's literals met to be kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+pub enum AuditRule {
+    /// Each listed value or shape is held by at least `k_min` rows, and the remainder by none or `k_min`.
+    #[serde(rename = "count >= k_min")]
+    CountAtLeastKMin,
+    /// Each histogram bin, overflow count or calendar share holds no rows or at least `k_min`.
+    #[serde(rename = "cell >= k_min")]
+    CellAtLeastKMin,
+    /// The extremes are the values at rank `k_min` from each end.
+    #[serde(rename = "trimmed_k")]
+    TrimmedK,
+    /// Each quantile sits at least `k_min` rows from both ends.
+    #[serde(rename = "k_min rows from each end")]
+    KMinRowsFromEachEnd,
+    /// The pattern's every literal is shared by all the values it was generalized from.
+    #[serde(rename = "generalized")]
+    Generalized,
+    /// The family was fitted to the values between the trimmed extremes.
+    #[serde(rename = "fitted within the trimmed extremes")]
+    FittedWithinTrimmedExtremes,
+    /// The sequence's start follows from the trimmed extreme at its end and its step.
+    #[serde(rename = "follows the trimmed extreme")]
+    FollowsTrimmedExtreme,
 }
 
 /// The files the data came from. `csv`, `parquet` and `json` take the keys a manifest's `writer`
@@ -494,6 +545,9 @@ pub enum ExtremesMethod {
     Exact,
     /// The values at rank `k_min` from each end.
     TrimmedK,
+    /// The least and greatest integers with as many digits as the trimmed extremes, so an
+    /// identifier's range shows its length and none of its values.
+    DigitBounds,
 }
 
 /// Bin edges and the rows in each bin. `counts` has one entry fewer than `edges`. Each bin holds
@@ -569,6 +623,9 @@ pub struct StringStats {
     pub top_values: Option<Vec<TopValue>>,
     /// The share of rows holding a value outside `top_values`.
     pub other_rate: Option<Rate>,
+    /// A regular expression drawn after each top value, so `top_values` hold prefixes, such as a
+    /// ZIP code's first three digits.
+    pub top_value_suffix: Option<String>,
     /// Written when the value list was frozen from an earlier profile.
     pub overflow: Option<ValueOverflow>,
 }
@@ -740,6 +797,11 @@ pub enum Provider {
 pub enum CheckDigit {
     /// The mod-10 digit of payment card numbers.
     Luhn,
+    /// A National Provider Identifier's: the Luhn digit over `80840` and the digits before it.
+    Npi,
+    /// A DEA registration number's: the last digit of the first, third and fifth digits plus twice
+    /// the second, fourth and sixth.
+    Dea,
 }
 
 impl std::str::FromStr for CheckDigit {

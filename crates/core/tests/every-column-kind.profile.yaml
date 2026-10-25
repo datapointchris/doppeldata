@@ -162,6 +162,19 @@ columns:
     null_rate: 0.1
     quality: {invalid_rate: 0.2}
     semantic: {generator_hint: {pattern: '^4\d{15}$', check_digit: luhn}}
+  - name: npi_check_digit
+    quality: {invalid_rate: 0.1}
+    semantic: {generator_hint: {pattern: '^1\d{9}$', check_digit: npi}}
+  - name: dea_check_digit
+    quality: {invalid_rate: 0.1}
+    semantic: {generator_hint: {pattern: '^[ABFM][A-Z]\d{7}$', check_digit: dea}}
+  - name: top_prefixes_with_suffix
+    distinct: {ratio: 0.02}
+    string:
+      top_values: [{value: "021", rate: 0.5}, {value: "000", rate: 0.3}]
+      other_rate: 0.2
+      top_value_suffix: '\d{2}'
+      shapes: [{shape: "99999", rate: 1.0}]
   - name: shapes
     string: {shapes: [{shape: AAA-9999, rate: 0.7}, {shape: aa99, rate: 0.3}]}
   - name: characters
