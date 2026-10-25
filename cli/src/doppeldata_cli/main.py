@@ -620,6 +620,115 @@ def profile_expand(
         raise typer.BadParameter(f'{out} could not be written: {error.strerror or error}', param_hint='--out') from error
 
 
+IMPORT_SOURCES = ('glue', 'odcs', 'json-schema', 'table-schema', 'data-package')
+# The sources that may hold several tables, so --table picks one.
+SEVERAL_TABLE_SOURCES = ('odcs', 'data-package')
+
+
+@profile_app.command('import', no_args_is_help=True)
+def profile_import(
+    source: Annotated[
+        str, typer.Argument(metavar='SOURCE', help='The schema file, or with --from glue the catalog table as DATABASE.TABLE.')
+    ],
+    kind: Annotated[str, typer.Option('--from', metavar='KIND', help=f'What SOURCE is: {", ".join(IMPORT_SOURCES)}.')],
+    table: Annotated[
+        str | None,
+        typer.Option(
+            '--table',
+            metavar='NAME',
+            help=(
+                "Import the one table NAME from a source holding several: an ODCS contract's schema object, or a Data Package's "
+                'resource. Without it a Data Package imports as a bundle of every resource, as profile create --tables profiles '
+                'every table.'
+            ),
+        ),
+    ] = None,
+    region: Annotated[
+        str | None, typer.Option('--region', metavar='REGION', help="With --from glue, the catalog's region, else the AWS environment's.")
+    ] = None,
+    detected_entities: Annotated[
+        Path | None,
+        typer.Option(
+            '--detected-entities',
+            metavar='FILE',
+            help=(
+                "With --from glue, a JSON object of each column's Glue entity types, as classifyColumns returns them: "
+                '{"email": ["EMAIL"]}. Each column takes the type a shipped detector pack declares for the first.'
+            ),
+        ),
+    ] = None,
+    out: Annotated[Path | None, typer.Option('--out', metavar='FILE', help='Write the seed to FILE rather than print its YAML.')] = None,
+) -> None:
+    """Import a seed profile from a schema a project already has: doppeldata profile import --from odcs orders.odcs.yaml
+
+    The seed takes each column's type and constraints from the schema, and a default where the schema is silent: numbers
+    between their bounds, dates in 2025, text from its pattern, values, format or name, else 8 to 16 letters and digits.
+    data generate reads it unchanged. glue reads the AWS Glue Data Catalog with the AWS environment's credentials.
+    """
+    if kind not in IMPORT_SOURCES:
+        raise typer.BadParameter(f'{kind!r} is not a source to import; choose from {", ".join(IMPORT_SOURCES)}', param_hint='--from')
+    if table is not None and kind not in SEVERAL_TABLE_SOURCES:
+        raise typer.BadParameter(f'a {kind} source holds one table, so --table picks nothing', param_hint='--table')
+    for given, flag in ((region, '--region'), (detected_entities, '--detected-entities')):
+        if given is not None and kind != 'glue':
+            raise typer.BadParameter(f'{flag} is read only with --from glue', param_hint=flag)
+    if out is not None and not out.parent.is_dir():
+        raise typer.BadParameter(f'{out.parent} is not a directory; create it, or name a FILE in one that exists', param_hint='--out')
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always', ProfilingWarning)
+            seed = imported_seed(kind, source, table, region, detected_entities)
+    except InvalidProfile as error:
+        raise typer.BadParameter(f'the seed it describes fails the profile schema: {error}', param_hint='SOURCE') from error
+    except SourceError as error:
+        if error.exit_code != 2:
+            raise
+        raise typer.BadParameter(str(error), param_hint='SOURCE') from error
+    print_notices(caught)
+    if out is None:
+        typer.echo(seed.to_yaml(), nl=False)
+        return
+    try:
+        seed.save(out)
+    except OSError as error:
+        raise typer.BadParameter(f'{out} could not be written: {error.strerror or error}', param_hint='--out') from error
+
+
+def imported_seed(kind: str, source: str, table: str | None, region: str | None, detected_entities: Path | None) -> Profile | Bundle:
+    """The seed `source` imports as, by the kind --from names: a bundle for a Data Package with no --table."""
+    if kind == 'glue':
+        database, dot, name = source.partition('.')
+        if not dot or not database or not name:
+            raise typer.BadParameter(f'{source!r} is not DATABASE.TABLE', param_hint='SOURCE')
+        entities = entity_types(detected_entities) if detected_entities is not None else None
+        return Profile.from_glue(database, name, region=region, detected_entities=entities)
+    if kind == 'odcs':
+        return Profile.from_odcs(source, table=table)
+    if kind == 'json-schema':
+        return Profile.from_json_schema(source)
+    if kind == 'table-schema':
+        return Profile.from_table_schema(source)
+    if table is not None:
+        return Profile.from_data_package(source, table=table)
+    return Bundle.from_data_package(source)
+
+
+def entity_types(path: Path) -> dict[str, list[str]]:
+    """The --detected-entities file's map of each column to its Glue entity types, refused with exit 2 in any other shape."""
+    try:
+        found = json.loads(path.read_text())
+    except OSError as error:
+        raise typer.BadParameter(f'{path} could not be read: {error.strerror or error}', param_hint='--detected-entities') from error
+    except json.JSONDecodeError as error:
+        raise typer.BadParameter(f'{path} is not JSON: {error}', param_hint='--detected-entities') from error
+    if not isinstance(found, dict) or not all(
+        isinstance(types, list) and all(isinstance(each, str) for each in types) for types in found.values()
+    ):
+        message = f'{path} is not a JSON object of each column to a list of entity types, such as {{"email": ["EMAIL"]}}'
+        raise typer.BadParameter(message, param_hint='--detected-entities')
+    return found
+
+
 @profile_app.command('show', no_args_is_help=True)
 def profile_show(name: Annotated[str, typer.Argument(metavar='NAME', help='An example name, as profile list prints it.')]) -> None:
     """Print an example profile's YAML, to start a profile from: doppeldata profile show orders > orders.profile.yaml"""
