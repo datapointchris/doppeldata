@@ -345,7 +345,8 @@ step lies beyond it is not written.
 ## No literal rests on fewer than k_min rows
 
 The default `k_min` is `DEFAULT_K_MIN`, from the privacy floor in
-`profile-format-and-privacy-floor.md`. The profiler applies it to every literal it writes:
+`profile-format-and-privacy-floor.md`. The statistics pass applies it to every literal it computes,
+and the policy's pass then removes what each column's rule withholds:
 
 - **A column with fewer than `k_min` values** keeps its type, null rate and distinct count, and
   nothing else. The mean of one value is that value.

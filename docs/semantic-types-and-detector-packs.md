@@ -115,6 +115,21 @@ A detector records Glue's managed type as `glue_type`, and the profile does not 
 profile's own `semantic.type` is a lowercase snake identifier, which stays stable if Glue renames a
 type.
 
+## The healthcare pack ships with the library, and policy healthcare enables it
+
+`doppeldata/profiling/detector_packs/healthcare.py` lists its types. `--pack healthcare` enables it
+under any policy, and `--policy healthcare` enables it without being named.
+
+- **An NPI and a DEA number are typed by their check digits.** A 10-digit number starting 1 or 2
+  passes an NPI's shape, and one in ten passes its check digit, so a column of other numbers stays
+  untyped.
+- **An ICD-10-CM or HCPCS Level II code is typed by membership** in the code list the pack ships, so
+  a product code of the same shape is not. `healthcare-policy.md` names each list's edition.
+- **An NDC or CPT code is typed by its shape alone**, and a CPT code, or an NDC without hyphens,
+  only where the name hints it. Five digits is a ZIP code's shape too.
+- **A member, medical record or claim number has no published format.** It is typed by its name
+  hint and a stable shape: the values' most common shape holds a digit, and enough of them share it.
+
 ## A pack is a plugin, registered under an entry point by its name
 
 A third party adds types without forking by building a `DetectorPack` of `Detector`s, both from

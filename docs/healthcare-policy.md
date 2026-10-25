@@ -1,0 +1,105 @@
+# The healthcare policy
+
+## healthcare adds HIPAA Safe Harbor to the default floor
+
+`profile create --policy healthcare` applies every `default` rule, then the Safe Harbor method of 45
+CFR 164.514(b)(2). Safe Harbor removes 18 categories of identifier from a dataset: names; geographic
+subdivisions smaller than a state; every element of a date tied to a person except its year;
+telephone and fax numbers; email addresses; Social Security numbers; medical record numbers; health
+plan beneficiary numbers; account numbers; certificate and license numbers; vehicle identifiers;
+device identifiers; URLs; IP addresses; biometrics; full-face photos; and any other unique
+identifying number. A profile holds aggregates rather than records, so the policy applies each
+category to what an aggregate can give away. The policy also enables the healthcare detector pack.
+
+`doppeldata/privacy_policy/column_treatment.py` decides each column's rule, from what the profile
+states about the column, in this order:
+
+1. A column typed `free_text` keeps its lengths.
+2. A ZIP column keeps three-digit prefixes. An integer ZIP column is an identifier, because a ZIP
+   below 10000 stored as an integer has lost its leading zeros, and its first three digits are not
+   its prefix.
+3. A type in one of the 18 categories is an identifier, whatever its pack calls its sensitivity.
+   `SAFE_HARBOR_TYPES` lists them.
+4. A numeric column whose name ends in an age hint caps its ages at 90.
+5. A date or timestamp column whose name holds a person-date hint keeps the years of its extremes.
+6. Otherwise the `default` rules hold.
+
+An NPI names a provider rather than the patient, and a provider's NPIs are published. It is an
+identifier under `healthcare` anyway, because a small practice's NPI beside a ZIP prefix and a year
+narrows its patients to a few people.
+
+## A ZIP code keeps its three-digit prefix, and a restricted prefix becomes 000
+
+The statistics pass counts each value's first three characters, and keeps a prefix only where it is
+three digits. A prefix on the restricted list is counted as `000`, and the counts are then held to
+`k_min` as any top value is. The column writes the prefixes as `top_values`, with
+`top_value_suffix: \d{2}`, or `\d{2}-\d{4}` where its dominant shape is a ZIP+4. The generator
+appends a value of the suffix to each prefix it draws, so the generated column holds whole ZIP codes.
+The column stores no `pattern`, because a pattern's literals could name a prefix.
+
+The restricted prefixes are the three-digit ZIP areas that held 20,000 or fewer people in the 2000
+Census. HHS's de-identification guidance lists them, and `privacy_policy/restricted_zip_prefixes.txt`
+copies that list. `rg -v '^#' library/src/doppeldata/privacy_policy/restricted_zip_prefixes.txt`
+prints it.
+
+## An age over 89 is counted in one bin and drawn as 90
+
+A numeric column whose name ends in `age`, `age_years`, `age_in_years` or `age_yrs` is an age.
+Typing runs before binning, so its histogram is binned to the cap: every edge above 89.5 gives way
+to one last bin from 89.5 to 90.5, and the rows above that bin are counted in it. Its extremes and
+quantiles are capped at 90. It holds no fitted family, whose support could reach past 90. The
+numeric sampler draws a histogram's bins only between the outermost quantiles, and its tail ends at
+the extremes, so no generated age exceeds 90.
+
+## A date tied to a person keeps the years of its extremes
+
+A date or timestamp column whose name holds `dob`, `birth`, `birthdate`, `dod`, `death`,
+`deceased`, `service`, `admit`, `admission`, `admitted`, `discharge`, `discharged`, `visit` or
+`encounter` is a date tied to a person. Its trimmed extremes widen to the first day of the low's
+year and the last day of the high's. Its gap rate is counted over those whole years, because the
+gap rate and the distinct count together give the span between the extremes in days. Its month,
+weekday and hour shares stay, each cell held to `k_min`.
+
+## The code lists are public US government data, and CPT and NDC lists are not shipped
+
+The healthcare pack types an ICD-10-CM or HCPCS Level II code by its membership in a list it ships
+under `profiling/detector_packs/healthcare_code_lists/`, one code a line without its dot, so a yearly
+update diffs line by line. Each file's first line names its source.
+
+- **ICD-10-CM** is the FY2027 code set: every header and billable code in `icd10cm-order-2027.txt`,
+  from CDC NCHS's `icd10cm-code-descriptions-2027.zip`. FY2027 adds categories whose second
+  character is a letter, such as `QA0`, so the validator's shape is a letter and two alphanumerics,
+  and membership decides the rest.
+- **HCPCS Level II** is every procedure code in CMS's October 2026 quarterly file,
+  `HCPC2026_OCT_ANWEB_09232026.txt`. Terminated codes are kept, because historical claims carry
+  them.
+- **CPT** is copyrighted by the AMA, so the package ships no CPT list. A CPT code is typed by its
+  shape and a name hint, and generated by its shape.
+- **The NDC directory** is public but large, so the package ships none. An NDC is typed by its
+  segments, or by its digits and a name hint, and generated by its shape.
+
+`rg -c -v '^#' library/src/doppeldata/profiling/detector_packs/healthcare_code_lists/icd10cm.txt`
+counts a list's codes. Each file stays under the repository's 1000 KB limit on an added file.
+
+## The claims example is the policy's reference
+
+`doppeldata profile show claims` prints a hand-written claims table under `policy: healthcare`, and
+`profile check claims` passes it. Its `member_id` is an integer identifier that holds no literal,
+only the bounds of its digit count. Its NPI, ICD-10-CM and HCPCS columns are typed by the healthcare
+pack. Its `member_dob` and `service_date` keep year-level extremes, its `member_age` ends in the
+90.5 bin, and its `member_zip` lists `000` among its prefixes.
+
+## Sources
+
+- [45 CFR 164.514](https://www.law.cornell.edu/cfr/text/45/164.514): the Safe Harbor method, its
+  18 categories, the 89-year age limit and the 20,000-person ZIP rule.
+- [HHS guidance on de-identification](https://www.hhs.gov/hipaa/for-professionals/special-topics/de-identification/index.html):
+  the restricted three-digit ZIP prefixes from the 2000 Census.
+- [Duke Health IRB, de-identification of health information](https://irb.duhs.duke.edu/sites/default/files/2022-04/deidentification_of_health_information_9-28-2021.pdf):
+  the same 17 prefixes, quoted from the HHS guidance.
+- [CMS cell size suppression policy, via ResDAC](https://resdac.org/node/1506): the `k_min` of 11
+  the `default` policy starts from.
+- [CDC NCHS ICD-10-CM FY2027 files](https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2027/icd10cm-code-descriptions-2027.zip):
+  the ICD-10-CM list.
+- [CMS October 2026 HCPCS file](https://www.cms.gov/files/zip/october-2026-alpha-numeric-hcpcs-file.zip):
+  the HCPCS Level II list.

@@ -2,8 +2,9 @@
 
 ## A check compares two profiles, so the real rows are never read again
 
-`data check PROFILE DATA` profiles DATA with `edges_from=PROFILE` and PROFILE's `k_min`, then
-measures the new profile against PROFILE. The histograms and value lists then compare bin for bin.
+`data check PROFILE DATA` profiles DATA with `edges_from=PROFILE` and PROFILE's privacy policy and
+`k_min`, then measures the new profile against PROFILE. Under the same policy, each field the new
+profile writes is one PROFILE could hold, such as a ZIP column's prefixes under `healthcare`. The histograms and value lists then compare bin for bin.
 Generated data has its own `source_fingerprint`, so the stats cache never hands PROFILE back
 unchanged. DATA is typed with the detector packs PROFILE records, so a type one of them declares can
 be confirmed.

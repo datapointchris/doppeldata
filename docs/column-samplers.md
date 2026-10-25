@@ -61,7 +61,9 @@ cargo run --release -p doppeldata-core --example throughput -- eight-columns --r
 ## A string column takes the most specific source its profile holds
 
 1. **`top_values`**: an alias table over the rates. A draw of `other_rate` generates a value from
-   the next source down.
+   the next source down. With `top_value_suffix`, each top value drawn is followed by a value of
+   that pattern. A ZIP column under `healthcare` keeps three-digit prefixes, so `\d{2}` makes each
+   a ZIP code again. The suffix's own distinct values count toward the column's distinct ratio.
 2. **`semantic.generator_hint.provider`**: a named generator, such as `email` or `city`. The names
    are doppeldata's own, an enum in the profile model, so the published schema lists them and
    replacing the faker library breaks no profile. A profile naming another fails validation.
@@ -72,7 +74,9 @@ cargo run --release -p doppeldata-core --example throughput -- eight-columns --r
 5. **Characters** of `charset.classes`, at a length drawn from `length`.
 
 `generator_hint.check_digit: luhn` writes the Luhn digit over a value's last digit, wrong on a
-`quality.invalid_rate` share of values. *Rejected:* the `luhn` crate. Its `checksum` allocates on
+`quality.invalid_rate` share of values. `npi` is the Luhn digit over `80840` and the first nine
+digits, as the NPI standard prefixes them. `dea` is the last digit of the sum of the first, third
+and fifth digits plus twice the sum of the second, fourth and sixth. *Rejected:* the `luhn` crate. Its `checksum` allocates on
 every call, and it panics on lower-case input and on a `u8` overflow past about 28 digits.
 
 `email` is `first.last` at `example.com`, `example.net` or `example.org`, domains reserved so no
