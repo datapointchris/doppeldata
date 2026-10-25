@@ -104,6 +104,10 @@ pub struct MetricResult {
     /// quantiles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmeasured: Option<String>,
+    /// The id of the scenario's perturbation that moves what the metric compares, so the metric
+    /// is not measured and passes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

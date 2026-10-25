@@ -79,6 +79,12 @@ mod _core {
             .collect()
     }
 
+    /// The scenario ops that shape the files a write makes rather than the rows.
+    #[pyfunction]
+    fn file_shaping_ops() -> Vec<&'static str> {
+        doppeldata_core::scenario::FILE_SHAPING_OPS.to_vec()
+    }
+
     /// Whether each scipy.stats family a profile's ``fit`` can name is discrete, by its name. Any
     /// other family leaves the column a linear tail.
     #[pyfunction]

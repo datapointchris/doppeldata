@@ -31,7 +31,7 @@ pub const PARTIAL_MANIFEST_FILE_NAME: &str = "_manifest.partial.json";
 /// The rows a file holds when neither the call nor the profile sets a size.
 pub const DEFAULT_FILE_ROWS: u64 = 1_000_000;
 
-/// The record of a generated dataset, which with its profile regenerates every file byte for byte.
+/// The record of a generated dataset, which with its profile and scenario regenerates every file byte for byte.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Manifest {
     pub manifest_version: ManifestVersion,

@@ -152,6 +152,11 @@ def determinism_values_digest(profile_json: str, profile_digest: str, seed: Supp
     contract pins.
     """
 
+def file_shaping_ops() -> list[str]:
+    """
+    The scenario ops that shape the files a write makes rather than the rows.
+    """
+
 def fitted_families() -> dict[str, bool]:
     """
     Whether each scipy.stats family a profile's ``fit`` can name is discrete, by its name. Any

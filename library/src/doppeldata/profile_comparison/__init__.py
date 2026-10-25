@@ -5,6 +5,7 @@ so histograms and value lists compare bin for bin.
 """
 
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -23,23 +24,41 @@ from doppeldata.profile_comparison.reports import CheckReport
 from doppeldata.profile_comparison.reports import DiffReport
 from doppeldata.profile_comparison.reports import MetricResult
 from doppeldata.profile_comparison.reports import ReportedProfile
+from doppeldata.profile_comparison.reports import ReportedScenario
+from doppeldata.profile_comparison.scenario_moves import attributed
+from doppeldata.profile_comparison.scenario_moves import moves
+from doppeldata.profile_comparison.scenario_moves import skipped
 from doppeldata.profile_comparison.thresholds import Thresholds
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import profile as profile_data
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
+from doppeldata.scenario_format import Scenario
+from doppeldata.scenario_format import composed
 
 # A report's values keep this many significant digits, and each verdict is taken on the value as written.
 REPORT_DIGITS = 6
 
 
-def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) -> CheckReport:
+def check(
+    profile: Profile,
+    data: Any,
+    *,
+    thresholds: Thresholds | None = None,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+) -> CheckReport:
     """Profile `data` with `profile`'s edges and value lists frozen, and measure every metric and column change against `profile`.
 
     `data` is anything `doppeldata.profile` reads. The report's `passed` is False when any metric misses its threshold or
     cannot be measured, or `column_changes` finds a change that fails.
+
+    With `scenario`, a Scenario or a list composed in order, the data is measured against the profile its patch makes. Each
+    metric on what a perturbation moves is listed as skipped by it, and a change on a column one writes passes. Each
+    expectation it declares is measured, and the report's `verified` is False when any misses its bounds.
     """
-    source = profile.to_plain()
+    applied = composed(scenario)
+    effective = applied.apply(profile) if applied is not None else profile
+    source = effective.to_plain()
     thresholds = thresholds or Thresholds()
     thresholds.check_columns(source)
     # The data is profiled under the profile's own policy, so each field it writes is one the profile could hold.
@@ -54,18 +73,25 @@ def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) 
         warnings.simplefilter('ignore', ColumnsNotFrozen)
         # Generated data is never the data the profile was made from, so the profile is always made again.
         warnings.simplefilter('ignore', EarlierProfileNotReused)
-        checked = profile_data(data, policy=policy, k_min=k_min, edges_from=profile, packs=[each.pack.name for each in packs])
+        checked = profile_data(data, policy=policy, k_min=k_min, edges_from=effective, packs=[each.pack.name for each in packs])
     observed = checked.to_plain()
+    # A check vouches for the data, so a statistic the profile states and the data cannot supply fails.
+    metrics = measured(source, observed, thresholds, unmeasured_passes=False)
+    changes = column_changes(source, observed, writer_changes_pass=True, declaring=declared_types(packs), listing=listed_types(packs))
+    if applied is None:
+        reported_scenario, expectations = None, []
+    else:
+        moved = moves(applied)
+        metrics, changes = skipped(metrics, moved), attributed(changes, moved)
+        reported_scenario, expectations = ReportedScenario(applied.name, applied.digest), applied.verify(data)
+    rows = (observed.get('dataset') or {}).get('row_count') or 0
     return CheckReport(
         profile=reported(profile),
-        data=CheckedData(
-            data_named(data),
-            (observed.get('dataset') or {}).get('row_count') or 0,
-            (observed.get('generated') or {}).get('source_fingerprint'),
-        ),
-        # A check vouches for the data, so a statistic the profile states and the data cannot supply fails.
-        metrics=measured(source, observed, thresholds, unmeasured_passes=False),
-        changes=column_changes(source, observed, writer_changes_pass=True, declaring=declared_types(packs), listing=listed_types(packs)),
+        data=CheckedData(data_named(data), rows, (observed.get('generated') or {}).get('source_fingerprint')),
+        metrics=metrics,
+        changes=changes,
+        scenario=reported_scenario,
+        expectations=expectations,
     )
 
 

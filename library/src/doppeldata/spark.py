@@ -13,6 +13,7 @@ import re
 import time
 from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Sequence
 from typing import Any
 
 try:
@@ -33,11 +34,13 @@ from doppeldata.dataset_generation import PreparedWrite
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.dataset_generation import engine_arguments
 from doppeldata.dataset_generation import prepared_write
+from doppeldata.dataset_generation import rows_only
 from doppeldata.dataset_generation import s3_store_of
 from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
 from doppeldata.manifest import Manifest
 from doppeldata.profile_format import Profile
+from doppeldata.scenario_format import Scenario
 
 # The engine blocks each Spark task generates in turn. The chunk is a unit of work and never of values, so its size moves no value.
 CHUNK_BLOCKS = 16
@@ -126,9 +129,9 @@ class RangeWrites:
         yield pa.record_batch([pa.array(records, pa.string())], names=['file'])
 
 
-def executor_plan(profile: Profile, rows: int | None, seed: int) -> tuple[ExecutorPlan, '_core.Plan']:
+def executor_plan(profile: Profile, rows: int | None, seed: int, scenario: Scenario | None) -> tuple[ExecutorPlan, '_core.Plan']:
     """What executors build the plan from, and the plan built on the driver, which refuses an ungenerable profile before a task runs."""
-    planned = ExecutorPlan(engine_arguments(profile, rows, seed), _core.VERSION, _core.STREAM_VERSION)
+    planned = ExecutorPlan(engine_arguments(profile, rows, seed, scenario), _core.VERSION, _core.STREAM_VERSION)
     return planned, planned.plan()
 
 
@@ -208,24 +211,32 @@ def spark_holds(data_type: Any) -> bool:
     return any(holds(data_type) for holds in SPARK_HOLDS)
 
 
-def struct_type(profile: Profile) -> 'st.StructType':
-    """The Spark schema of the DataFrame `generate` returns for `profile`.
+def struct_type(profile: Profile, *, scenario: Scenario | Sequence[Scenario] | None = None) -> 'st.StructType':
+    """The Spark schema of the DataFrame `generate` returns for `profile` under `scenario`.
 
     A timestamp with no time zone is a TimestampNTZType, and one with a zone a TimestampType. A column of a type `spark_holds`
     refuses, which Spark cannot carry with every value kept, raises ValueError naming it.
     """
-    _, engine = executor_plan(profile, 0, 0)
+    _, engine = executor_plan(profile, 0, 0, rows_only(scenario, 'spark.generate'))
     return arrow_struct_type(engine)
 
 
-def generate(spark: SparkSession, profile: Profile, *, rows: int | None = None, seed: int = 0, partitions: int | None = None) -> DataFrame:
+def generate(
+    spark: SparkSession,
+    profile: Profile,
+    *,
+    rows: int | None = None,
+    seed: int = 0,
+    partitions: int | None = None,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+) -> DataFrame:
     """The dataset as a DataFrame whose rows Spark's executors generate, with the values `doppeldata.generate` returns, in its order.
 
     Each task generates whole chunks of `CHUNK_BLOCKS` engine blocks through `mapInArrow`, so `partitions`, one per chunk when
     None, changes which task makes a row and never its value. Write it with any Spark writer, partitioned as the run needs.
-    Every executor must have the driver's doppeldata release installed.
+    Every executor must have the driver's doppeldata release installed. `scenario` is taken as `doppeldata.generate` takes it.
     """
-    planned, engine = executor_plan(profile, rows, seed)
+    planned, engine = executor_plan(profile, rows, seed, rows_only(scenario, 'spark.generate'))
     schema = arrow_struct_type(engine)
     chunks = -(-engine.block_count // CHUNK_BLOCKS)
     numbers = spark.range(chunks, numPartitions=checked_partitions(partitions, chunks))
@@ -246,6 +257,7 @@ def write(
     writer: dict[str, Any] | None = None,
     replace: bool = False,
     partitions: int | None = None,
+    scenario: Scenario | Sequence[Scenario] | None = None,
 ) -> Manifest:
     """Write from Spark's executors the files `doppeldata.write` writes with the same arguments, byte for byte, and `_manifest.json`.
 
@@ -256,10 +268,12 @@ def write(
     resolves through its own boto3 chain.
 
     A failed Spark job stores `_manifest.partial.json` recording no object, then raises WriteFailed. Its code is that of the
-    StoppedWrite a task raised, or `spark-job-failed`. `replace` then deletes every part the run stored.
+    StoppedWrite a task raised, or `spark-job-failed`. `replace` then deletes every part the run stored. `scenario` is taken as
+    `doppeldata.write` takes it, and the files are the ones it writes.
     """
     started = time.monotonic()
-    prepared = prepared_write(profile, out, rows, seed, WriteChoices(format, file_rows, partition_by, partition_style, writer))
+    choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
+    prepared = prepared_write(profile, out, rows, seed, choices, scenario)
     destination = executors_destination(spark, prepared)
     engine, options = prepared.engine, prepared.options
     ranges = len(json.loads(engine.ranges_json(options)))

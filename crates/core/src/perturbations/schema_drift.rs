@@ -63,6 +63,11 @@ impl SchemaDriftPlan {
         self.first_row
     }
 
+    /// The pointer to the drift's `after_fraction`, which sets where its files begin.
+    pub fn cut_field(&self) -> String {
+        format!("/perturbations/{}/after_fraction", self.index)
+    }
+
     /// The pointer to the scenario entry that drops or renames `column`, where one does.
     pub fn moves(&self, column: &str) -> Option<String> {
         self.moved

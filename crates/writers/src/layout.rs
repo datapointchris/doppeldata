@@ -185,6 +185,18 @@ fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange]) ->
             message: format!("the write is partitioned by {key:?}, which schema_drift drops or renames in the files past its cut"),
         });
     }
+    if let Some(drift) = plan.drift()
+        && !ranges.is_empty()
+        && ranges.iter().all(|range| range.first_row < drift.first_row())
+    {
+        return Err(LayoutError::Scenario {
+            field: drift.cut_field(),
+            message: format!(
+                "no file starts at or past row {}, where schema_drift's files begin, so none would drift; write smaller files, or lower after_fraction",
+                drift.first_row()
+            ),
+        });
+    }
     if let Some((field, reach)) = plan.across_files_reach()
         && let Some(range) = ranges.iter().find(|range| range.rows > reach)
     {

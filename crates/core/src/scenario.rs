@@ -19,7 +19,7 @@ use crate::profile::Rate;
 /// The scenario format version the engine reads, which names the published schema's file.
 pub const SCENARIO_VERSION: u64 = 1;
 
-/// A scenario file.
+/// A scenario file: a layer over a profile that bends the generated data on purpose.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Scenario {
@@ -465,13 +465,11 @@ impl Perturbation {
             Self::Duplicates(_) | Self::SchemaDrift(_) | Self::SmallFiles(_) => "table".into(),
         }
     }
-
-    /// Whether the op shapes the files written rather than the rows, so a run that writes no files
-    /// cannot apply it.
-    pub fn shapes_files(&self) -> bool {
-        matches!(self, Self::SchemaDrift(_) | Self::SmallFiles(_))
-    }
 }
+
+/// The ops that shape the files a write makes rather than the rows, so a run writing no files
+/// cannot apply them.
+pub const FILE_SHAPING_OPS: [&str; 2] = ["schema_drift", "small_files"];
 
 /// Two perturbations would share an id, and so a stream.
 #[derive(Debug, Clone, PartialEq, Eq)]

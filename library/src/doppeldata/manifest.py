@@ -1,4 +1,4 @@
-"""The record a write leaves beside a generated dataset, which with its profile regenerates every file."""
+"""The record a write leaves beside a generated dataset, which with its profile and scenario regenerates every file."""
 
 import dataclasses as dc
 import json

@@ -256,6 +256,13 @@
         "passed": {
           "type": "boolean"
         },
+        "skipped_by": {
+          "description": "The id of the scenario's perturbation that moves what the metric compares, so the metric\nis not measured and passes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "threshold": {
           "type": "number",
           "format": "double"

@@ -94,6 +94,7 @@ def footer_of(metadata: pq.FileMetaData) -> ParquetFooter:
         sorting_columns=declared.pop() if len(declared) == 1 else (),
         timestamp_units={path: unit for index, path in enumerate(paths) if (unit := stored_unit(metadata.schema.column(index)))},
         decimal_scales={path: column.scale for index, path in enumerate(paths) if is_decimal(column := metadata.schema.column(index))},
+        schema=metadata.schema.to_arrow_schema(),
     )
 
 

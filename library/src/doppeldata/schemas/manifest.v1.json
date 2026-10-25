@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "doppeldata manifest v1",
-  "description": "The record of a generated dataset, which with its profile regenerates every file byte for byte.",
+  "description": "The record of a generated dataset, which with its profile and scenario regenerates every file byte for byte.",
   "type": "object",
   "properties": {
     "dataset_digest": {

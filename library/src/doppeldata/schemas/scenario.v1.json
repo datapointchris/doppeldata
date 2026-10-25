@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "doppeldata scenario v1",
-  "description": "A scenario file.",
+  "description": "A scenario file: a layer over a profile that bends the generated data on purpose.",
   "type": "object",
   "properties": {
     "description": {

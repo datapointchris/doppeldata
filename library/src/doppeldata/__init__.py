@@ -32,6 +32,7 @@ from doppeldata.profile_comparison import check
 from doppeldata.profile_comparison import diff
 from doppeldata.profile_comparison.reports import CheckReport
 from doppeldata.profile_comparison.reports import DiffReport
+from doppeldata.profile_comparison.reports import ExpectationResult
 from doppeldata.profile_comparison.thresholds import Thresholds
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
@@ -39,6 +40,8 @@ from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import UngenerableProfile
 from doppeldata.profiling import profile
+from doppeldata.scenario_format import InvalidScenario
+from doppeldata.scenario_format import Scenario
 
 __all__ = [
     'Bundle',
@@ -50,9 +53,11 @@ __all__ = [
     'DiffReport',
     'DoppeldataError',
     'EarlierProfileNotReused',
+    'ExpectationResult',
     'FitsSkipped',
     'InvalidCodeList',
     'InvalidProfile',
+    'InvalidScenario',
     'InvalidThresholds',
     'Issue',
     'Manifest',
@@ -62,6 +67,7 @@ __all__ = [
     'ProfilesDrifted',
     'ProfilingEnginesMissing',
     'ProfilingWarning',
+    'Scenario',
     'SourceError',
     'StoppedWrite',
     'Thresholds',
