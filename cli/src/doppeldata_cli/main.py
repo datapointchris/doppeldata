@@ -1,10 +1,13 @@
 import dataclasses as dc
 import importlib.metadata
 import json
+import math
 import warnings
 from pathlib import Path
 from typing import Annotated
+from typing import Any
 
+import doppeldata
 import typer
 from doppeldata import DoppeldataError
 from doppeldata import InvalidProfile
@@ -12,9 +15,11 @@ from doppeldata import Profile
 from doppeldata import ProfilingWarning
 from doppeldata import SourceError
 from doppeldata import profile
+from doppeldata.errors import StoppedWrite
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_text
 from doppeldata.profiling import DEFAULT_K_MIN
+from doppeldata.published_schemas import output_formats
 from doppeldata.published_schemas import schema_names
 from doppeldata.published_schemas import schema_summaries
 from doppeldata.published_schemas import schema_text
@@ -22,10 +27,49 @@ from doppeldata.published_schemas import schema_text
 app = typer.Typer(no_args_is_help=True)
 profile_app = typer.Typer(no_args_is_help=True, help='Profiles: reviewable files that describe a dataset without holding its rows.')
 app.add_typer(profile_app, name='profile')
+data_app = typer.Typer(no_args_is_help=True, help='Synthetic datasets generated from a profile, written as files with a manifest.')
+app.add_typer(data_app, name='data')
 schemas_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas of the files doppeldata reads and writes.')
 app.add_typer(schemas_app, name='schemas')
 
 JsonOption = Annotated[bool, typer.Option('--json', help='Print JSON instead of a table.')]
+ProfileArgument = Annotated[str, typer.Argument(metavar='PROFILE', help='A profile file, or an example name as profile list prints it.')]
+RowsOption = Annotated[
+    int | None, typer.Option('--rows', metavar='N', min=0, help='Rows to generate. Defaults to the row count the profile records.')
+]
+SeedOption = Annotated[
+    int,
+    typer.Option(
+        '--seed', metavar='S', min=0, max=2**64 - 1, help='The seed. One profile, seed and row count give the same values anywhere.'
+    ),
+]
+FormatOption = Annotated[
+    str | None,
+    typer.Option(
+        '--format', metavar='F', help=f'One of {", ".join(output_formats())}. Defaults to the format the profile records, else parquet.'
+    ),
+]
+OutOption = Annotated[str, typer.Option('--out', metavar='PATH', help='A local directory or an s3:// URL.')]
+FileRowsOption = Annotated[
+    int | None,
+    typer.Option('--file-rows', metavar='N', min=1, help='Rows in each file. Defaults to the sizes the profile records, else 1,000,000.'),
+]
+PartitionByOption = Annotated[
+    list[str] | None,
+    typer.Option(
+        '--partition-by',
+        metavar='COLUMN',
+        help="Write a directory per value of COLUMN, repeated for nested ones. Replaces the profile's keys.",
+    ),
+]
+WriterOption = Annotated[
+    str | None,
+    typer.Option(
+        '--writer',
+        metavar='JSON',
+        help='The format\'s settings to change, as a JSON object such as \'{"compression":"snappy"}\'. schemas show manifest names them.',
+    ),
+]
 
 
 @profile_app.command('list')
@@ -110,6 +154,180 @@ def profile_show(name: Annotated[str, typer.Argument(metavar='NAME', help='An ex
             f'{name!r} is not an example profile doppeldata ships; choose from {", ".join(example_names())}', param_hint='NAME'
         )
     typer.echo(example_text(name), nl=False)
+
+
+@dc.dataclass(frozen=True)
+class DataChoices:
+    """What data plan and data generate share: the profile and every flag that decides what is written."""
+
+    profile: Profile
+    rows: int | None
+    seed: int
+    file_format: str | None
+    out: str
+    file_rows: int | None
+    partition_by: list[str] | None
+    writer: dict[str, Any] | None
+
+    def arguments(self) -> dict[str, Any]:
+        return {
+            'rows': self.rows,
+            'seed': self.seed,
+            'format': self.file_format,
+            'file_rows': self.file_rows,
+            'partition_by': self.partition_by,
+            'writer': self.writer,
+        }
+
+
+def data_choices(
+    profile_name: str,
+    rows: int | None,
+    seed: int,
+    file_format: str | None,
+    out: str,
+    file_rows: int | None,
+    partition_by: list[str] | None,
+    writer: str | None,
+) -> DataChoices:
+    """The flags both data verbs take, each refused here with exit 2 when it names nothing doppeldata writes."""
+    if file_format is not None and file_format not in output_formats():
+        raise typer.BadParameter(
+            f'{file_format!r} is not a format doppeldata writes; choose from {", ".join(output_formats())}', param_hint='--format'
+        )
+    settings = None
+    if writer is not None:
+        try:
+            settings = json.loads(writer)
+        except json.JSONDecodeError as error:
+            raise typer.BadParameter(f'{writer!r} is not JSON: {error}', param_hint='--writer') from error
+        if not isinstance(settings, dict):
+            raise typer.BadParameter(f'{writer!r} is not a JSON object', param_hint='--writer')
+    path = Path(profile_name)
+    if path.is_file():
+        try:
+            loaded = Profile.load(path)
+        except InvalidProfile as error:
+            raise typer.BadParameter(str(error), param_hint='PROFILE') from error
+    elif profile_name in example_names():
+        loaded = Profile.example(profile_name)
+    else:
+        message = f'{profile_name!r} is neither a profile file nor an example; name a file, or one of {", ".join(example_names())}'
+        raise typer.BadParameter(message, param_hint='PROFILE')
+    return DataChoices(loaded, rows, seed, file_format, out, file_rows, partition_by or None, settings)
+
+
+def refused(error: DoppeldataError) -> typer.Exit:
+    """Report `error` on stderr, and the exit its code calls for."""
+    typer.echo(f'doppeldata: {error}', err=True)
+    return typer.Exit(error.exit_code)
+
+
+def size(count: int) -> str:
+    """`count` bytes in decimal units: 950 B, 41.3 MB."""
+    if count < 1000:
+        return f'{count} B'
+    units = ('KB', 'MB', 'GB', 'TB')
+    power = min(int(math.log10(count)) // 3, len(units))
+    return f'{count / 1000**power:.1f} {units[power - 1]}'
+
+
+def counted(count: int, noun: str) -> str:
+    return f'{count:,} {noun}' + ('' if count == 1 else 's')
+
+
+@data_app.command('plan', no_args_is_help=True)
+def data_plan(
+    profile_name: ProfileArgument,
+    out: OutOption,
+    rows: RowsOption = None,
+    seed: SeedOption = 0,
+    file_format: FormatOption = None,
+    file_rows: FileRowsOption = None,
+    partition_by: PartitionByOption = None,
+    writer: WriterOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Print what data generate would write with the same flags: doppeldata data plan orders --rows 1000000000 --out s3://bucket/orders/
+
+    It reads nothing at --out, and generates the first four blocks to estimate the size.
+    """
+    choices = data_choices(profile_name, rows, seed, file_format, out, file_rows, partition_by, writer)
+    try:
+        planned = doppeldata.plan(choices.profile, choices.out, **choices.arguments())
+    except DoppeldataError as error:
+        raise refused(error) from error
+    if as_json:
+        typer.echo(json.dumps(planned.to_json(), indent=2))
+        return
+    identity = planned.identity
+    partitioned = planned.layout['partition_by']
+    lines = [
+        f'dataset    {planned.dataset_digest}',
+        f'identity   {int(identity["dataset_rows"]):,} rows from seed {identity["seed"]}, profile {identity["profile_digest"]}, '
+        f'stream version {identity["stream_version"]}',
+        f'format     {planned.format} {json.dumps(planned.writer, separators=(",", ":"))}',
+        f'files      {counted(len(planned.files), "file")} to {planned.destination}'
+        + (f', each under one {planned.layout["partition_style"]} directory per value of {", ".join(partitioned)}' if partitioned else ''),
+        f'estimate   {size(planned.estimated_bytes)}, from the first four blocks encoded with these settings',
+        '',
+    ]
+    width = max(len(column.name) for column in planned.columns)
+    type_width = max(len(column.arrow_type) for column in planned.columns)
+    for column in planned.columns:
+        nulls = f', {column.null_share:.3g} null' if column.null_share else ''
+        lines.append(f'{column.name:<{width}}  {column.arrow_type:<{type_width}}  {column.sampler}{nulls}')
+    lines.append('')
+    path_width = max((len(file.path) for file in planned.files), default=0)
+    lines.extend(f'{file.path:<{path_width}}  rows {file.first_row:,} to {file.first_row + file.rows - 1:,}' for file in planned.files)
+    typer.echo('\n'.join(lines))
+
+
+@data_app.command('generate', no_args_is_help=True)
+def data_generate(
+    profile_name: ProfileArgument,
+    out: OutOption,
+    rows: RowsOption = None,
+    seed: SeedOption = 0,
+    file_format: FormatOption = None,
+    file_rows: FileRowsOption = None,
+    partition_by: PartitionByOption = None,
+    writer: WriterOption = None,
+    replace: Annotated[
+        bool,
+        typer.Option(
+            '--replace', help='Delete what an earlier doppeldata write left at --out first. Anything else there refuses the write.'
+        ),
+    ] = False,
+    threads: Annotated[
+        int, typer.Option('--threads', metavar='N', min=0, help='Threads that generate and encode. 0 takes one per core.')
+    ] = 0,
+) -> None:
+    """Write a dataset and its _manifest.json, as data plan prints it: doppeldata data generate orders --rows 1000000 --out orders/
+
+    A destination holding anything is refused unless --replace is given. A write that fails or is interrupted leaves
+    _manifest.partial.json listing the files it completed, and exits 1. S3 is written with the AWS environment's credentials.
+    """
+    choices = data_choices(profile_name, rows, seed, file_format, out, file_rows, partition_by, writer)
+    try:
+        manifest = doppeldata.write(choices.profile, choices.out, **choices.arguments(), threads=threads, replace=replace)
+    except StoppedWrite as error:
+        typer.echo(f'doppeldata: {error}', err=True)
+        if error.manifest is not None and error.manifest_stored:
+            location = f'{choices.out.rstrip("/")}/_manifest.partial.json'
+            typer.echo(f'doppeldata: {location} lists the {counted(len(error.manifest.files), "file")} the write completed', err=True)
+        raise typer.Exit(error.exit_code) from error
+    except DoppeldataError as error:
+        raise refused(error) from error
+    document = manifest.document
+    rows_written = int(manifest.identity['dataset_rows'])
+    seconds = max(document['elapsed_ms'], 1) / 1000
+    stored = size(sum(file['bytes'] for file in manifest.files))
+    typer.echo(
+        f'wrote {counted(rows_written, "row")} as {document["format"]} in {counted(len(manifest.files), "file")}, {stored}, '
+        f'in {seconds:.2f} s on {counted(document["threads"], "thread")}: {rows_written / seconds / 1e6:.2f}M rows/s'
+    )
+    typer.echo(f'{choices.out.rstrip("/")}/_manifest.json names dataset {manifest.dataset_digest}')
 
 
 @schemas_app.command('list')
