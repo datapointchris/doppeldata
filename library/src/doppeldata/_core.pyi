@@ -2,9 +2,8 @@
 doppeldata's engine, compiled.
 """
 
-from typing import Final
-
 from _typeshed import SupportsGetItem
+from typing import Final
 
 FORMAT_VERSION: Final[int]
 """
@@ -16,7 +15,7 @@ VERSION: Final[str]
 The engine's release, which is the tag the wheel was built from.
 """
 
-def generalize_pattern(values: SupportsGetItem[int, str]) -> str | None:
+def generalize_pattern(values: SupportsGetItem[int, str]) -> str |None:
     """
     The anchored regular expression grex generalizes the values to, with each digit as a digit
     class, or None when it would hold a literal or a character class only some values have.
