@@ -8,6 +8,7 @@ use super::values::Quantiles;
 use super::values::Rate;
 use crate::format_settings::DelimitedSettings;
 use crate::format_settings::JsonSettings;
+use crate::format_settings::LineTerminator;
 use crate::format_settings::ParquetSettings;
 
 /// One table's profile. Every section is optional, and the generator falls back to defaults.
@@ -34,6 +35,9 @@ pub struct Generated {
     /// Each detector pack the profiler typed columns with, by name, with the distribution that
     /// provides it and its version, as `doppeldata <version>`.
     pub detector_packs: Option<BTreeMap<String, String>>,
+    /// Each package that read or sniffed the source files, with its version, such as
+    /// `{duckdb: 2.0.0, clevercsv: 0.8.5}`.
+    pub readers: Option<BTreeMap<String, String>>,
     /// When profiling finished, in RFC 3339.
     pub at: Option<String>,
     pub engine: Option<Engine>,
@@ -112,15 +116,128 @@ pub struct AuditEntry {
 }
 
 /// The files the data came from. `csv`, `parquet` and `json` take the keys a manifest's `writer`
-/// takes for that format, so a generated dataset can be written the way its source was.
+/// takes for that format, so a generated dataset can be written the way its source was. Beside them
+/// each holds what the profiler observed of the files that no writer setting reproduces.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Source {
     pub format: Option<SourceFormat>,
     pub compression: Option<Compression>,
     pub layout: Option<Layout>,
-    pub csv: Option<DelimitedSettings>,
-    pub parquet: Option<ParquetSettings>,
-    pub json: Option<JsonSettings>,
+    pub csv: Option<CsvSource>,
+    pub parquet: Option<ParquetSource>,
+    pub json: Option<JsonSource>,
+}
+
+/// A delimited source's dialect, as a writer takes it, and how it was found.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CsvSource {
+    #[serde(flatten)]
+    pub settings: DelimitedSettings,
+    /// The encoding charset-normalizer named for the first block, such as `ascii`, `utf_8` or
+    /// `cp1252`. `encoding` holds the nearest one a writer writes.
+    pub detected_encoding: Option<String>,
+    /// The share of the first block's line breaks that end in each terminator.
+    pub line_terminator_mix: Option<BTreeMap<LineTerminator, Rate>>,
+    /// Whether every sampled line ends in a delimiter, which a reader takes as one more empty column.
+    pub trailing_delimiter: Option<bool>,
+    pub detector: Option<DialectDetection>,
+    pub malformed: Option<MalformedRows>,
+}
+
+/// How the dialect was found. DuckDB's sniffer reads the files first, and CleverCSV confirms its
+/// dialect on the first block. Where the two disagree, CleverCSV's dialect is read.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct DialectDetection {
+    pub primary: Option<DialectSniffer>,
+    pub confirm: Option<DialectSniffer>,
+    /// Whether the two found the same delimiter and quote.
+    pub agreed: Option<bool>,
+    pub chosen: Option<DialectSniffer>,
+    /// The share of the first block's records that split into the most common number of fields
+    /// under the chosen dialect.
+    pub confidence: Option<Rate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DialectSniffer {
+    Duckdb,
+    Clevercsv,
+}
+
+/// The data rows a reader rejects, as shares of every data row the files hold. A type held by
+/// fewer than `k_min` rows is left out, and `rate` is the sum of the rest.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct MalformedRows {
+    pub rate: Option<Rate>,
+    /// Each rejected row is counted once, under its first error.
+    pub by_type: Option<BTreeMap<MalformedRow, Rate>>,
+}
+
+/// Why a reader rejects a row, as DuckDB's rejects table names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MalformedRow {
+    /// A value that does not parse as its column's type.
+    Cast,
+    MissingColumns,
+    TooManyColumns,
+    /// A quoted value whose closing quote is not followed by a delimiter or a line break.
+    UnquotedValue,
+    LineSizeOverMaximum,
+    InvalidEncoding,
+    InvalidState,
+}
+
+/// A Parquet source's writer settings, read from its files' footers, and what the footers say of
+/// the writer. No value statistic is read from a footer.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ParquetSource {
+    #[serde(flatten)]
+    pub settings: ParquetSettings,
+    /// The `created_by` most footers name, such as `parquet-mr version 1.13.1 (build ...)`.
+    pub writer: Option<String>,
+    /// `org.apache.spark.version` from the key-value metadata, where Spark wrote the files.
+    pub spark_version: Option<String>,
+    /// The format version most footers declare, such as `1.0` or `2.6`.
+    pub format_version: Option<String>,
+    pub row_groups: Option<RowGroups>,
+    /// Each timestamp column's unit as stored. `int96` is the legacy encoding no writer reproduces.
+    pub timestamp_units: Option<BTreeMap<String, StoredTimestampUnit>>,
+    /// Whether a decimal column's scale differs between files.
+    pub decimal_scale_drift: Option<bool>,
+    /// How many files' footers were read: every file's, or a seeded sample's.
+    pub footers_read: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct RowGroups {
+    /// Row groups in each file.
+    pub per_file: Option<Quantiles>,
+    pub rows: Option<Quantiles>,
+    /// Each row group's bytes on disk, the sum of its column chunks' compressed sizes.
+    pub compressed_bytes: Option<Quantiles>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StoredTimestampUnit {
+    Ms,
+    Us,
+    Ns,
+    Int96,
+}
+
+/// A JSON source's writer settings and its nesting.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JsonSource {
+    #[serde(flatten)]
+    pub settings: JsonSettings,
+    /// The deepest nesting of objects and arrays, counting the record as 1.
+    pub max_depth: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -198,6 +315,11 @@ pub struct PartitionKey {
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct ValueCount {
     pub count: Option<u64>,
+    /// The share of rows under each value at least `k_min` rows hold, written where the key takes
+    /// no more values than a string column's top values list.
+    pub shares: Option<BTreeMap<String, Rate>>,
+    /// The share of rows under a non-null value `shares` does not list.
+    pub other_rate: Option<Rate>,
 }
 
 /// Facts about the table as a whole.

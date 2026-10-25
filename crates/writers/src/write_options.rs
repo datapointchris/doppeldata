@@ -82,7 +82,10 @@ impl WriteOptions {
             .filter(|_| recorded.is_none_or(|recorded| recorded == format));
         let output = match format {
             SourceFormat::Parquet => {
-                let mut settings = source.and_then(|source| source.parquet.clone()).unwrap_or_default();
+                let mut settings = source
+                    .and_then(|source| source.parquet.as_ref())
+                    .map(|parquet| parquet.settings.clone())
+                    .unwrap_or_default();
                 if let Some(compression) = compression
                     && settings.compression == ParquetSettings::default().compression
                 {
@@ -98,7 +101,10 @@ impl WriteOptions {
                 Output::Arrow(settings)
             }
             SourceFormat::Csv | SourceFormat::Tsv => {
-                let mut settings = source.and_then(|source| source.csv.clone()).unwrap_or_default();
+                let mut settings = source
+                    .and_then(|source| source.csv.as_ref())
+                    .map(|csv| csv.settings.clone())
+                    .unwrap_or_default();
                 if let Some(compression) = compression
                     && settings.compression == TextCompression::None
                 {
@@ -110,7 +116,10 @@ impl WriteOptions {
                 }
             }
             SourceFormat::Json | SourceFormat::Ndjson => {
-                let mut settings: JsonSettings = source.and_then(|source| source.json.clone()).unwrap_or_default();
+                let mut settings: JsonSettings = source
+                    .and_then(|source| source.json.as_ref())
+                    .map(|json| json.settings.clone())
+                    .unwrap_or_default();
                 if let Some(compression) = compression
                     && settings.compression == TextCompression::None
                 {
