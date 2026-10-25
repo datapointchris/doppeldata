@@ -8,6 +8,7 @@ import os
 import warnings
 from collections.abc import Mapping
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 from typing import Any
 
 from doppeldata.errors import ColumnsNotFrozen
@@ -20,12 +21,18 @@ from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import table_profile
+from doppeldata.profiling.backend import Backend
+from doppeldata.profiling.backend import Request
+from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.detector_packs import HEALTHCARE
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import SuppliedCodeList
 from doppeldata.profiling.detector_packs import enabled_packs
 from doppeldata.profiling.detector_packs import read_code_lists
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 
 @dc.dataclass(frozen=True)
@@ -106,29 +113,17 @@ def profile(
     column's `overflow`. A column only one of the two tables holds, or whose list would move to another
     section, issues `ColumnsNotFrozen`.
     """
-    if engine not in ENGINES:
-        raise ValueError(f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}')
     if sample is not None and sample < 1:
         raise ValueError(f'sample must be a positive number of rows, not {sample}')
     applied = applied_policy(policy, k_min)
     stated = applied.k_min(k_min)
     # `none` holds no floor, so every statistic is computed over every row.
     floor = stated or 1
-    chosen = ENGINES[engine]
-    missing = uninstalled([package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
-    if missing:
-        raise ProfilingEnginesMissing(engine, missing)
-    # Imported by name, because each imports packages a library-only install lacks.
-    backend = getattr(importlib.import_module(chosen.module), chosen.backend)()
+    backend = engine_backend(engine)
     named = [*packs, HEALTHCARE] if applied is Policy.HEALTHCARE and HEALTHCARE not in packs else list(packs)
     enabled = enabled_packs(named)
     supplied = read_code_lists(code_lists or {}, enabled)
-    sources = importlib.import_module(SOURCES_MODULE)
-    source = sources.resolve(data)
-    reading = [package for package in chosen.packages if source.format in package.reads]
-    missing = uninstalled(reading)
-    if missing:
-        raise ProfilingEnginesMissing(engine, missing)
+    source, reading = listed_source(data, engine)
     readers = {package.distribution: importlib.metadata.version(package.distribution) for package in reading}
     if edges_from is not None:
         changed = what_changed(
@@ -159,7 +154,7 @@ def profile(
             frozen=frozen,
         )
     )
-    sources.check_unchanged(source)
+    importlib.import_module(SOURCES_MODULE).check_unchanged(source)
     issues = profiled.validate()
     if issues:
         raise InvalidProfile(f'the profile of {data!r}', issues)
@@ -170,6 +165,52 @@ def profile(
         if undescribed or missing or relisted:
             warnings.warn(ColumnsNotFrozen(undescribed, missing, relisted), stacklevel=2)
     return profiled
+
+
+def engine_backend(engine: str) -> Backend:
+    """The engine's backend, refused with ProfilingEnginesMissing where a package every source needs is not installed."""
+    if engine not in ENGINES:
+        raise ValueError(f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}')
+    chosen = ENGINES[engine]
+    missing = uninstalled([package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
+    if missing:
+        raise ProfilingEnginesMissing(engine, missing)
+    # Imported by name, because each imports packages a library-only install lacks.
+    backend: Backend = getattr(importlib.import_module(chosen.module), chosen.backend)()
+    return backend
+
+
+def listed_source(data: Any, engine: str = 'polars') -> tuple[Source, list[EnginePackage]]:
+    """`data` listed as one source, and the engine's packages that read its format, refused where one is not installed."""
+    source: Source = importlib.import_module(SOURCES_MODULE).resolve(data)
+    reading = [package for package in ENGINES[engine].packages if source.format in package.reads]
+    missing = uninstalled(reading)
+    if missing:
+        raise ProfilingEnginesMissing(engine, missing)
+    return source, reading
+
+
+@dc.dataclass(frozen=True)
+class SampledTable:
+    """A seeded random sample of a source's rows, and the rows the source holds.
+
+    `fingerprint` is the listing's, as a profile's `source_fingerprint` records it, and None for a table in memory.
+    """
+
+    table: 'pa.Table'
+    rows: int
+    fingerprint: str | None
+
+
+def sampled_table(data: Any, rows: int, *, engine: str = 'polars', seed: int = table_profile.SAMPLE_SEED) -> SampledTable:
+    """A seeded random sample of up to `rows` rows of `data`, anything `profile` reads, at the types `profile` reads them as."""
+    if rows < 1:
+        raise ValueError(f'rows must be a positive number of rows, not {rows}')
+    backend = engine_backend(engine)
+    source, _ = listed_source(data, engine)
+    table = table_profile.typed_table(backend, source)
+    held = table_profile.answered(backend, table, [Request(None, 'rows')])[(None, 'rows')]
+    return SampledTable(backend.sample(table, rows, seed), held, source.fingerprint)
 
 
 def uninstalled(packages: Sequence[EnginePackage]) -> list[str]:

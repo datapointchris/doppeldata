@@ -293,26 +293,11 @@ def profile_columns(
     unparsed_rows, null_token = 0, text_types.EMPTY
     paths: set[str] = set()
     if settings.source_format in TEXT_FORMATS:
-        visible = visible_specs(backend, table)
-        delimited = json_root is None
-        tokens = text_types.null_tokens(backend, table, visible) if delimited else {}
-        nulled = {
-            name: ParsedType('string', missing=missing)
-            for name, found in tokens.items()
-            if (missing := tuple(set(found) - {text_types.EMPTY}))
-        }
-        if nulled:
-            table = backend.parse(table, nulled)
-        # A column outside the JSON tree, such as a Hive key read from the path, is typed by its text alone.
-        paths = {node.column for node in json_paths.table_nodes(json_root)} if json_root else paths
-        from_text = [spec for spec in visible if spec.name not in paths]
-        from_json = [spec for spec in visible if spec.name in paths]
-        text = text_types.type_text_columns(backend, table, from_text, SAMPLE_SEED) if from_text else {}
-        if from_json:
-            text |= text_types.type_text_columns(backend, table, from_json, SAMPLE_SEED, json=True)
-        if delimited:
-            null_token = most_written_token(tokens)
-            text = {name: dc.replace(column, missing_tokens=column_tokens(tokens[name], null_token)) for name, column in text.items()}
+        typed = typed_text(backend, table, json_root)
+        table, text, paths = typed.table, typed.columns, typed.paths
+        if json_root is None:
+            null_token = most_written_token(typed.tokens)
+            text = {name: dc.replace(column, missing_tokens=column_tokens(typed.tokens[name], null_token)) for name, column in text.items()}
             parsing = tuple((name, column.parsed) for name, column in text.items())
             unparsed_rows = answered(backend, table, [Request(None, 'unparsed_rows', parsing)])[(None, 'unparsed_rows')]
         table = backend.parse(table, {name: column.parsed for name, column in text.items()})
@@ -393,6 +378,47 @@ def column_facts(spec: ColumnSpec, typing: 'Typing | None') -> ColumnFacts:
         detector.type if detector else None,
         detector.sensitivity if detector else None,
     )
+
+
+@dc.dataclass(frozen=True)
+class TypedText:
+    """A text table with its null tokens read as null, each column's type, the rows of each null token by column, and the
+    columns a JSON tree holds.
+    """
+
+    table: Table
+    columns: dict[str, TextColumn]
+    tokens: dict[str, dict[str, int]]
+    paths: set[str]
+
+
+def typed_text(backend: Backend, table: Table, json_root: JsonNode | None) -> TypedText:
+    """The type each text column of `table` is read as. A delimited table's null tokens are read as null first."""
+    visible = visible_specs(backend, table)
+    delimited = json_root is None
+    tokens = text_types.null_tokens(backend, table, visible) if delimited else {}
+    nulled = {
+        name: ParsedType('string', missing=missing) for name, found in tokens.items() if (missing := tuple(set(found) - {text_types.EMPTY}))
+    }
+    if nulled:
+        table = backend.parse(table, nulled)
+    # A column outside the JSON tree, such as a Hive key read from the path, is typed by its text alone.
+    paths = {node.column for node in json_paths.table_nodes(json_root)} if json_root else set()
+    from_text = [spec for spec in visible if spec.name not in paths]
+    from_json = [spec for spec in visible if spec.name in paths]
+    text = text_types.type_text_columns(backend, table, from_text, SAMPLE_SEED) if from_text else {}
+    if from_json:
+        text |= text_types.type_text_columns(backend, table, from_json, SAMPLE_SEED, json=True)
+    return TypedText(table, text, tokens, paths)
+
+
+def typed_table(backend: Backend, source: Source) -> Table:
+    """The source's record table with each column at the type a profile of it gives the column."""
+    read = backend.read(source)
+    if source.format not in TEXT_FORMATS:
+        return read.table
+    typed = typed_text(backend, read.table, read.json.paths if read.json else None)
+    return backend.parse(typed.table, {name: column.parsed for name, column in typed.columns.items()})
 
 
 def json_profiled(backend: Backend, profiled: ProfiledColumns, settings: ColumnSettings, root: JsonNode) -> json_paths.ProfiledTable:
