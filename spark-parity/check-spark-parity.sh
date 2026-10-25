@@ -56,6 +56,7 @@ main() {
       -v "$fixture:/work/every-column-kind.profile.yaml:ro" "${mounted[@]}" \
       -v "$wheel:/wheel/$(basename "$wheel"):ro" --entrypoint bash "$image" \
       /parity/inside-spark-image.sh "/wheel/$(basename "$wheel")" "$SPARK_MASTER" "$DRIVER_MEMORY" \
+      /parity/compare_spark_with_local.py /work/local/_manifest.json /tmp/out /work/every-column-kind.profile.yaml \
       "${mounted:+/work/scenario.yaml}" || status=1
   done
   exit "$status"
