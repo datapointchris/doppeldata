@@ -126,10 +126,32 @@ under any policy, and `--policy healthcare` enables it without being named.
 - **An ICD-10-CM or HCPCS Level II code is typed by membership** in a code list the engine ships, so
   a product code of the same shape is not. Its generator hint is the `icd10cm` or `hcpcs_level2`
   provider, which draws from the same list. `healthcare-policy.md` says where each list comes from.
-- **An NDC or CPT code is typed by its shape alone**, and a CPT code, or an NDC without hyphens,
-  only where the name hints it. Five digits is a ZIP code's shape too.
+- **A CPT code is typed by its shape alone**, and only where the name hints it. Five digits is a ZIP
+  code's shape too.
+- **An NDC is typed by its shape, and by membership where the caller supplies an `ndc` list.** An
+  NDC without hyphens is typed only where the name hints it.
 - **A member, medical record or claim number has no published format.** It is typed by its name
   hint and a stable shape: the values' most common shape holds a digit, and enough of them share it.
+
+## A detector may read a code list the caller supplies, recorded by its sha256
+
+A `Detector` whose `code_list` names a list, such as `ndc`, reads the file a run supplies under
+that name: `profile create --code-list ndc=FILE`, or `profile(..., code_lists={'ndc': path})`.
+FILE holds one code a line. The detector's `validate` takes the list's lines as a second argument,
+or None where the run supplied none, so the type falls back to what it decides without one.
+
+- **`generated.code_lists` records each list's name and the sha256 of its content.** It records no
+  path, because a committed profile must not name a machine's directories. An earlier profile made
+  with another list, or none, is not reused by `--edges-from`.
+- **A name no enabled detector reads is a usage error**, exit 2, naming the lists the enabled
+  detectors read, or the shipped packs that read one.
+- **Detection reads the list, and generation does not.** A typed column is drawn from its hint, so
+  its generated codes are not the list's. `data check` profiles generated data without the list,
+  and passes a type change on a type a list decides, because only a run reading it could confirm
+  the type.
+
+*Rejected:* naming the list in an environment variable. It is state no argument shows, and the
+profile would not say which list typed it.
 
 ## A pack is a plugin, registered under an entry point by its name
 

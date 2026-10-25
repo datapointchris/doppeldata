@@ -36,6 +36,9 @@ pub struct Generated {
     /// Each detector pack the profiler typed columns with, by name, with the distribution that
     /// provides it and its version, as `doppeldata <version>`.
     pub detector_packs: Option<BTreeMap<String, String>>,
+    /// Each code list the caller supplied a detector, by the name the detector reads it by, with
+    /// the sha256 of the file's content, as `sha256:<hex>`. The file's path is not recorded.
+    pub code_lists: Option<BTreeMap<String, String>>,
     /// Each package that read or sniffed the source files, by its distribution name, with its
     /// installed version.
     pub readers: Option<BTreeMap<String, String>>,

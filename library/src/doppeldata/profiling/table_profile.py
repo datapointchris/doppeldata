@@ -8,6 +8,7 @@ import math
 import random
 import warnings
 from collections.abc import Callable
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 from typing import Any
 
@@ -42,6 +43,7 @@ from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import Table
 from doppeldata.profiling.backend import is_hidden
 from doppeldata.profiling.detector_packs import EnabledPack
+from doppeldata.profiling.detector_packs import SuppliedCodeList
 from doppeldata.profiling.profiled_columns import Answers
 from doppeldata.profiling.profiled_columns import ProfiledColumns
 from doppeldata.profiling.recorded_counts import RATE_DIGITS
@@ -193,14 +195,15 @@ def profile_table(
     k_min: int,
     policy: Policy,
     packs: list[EnabledPack],
+    code_lists: Mapping[str, SuppliedCodeList],
     readers: dict[str, str],
     frozen: FrozenLayout | None = None,
 ) -> dict[str, Any]:
     """The profile document of `source`, from every row or from a seeded sample of `sample` rows, written under `policy`.
 
-    The detectors of `packs` type each column `semantic_types.detected_columns` names, and the type decides which rule
-    of the policy holds the column. With `frozen`, each column it names is counted against the earlier profile's edges
-    and value list.
+    The detectors of `packs` type each column `semantic_types.detected_columns` names, reading `code_lists`, and the
+    type decides which rule of the policy holds the column. With `frozen`, each column it names is counted against the
+    earlier profile's edges and value list.
     """
     read = backend.read(source)
     table = read.table
@@ -213,13 +216,14 @@ def profile_table(
     whole_distinct: dict[str, int] = {column: count for (column, _), count in counted.items() if column is not None}
     if sample is not None and rows > sample:
         table = backend.scan(Source(format=None, table=backend.sample(table, sample, SAMPLE_SEED)))
-    settings = ColumnSettings(source.format, k_min, policy, packs, frozen or FrozenLayout(), read.json.elements if read.json else {})
+    elements = read.json.elements if read.json else {}
+    settings = ColumnSettings(source.format, k_min, policy, packs, code_lists, frozen or FrozenLayout(), elements)
     profiled = profile_columns(backend, table, settings, rows, whole_distinct, read.json.paths if read.json else None)
     fitting, _ = fitting_module()
     generated: dict[str, Any] = {
         'tool': TOOL,
         'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
-    } | derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None, packs, readers)
+    } | derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None, packs, code_lists, readers)
     generated['sample'] = {'strategy': 'reservoir', 'rows_read': profiled.described} if profiled.described < rows else {'strategy': 'full'}
     document: dict[str, Any] = {
         'profile_version': _core.FORMAT_VERSION,
@@ -242,14 +246,16 @@ def visible_specs(backend: Backend, table: Table) -> list[ColumnSpec]:
 
 @dc.dataclass(frozen=True)
 class ColumnSettings:
-    """What every table of one source is profiled with: its format, the floor, the privacy policy, the detector packs,
-    an earlier profile's edges and value lists, and a JSON source's element tables by array path.
+    """What every table of one source is profiled with: its format, the floor, the privacy policy, the detector packs
+    and the code lists they read, an earlier profile's edges and value lists, and a JSON source's element tables by
+    array path.
     """
 
     source_format: SourceFormat | None
     k_min: int
     policy: Policy
     packs: list[EnabledPack]
+    code_lists: Mapping[str, SuppliedCodeList]
     frozen: FrozenLayout
     elements: dict[str, Table]
 
@@ -301,7 +307,7 @@ def profile_columns(
     detected = detection.detected_columns(specs, packs)
     value_sample = backend.sample(table, VALUE_SAMPLE_ROWS, SAMPLE_SEED) if detected else None
     patterns = generalized_patterns(value_sample, shapes, stats, described, k_min)
-    typings = detection.column_typings(value_sample, detected, patterns, k_min) if value_sample else {}
+    typings = detection.column_typings(value_sample, detected, patterns, k_min, settings.code_lists) if value_sample else {}
     treatments = {spec.name: column_treatment(column_facts(spec, typings.get(spec.name)), settings.policy) for spec in specs}
     binnings = {}
     for spec in specs:
@@ -412,14 +418,22 @@ def column_tokens(found: dict[str, int], null_token: str) -> dict[str, int]:
 
 
 def derivation(
-    engine: str, fingerprint: str | None, fitter: str | None, packs: list[EnabledPack], readers: dict[str, str]
+    engine: str,
+    fingerprint: str | None,
+    fitter: str | None,
+    packs: list[EnabledPack],
+    code_lists: Mapping[str, SuppliedCodeList],
+    readers: dict[str, str],
 ) -> dict[str, Any]:
-    """The `DERIVED_FROM` fields a profile made now with this engine, listing, fitter, detector packs and readers writes."""
+    """The `DERIVED_FROM` fields a profile made now with this engine, listing, fitter, detector packs, code lists and
+    readers writes.
+    """
     values = {
         'tool': TOOL,
         'engine': engine,
         'fitter': fitter,
         'detector_packs': {enabled.pack.name: enabled.provided_by for enabled in packs},
+        'code_lists': {name: supplied.digest for name, supplied in sorted(code_lists.items())} or None,
         'readers': readers or None,
         'source_fingerprint': fingerprint,
     }

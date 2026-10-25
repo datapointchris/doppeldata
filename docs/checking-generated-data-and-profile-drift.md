@@ -153,6 +153,9 @@ Arrow decimal type telling a decimal from a float.
   hand-written profile may carry any type, and one no pack declares is found in no data. A
   column's `semantic.pack` names the pack, and in a check the packs it ran name it for a column
   that does not.
+- **A check passes a type change on a type a code list decides**, where the two profiles record
+  different contents for that list. A check profiles generated data without the list, and
+  generated codes are drawn from the type's hint rather than the list.
 - **A diff fails on every other changed field.** That covers a changed Arrow type or kind, which
   there means the source itself changed. It also covers a column with more than `OVERFLOW_SHARE`
   of its values outside the edges or value list frozen from A, a CSV dialect setting a writer takes

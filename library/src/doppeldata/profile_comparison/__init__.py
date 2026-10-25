@@ -65,7 +65,7 @@ def check(profile: Profile, data: Any, *, thresholds: Thresholds | None = None) 
         ),
         # A check vouches for the data, so a statistic the profile states and the data cannot supply fails.
         metrics=measured(source, observed, thresholds, unmeasured_passes=False),
-        changes=column_changes(source, observed, writer_changes_pass=True, declaring=declared_types(packs)),
+        changes=column_changes(source, observed, writer_changes_pass=True, declaring=declared_types(packs), listing=listed_types(packs)),
     )
 
 
@@ -77,7 +77,7 @@ def diff(a: Profile, b: Profile, *, thresholds: Thresholds | None = None) -> Dif
     earlier, later = a.to_plain(), b.to_plain()
     thresholds = thresholds or Thresholds()
     thresholds.check_columns(earlier)
-    changes = column_changes(earlier, later, writer_changes_pass=False, declaring={})
+    changes = column_changes(earlier, later, writer_changes_pass=False, declaring={}, listing={})
     changes += overflow_changes(earlier, later) + source_changes(earlier, later)
     # A diff reports what changed between two profiles, and B binned afresh supplies no overflow, so an unmeasured metric passes.
     return DiffReport(reported(a), reported(b), measured(earlier, later, thresholds, unmeasured_passes=True), changes)
@@ -118,6 +118,11 @@ def measured(source: Document, observed: Document, thresholds: Thresholds, *, un
 def declared_types(packs: list[EnabledPack]) -> dict[str, str]:
     """The pack that declares each semantic type, by type."""
     return {detector.type: each.pack.name for each in packs for detector in each.pack.detectors}
+
+
+def listed_types(packs: list[EnabledPack]) -> dict[str, str]:
+    """The code list each semantic type is read from, by type, for the types a detector reads one for."""
+    return {detector.type: detector.code_list for each in packs for detector in each.pack.detectors if detector.code_list}
 
 
 def reported(profile: Profile) -> ReportedProfile:

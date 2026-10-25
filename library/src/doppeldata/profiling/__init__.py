@@ -4,7 +4,9 @@ import dataclasses as dc
 import importlib
 import importlib.metadata
 import importlib.util
+import os
 import warnings
+from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
 
@@ -21,7 +23,9 @@ from doppeldata.profiling import table_profile
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.detector_packs import HEALTHCARE
 from doppeldata.profiling.detector_packs import EnabledPack
+from doppeldata.profiling.detector_packs import SuppliedCodeList
 from doppeldata.profiling.detector_packs import enabled_packs
+from doppeldata.profiling.detector_packs import read_code_lists
 
 
 @dc.dataclass(frozen=True)
@@ -75,6 +79,7 @@ def profile(
     k_min: int | None = None,
     edges_from: Profile | None = None,
     packs: Sequence[str] = (),
+    code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
 ) -> Profile:
     """Profile `data` into a valid table profile holding no rows, written under the privacy policy `policy`.
 
@@ -88,8 +93,13 @@ def profile(
     found by name in the `doppeldata.detector_packs` entry-point group, and `DetectorPackError` names one
     that is not installed or does not load.
 
+    `code_lists` maps the name a detector reads a list by to a local file holding one code a line, such as
+    `{'ndc': 'ndc.txt'}`, and the healthcare pack then types an NDC only where the list holds it.
+    `generated.code_lists` records each list's sha256 and never its path. `InvalidCodeList` names a list no
+    enabled detector reads, or a file that cannot be read.
+
     `edges_from` is an earlier profile of the same table. Where its source fingerprint matches the files
-    listed now, and it was made by this doppeldata, scipy, detector packs and readers, such as DuckDB and
+    listed now, and it was made by this doppeldata, scipy, detector packs, code lists and readers, such as DuckDB and
     CleverCSV, with the same engine, policy, `k_min` and sampling, it is returned unchanged, so a reviewer's
     edits survive a re-run. Otherwise an `EarlierProfileNotReused` names what differs, each column it holds a
     histogram or value list for is counted
@@ -112,6 +122,7 @@ def profile(
     backend = getattr(importlib.import_module(chosen.module), chosen.backend)()
     named = [*packs, HEALTHCARE] if applied is Policy.HEALTHCARE and HEALTHCARE not in packs else list(packs)
     enabled = enabled_packs(named)
+    supplied = read_code_lists(code_lists or {}, enabled)
     sources = importlib.import_module(SOURCES_MODULE)
     source = sources.resolve(data)
     reading = [package for package in chosen.packages if source.format in package.reads]
@@ -121,7 +132,15 @@ def profile(
     readers = {package.distribution: importlib.metadata.version(package.distribution) for package in reading}
     if edges_from is not None:
         changed = what_changed(
-            edges_from, source.fingerprint, engine=engine, sample=sample, policy=applied, k_min=stated, packs=enabled, readers=readers
+            edges_from,
+            source.fingerprint,
+            engine=engine,
+            sample=sample,
+            policy=applied,
+            k_min=stated,
+            packs=enabled,
+            code_lists=supplied,
+            readers=readers,
         )
         if changed is None:
             return edges_from
@@ -129,7 +148,15 @@ def profile(
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
     profiled = Profile(
         table_profile.profile_table(
-            backend, source, sample=sample, k_min=floor, policy=applied, packs=enabled, readers=readers, frozen=frozen
+            backend,
+            source,
+            sample=sample,
+            k_min=floor,
+            policy=applied,
+            packs=enabled,
+            code_lists=supplied,
+            readers=readers,
+            frozen=frozen,
         )
     )
     sources.check_unchanged(source)
@@ -175,12 +202,13 @@ def what_changed(
     policy: Policy,
     k_min: int | None,
     packs: list[EnabledPack],
+    code_lists: Mapping[str, SuppliedCodeList],
     readers: dict[str, str],
 ) -> str | None:
     """What keeps `previous` from being what profiling the listed source with these settings would give, or None.
 
-    So an earlier doppeldata, a run without scipy, or one with other detector packs, never hands back a profile this one
-    would write differently.
+    So an earlier doppeldata, a run without scipy, or one with other detector packs or code lists, never hands back a
+    profile this one would write differently.
     """
     document = previous.to_plain()
     generated = document.get('generated') or {}
@@ -193,7 +221,7 @@ def what_changed(
     if recorded_k_min != k_min:
         return f'it was made with k_min {recorded_k_min}, and this run uses {k_min}'
     fitting, _ = table_profile.fitting_module()
-    now = table_profile.derivation(engine, fingerprint, fitting.FITTER if fitting else None, packs, readers)
+    now = table_profile.derivation(engine, fingerprint, fitting.FITTER if fitting else None, packs, code_lists, readers)
     for field in DERIVED_FROM:
         if generated.get(field) != now.get(field):
             return f'its generated.{field} is {described(generated.get(field))}, and this run writes {described(now.get(field))}'

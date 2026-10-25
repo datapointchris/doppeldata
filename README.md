@@ -80,13 +80,14 @@ numbers and US SSNs, and `doppeldata.profiling.detector_packs.general` lists its
 names what the generator draws for it, and the failing share becomes `quality.invalid_rate`.
 `--pack NAME` adds an installed detector pack's types to these. The healthcare pack ships with the
 library, and types NPIs, MBIs, NDC, ICD-10-CM, HCPCS and CPT codes, DEA numbers, and member, medical
-record and claim numbers.
+record and claim numbers. `--code-list ndc=FILE` types an NDC only where FILE lists it, and the
+profile records the file's sha256.
 
 Each numeric column gets an equal-depth histogram, and each with enough distinct values gets the
 distribution family that fits it best. `--edges-from` counts a new profile against an earlier one's
 bin edges and value lists, so the two compare bin for bin, and the rows outside them are written as
-overflow. Where the files, the run's settings, the doppeldata, scipy and reader versions and the
-detector packs match the ones the earlier profile was made with, it is kept as it is, with any edits a
+overflow. Where the files, the run's settings, the doppeldata, scipy and reader versions, the
+detector packs and the code lists match the ones the earlier profile was made with, it is kept as it is, with any edits a
 reviewer made. Otherwise `profile create` says what differs.
 
 `data check` profiles generated data with its profile's edges frozen, and never reads the real data.

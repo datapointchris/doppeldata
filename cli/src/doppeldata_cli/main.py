@@ -17,6 +17,7 @@ import typer
 from doppeldata import CheckFailed
 from doppeldata import DetectorPackError
 from doppeldata import DoppeldataError
+from doppeldata import InvalidCodeList
 from doppeldata import InvalidProfile
 from doppeldata import InvalidThresholds
 from doppeldata import Profile
@@ -211,7 +212,7 @@ def profile_create(
             help=(
                 "Count each column against FILE's histogram edges and value list, writing the rows outside them as overflow. "
                 'FILE is returned unchanged when nothing it was made from has changed: the files, the settings, '
-                'and the versions of the tools, readers and detector packs that made it.'
+                'the versions of the tools, readers and detector packs that made it, and the code lists it read.'
             ),
         ),
     ] = None,
@@ -221,6 +222,17 @@ def profile_create(
             '--pack',
             metavar='NAME',
             help=('Also type columns with the installed detector pack NAME; repeat it for more than one. The general pack is always on.'),
+        ),
+    ] = None,
+    code_lists: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--code-list',
+            metavar='NAME=FILE',
+            help=(
+                'Hand the detectors that read the code list NAME the codes in FILE, one a line; repeat it for more than one. '
+                'With ndc=FILE, the healthcare pack types an NDC only where FILE holds it. The profile records its sha256, not its path.'
+            ),
         ),
     ] = None,
 ) -> None:
@@ -238,10 +250,15 @@ def profile_create(
         earlier = Profile.load(edges_from) if edges_from is not None else None
     except (OSError, InvalidProfile) as error:
         raise typer.BadParameter(str(error), param_hint='--edges-from') from error
+    named_lists = named_files(code_lists or [], '--code-list')
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', ProfilingWarning)
-            profiled = profile(data, sample=sample, policy=policy, k_min=k_min, edges_from=earlier, packs=packs or ())
+            profiled = profile(
+                data, sample=sample, policy=policy, k_min=k_min, edges_from=earlier, packs=packs or (), code_lists=named_lists
+            )
+    except InvalidCodeList as error:
+        raise typer.BadParameter(str(error), param_hint='--code-list') from error
     except SourceError as error:
         if error.exit_code != 2:
             raise
@@ -260,6 +277,19 @@ def profile_create(
         typer.echo(profiled.to_yaml(), nl=False)
         return
     profiled.save(out)
+
+
+def named_files(pairs: list[str], option: str) -> dict[str, Path]:
+    """Each `NAME=FILE` an option was given, by name, refused with exit 2 where one has no `=` or a name repeats."""
+    named: dict[str, Path] = {}
+    for pair in pairs:
+        name, equals, file = pair.partition('=')
+        if not equals or not name or not file:
+            raise typer.BadParameter(f'{pair!r} is not NAME=FILE', param_hint=option)
+        if name in named:
+            raise typer.BadParameter(f'{name} is named twice', param_hint=option)
+        named[name] = Path(file)
+    return named
 
 
 def print_notices(caught: list[warnings.WarningMessage]) -> None:

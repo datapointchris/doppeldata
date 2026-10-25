@@ -11,18 +11,22 @@ type. So enable only a pack trusted with the data. The profile holds none of tho
 """
 
 import dataclasses as dc
+import hashlib
 import importlib
 import importlib.metadata
+import os
 import re
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 
 from doppeldata import _core
 from doppeldata.column_name_words import name_words
 from doppeldata.errors import DetectorPackError
+from doppeldata.errors import InvalidCodeList
 from doppeldata.privacy_policy.column_treatment import SAFE_HARBOR_TYPES
 from doppeldata.published_schemas import published_enum
 from doppeldata.published_schemas import published_fields
@@ -44,6 +48,8 @@ BUILT_IN = {
 IDENTIFIER = re.compile(r'[a-z][a-z0-9_]*')
 
 Validator = Callable[['pa.Array'], 'pa.BooleanArray']
+# A detector reading a code list is handed the supplied list's codes beside the values, or None where none was supplied.
+ListValidator = Callable[['pa.Array', 'pa.Array | None'], 'pa.BooleanArray']
 
 
 @dc.dataclass(frozen=True)
@@ -62,6 +68,9 @@ class Detector:
     With `hint_required`, only a column whose name hints the type takes it, and the validator confirms the hint.
     A type with no validator is assigned by its name hints alone.
 
+    `code_list` names a list a caller may supply the run, such as `ndc`, which `validate` then takes as a second
+    argument: a string array of the list's lines, or None where the caller supplied none.
+
     `glue_type` is the AWS Glue sensitive-data managed type, such as `EMAIL`. The profile does not write it.
     """
 
@@ -69,10 +78,11 @@ class Detector:
     sensitivity: str
     name_hints: tuple[str, ...]
     generator_hint: Mapping[str, str]
-    validate: Validator | None = None
+    validate: Validator | ListValidator | None = None
     method: str = 'validator'
     hint_required: bool = False
     glue_type: str | None = None
+    code_list: str | None = None
 
 
 @dc.dataclass(frozen=True)
@@ -106,6 +116,56 @@ def enabled_packs(names: Iterable[str]) -> list[EnabledPack]:
                 raise DetectorPackError(f'the detector packs {owners[kind]!r} and {each.pack.name!r} both declare the type {kind}')
             owners[kind] = each.pack.name
     return enabled
+
+
+@dc.dataclass(frozen=True)
+class SuppliedCodeList:
+    """A code list a caller supplied a run: the name detectors read it by, the sha256 of its file, and its lines.
+
+    `generated.code_lists` records the name and the digest, and never the path, which would name a machine.
+    """
+
+    name: str
+    digest: str
+    codes: tuple[str, ...] = dc.field(compare=False, repr=False)
+
+
+def read_code_lists(paths: Mapping[str, str | os.PathLike[str]], packs: list[EnabledPack]) -> dict[str, SuppliedCodeList]:
+    """Each list `paths` names, read from its file as one code a line, leaving out blank lines.
+
+    Raises `InvalidCodeList` for a name no detector of `packs` reads, naming the detectors that read one, and for a
+    file that cannot be read as UTF-8 or holds no code.
+    """
+    readers: dict[str, list[str]] = {}
+    for enabled in packs:
+        for detector in enabled.pack.detectors:
+            reading = readers.setdefault(detector.code_list, []) if detector.code_list else None
+            if reading is not None and f'{enabled.pack.name} {detector.type}' not in reading:
+                reading.append(f'{enabled.pack.name} {detector.type}')
+    supplied = {}
+    for name, path in paths.items():
+        if name not in readers:
+            raise InvalidCodeList(f'no enabled detector reads a code list named {name!r}; {list_readers(readers)}')
+        try:
+            content = Path(path).read_bytes()
+            lines = [line.strip() for line in content.decode('utf-8').splitlines()]
+        except OSError as error:
+            raise InvalidCodeList(f'the code list {name!r} cannot be read from {path}: {error.strerror}') from error
+        except UnicodeDecodeError as error:
+            raise InvalidCodeList(f'the code list {name!r} at {path} is not UTF-8 text: {error.reason}') from error
+        codes = tuple(line for line in lines if line)
+        if not codes:
+            raise InvalidCodeList(f'the code list {name!r} at {path} holds no code; expected one code a line')
+        supplied[name] = SuppliedCodeList(name, 'sha256:' + hashlib.sha256(content).hexdigest(), codes)
+    return supplied
+
+
+def list_readers(readers: Mapping[str, list[str]]) -> str:
+    """The code lists the enabled detectors read, or the shipped packs that read one where no enabled detector does."""
+    if readers:
+        return 'the enabled detectors read ' + '; '.join(f'{name}, by {", ".join(by)}' for name, by in sorted(readers.items()))
+    shipped = sorted({(detector.code_list, name) for name in BUILT_IN for detector in load(name).pack.detectors if detector.code_list})
+    return 'no enabled detector reads one; ' + '; '.join(f'the {pack} pack reads {listed}' for listed, pack in shipped)
 
 
 def load(name: str) -> EnabledPack:
@@ -167,6 +227,10 @@ def checked(name: str, pack: Any) -> DetectorPack:
             raise refuse(f'gives {kind} the method {detector.method!r}; choose from {", ".join(methods)}')
         if detector.validate is not None and not callable(detector.validate):
             raise refuse(f'gives {kind} a validator that is a {type(detector.validate).__name__}, not a callable')
+        if detector.code_list is not None and (not isinstance(detector.code_list, str) or not IDENTIFIER.fullmatch(detector.code_list)):
+            raise refuse(f'gives {kind} the code list {detector.code_list!r}, which is not a lowercase snake identifier')
+        if detector.code_list is not None and detector.validate is None:
+            raise refuse(f'gives {kind} the code list {detector.code_list!r} and no validator to read it')
         if not isinstance(detector.name_hints, tuple | list) or not all(
             isinstance(hint, str) and name_words(hint) for hint in detector.name_hints
         ):

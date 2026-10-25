@@ -83,6 +83,12 @@ class DetectorPackError(DoppeldataError):
         self.exit_code = EXIT_CODES[kind]
 
 
+class InvalidCodeList(DoppeldataError, ValueError):
+    """A code list named for a run is read by no enabled detector, or its file cannot be read or holds no code."""
+
+    exit_code = 2
+
+
 class InvalidThresholds(DoppeldataError, ValueError):
     """A thresholds file names a metric no check measures, a column the source profile lacks, or a value that is not a number."""
 

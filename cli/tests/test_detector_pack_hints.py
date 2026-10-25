@@ -5,6 +5,7 @@ from doppeldata import _core
 from doppeldata import generate
 from doppeldata.profiling.detector_packs import BUILT_IN
 from doppeldata.profiling.detector_packs import load
+from doppeldata.profiling.semantic_types import bound
 from doppeldata.profiling.semantic_types import passes
 
 ROWS = 20_000
@@ -39,7 +40,8 @@ def test_every_shipped_pack_hint_generates_values_its_own_validator_passes(pack_
     for detector, column in zip(detectors, columns, strict=True):
         assert detector.validate is not None
         values = table.column(column['name']).combine_chunks()
-        rate = passes(detector.validate, detector.generator_hint.get('check_digit'), values, column['name']) / ROWS
+        # A check profiles generated data with no code list, so a detector reading one validates without it.
+        rate = passes(bound(detector, {}), detector.generator_hint.get('check_digit'), values, column['name']) / ROWS
         expected = 1 - column.get('quality', {}).get('invalid_rate', 0)
         if rate < expected - TOLERANCE:
             failures.append(f'{column["name"]} {dict(detector.generator_hint)} passed {rate:.4f}, expected {expected}')

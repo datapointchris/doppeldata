@@ -1,11 +1,12 @@
 """The healthcare pack: the US identifiers and code sets a medical claim holds, which `policy: healthcare` enables.
 
-An ICD-10-CM or HCPCS Level II code is checked against the code list the engine ships, both US government data, and
-generated from it. CPT is copyrighted and the NDC directory is large, so their codes are typed by shape and name hint
-alone. Every pattern here is fixed, and comes from no data.
+An ICD-10-CM or HCPCS Level II code is checked against the code list the engine ships, and generated from it. CPT is
+copyrighted and the NDC directory is large, so neither ships. A CPT code is typed by shape and name hint alone, and an
+NDC by those and the `ndc` list, where the caller supplies one. Every pattern here is fixed, and comes from no data.
 """
 
 import collections
+import functools
 from functools import cache
 
 import pyarrow as pa
@@ -14,6 +15,7 @@ import pyarrow.compute as pc
 from doppeldata import _core
 from doppeldata.profiling.detector_packs import Detector
 from doppeldata.profiling.detector_packs import DetectorPack
+from doppeldata.profiling.detector_packs import ListValidator
 from doppeldata.profiling.detector_packs import Validator
 from doppeldata.profiling.detector_packs.general import matching
 
@@ -26,6 +28,10 @@ MBI = f'[1-9]{MBI_LETTER}{MBI_EITHER}[0-9]{MBI_LETTER}{MBI_EITHER}[0-9]{MBI_LETT
 MBI_DASHED = f'[1-9]{MBI_LETTER}{MBI_EITHER}[0-9]-?{MBI_LETTER}{MBI_EITHER}[0-9]-?{MBI_LETTER}{{2}}[0-9]{{2}}'
 # The FDA's three 10-digit segmentations, and HIPAA's 11-digit 5-4-2.
 NDC_SEGMENTED = r'^(?:\d{4}-\d{4}-\d{2}|\d{5}-\d{3}-\d{2}|\d{5}-\d{4}-\d{1,2})$'
+NDC_SEGMENTS = r'^(?P<labeler>\d{4,5})-(?P<product>\d{3,4})-(?P<package>\d{1,2})$'
+# Each segment's digits in HIPAA's 5-4-2.
+NDC_WIDTHS = (('labeler', 5), ('product', 4), ('package', 2))
+NDC_LIST = 'ndc'
 # A category is a letter and two letters or digits: a category's second character may be a letter.
 ICD10CM_SHAPE = r'^[A-Za-z][0-9A-Za-z][0-9A-Za-z](?:\.?[0-9A-Za-z]{1,4})?$'
 HCPCS_LEVEL2_SHAPE = r'^[A-Va-v]\d{4}$'
@@ -77,6 +83,37 @@ def listed(shape: str, codes: str) -> Validator:
     return validate
 
 
+def ndc_matching(shape: str) -> ListValidator:
+    """Whether each value matches the RE2 `shape` and, where a list is supplied, names a package code the list holds."""
+
+    def validate(values: pa.Array, codes: pa.Array | None) -> pa.BooleanArray:
+        matched = pc.match_substring_regex(values, shape)
+        if codes is None or not pc.any(matched).as_py():
+            return matched
+        known = pa.concat_arrays(ndc_readings(codes)).unique().drop_null()
+        held = [pc.is_in(reading, value_set=known) for reading in ndc_readings(values)]
+        return pc.and_(matched, functools.reduce(pc.or_kleene, held).fill_null(False))
+
+    return validate
+
+
+def ndc_readings(values: pa.Array) -> list[pa.Array]:
+    """Each value as HIPAA's eleven digits, 5-4-2, one array a reading, null where a value has no such reading.
+
+    A segmented code's segments are padded with zeros, and eleven digits are kept as written. Ten digits without
+    hyphens have one reading for each of the FDA's segmentations, 4-4-2, 5-3-2 and 5-4-1.
+    """
+    segments = pc.extract_regex(values, NDC_SEGMENTS)
+    padded = [pc.utf8_lpad(pc.struct_field(segments, name), width, '0') for name, width in NDC_WIDTHS]
+    segmented = pc.if_else(pc.is_valid(segments), pc.binary_join_element_wise(*padded, ''), pa.scalar(None, pa.string()))
+    eleven = pc.if_else(pc.match_substring_regex(values, r'^\d{11}$'), values, pa.scalar(None, pa.string()))
+    ten = pc.if_else(pc.match_substring_regex(values, r'^\d{10}$'), values, pa.scalar(None, pa.string()))
+    readings = [pc.coalesce(segmented, eleven)]
+    for cut in (0, 5, 9):
+        readings.append(pc.binary_join_element_wise(pc.utf8_slice_codeunits(ten, 0, cut), pc.utf8_slice_codeunits(ten, cut), '0'))
+    return readings
+
+
 def stable_shape(values: pa.Array) -> pa.BooleanArray:
     """Whether each value has the most common shape of the values, where that shape holds a digit, as an assigned number's does."""
     shapes = [_core.shape_of(value) for value in values.to_pylist()]
@@ -117,9 +154,10 @@ PACK = DetectorPack(
             'sensitive',
             NDC_HINTS,
             {'pattern': r'\d{5}-\d{4}-\d{2}'},
-            matching(NDC_SEGMENTED),
+            ndc_matching(NDC_SEGMENTED),
             'pattern',
             glue_type='USA_NATIONAL_DRUG_CODE',
+            code_list=NDC_LIST,
         ),
         # Most 10- and 11-digit numbers would pass, so an NDC without hyphens is typed only where the name hints it.
         Detector(
@@ -127,10 +165,11 @@ PACK = DetectorPack(
             'sensitive',
             NDC_HINTS,
             {'pattern': r'\d{11}'},
-            matching(r'^\d{10,11}$'),
+            ndc_matching(r'^\d{10,11}$'),
             'pattern',
             hint_required=True,
             glue_type='USA_NATIONAL_DRUG_CODE',
+            code_list=NDC_LIST,
         ),
         Detector(
             'icd10cm',
