@@ -630,12 +630,11 @@ class SparkBackend:
         and joined by name, which widens a column to the widest type a file stores it as and leaves it null in a file that
         lacks it, as the Polars backend reads them. Spark's `mergeSchema` refuses an int32 column widened to int64.
         """
-        footers = parquet_footers.read_footers(source.files)
-        if all(footer.schema.equals(footers[0].schema) for footer in footers):
+        every = parquet_footers.read_footers(source.files)
+        footers = parquet_footers.sampled_footers(source.files, every)
+        if all(footer.schema.equals(every[0].schema) for footer in every):
             frame = self.with_split_columns(self.reader(source).parquet(*(file.path for file in source.files)))
             return SourceRead(self.with_partition_types(frame, source), footers=footers)
-        # A sample holding two schemas may miss a third, so every file's footer places it.
-        every = footers if len(footers) == len(source.files) else parquet_footers.read_footers(source.files, every=True)
         groups: list[tuple[pa.Schema, list[str]]] = []
         for file, footer in zip(source.files, every, strict=True):
             group = next((paths for schema, paths in groups if footer.schema.equals(schema)), None)

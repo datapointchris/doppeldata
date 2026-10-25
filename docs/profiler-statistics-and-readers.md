@@ -367,8 +367,9 @@ is left out of the table, and counted once, under its first error by position.
 A footer's min and max are single rows' values, so no column statistic comes from one. Every
 statistic is taken from the rows, under the floor below.
 
-- **At most `FOOTERS_READ` footers are read**, a sample seeded by `FOOTER_SEED` beyond that, on
-  `FOOTER_THREADS` threads.
+- **Every footer is read for the schema, and at most `FOOTERS_READ` describe the files**, a sample
+  seeded by `FOOTER_SEED` beyond that. They are read on `FOOTER_THREADS` threads. One drifted file
+  a sample missed would leave its columns out of the union, and Spark would fail reading it.
 - **An S3 footer is read through the boto3 client that lists the source.** One ranged read of the
   last `TAIL_BYTES` holds most footers, and a longer one takes a second. So the listing's
   timeouts, retries and region redirects apply, and a failure exits as a listing's does, with 4
@@ -386,8 +387,6 @@ statistic is taken from the rows, under the floor below.
   Polars the union as its scan schema, so no file's own schema decides the table's. A column is
   read at the widest type a footer stores it as, and is null in a file that lacks it. A
   schema-drifted dataset, generated or not, then profiles as one table.
-- **A sample of footers holding two schemas sends the reader to every footer.** A third schema
-  outside the sample would otherwise lose its columns.
 - **A column two files store as an integer and a string fails the read**, naming the column.
   Neither type widens to the other.
 

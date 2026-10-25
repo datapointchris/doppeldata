@@ -388,12 +388,9 @@ def read_files(source: Source) -> SourceRead:
     try:
         match source.format:
             case SourceFormat.PARQUET:
-                footers = parquet_footers.read_footers(source.files)
-                union = schema_union(footers)
-                if union and len(footers) < len(source.files):
-                    # A sample holding two schemas may miss a third, whose columns the union would leave out.
-                    union = schema_union(parquet_footers.read_footers(source.files, every=True))
-                read = SourceRead(pl.scan_parquet(paths, hive_partitioning=hive, **union), footers=footers)
+                every = parquet_footers.read_footers(source.files)
+                scan = pl.scan_parquet(paths, hive_partitioning=hive, **schema_union(every))
+                read = SourceRead(scan, footers=parquet_footers.sampled_footers(source.files, every))
             case SourceFormat.ARROW:
                 read = SourceRead(pl.scan_ipc(paths, hive_partitioning=hive))
             case SourceFormat.CSV | SourceFormat.TSV:
