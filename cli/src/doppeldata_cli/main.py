@@ -5,11 +5,14 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from doppeldata import DoppeldataError
+from doppeldata import InvalidProfile
 from doppeldata import Profile
 from doppeldata import SourceError
 from doppeldata import profile
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_text
+from doppeldata.profiling import DEFAULT_K_MIN
 from doppeldata.published_schemas import schema_names
 from doppeldata.published_schemas import schema_summaries
 from doppeldata.published_schemas import schema_text
@@ -47,15 +50,25 @@ def profile_create(
         typer.Option('--out', metavar='FILE', help='Write the profile to FILE, as JSON when it ends in .json, rather than print its YAML.'),
     ] = None,
     sample: Annotated[int | None, typer.Option('--sample', metavar='N', min=1, help='Profile a seeded random sample of N rows.')] = None,
+    k_min: Annotated[
+        int, typer.Option('--k-min', metavar='N', min=1, help='Store no data value that fewer than N rows hold.')
+    ] = DEFAULT_K_MIN,
 ) -> None:
     """Profile a dataset into a file holding no rows: doppeldata profile create data/orders/ --out orders.profile.yaml
 
-    Parquet and Arrow are read locally or from S3, as the AWS environment's credentials allow. CSV, TSV and JSON are read locally.
+    Each file is read as its suffix's format. S3 is read with the AWS environment's credentials, and text formats from local files only.
     """
+    if out is not None and not out.parent.is_dir():
+        raise typer.BadParameter(f'{out.parent} is not a directory; create it, or name a FILE in one that exists', param_hint='--out')
     try:
-        profiled = profile(data, sample=sample)
-    except SourceError as error:
-        raise typer.BadParameter(str(error), param_hint='DATA') from error
+        profiled = profile(data, sample=sample, k_min=k_min)
+    except DoppeldataError as error:
+        if isinstance(error, SourceError) and error.exit_code == 2:
+            raise typer.BadParameter(str(error), param_hint='DATA') from error
+        if isinstance(error, InvalidProfile):
+            typer.echo('doppeldata: the profile it wrote fails its own schema, which is a bug in doppeldata:', err=True)
+        typer.echo(f'doppeldata: {error}', err=True)
+        raise typer.Exit(error.exit_code) from error
     if out is None:
         typer.echo(profiled.to_yaml(), nl=False)
         return
