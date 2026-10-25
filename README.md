@@ -60,9 +60,9 @@ synthetic or public.
 
 A profile's `source` section records how the files were written. For a CSV, that is its dialect,
 encoding and line endings, and its malformed rows by kind. For Parquet, it is the footer's writer,
-Spark version, codec and row groups, and never a footer's min or max. For JSON, it is each path's
-type mix and presence. Every format gets the file sizes, the rows per file, and each Hive key's
-values. `data generate` writes the dialect and the Parquet settings back.
+Spark version, codec and row groups, and never a footer's min or max. For JSON, it is the nesting
+depth and whether nulls are written, and each path's type mix and presence sit on its column. Every
+format gets the file sizes, the rows per file, and each Hive key's values. `data generate` writes the dialect and the Parquet settings back.
 
 A string column is given a semantic type where enough of its values pass a type's validator. Fewer
 need to pass where its name hints the type. An integer column is typed only where its name hints

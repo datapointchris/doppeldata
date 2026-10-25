@@ -17,7 +17,8 @@ from doppeldata.published_schemas import writer_fields
 TEXT_READ_KINDS = {ColumnKind.DECIMAL.value, ColumnKind.FLOAT.value}
 # A diff reports a column when more than this share of its values falls outside the edges or value list frozen from A.
 OVERFLOW_SHARE = 0.05
-# The `source.csv` keys a writer takes. The rest record what the profiler saw, such as the malformed rows, and move each run.
+# The `source.csv` keys a writer takes. The rest describe the files rather than a setting a writer takes, such as the
+# malformed rows, so a diff does not compare them.
 DIALECT_KEYS = frozenset(writer_fields('DelimitedSettings'))
 
 

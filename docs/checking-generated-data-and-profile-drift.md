@@ -152,8 +152,9 @@ Arrow decimal type telling a decimal from a float.
   there means the source itself changed. It also covers a column with more than `OVERFLOW_SHARE`
   of its values outside the edges or value list frozen from A, a CSV dialect setting a writer takes
   that changed, and a partition key B adds. The rest of `source.csv`, such as the malformed rows
-  and the sniffers' confidence, records a run and is not compared. The tool versions and packs a profile records are how it was made,
-  so a diff compares none of them.
+  and the sniffers' confidence, describes the files rather than a setting a writer takes, so a diff
+  does not compare it. The tool versions and packs a profile records are how it was made, so a diff
+  compares none of them.
 
 ## A failed check exits 3, drift exits 1, and a verb that could not finish exits 3
 
