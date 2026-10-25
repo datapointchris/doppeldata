@@ -269,7 +269,7 @@ pub struct Column {
     /// Tokens a text source uses for a missing value, with the share of rows holding each.
     pub missing_tokens: Option<BTreeMap<String, Rate>>,
     /// The share of raw values parsing as each type. The shares sum to 1.
-    pub type_mix: Option<BTreeMap<String, Rate>>,
+    pub type_mix: Option<BTreeMap<RawValueType, Rate>>,
     pub distinct: Option<Distinct>,
     pub numeric: Option<NumericStats>,
     pub string: Option<StringStats>,
@@ -280,6 +280,18 @@ pub struct Column {
     pub struct_fields: Option<StructStats>,
     pub semantic: Option<Semantic>,
     pub quality: Option<Quality>,
+}
+
+/// A type a raw value in a text source parses as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RawValueType {
+    String,
+    Integer,
+    Decimal,
+    Boolean,
+    Date,
+    Timestamp,
 }
 
 /// The logical types of the Open Data Contract Standard v3.
@@ -503,7 +515,55 @@ pub struct Semantic {
     pub detectors: Option<Vec<Detector>>,
     pub sensitivity: Option<Sensitivity>,
     /// What the generator should draw from, such as `{provider: email}`.
-    pub generator_hint: Option<OpenObject>,
+    pub generator_hint: Option<GeneratorHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct GeneratorHint {
+    pub provider: Option<Provider>,
+    /// A regular expression every value matches. It takes the place of `string.pattern`.
+    pub pattern: Option<String>,
+    /// The check digit a value's last digit holds. `quality.invalid_rate` of values hold a wrong one.
+    pub check_digit: Option<CheckDigit>,
+}
+
+/// A source of realistic values. The names are doppeldata's, so a change of faker breaks no profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Provider {
+    Email,
+    FreeEmail,
+    Username,
+    Ipv4,
+    Ipv6,
+    MacAddress,
+    UserAgent,
+    Name,
+    FirstName,
+    LastName,
+    PhoneNumber,
+    CellNumber,
+    Company,
+    JobTitle,
+    StreetAddress,
+    StreetName,
+    BuildingNumber,
+    City,
+    State,
+    StateAbbr,
+    ZipCode,
+    PostCode,
+    Country,
+    CountryCode,
+    CreditCard,
+    Uuid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckDigit {
+    /// The mod-10 digit of payment card numbers.
+    Luhn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]

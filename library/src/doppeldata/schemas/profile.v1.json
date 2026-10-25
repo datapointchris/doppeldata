@@ -163,6 +163,15 @@
         }
       }
     },
+    "CheckDigit": {
+      "oneOf": [
+        {
+          "description": "The mod-10 digit of payment card numbers.",
+          "type": "string",
+          "const": "luhn"
+        }
+      ]
+    },
     "Column": {
       "description": "One column, or one field nested in a list or struct column.",
       "type": "object",
@@ -317,9 +326,27 @@
             "object",
             "null"
           ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
+          "properties": {
+            "boolean": {
+              "$ref": "#/$defs/Rate"
+            },
+            "date": {
+              "$ref": "#/$defs/Rate"
+            },
+            "decimal": {
+              "$ref": "#/$defs/Rate"
+            },
+            "integer": {
+              "$ref": "#/$defs/Rate"
+            },
+            "string": {
+              "$ref": "#/$defs/Rate"
+            },
+            "timestamp": {
+              "$ref": "#/$defs/Rate"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [
@@ -757,6 +784,39 @@
           "type": [
             "string",
             "null"
+          ]
+        }
+      }
+    },
+    "GeneratorHint": {
+      "type": "object",
+      "properties": {
+        "check_digit": {
+          "description": "The check digit a value's last digit holds. `quality.invalid_rate` of values hold a wrong one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CheckDigit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pattern": {
+          "description": "A regular expression every value matches. It takes the place of `string.pattern`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Provider"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       }
@@ -1367,6 +1427,38 @@
       "description": "The format version, which changes only on a breaking format change.",
       "const": 1
     },
+    "Provider": {
+      "description": "A source of realistic values. The names are doppeldata's, so a change of faker breaks no profile.",
+      "type": "string",
+      "enum": [
+        "email",
+        "free_email",
+        "username",
+        "ipv4",
+        "ipv6",
+        "mac_address",
+        "user_agent",
+        "name",
+        "first_name",
+        "last_name",
+        "phone_number",
+        "cell_number",
+        "company",
+        "job_title",
+        "street_address",
+        "street_name",
+        "building_number",
+        "city",
+        "state",
+        "state_abbr",
+        "zip_code",
+        "post_code",
+        "country",
+        "country_code",
+        "credit_card",
+        "uuid"
+      ]
+    },
     "Quality": {
       "type": "object",
       "properties": {
@@ -1512,11 +1604,14 @@
         },
         "generator_hint": {
           "description": "What the generator should draw from, such as `{provider: email}`.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeneratorHint"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "sensitivity": {
           "anyOf": [

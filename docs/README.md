@@ -7,7 +7,8 @@ and says what was weighed and rejected.
 | --- | --- |
 | [python-profiler-rust-generator.md](python-profiler-rust-generator.md) | why profiling stays in Python while generation is compiled Rust, and the comparison that split them |
 | [profile-format-and-privacy-floor.md](profile-format-and-privacy-floor.md) | why a profile is YAML validated by a schema derived from the Rust model, how a profile and a bundle are hashed, what generated files record of their profile, and why no stored statistic rests on fewer than 11 rows |
-| [determinism-contract.md](determinism-contract.md) | what identifies a generated dataset, and why its values never change with thread count, batch size or column order |
+| [determinism-contract.md](determinism-contract.md) | what identifies a generated dataset, and why its values never change with thread count, batch size, column order or platform |
+| [column-samplers.md](column-samplers.md) | how each column kind is drawn from its profile, and why a numeric tail comes from the fitted family |
 | [prior-art-and-licenses.md](prior-art-and-licenses.md) | which existing generators and checkers doppeldata borrows ideas from, and why none of them is a dependency |
 | [aws-glue-support.md](aws-glue-support.md) | which AWS Glue versions run the library, and why Glue 4.0 does not |
 

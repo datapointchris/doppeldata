@@ -1,0 +1,45 @@
+name: Determinism contract
+
+# A dataset regenerates from its profile, seed and row count on any machine,
+# so the determinism contract test pins a hash of generated values. A float
+# function whose rounding varies by platform would break that pin on one
+# runner only. build-library.yml's wheels job runs the test on every platform
+# it builds a wheel for, so a new wheel target is tested by construction. This
+# adds the platforms and checks that list leaves out.
+#
+# push is left out because release.yml calls this on every push to main.
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # Apple Silicon has no wheel, so installing the library there compiles the
+  # crates from the sdist. Release builds, because the wheels are release builds.
+  pinned-values-on-apple-silicon:
+    runs-on: macos-26
+    # Bounds a hung run. A queued job waiting for a runner is not covered.
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: crates
+    steps:
+      - uses: actions/checkout@v7
+
+      # No toolchain step. rustup reads the repo's rust-toolchain.toml.
+      - run: cargo test --release -p doppeldata-core --test determinism_contract
+
+  # The pinned hash can be edited alone. This refuses a new hash at the stream
+  # version the last release pinned.
+  stream-version-raised:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - run: crates/check-stream-version-raised.sh

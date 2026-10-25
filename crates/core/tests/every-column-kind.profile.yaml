@@ -1,0 +1,204 @@
+# One column of every kind the engine samples, and one per provider. The determinism contract test
+# pins a hash over the values and text cells this generates, so a column added here moves the pin.
+profile_version: 1
+kind: table
+name: every_column_kind
+columns:
+  - name: sequence
+    physical_type: int64
+    numeric: {sequence: {start: 1000, step: 3}}
+  - name: quantiles_only
+    physical_type: double
+    null_rate: 0.05
+    numeric:
+      quantiles: {p01: -3.0, p25: 1.0, p50: 2.5, p75: 4.0, p99: 9.0}
+      extremes: {low: -5.0, high: 12.0}
+  - name: histogram_body
+    physical_type: double
+    numeric:
+      quantiles: {p05: 1.0, p50: 10.0, p95: 40.0}
+      extremes: {low: 0.0, high: 60.0}
+      histogram: {kind: equal_width, edges: [0, 10, 20, 30, 40, 50, 60], counts: [500, 250, 120, 80, 40, 10]}
+  - name: zero_inflated
+    physical_type: double
+    numeric:
+      zero_rate: 0.3
+      quantiles: {p25: 0.0, p50: 2.0, p75: 5.0}
+      extremes: {low: 0.0, high: 10.0}
+  - name: decimal_amount
+    physical_type: "decimal128(12, 2)"
+    numeric:
+      quantiles: {p10: 5.0, p50: 20.0, p90: 80.0, p99: 200.0}
+      extremes: {low: 0.5, high: 900.0}
+      fit: {family: lognorm, params: {s: 0.9, loc: 0.0, scale: 20.0}}
+  - name: narrow_int8
+    physical_type: int8
+    numeric: {integral: true, quantiles: {p50: 10.0}, extremes: {low: -100.0, high: 300.0}}
+  - name: unsigned_int16
+    physical_type: uint16
+    numeric: {integral: true, quantiles: {p25: 100.0, p75: 900.0}, extremes: {low: 0.0, high: 2000.0}}
+  - name: single_float
+    physical_type: float
+    numeric: {quantiles: {p50: 0.5}, extremes: {low: 0.0, high: 1.0}}
+  - name: fit_norm
+    numeric:
+      quantiles: {p01: 52.0, p50: 100.0, p99: 148.0}
+      extremes: {low: 40.0, high: 160.0}
+      fit: {family: norm, params: {loc: 100.0, scale: 20.0}}
+  - name: fit_expon
+    numeric:
+      quantiles: {p50: 7.0, p99: 46.0}
+      extremes: {low: 0.0, high: 90.0}
+      fit: {family: expon, params: {loc: 0.0, scale: 10.0}}
+  - name: fit_weibull_min
+    numeric:
+      quantiles: {p01: 0.5, p50: 4.2, p99: 10.0}
+      extremes: {low: 0.1, high: 14.0}
+      fit: {family: weibull_min, params: {c: 1.8, loc: 0.0, scale: 5.0}}
+  - name: fit_pareto
+    numeric:
+      quantiles: {p50: 1.5, p99: 10.0}
+      extremes: {low: 1.0, high: 80.0}
+      fit: {family: pareto, params: {b: 2.0, loc: 0.0, scale: 1.0}}
+  - name: fit_uniform
+    numeric:
+      quantiles: {p05: 2.5, p95: 47.5}
+      extremes: {low: 0.0, high: 50.0}
+      fit: {family: uniform, params: {loc: 0.0, scale: 50.0}}
+  - name: fit_logistic
+    numeric:
+      quantiles: {p01: -9.0, p50: 0.0, p99: 9.0}
+      extremes: {low: -15.0, high: 15.0}
+      fit: {family: logistic, params: {loc: 0.0, scale: 2.0}}
+  - name: fit_loguniform
+    numeric:
+      quantiles: {p10: 2.0, p90: 500.0}
+      extremes: {low: 1.0, high: 1000.0}
+      fit: {family: loguniform, params: {a: 1.0, b: 1000.0}}
+  - name: fit_triang
+    numeric:
+      quantiles: {p10: 2.0, p90: 8.0}
+      extremes: {low: 0.0, high: 10.0}
+      fit: {family: triang, params: {c: 0.3, loc: 0.0, scale: 10.0}}
+  - name: fit_geom
+    physical_type: int32
+    numeric:
+      integral: true
+      quantiles: {p50: 3.0, p90: 10.0}
+      extremes: {low: 1.0, high: 40.0}
+      fit: {family: geom, params: {p: 0.2, loc: 0.0}}
+  - name: fit_randint
+    physical_type: int64
+    numeric:
+      integral: true
+      quantiles: {p10: 2.0, p90: 18.0}
+      extremes: {low: 0.0, high: 19.0}
+      fit: {family: randint, params: {low: 0.0, high: 20.0}}
+  - name: fit_gamma_keeps_a_linear_tail
+    numeric:
+      quantiles: {p50: 3.0, p99: 9.0}
+      extremes: {low: 0.0, high: 30.0}
+      fit: {family: gamma, params: {a: 3.0}}
+  - name: timestamp_uniform
+    physical_type: "timestamp[us]"
+    temporal: {extremes: {low: "2024-01-01T00:00:00", high: "2024-12-31T23:59:59", granularity: second}}
+  - name: timestamp_weekdays_inside_office_hours
+    physical_type: "timestamp[s]"
+    temporal:
+      extremes: {low: "2025-03-03T09:00:00", high: "2025-03-07T17:00:00", granularity: second}
+      by_dow: [0.2, 0.2, 0.2, 0.2, 0.2, 0.0, 0.0]
+  - name: timestamp_by_month_and_hour
+    physical_type: "timestamp[ms, tz=UTC]"
+    temporal:
+      extremes: {low: "2024-01-01T06:30:00", high: "2024-12-31T20:15:00", granularity: minute}
+      by_month: [0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+      by_hour: [0, 0, 0, 0, 0, 0, 0.05, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0, 0, 0, 0, 0, 0]
+  - name: date_with_gaps
+    physical_type: date32
+    temporal: {extremes: {low: "2024-01-01", high: "2024-03-31"}, gap_rate: 0.3}
+  - name: date64_uniform
+    physical_type: date64
+    temporal: {extremes: {low: "2020-01-01", high: "2020-12-31"}}
+  - name: time_by_hour
+    physical_type: "time64[us]"
+    temporal:
+      by_hour: [0, 0, 0, 0, 0, 0, 0, 0, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  - name: time32_inside_extremes
+    physical_type: "time32[ms]"
+    temporal: {extremes: {low: "08:15:00", high: "17:45:00"}}
+  - name: flag
+    boolean: {true_rate: 0.3}
+  - name: status
+    string:
+      top_values: [{value: shipped, rate: 0.6}, {value: pending, rate: 0.3}]
+      other_rate: 0.1
+      shapes: [{shape: aaaaaaa, rate: 1.0}]
+  - name: stored_pattern
+    string: {pattern: '^[A-Z]{3}-\d{4}$'}
+  - name: card_with_check_digit
+    null_rate: 0.1
+    quality: {invalid_rate: 0.2}
+    semantic: {generator_hint: {pattern: '^4\d{15}$', check_digit: luhn}}
+  - name: shapes
+    string: {shapes: [{shape: AAA-9999, rate: 0.7}, {shape: aa99, rate: 0.3}]}
+  - name: characters
+    string: {length: {min: 2, max: 9, quantiles: {p50: 4}}, charset: {classes: [lower, digit, punct]}}
+  - name: large_characters
+    physical_type: large_string
+    string: {length: {min: 1, max: 3}}
+  - name: integer_with_foreign_text
+    physical_type: int64
+    type_mix: {integer: 0.9, string: 0.06, decimal: 0.04}
+    numeric: {integral: true, quantiles: {p50: 5.0}, extremes: {low: 0.0, high: 10.0}}
+  - name: tokens_cover_part_of_the_nulls
+    physical_type: double
+    null_rate: 0.1
+    missing_tokens: {NA: 0.02, "-": 0.01}
+    numeric: {quantiles: {p50: 1.0}, extremes: {low: 0.0, high: 2.0}}
+  - name: string_with_numeric_raw_values
+    type_mix: {string: 0.7, integer: 0.3}
+    string: {shapes: [{shape: AA9, rate: 0.7}, {shape: "99999", rate: 0.3}]}
+  - name: tags
+    logical_type: array
+    list:
+      length: {p50: 2, p90: 4}
+      empty_rate: 0.25
+      element: {name: element, string: {top_values: [{value: a, rate: 0.5}, {value: b, rate: 0.5}]}}
+  - name: large_list_of_numbers
+    physical_type: large_list
+    list:
+      element: {name: element, physical_type: int16, numeric: {integral: true, extremes: {low: 0.0, high: 9.0}}}
+  - name: address
+    logical_type: object
+    struct:
+      presence: {zip: 0.5}
+      fields:
+        - {name: zip, string: {pattern: '\d{5}'}}
+        - {name: city, semantic: {generator_hint: {provider: city}}}
+        - {name: lines, logical_type: array, list: {element: {name: element, string: {length: {min: 3, max: 6}}}}}
+  - {name: provider_email, semantic: {generator_hint: {provider: email}}}
+  - {name: provider_free_email, semantic: {generator_hint: {provider: free_email}}}
+  - {name: provider_username, semantic: {generator_hint: {provider: username}}}
+  - {name: provider_ipv4, semantic: {generator_hint: {provider: ipv4}}}
+  - {name: provider_ipv6, semantic: {generator_hint: {provider: ipv6}}}
+  - {name: provider_mac_address, semantic: {generator_hint: {provider: mac_address}}}
+  - {name: provider_user_agent, semantic: {generator_hint: {provider: user_agent}}}
+  - {name: provider_name, semantic: {generator_hint: {provider: name}}}
+  - {name: provider_first_name, semantic: {generator_hint: {provider: first_name}}}
+  - {name: provider_last_name, semantic: {generator_hint: {provider: last_name}}}
+  - {name: provider_phone_number, semantic: {generator_hint: {provider: phone_number}}}
+  - {name: provider_cell_number, semantic: {generator_hint: {provider: cell_number}}}
+  - {name: provider_company, semantic: {generator_hint: {provider: company}}}
+  - {name: provider_job_title, semantic: {generator_hint: {provider: job_title}}}
+  - {name: provider_street_address, semantic: {generator_hint: {provider: street_address}}}
+  - {name: provider_street_name, semantic: {generator_hint: {provider: street_name}}}
+  - {name: provider_building_number, semantic: {generator_hint: {provider: building_number}}}
+  - {name: provider_city, semantic: {generator_hint: {provider: city}}}
+  - {name: provider_state, semantic: {generator_hint: {provider: state}}}
+  - {name: provider_state_abbr, semantic: {generator_hint: {provider: state_abbr}}}
+  - {name: provider_zip_code, semantic: {generator_hint: {provider: zip_code}}}
+  - {name: provider_post_code, semantic: {generator_hint: {provider: post_code}}}
+  - {name: provider_country, semantic: {generator_hint: {provider: country}}}
+  - {name: provider_country_code, semantic: {generator_hint: {provider: country_code}}}
+  - {name: provider_credit_card, semantic: {generator_hint: {provider: credit_card}}}
+  - {name: provider_uuid, semantic: {generator_hint: {provider: uuid}}}

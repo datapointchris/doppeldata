@@ -58,10 +58,15 @@ into synthetic data while no key leaves the source.
 
 ## Generated files name the profile they came from
 
-Every Parquet and Arrow file the generator writes must carry schema-level key-value metadata: the
-profile's name, version and digest, the scenario's name, and the seed. The keys are the
-`doppeldata.*` constants in the core crate's `profile::provenance`. So the next profiler can tell
-synthetic data from real.
+Every Parquet and Arrow file the generator writes must carry schema-level key-value metadata, under
+the `doppeldata.*` constants in the core crate's `profile::provenance`, where each key says what it
+holds. So the next profiler can tell synthetic data from real, and any one file names the whole
+dataset it belongs to.
+
+The keys carry the profile's name and format version, and the dataset's whole identity: the five
+values `determinism-contract.md` names, and their digest as a quick equality check. The row key
+names the dataset, because every file of it carries the same schema. One part file reading
+`rows: 10000000` would mislead.
 
 ## Sketches are an optional sidecar, never written for a sensitive column
 

@@ -32,7 +32,13 @@ docs/           the design pages
   declared nowhere, and its missing-import error names what to install.
 - **A change to a sampler's draw order raises the engine's stream version.** The stream version is
   part of a generated dataset's identity. `docs/determinism-contract.md` says what else must never
-  change.
+  change. The determinism contract test pins the stream version and a hash over what
+  `crates/core/tests/every-column-kind.profile.yaml` generates, as one pair. A column kind, family
+  or provider the engine gains adds a column there.
+- **Nothing that feeds a generated value calls std's `exp`, `ln`, `powf`, `powi` or any other
+  transcendental.** Call the `libm` crate's function instead. std's may round differently by
+  platform, and a dataset must regenerate to the same bits anywhere. `crates/clippy.toml` refuses
+  them.
 
 ## Library code must run on Python 3.11
 

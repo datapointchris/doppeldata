@@ -25,13 +25,16 @@ jobs:
   library-on-python-3-11:
     uses: ./.github/workflows/library-on-python-3.11.yml
 
+  determinism-contract:
+    uses: ./.github/workflows/determinism-contract.yml
+
   # The tag cannot be taken back, so the commit it would name builds on every
-  # platform first.
+  # platform first, and generates the pinned values on each.
   build-before-tagging:
     uses: ./.github/workflows/build-library.yml
 
   release:
-    needs: [validate, library-on-python-3-11, build-before-tagging]
+    needs: [validate, library-on-python-3-11, determinism-contract, build-before-tagging]
     uses: datapointchris/reusable-workflows/.github/workflows/python-semantic-release.yml@v1
     permissions:
       contents: write

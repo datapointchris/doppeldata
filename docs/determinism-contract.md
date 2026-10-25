@@ -13,10 +13,40 @@ A generated dataset is a pure function of:
 The manifest written beside the output must record all five, plus a SHA-256 over them. Three committed
 files — profile, scenario and seed — reproduce a dataset anywhere.
 
+## The engine owns the identity: RFC 8785 JSON keyed like the file metadata
+
+The SHA-256 is taken over the RFC 8785 canonical JSON of one object with five keys:
+
+```json
+{"dataset_rows":"10000000","profile_digest":"sha256:…","scenario_digest":null,"seed":"18446744073709551615","stream_version":1}
+```
+
+- **The engine builds the canonical JSON and its digest, in `DatasetIdentity`.** The library and its
+  manifest take both from the engine and compute neither. The library owns the profile's canonical
+  form, so it computes the profile and scenario digests and passes them in.
+- **Each key is a file metadata key without its `doppeldata.` prefix.** Both derive from the
+  constants in `profile::provenance`. So a reader holding a file's metadata rebuilds the identity
+  with no mapping, and a sixth value needs no hand ordering, because the map sorts its keys.
+- **The seed and the row count are decimal strings.** Both are 64-bit unsigned integers. RFC 8785
+  writes a number as an IEEE 754 double, which holds every integer only up to 2^53, so a seed
+  written as a number would lose digits. A string keeps the seed's whole range with no cap.
+- **Each digest is `sha256:` and 64 lowercase hex digits**, the form the library's profile digest
+  takes. The identity's own digest is written the same way.
+- **An absent scenario is `null` in the identity and a missing key in the metadata.** No scenario is
+  the absence of one, so it hashes as an absence rather than as the digest of an empty file.
+
+A test pins the digest of one fixed identity, which the library's `rfc8785` package reproduces.
+
 ## Each column draws from a stream named for it, never numbered
 
 Every (seed, table, column path, perturbation) derives its own ChaCha8 stream from a hash of its
 name. So adding, removing or reordering a column leaves every other column's values unchanged.
+
+Within a column, each kind of draw has its own stream: the values, the null mask, the `type_mix`
+errors, the missing-value tokens, the wrong check digits and a list's lengths. The values stream
+draws a value for every row, a null row's included. So a column's values do not move when its null
+rate, its error rate or its tokens change. A nested field's streams are named by its dotted path, so
+it draws the same whatever its siblings are.
 
 A copula group, the set of numeric columns correlated through one matrix, draws from one stream keyed
 by its sorted column names. Adding an unrelated column changes nothing. Adding a column to the group
@@ -45,3 +75,30 @@ The guarantees, strongest first:
 An upgrade to the Arrow or Parquet writer that changes encoder output, or any change to a sampler's
 draw order, raises the stream version. The stream version is part of a dataset's identity, so a
 dataset generated before the change is still named exactly.
+
+A test pins a SHA-256 beside the stream version, as one pair. The hash covers the values and text
+cells of a fixture holding one column of every kind, fitted family and provider. A change that moves
+a value fails it until both are updated together. The fixture is the test's own, so editing a
+bundled example moves no pin.
+
+## Every exp, log and pow that feeds a value is libm's, so values match on every platform
+
+Rust's standard library allows its transcendental functions (`exp`, `ln`, `powf`, `powi` and the
+rest) to round differently by platform and by Rust version. A value computed through one of them
+could differ in its last bit on another machine, and "reproduce anywhere" would fail there alone.
+
+- **Arithmetic, `sqrt` and rounding to an integer are exact under IEEE 754**, and need nothing.
+- **Every other function goes through the `libm` crate**, called directly. That covers the
+  inverse CDFs a fitted tail is tabulated from at plan time. Clippy refuses std's transcendentals
+  in the workspace's own code.
+- **A fitted family is used only where its CDF and inverse are closed forms over libm.**
+  `FittedFamily::from_fit` in `crates/core/src/samplers/fitted_family.rs` names them. `norm` uses
+  Wichura's AS 241, which needs only `log` and `sqrt`. A family with no closed form, such as `gamma`
+  or `poisson`, leaves the column with a linear tail.
+- *Rejected:* statrs's inverse CDFs. They call std's functions, and a dependency's `num-traits`
+  feature cannot force libm, because features unify across the build.
+
+CI runs the pinned-value test on every platform with a wheel, in the library's wheel build, and on
+the platforms `determinism-contract.yml` adds. A failure on one runner is a platform difference, and
+never a reason to loosen the pin. The same workflow refuses a pinned hash that changed since the last
+release while the pinned stream version stayed level.
