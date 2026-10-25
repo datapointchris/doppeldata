@@ -314,7 +314,7 @@ def scan_files(source: Source) -> pl.LazyFrame:
         # Counting rows reads every file's footer, so a corrupt file fails here rather than mid-profile.
         table.select(pl.len()).collect(engine='streaming')
     except (pl.exceptions.PolarsError, duckdb.Error, OSError) as error:
-        raise SourceError(f'{", ".join(source.roots)} could not be read as {format_name}: {first_line(error)}') from error
+        raise SourceError(f'{", ".join(source.roots)} could not be read as {format_name}: {first_line(error)}', exit_code=1) from error
     return table
 
 
