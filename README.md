@@ -24,9 +24,9 @@ doppeldata schemas show profile        # the JSON Schema every profile validates
 ```
 
 `profile create` reads Parquet and Arrow locally or from S3, with the credentials and endpoint the
-AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files. No data value
-it stores, such as a top value or an extreme, rests on fewer than 11 rows. Profile only data that is already synthetic or public until
-identifier columns are detected and suppressed.
+AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files. No data
+value it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. Profile only
+data that is already synthetic or public until identifier columns are detected and suppressed.
 
 Each release's notes list what it does. Its commands and its profile format change without notice
 until 1.0.
