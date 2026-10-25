@@ -33,7 +33,8 @@ pa.RecordBatchReader.from_stream(sd.stream(profile, rows=10**9, seed=7))   # pya
 
 `generate`, `write` and the size estimate leave Python with `Python::detach`, and run the engine on
 threads they spawn. `stream` makes its blocks on threads it spawns, and hands them over on its
-consumer's thread.
+consumer's thread. [performance.md](performance.md) records how fast `generate` and `data generate`
+run on one thread and on every core.
 
 Python runs a signal handler only on the main thread, and only when that thread returns to the
 interpreter. Native code that never returns never sees Ctrl-C. So the calling thread waits in steps
@@ -156,18 +157,3 @@ jq '[.files[].bytes] | add' out/_manifest.json
 
 Parquet compresses a whole file's row group better than a few blocks of it. A partitioned estimate
 counts one object per value in every range, and a skewed key makes some of those small.
-
-## Generation scales with threads, and a write runs at its encoder's rate
-
-The population is 10M rows of the `eight-columns` example, seed 42. Each row is five runs on a
-16-thread Ryzen 9 6900HX with other work running. A rate is rows over the call's wall time.
-
-| Call | Threads | Rows/s |
-| --- | --- | --- |
-| `sd.generate(profile, rows=10_000_000, seed=42, threads=N)` | 16 | 44M to 72M |
-| the same | 1 | 7.6M to 9.7M |
-| `doppeldata data generate eight-columns --rows 10000000 --seed 42 --file-rows 1000000 --threads N` to local disk | 16 | 16.3M to 18.9M |
-| the same | 1 | 3.50M to 3.55M |
-
-The write is ZSTD Parquet, which the encoder dominates. Its rates match the writers' own into
-memory, which `--out memory://` measures. So the CLI and the SDK add nothing measurable to a write.

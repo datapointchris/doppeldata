@@ -12,10 +12,12 @@ Generation produces every row, so its cost scales with the output. The compariso
 8-column table in million-row chunks, one ZSTD Parquet file per chunk, from Rust and from numpy with
 pyarrow, on one thread and on sixteen:
 
-- **On one thread the arms tie once Parquet is written.** The encoder and ZSTD dominate both.
-- **On sixteen, Rust scales and Python's pool does not.** Converting each array with `pa.array`
-  holds the GIL, so the thread pool barely moved Python's generation rate. Rust wrote several times
+- **On one thread the arms tied once Parquet was written.** The encoder and ZSTD dominated both.
+- **On sixteen, Rust scaled and Python's pool barely did.** Converting each array with `pa.array`
+  held the GIL, so the thread pool barely moved Python's generation rate. Rust wrote several times
   as many rows a second.
+
+[performance.md](performance.md) measures the shipped engine against the same numpy arm.
 
 The columns were a sequential id, a lognormal amount, a Poisson quantity, a Zipf-weighted category
 from 50 values, a uniform timestamp over a year, a Bernoulli flag, a normal score with 5% nulls and a

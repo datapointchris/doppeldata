@@ -48,6 +48,17 @@ tasks:
       - cd crates && cargo test -q -p doppeldata-core --test profile_schema
       - cd library && out=$(mktemp -d) && uv run maturin generate-stubs --quiet --out "$out" && diff -u src/doppeldata/_core.pyi "$out/doppeldata/_core.pyi"
 
+  # Timing on a shared CI runner is noise, so no workflow runs this.
+  bench:
+    desc: Time the engine against numpy, and its name provider against Faker and Mimesis, as one table
+    silent: true
+    cmds:
+      - echo '| Arm | Threads | Work | Per second, range of 5 runs | Output | Load average, before and after |'
+      - echo '| --- | --- | --- | --- | --- | --- |'
+      - uv run benchmarks/engine_throughput.py
+      - uv run benchmarks/numpy_throughput.py
+      - uv run benchmarks/name_generators.py
+
   format:
     desc: Apply ruff's and rustfmt's formatting and autofixes
     cmds:

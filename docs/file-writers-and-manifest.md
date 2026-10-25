@@ -69,7 +69,8 @@ thread only waits for them.
   its workers.
 - **Worker threads take ranges in index order.** Each one generates its range's blocks and encodes
   them. So memory stays near one block per worker, plus one open object for each partition value
-  the worker's range holds.
+  the worker's range holds. A run never keeps more threads busy than it has ranges.
+  [performance.md](performance.md) records how fast a write runs.
 - **A cancel flag stops the workers between blocks.** Unless every range was already written, the
   write then fails with `Cancelled`.
 
@@ -179,25 +180,3 @@ so it never reads as data. Its schema is `doppeldata schemas show manifest`.
 - **`regenerate()` compares every file it writes with the record.** A file whose rows, bytes or
   SHA-256 differ fails the call with `RegeneratedFilesDiffer`, which names it. One tool version and
   one set of writer settings write the same bytes.
-
-## Parquet write throughput scales with the ranges a run splits into
-
-The population is 10M rows of the `eight-columns` example in 1M-row files, seed 42. The instrument
-is the manifest's `elapsed_ms`, which covers preparing the destination, every file and the manifest.
-Peak memory is GNU time's maximum resident set. The machine is a 16-thread Ryzen 9 6900HX with other
-work running. Each row is five runs into memory of this command, with the row's flags added:
-
-```bash
-cargo run --release -p doppeldata-writers --example write_dataset -- eight-columns --rows 10000000 --file-rows 1000000 --out memory://
-```
-
-| Flags | Rows/s | Peak memory |
-| --- | --- | --- |
-| `--threads 16` | 15.4M to 19.7M | 670 to 740 MB |
-| `--threads 1` | 3.35M to 3.38M | 424 to 435 MB |
-| `--threads 16 --writer '{"compression":"snappy"}'` | 20.9M to 21.5M | 822 to 924 MB |
-| `--threads 16 --partition-by category` | 1.76M to 1.78M | 1.15 GB |
-
-The codec is ZSTD at its default level unless the row says otherwise. Ten ranges feed ten workers,
-so six of the sixteen threads sit idle. `category` has 50 values, so partitioning by it makes the
-whole run one range on one worker.

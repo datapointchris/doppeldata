@@ -13,6 +13,7 @@ crates/         the cargo workspace: core (the engine, no Python), writers (file
 library/        doppeldata: imported as `doppeldata`, built by maturin, no scripts
 cli/            doppeldata-cli: imported as `doppeldata_cli`, the `doppeldata` command
 docs/           the design pages
+benchmarks/     PEP 723 scripts timing the engine against numpy, Faker and Mimesis, run by `task bench`
 ```
 
 - **The dependency runs one way: the CLI imports the library, never the reverse.** Typer and rich
@@ -71,6 +72,7 @@ task test       # cargo test in crates/, then pytest
 task lint       # ruff, mypy, rustfmt and clippy, writing nothing
 task generate   # rewrite the JSON Schemas and the extension's stub from the crates
 task check-generated   # fail when a committed schema or the stub is not what the crates generate
+task bench      # time the engine against numpy, Faker and Mimesis; never in CI, see docs/performance.md
 ```
 
 `uv sync` rebuilds the extension when `crates/` changes. A `cargo` command runs from `crates/`,
