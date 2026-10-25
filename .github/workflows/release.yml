@@ -25,13 +25,16 @@ jobs:
   library-on-python-3-11:
     uses: ./.github/workflows/library-on-python-3.11.yml
 
+  determinism-across-platforms:
+    uses: ./.github/workflows/determinism-across-platforms.yml
+
   # The tag cannot be taken back, so the commit it would name builds on every
   # platform first.
   build-before-tagging:
     uses: ./.github/workflows/build-library.yml
 
   release:
-    needs: [validate, library-on-python-3-11, build-before-tagging]
+    needs: [validate, library-on-python-3-11, determinism-across-platforms, build-before-tagging]
     uses: datapointchris/reusable-workflows/.github/workflows/python-semantic-release.yml@v1
     permissions:
       contents: write
