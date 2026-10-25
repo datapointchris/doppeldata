@@ -67,6 +67,7 @@ def test_the_general_pack_types_each_column_of_the_mixed_fixture(tmp_path):
     corrupted = set(draw.sample(range(rows), 30))
     cards = [luhn_completed(draw.choice(['4', '51', '37']) + ''.join(draw.choices('0123456789', k=13))) for _ in range(rows)]
     cards = [card[:-1] + str((int(card[-1]) + 1) % 10) if index in corrupted else card for index, card in enumerate(cards)]
+    phones = [draw.randrange(2_000_000_000, 9_999_999_999) for _ in range(300)]
     table = pl.DataFrame(
         {
             'contact': [f'user{index}@mail{draw.randrange(9)}.example.com' for index in range(rows)],
@@ -77,6 +78,7 @@ def test_the_general_pack_types_each_column_of_the_mixed_fixture(tmp_path):
             'ship_zip': [f'{draw.randrange(100_000):05d}' for _ in range(rows)],
             'state': [draw.choice(['CA', 'NY', 'TX', 'WA', 'FL', 'MA', 'IL', 'OH']) for _ in range(rows)],
             'last_name_id': draw.sample(range(10**6), rows),
+            'phone': [draw.choice(phones) for _ in range(rows)],
         }
     )
     table.write_parquet(tmp_path / 'mixed.parquet')
@@ -94,8 +96,11 @@ def test_the_general_pack_types_each_column_of_the_mixed_fixture(tmp_path):
         'ship_zip': 'us_zip',
         'state': 'us_state',
         'last_name_id': None,
+        'phone': 'phone_number',
     }
     assert columns['card_number']['quality']['invalid_rate'] == pytest.approx(0.003, abs=0.001)
+    # An integer identifier repeated across rows, a phone number here, lists none of its values.
+    assert 'top_values' not in columns['phone']['numeric']
 
 
 def test_a_log_uniform_column_is_fitted_as_the_loguniform_the_generator_reads(tmp_path):

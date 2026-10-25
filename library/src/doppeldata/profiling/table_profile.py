@@ -539,7 +539,7 @@ def column_entry(
     if values < k_min:
         return entry
     if spec.kind in NUMERIC:
-        identifier = typing is not None and typing.candidate.detector.type == 'identifier'
+        identifier = typing is not None and typing.candidate.detector.sensitivity == 'identifier'
         entry['numeric'] = numeric_section(backend, table, spec, stat, values, layout, k_min, identifier=identifier)
     elif spec.kind is ColumnKind.STRING:
         entry['string'] = string_section(
