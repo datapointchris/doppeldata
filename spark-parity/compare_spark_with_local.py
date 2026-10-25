@@ -2,8 +2,9 @@
 
 `check-spark-parity.sh` runs this through spark-submit inside each Spark image. `generate`'s DataFrame is collected as Arrow and
 compared value for value with `doppeldata.stream`, each float by its bits. `write`'s files are compared by SHA-256 with the
-manifest of a `doppeldata data generate` with the same arguments. It prints one JSON object per check, and exits 1 when any
-differs.
+manifest of a `doppeldata data generate` with the same arguments. Each column of the every-column-kind fixture then goes through
+`mapInArrow` alone, and whether Spark gave every value back is compared with `spark_holds`. It prints one JSON object per check,
+and exits 1 when any differs.
 """
 
 import json
@@ -14,7 +15,9 @@ from typing import Any
 
 import doppeldata as sd
 import pyarrow as pa
+from doppeldata.spark import spark_holds
 from pyspark.sql import SparkSession
+from pyspark.sql.pandas.types import from_arrow_schema
 
 ROWS = 10_000_000
 SEED = 42
@@ -31,6 +34,15 @@ def arrow_of(frame: Any) -> pa.Table:
     return pa.Table.from_batches(frame._collect_as_arrow())
 
 
+def same_values(got: pa.Array, want: pa.Array) -> bool:
+    """Whether two arrays hold one type and the same values, each float compared by its bits."""
+    if got.type != want.type:
+        return False
+    if want.type in FLOAT_BITS:
+        got, want = got.view(FLOAT_BITS[want.type]), want.view(FLOAT_BITS[want.type])
+    return bool(got.equals(want))
+
+
 def first_difference(collected: pa.Table, expected: pa.RecordBatchReader) -> str | None:
     """Where the collected table first differs from the stream doppeldata generates, or None when every value is identical."""
     offset = 0
@@ -41,9 +53,7 @@ def first_difference(collected: pa.Table, expected: pa.RecordBatchReader) -> str
             want = batch.column(name)
             if got.type != want.type:
                 return f'column {name} is {got.type} where doppeldata generates {want.type}'
-            if want.type in FLOAT_BITS:
-                got, want = got.view(FLOAT_BITS[want.type]), want.view(FLOAT_BITS[want.type])
-            if not got.equals(want):
+            if not same_values(got, want):
                 return f'column {name} differs in rows {offset} to {offset + batch.num_rows}'
         offset += batch.num_rows
     if offset != collected.num_rows:
@@ -51,12 +61,35 @@ def first_difference(collected: pa.Table, expected: pa.RecordBatchReader) -> str
     return None
 
 
+def carried(spark: SparkSession, table: pa.Table, name: str) -> bool:
+    """Whether column `name` of `table` comes back from `mapInArrow` with every value, in a type that casts back to its own."""
+    column = table.select([name]).replace_schema_metadata(None)
+    want = column.column(0).combine_chunks()
+    try:
+        schema = from_arrow_schema(column.schema, prefer_timestamp_ntz=True)
+        batches = column.to_batches()
+        frame = spark.range(1, numPartitions=1).mapInArrow(lambda _, held=batches: iter(held), schema)
+        return same_values(arrow_of(frame).column(0).combine_chunks().cast(want.type), want)
+    except Exception:
+        return False
+
+
+def type_disagreements(spark: SparkSession, fixture: str) -> list[str]:
+    """Each fixture column whose type `spark_holds` judges otherwise than this Spark carries it."""
+    table = pa.table(sd.generate(sd.Profile.load(fixture), rows=3000, seed=1))
+    return [
+        f'{field.name} ({field.type}): spark_holds says {spark_holds(field.type)}'
+        for field in table.schema
+        if carried(spark, table, field.name) != spark_holds(field.type)
+    ]
+
+
 def report(check: dict[str, Any]) -> bool:
     print(json.dumps(check), flush=True)
     return check['identical']
 
 
-def main(local_manifest_path: str, out: str) -> int:
+def main(local_manifest_path: str, out: str, fixture: str) -> int:
     spark = SparkSession.builder.getOrCreate()
     profile = sd.Profile.example('eight-columns')
     local = {file['path']: file['sha256'] for file in json.loads(pathlib.Path(local_manifest_path).read_text())['files']}
@@ -79,6 +112,8 @@ def main(local_manifest_path: str, out: str) -> int:
         differ = sorted(path for path in local.keys() | written.keys() if local.get(path) != written.get(path))
         check = {'check': 'write', 'partitions': partitions, 'files': len(written), 'seconds': round(seconds, 1)}
         identical &= report(check | {'identical': not differ, 'differ': differ})
+    disagree = type_disagreements(spark, fixture)
+    identical &= report({'check': 'types', 'fixture': pathlib.Path(fixture).name, 'identical': not disagree, 'disagree': disagree})
     spark.stop()
     return 0 if identical else 1
 
