@@ -31,6 +31,7 @@ use rand_chacha::ChaCha8Rng;
 
 use super::BlockPosition;
 use super::StreamKeys;
+use super::distinct_values::DistinctTarget;
 use super::distinct_values::Stratum;
 use super::distinct_values::ValueIndex;
 use super::distinct_values::Variety;
@@ -397,13 +398,6 @@ pub(crate) struct NumericSampler {
     pub(crate) index: Option<ValueIndex>,
 }
 
-/// The distinct values a column is to hold over the dataset, and the rows not null it draws them in.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DistinctTarget {
-    pub(crate) distinct: f64,
-    pub(crate) filled_rows: f64,
-}
-
 impl NumericSampler {
     /// The sampler drawing through `cdf`, the column's inverse CDF, built as `curve` says. It fails
     /// only on unusable rates.
@@ -416,7 +410,7 @@ impl NumericSampler {
     ) -> Result<Self, String> {
         let rounding = Rounding::for_column(Some(stats), &output);
         let Some(numbers) = ListedNumbers::of(&cdf, stats, rounding, source)? else {
-            let index = target.and_then(|t| ValueIndex::for_distinct_in_bands(t.distinct, t.filled_rows, &variety(&cdf, rounding)));
+            let index = target.and_then(|target| ValueIndex::for_distinct_in_bands(target, &variety(&cdf, rounding)));
             return Ok(Self {
                 cdf,
                 curve,
@@ -429,10 +423,7 @@ impl NumericSampler {
         };
         let cdf = numbers.outside.unwrap_or(cdf);
         let listed = numbers.listed;
-        let index = target.and_then(|t| {
-            let distinct = t.distinct - listed.len() as f64;
-            ValueIndex::for_distinct_in_bands(distinct, t.filled_rows * listed.other_share(), &variety(&cdf, rounding))
-        });
+        let index = target.and_then(|target| ValueIndex::for_distinct_in_bands(listed.outside(target), &variety(&cdf, rounding)));
         Ok(Self {
             cdf,
             curve,

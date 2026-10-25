@@ -94,16 +94,24 @@ fn cell_reached(width: f64, drawn: f64) -> f64 {
     1.0 - missed
 }
 
+/// The distinct values a column is to hold over the dataset, and the rows not null it draws them in.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DistinctTarget {
+    pub(crate) distinct: f64,
+    pub(crate) filled_rows: f64,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ValueIndex {
     range: u64,
 }
 
 impl ValueIndex {
-    /// The range whose `draws` uniform draws are expected to give `distinct` distinct values from a
-    /// source of `variety`. `None` where fresh draws come no nearer than that, as at a ratio of 1.
-    pub(crate) fn for_distinct(distinct: f64, draws: f64, variety: &Variety) -> Option<Self> {
-        let distinct = distinct.max(1.0);
+    /// The range whose uniform draws, one per filled row, are expected to give the target's distinct
+    /// values from a source of `variety`. `None` where fresh draws come no nearer than that, as at a
+    /// ratio of 1.
+    pub(crate) fn for_distinct(target: DistinctTarget, variety: &Variety) -> Option<Self> {
+        let (distinct, draws) = (target.distinct.max(1.0), target.filled_rows);
         if draws.is_nan() || draws < 1.0 || variety.distinct_values(draws) <= distinct {
             return None;
         }
@@ -116,11 +124,11 @@ impl ValueIndex {
         })
     }
 
-    /// The range whose `draws` draws at [`Self::stratified_level`] levels are expected to give
-    /// `distinct` distinct values from a source of `variety`. `None` where fresh draws come no
-    /// nearer than that.
-    pub(crate) fn for_distinct_in_bands(distinct: f64, draws: f64, variety: &Variety) -> Option<Self> {
-        let distinct = distinct.max(1.0);
+    /// The range whose draws at [`Self::stratified_level`] levels, one per filled row, are expected
+    /// to give the target's distinct values from a source of `variety`. `None` where fresh draws come
+    /// no nearer than that.
+    pub(crate) fn for_distinct_in_bands(target: DistinctTarget, variety: &Variety) -> Option<Self> {
+        let (distinct, draws) = (target.distinct.max(1.0), target.filled_rows);
         if draws.is_nan() || draws < 1.0 || variety.distinct_values(draws) <= distinct {
             return None;
         }

@@ -5,6 +5,8 @@ use rand::Rng;
 use rand_distr::Distribution;
 use rand_distr::weighted::WeightedAliasIndex;
 
+use super::distinct_values::DistinctTarget;
+
 #[derive(Debug, Clone)]
 pub(crate) struct ListedValues<T> {
     values: Vec<T>,
@@ -42,5 +44,14 @@ impl<T> ListedValues<T> {
     /// The share of rows drawn outside the list.
     pub(crate) fn other_share(&self) -> f64 {
         self.other_share
+    }
+
+    /// What the `other` share is to hold of a column's `target`: every value the list does not,
+    /// in the rows it draws.
+    pub(crate) fn outside(&self, target: DistinctTarget) -> DistinctTarget {
+        DistinctTarget {
+            distinct: target.distinct - self.values.len() as f64,
+            filled_rows: target.filled_rows * self.other_share,
+        }
     }
 }

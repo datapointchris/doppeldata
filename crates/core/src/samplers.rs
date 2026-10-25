@@ -27,6 +27,7 @@ use arrow_schema::TimeUnit;
 use rand_distr::weighted::WeightedAliasIndex;
 
 use self::categorical::CategoricalSampler;
+use self::distinct_values::DistinctTarget;
 use self::distinct_values::ValueIndex;
 pub use self::file_rows::file_rows_draws;
 pub use self::fitted_family::FITTED_FAMILIES;
@@ -35,7 +36,6 @@ pub use self::fitted_family::FittedFamilyKind;
 use self::listed_values::ListedValues;
 use self::nested::ListSampler;
 use self::nested::StructSampler;
-use self::numeric::DistinctTarget;
 use self::numeric::NumericOutput;
 use self::numeric::NumericSampler;
 use self::numeric::SequenceSampler;
@@ -109,26 +109,26 @@ pub(crate) struct PlanContext<'a> {
 }
 
 impl PlanContext<'_> {
-    /// The distinct values a column is to hold over the dataset. At or above the source's rows its
-    /// ratio holds, so a longer run holds more values. Below them it is what a random sample of the
-    /// source holds where each value fills an equal share of its rows,
+    /// The distinct values a column is to hold over the dataset, drawn in its `filled_rows`. At or
+    /// above the source's rows its ratio holds, so a longer run holds more values. Below them it is
+    /// what a random sample of the source holds where each value fills an equal share of its rows,
     /// `count · (1 − (1 − rows/N)^(N/count))`, so a short run keeps the source's values.
-    fn distinct_target(&self, distinct: Option<&Distinct>) -> Option<f64> {
+    fn distinct_target(&self, distinct: Option<&Distinct>, filled_rows: f64) -> Option<DistinctTarget> {
         let distinct = distinct?;
         let ratio = distinct.ratio?.0;
         let held = ratio * self.rows;
-        let Some(count) = distinct
+        let source_rows = distinct
             .approx
             .map(|count| count as f64)
             .filter(|&count| count > 0.0 && ratio > 0.0)
-        else {
-            return Some(held);
+            .map(|count| (count, self.source_rows.unwrap_or(count / ratio)));
+        let distinct = match source_rows {
+            Some((count, source_rows)) if source_rows > self.rows => {
+                count * (1.0 - libm::pow(1.0 - self.rows / source_rows, source_rows / count))
+            }
+            _ => held,
         };
-        let source_rows = self.source_rows.unwrap_or(count / ratio);
-        if source_rows <= self.rows {
-            return Some(held);
-        }
-        Some(count * (1.0 - libm::pow(1.0 - self.rows / source_rows, source_rows / count)))
+        Some(DistinctTarget { distinct, filled_rows })
     }
 }
 
@@ -530,9 +530,7 @@ fn value_sampler(
             None => None,
         };
         let stats = numeric.cloned().unwrap_or_else(empty_numeric_stats);
-        let target = context
-            .distinct_target(column.distinct.as_ref())
-            .map(|distinct| DistinctTarget { distinct, filled_rows });
+        let target = context.distinct_target(column.distinct.as_ref(), filled_rows);
         let source = column.distinct.as_ref().and_then(|d| {
             let (distinct, ratio) = (d.approx?, d.ratio?.0);
             let described = context.described_rows.or((ratio > 0.0).then(|| distinct as f64 / ratio))?;
@@ -568,7 +566,7 @@ fn value_sampler(
     let string = column.string.as_ref();
     let hint = column.semantic.as_ref().and_then(|s| s.generator_hint.as_ref());
     let source = text_source(string, hint, site)?;
-    let distinct = context.distinct_target(column.distinct.as_ref());
+    let target = context.distinct_target(column.distinct.as_ref(), filled_rows);
     let categories = match (listed_values(string), listed_prefixes(string)) {
         (Some(top_values), _) => Some((
             top_values,
@@ -602,13 +600,7 @@ fn value_sampler(
         let values: Vec<_> = listed.iter().map(|top| (top.value.clone(), top.rate.0)).collect();
         let other_rate = other_rate.map_or(0.0, |r| r.0);
         let listed = ListedValues::new(values, other_rate).map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
-        let other_index = distinct.and_then(|distinct| {
-            ValueIndex::for_distinct(
-                distinct - listed.len() as f64,
-                filled_rows * listed.other_share(),
-                &other_variety,
-            )
-        });
+        let other_index = target.and_then(|target| ValueIndex::for_distinct(listed.outside(target), &other_variety));
         return Ok(ValueSampler::Categorical(CategoricalSampler {
             listed,
             suffix: suffix.map(Box::new),
@@ -625,7 +617,7 @@ fn value_sampler(
         }
     });
     Ok(ValueSampler::Text(TextSampler {
-        index: distinct.and_then(|distinct| ValueIndex::for_distinct(distinct, filled_rows, &source.variety())),
+        index: target.and_then(|target| ValueIndex::for_distinct(target, &source.variety())),
         source,
         check_digit,
         output,
