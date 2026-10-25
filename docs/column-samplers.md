@@ -1,6 +1,6 @@
 # How each column kind is drawn from its profile
 
-## A numeric column is one uniform draw through a piecewise-linear inverse CDF
+## A numeric column draws a uniform level through a piecewise-linear inverse CDF
 
 The inverse CDF is a list of (level, value) knots. The stored quantiles are the frame, with the
 extremes at levels 0 and 1. A histogram's edges, at their cumulative shares, fill the body between
@@ -18,13 +18,14 @@ An edge's share counts every row, the histogram's `overflow` included. Edge `i` 
 level 0 to 1. A profile whose edges were frozen from an earlier one still places them at the shares
 its own rows give.
 
-Every value is one uniform draw, whatever the knots came from. So a profiler that adds a histogram
+Every value is one uniform level, whatever the knots came from. So a profiler that adds a histogram
 changes the values but not the draw order, and the samplers need no change to read it.
 
 `integral` rounds the value to the nearest integer. So the profiler writes an integer column's
-histogram edges halfway between integers, and each bin draws the integers it counted. `precision`
-and `scale` quantize the value, or become a decimal type. A
-`sequence` emits `start + step · row` and draws nothing.
+histogram edges halfway between integers, and each bin draws the integers it counted. `scale`
+rounds the value to that many decimal places, and a decimal type to its own scale. So a float
+column every value of which has two places generates cents. A `sequence` emits
+`start + step · row` and draws nothing.
 
 ## Beyond the outermost quantile, a fitted tail replaces the straight line
 
@@ -55,8 +56,41 @@ cargo run --release -p doppeldata-core --example throughput -- eight-columns --r
   of the tail beyond it. A draw then costs one uniform and one lookup, whatever the family.
 - **A discrete family's tail includes the stored quantile's own mass**, so an integral column's
   generated quantile still lands on the stored value.
+- **A family whose support stops short of the extreme leaves that tail straight.** A lognormal
+  with `loc` −0.22 draws no value below −0.22, so toward a trimmed low of −62 its tail would put
+  every value between them on one segment. The line from the quantile to the extreme draws there.
+- **Where the body starts at or above zero and the low extreme sits below it, `negative_rate` is
+  the lower tail's share below zero.** The levels from it to the body's first knot draw between
+  zero and that knot. Spread over p001's whole share, the fitted tail of the NYC yellow taxi
+  trips' `tip_amount` put 8,531 of 10M generated values below zero where 381 source values sat.
 - **The remaining lift is the body.** Below p99, linear interpolation across the stored quantiles gives 33.31
   against 30.06 for the true lognormal. A histogram's many knots shrink it.
+
+## A numeric column with few values draws each listed value by its rate
+
+The profiler lists a numeric column's values as `numeric.top_values`, beside an `other_rate`, where
+it holds at most `NUMERIC_TOP_VALUES_THRESHOLD` distinct values. An alias table draws a listed value
+by its rate, or the `other` share. A value drawn from the `other` share comes from the column's
+inverse CDF with every level rounding to a listed value cut out.
+
+- **The levels left are scaled by what each histogram bin holds outside the list.** A bin's weight
+  is its count less its listed values' rows. So a ramp the quantiles draw between two listed values
+  keeps no levels where the counts give it no rows. Where no bin holds anything outside the list,
+  the levels keep their own widths.
+- **A lattice column's distinct count can show values beyond its trimmed extremes.** On an integer
+  column, a decimal, or a float with a `scale`, the values the extremes leave room for are the points
+  between them that no listed value takes. Where `distinct.approx` holds more than the listed
+  values and that room, the rest lie beyond the extremes. At most `2 · (k_min − 1)` hide there, and
+  each side's share `(k_min − 1) / 2` source rows.
+- **They are drawn on the side the histogram's overflow names**: above where only `above` counts
+  rows, below where only `below` does, and otherwise above and below in turn. Their rows come out of
+  the `other` share, never on top of it.
+- **A continuous column never draws past its extremes.** Its room between them is unbounded.
+
+On the NYC yellow taxi trips for February to April 2024, `payment_type` holds six values. Value 5
+sits on 2 rows, and value 3's 64,979 rows fold into `other` so it holds `k_min` rows. The extremes
+are 0 and 4, so the sixth value is drawn as 5, on 2 of 10M generated rows. `boundary_adherence`
+stays at 1.0.
 
 ## A string column takes the most specific source its profile holds
 
@@ -85,12 +119,12 @@ every call, and it panics on lower-case input and on a `u8` overflow past about 
 generated address reaches anyone. That holds 3,007 × 474 × 3 = 4,275,954 addresses. *Rejected:*
 fake's `SafeEmail`. It is a first name at one of the three domains, so it holds 9,021 addresses.
 
-## A string column below a distinct ratio of 1 draws each value at an index
+## A column below a distinct ratio of 1 draws each value at an index
 
-A generated string is drawn fresh by default, so its distinct count is whatever the source
-yields. With `distinct.ratio`, a row instead draws an index from `0..K` on a stream of its own.
-The value at an index comes from a stream positioned at that index. So a value is a pure function
-of its index, no pool of values is held, and any block still generates alone.
+A generated string or number is drawn fresh by default, so its distinct count is whatever the
+source yields. With `distinct.ratio`, a row instead draws an index from `0..K` on a stream of its
+own. The value at an index comes from a stream positioned at that index. So a value is a pure
+function of its index, no pool of values is held, and any block still generates alone.
 
 - **The target is `distinct.ratio` times the generated rows**, never `distinct.approx`. So a
   10M-row run of a 100K-row profile holds 100 times the profiled distinct count, and its ratio
@@ -124,6 +158,40 @@ On 1M rows of the bundled `orders` example, at seed 42 and stream version 2:
 | --- | --- | --- | --- | --- |
 | `ship_zip` | pattern `^\d{5}$`, 100,000 strings | 0.09 | 0.059167 | 0.089921 |
 | `customer_email` | `email`, 4,275,954 strings | 0.195 | 0.190699 | 0.195046 |
+
+## A numeric column's index picks a band of levels, and K counts where bands share a value
+
+The levels split into K equal bands. The value at index `i` is drawn at a level inside band `i`,
+offset by a draw from the index's own stream. A uniform index and a uniform offset make a uniform
+level, so the values still follow the inverse CDF. And a few indices reach each piece of it in
+proportion. Independent levels could leave a short piece with none: the taxi trips'
+`congestion_surcharge` held 3 to 9 distinct values across eight seeds that way, and holds 7, the
+source's count, at each of them in bands.
+
+A rounded value's levels form a cell, and neighboring bands give one value where an edge splits a
+cell between them. The collision count the strings use assumes independent draws, so it overstates
+how often bands collide. K is solved from each cell's chance of being reached instead, averaged over
+where the cell starts inside a band.
+
+- **A cell `w` bands wide, with `w` at most 1, is reached with chance `q·w − q²·w³ / 6`**, where
+  `q` is the chance a band is drawn. It lies inside one band, or an edge splits it between two.
+- **A wider cell misses only where every band it spans misses.** A band the cell holds a share `f`
+  of misses it with chance `1 − q·f`, so a whole band misses with chance `1 − q`.
+- **Each piece of the inverse CDF is one stratum of cells**, each flat run or end value one cell,
+  and an unrounded piece cells without limit.
+
+At stream version 5, with each column's distinct values counted by Polars:
+
+| Column | Target | One value per band | Averaged over cell starts |
+| --- | --- | --- | --- |
+| taxi `tolls_amount`, cents, 10M rows | 1,918 | 1,669 | 1,912 |
+| `orders` `customer_id` bounded at 10,000 and 99,999, 100,000 rows | 20,000 | 19,834 | 19,997 |
+
+The strings' collision count gives `customer_id` 22,353. A column whose fresh draws hold fewer
+values than its target draws fresh. Its quantiles bound it, at the rows or the lattice points each
+piece holds, whichever is fewer. The taxi trips' `tip_amount` holds 5,180 of the 5,484 cents its
+ratio asks. Its profile states nothing above p999 but the fit, and the fitted upper tail draws a
+third of the source's rows above 40.
 
 The ratios are each column's distinct values, nulls left out, over all rows, read by Polars from
 the file this writes:

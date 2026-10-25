@@ -7,6 +7,7 @@
 //! it. Beyond the outermost quantile, a fitted family's conditional tail, truncated at the
 //! extremes, is tabulated into dense knots; without a usable fit the tail is linear.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow_array::ArrayRef;
@@ -27,13 +28,22 @@ use arrow_buffer::NullBuffer;
 use arrow_buffer::ScalarBuffer;
 use arrow_schema::DataType;
 use rand_chacha::ChaCha8Rng;
+use rand_distr::Distribution;
+use rand_distr::weighted::WeightedAliasIndex;
 
+use super::BlockPosition;
+use super::StreamKeys;
+use super::distinct_values::Stratum;
+use super::distinct_values::ValueIndex;
+use super::distinct_values::Variety;
 use super::fitted_family::FittedFamily;
 use super::inverse_cdf::InverseCdf;
 use super::inverse_cdf::Knots;
+use crate::profile::ExtremesMethod;
 use crate::profile::Histogram;
 use crate::profile::NumericStats;
 use crate::profile::Quantiles;
+use crate::rng::rng_for;
 use crate::rng::unit;
 
 /// Knots tabulated across each fitted tail.
@@ -116,14 +126,25 @@ pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> R
     // the fit cannot place, such as a NaN, is left out, and the curve runs straight across it.
     if let Some((level, value)) = body_low.filter(|&(level, _)| level > 0.0) {
         let low = low.filter(|&low| low <= value);
-        match fit.and_then(|fit| lower_tail(fit, low, level, value)) {
+        // Where the body starts at or above zero, the stated negative rate is the share a fitted tail
+        // below zero may hold, and the levels from it up to the body draw between zero and the body.
+        let below_zero = stats
+            .negative_rate
+            .map(|r| r.0)
+            .filter(|&share| 0.0 < share && share < level && value >= 0.0 && low.is_some_and(|low| low < 0.0));
+        let (top_level, top_value) = below_zero.map_or((level, value), |share| (share, 0.0));
+        // A family whose support stops short of the extreme cannot draw the values between them.
+        let reaches = fit.filter(|fit| low.is_none_or(|low| fit.support().0 <= low));
+        _ = knots.insert(top_level, top_value);
+        match reaches.and_then(|fit| lower_tail(fit, low, top_level, top_value)) {
             Some(tail) => _ = knots.extend(tail),
-            None => _ = knots.insert(0.0, low.unwrap_or(value)),
+            None => _ = knots.insert(0.0, low.unwrap_or(top_value)),
         }
     }
     if let Some((level, value)) = body_high.filter(|&(level, _)| level < 1.0) {
         let high = high.filter(|&high| high >= value);
-        match fit.and_then(|fit| upper_tail(fit, level, value, high)) {
+        let reaches = fit.filter(|fit| high.is_none_or(|high| fit.support().1 >= high));
+        match reaches.and_then(|fit| upper_tail(fit, level, value, high)) {
             Some(tail) => _ = knots.extend(tail),
             None => _ = knots.insert(1.0, high.unwrap_or(value)),
         }
@@ -226,6 +247,8 @@ impl Rounding {
             return Self::Integer;
         }
         match (output, stats.and_then(|s| s.scale)) {
+            // The decimal type quantizes to its scale anyway, so rounding there first changes no value.
+            (&NumericOutput::Decimal128 { scale, .. }, _) => Self::Decimals(power_of_ten(i32::from(scale))),
             (NumericOutput::Float32 | NumericOutput::Float64, Some(scale)) => Self::Decimals(power_of_ten(scale)),
             _ => Self::Exact,
         }
@@ -238,6 +261,15 @@ impl Rounding {
             Self::Decimals(factor) => (value * factor).round() / factor,
         }
     }
+
+    /// The values a rounded value can take, as how many of them fit in one unit, or `None` for any.
+    fn lattice(self) -> Option<f64> {
+        match self {
+            Self::Exact => None,
+            Self::Integer => Some(1.0),
+            Self::Decimals(factor) => Some(factor),
+        }
+    }
 }
 
 fn power_of_ten(exponent: i32) -> f64 {
@@ -245,17 +277,310 @@ fn power_of_ten(exponent: i32) -> f64 {
     if exponent < 0 { 1.0 / power } else { power }
 }
 
+/// How many distinct values draws through `cdf` take once rounded. A linear piece's interior
+/// values are equally likely, so each piece is one stratum, and each end value and flat run is a
+/// stratum of one value, its shares merged wherever pieces meet.
+pub(crate) fn variety(cdf: &InverseCdf, rounding: Rounding) -> Variety {
+    let mut points: BTreeMap<u64, f64> = BTreeMap::new();
+    let mut point = |value: f64, share: f64| *points.entry((rounding.apply(value) + 0.0).to_bits()).or_default() += share;
+    let mut strata = Vec::new();
+    for ((start, low), (end, high)) in cdf.segments() {
+        let width = end - start;
+        let Some(factor) = rounding.lattice().filter(|_| high > low) else {
+            match high > low {
+                true => strata.push(Stratum {
+                    strings: f64::INFINITY,
+                    share: width,
+                }),
+                false => point(low, width),
+            }
+            continue;
+        };
+        let (from, to) = (low * factor, high * factor);
+        let (first, last) = (from.round(), to.round());
+        if first == last {
+            point(low, width);
+            continue;
+        }
+        // Levels per lattice step. The end values hold only the part of their step the piece reaches.
+        let density = width / (to - from);
+        point(low, (first + 0.5 - from) * density);
+        point(high, (to - (last - 0.5)) * density);
+        let interior = last - first - 1.0;
+        if interior > 0.0 {
+            strata.push(Stratum {
+                strings: interior,
+                share: interior * density,
+            });
+        }
+    }
+    strata.extend(points.into_values().map(|share| Stratum { strings: 1.0, share }));
+    Variety::Strata(strata)
+}
+
+/// The inverse CDF of the values `cdf` draws outside the `listed` (value, rate) pairs. Every level
+/// whose value rounds to a listed one is cut out. Where a histogram counts the column, each bin's
+/// remaining levels are scaled to the rows its count leaves outside the listed values, so a ramp
+/// the quantiles draw between two listed values keeps no levels the counts do not give it. `None`
+/// where no level is left.
+fn outside_cdf(cdf: &InverseCdf, listed: &[(f64, f64)], rounding: Rounding, histogram: Option<&Histogram>) -> Option<InverseCdf> {
+    let is_listed = |value: f64| {
+        let rounded = rounding.apply(value);
+        listed.iter().any(|&(listed, _)| listed == rounded)
+    };
+    let histogram = histogram.filter(|h| h.edges.len() == h.counts.len() + 1 && h.edges.len() > 1);
+    let mut cuts: Vec<f64> = rounding
+        .lattice()
+        .map(|factor| {
+            let half = 0.5 / factor;
+            listed.iter().flat_map(|&(value, _)| [value - half, value + half]).collect()
+        })
+        .unwrap_or_default();
+    cuts.extend(histogram.into_iter().flat_map(|h| h.edges.iter().copied()));
+    cuts.sort_by(f64::total_cmp);
+    cuts.dedup();
+    // Each kept piece as (level width, value at its start, value at its end).
+    let mut pieces: Vec<(f64, f64, f64)> = Vec::new();
+    for ((start, low), (end, high)) in cdf.segments() {
+        if high == low {
+            if !is_listed(low) {
+                pieces.push((end - start, low, high));
+            }
+            continue;
+        }
+        let mut at = (start, low);
+        for cut in cuts
+            .iter()
+            .copied()
+            .filter(|&cut| low < cut && cut < high)
+            .chain(std::iter::once(high))
+        {
+            let level = if cut == high {
+                end
+            } else {
+                start + (cut - low) / (high - low) * (end - start)
+            };
+            if !is_listed((at.1 + cut) / 2.0) {
+                pieces.push((level - at.0, at.1, cut));
+            }
+            at = (level, cut);
+        }
+    }
+    let weights = histogram.and_then(|h| bin_weights(&pieces, listed, h));
+    let widths: Vec<f64> = match &weights {
+        Some(weights) => pieces.iter().zip(weights).map(|(&(width, ..), weight)| width * weight).collect(),
+        None => pieces.iter().map(|&(width, ..)| width).collect(),
+    };
+    let total: f64 = widths.iter().sum();
+    if total.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
+        return None;
+    }
+    let mut knots = Vec::with_capacity(2 * pieces.len());
+    let mut level = 0.0;
+    for (&(_, low, high), width) in pieces.iter().zip(widths) {
+        knots.push((level, low));
+        level = (level + width / total).min(1.0);
+        knots.push((level, high));
+    }
+    if let Some(last) = knots.last_mut() {
+        last.0 = 1.0;
+    }
+    Knots::from_sorted(knots).map(InverseCdf::new)
+}
+
+/// Each piece's scale: the rows its bin's count leaves outside the listed values, over the levels
+/// the bin's pieces hold. The rows below the first edge and above the last are bins of their own.
+/// `None` where no bin holding a piece leaves any row, as when rounded rates swamp a tiny remainder.
+fn bin_weights(pieces: &[(f64, f64, f64)], listed: &[(f64, f64)], histogram: &Histogram) -> Option<Vec<f64>> {
+    let edges = &histogram.edges;
+    let (below, above) = histogram.overflow.as_ref().map_or((0, 0), |o| (o.below, o.above));
+    let counted: Vec<u64> = std::iter::once(below)
+        .chain(histogram.counts.iter().copied())
+        .chain([above])
+        .collect();
+    let total = counted.iter().sum::<u64>() as f64;
+    // Bin 0 is below the first edge and the last is above the last edge. The last edge closes its bin.
+    let bin = |value: f64| match edges.partition_point(|&edge| edge <= value) {
+        at if at == edges.len() && value == edges[edges.len() - 1] => at - 1,
+        at => at,
+    };
+    let mut leftover: Vec<f64> = counted.iter().map(|&count| count as f64).collect();
+    for &(value, rate) in listed {
+        leftover[bin(value)] -= rate * total;
+    }
+    let mut levels = vec![0.0; counted.len()];
+    let homes: Vec<usize> = pieces.iter().map(|&(_, low, high)| bin((low + high) / 2.0)).collect();
+    for (&(width, ..), &home) in pieces.iter().zip(&homes) {
+        levels[home] += width;
+    }
+    let scale: Vec<f64> = leftover
+        .iter()
+        .zip(&levels)
+        .map(|(&rows, &level)| if level > 0.0 { rows.max(0.0) / level } else { 0.0 })
+        .collect();
+    homes
+        .iter()
+        .any(|&home| scale[home] > 0.0)
+        .then(|| homes.iter().map(|&home| scale[home]).collect())
+}
+
+/// What a profile states about the source a lattice column's hidden values are deduced from.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SourceCounts {
+    /// Its distinct values, `distinct.approx`.
+    pub(crate) distinct: u64,
+    /// Its values not null.
+    pub(crate) values: f64,
+    pub(crate) k_min: u64,
+}
+
+/// The values a lattice column's trimmed extremes must hide, as (value, rate) pairs. Where the
+/// source holds more distinct values than its listed values and the lattice between its extremes
+/// can, the rest lie beyond the extremes. Each side's values share `(k_min - 1) / 2` rows, half
+/// of what the floor allows beyond an extreme. They go above where the histogram's overflow counts
+/// rows only above, below where it counts them only below, and otherwise above and below in turn.
+fn hidden_beyond(stats: &NumericStats, rounding: Rounding, listed: &[(f64, f64)], source: SourceCounts) -> Vec<(f64, f64)> {
+    let extremes = stats.extremes.as_ref().filter(|e| e.method == Some(ExtremesMethod::TrimmedK));
+    let (Some(factor), Some(low), Some(high)) = (rounding.lattice(), extremes.and_then(|e| e.low), extremes.and_then(|e| e.high)) else {
+        return Vec::new();
+    };
+    let (first, last) = ((low * factor).round(), (high * factor).round());
+    let listed_inside = listed.iter().filter(|&&(value, _)| low <= value && value <= high).count() as f64;
+    let room = (last - first + 1.0 - listed_inside).max(0.0);
+    let beyond_room = source.distinct as f64 - listed.len() as f64 - room;
+    let floor_allows = 2 * source.k_min.saturating_sub(1);
+    let hidden = (beyond_room.max(0.0) as u64).min(floor_allows);
+    if hidden == 0 || source.values.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
+        return Vec::new();
+    }
+    let (rows_below, rows_above) = stats
+        .histogram
+        .as_ref()
+        .and_then(|h| h.overflow.as_ref())
+        .map_or((0, 0), |o| (o.below, o.above));
+    let above = match (rows_below > 0, rows_above > 0) {
+        (false, true) => hidden,
+        (true, false) => 0,
+        _ => hidden.div_ceil(2),
+    };
+    let side_rows = (source.k_min.saturating_sub(1)) as f64 / 2.0;
+    let rate = |count: u64| side_rows / count as f64 / source.values;
+    let steps = |count: u64| 1..=count;
+    let mut values: Vec<(f64, f64)> = steps(above).map(|step| ((last + step as f64) / factor, rate(above))).collect();
+    values.extend(steps(hidden - above).map(|step| ((first - step as f64) / factor, rate(hidden - above))));
+    values
+}
+
+/// Values a column lists by rate, and the share drawn outside them.
+#[derive(Debug, Clone)]
+pub(crate) struct ListedValues {
+    pub(crate) values: Vec<f64>,
+    /// One entry per value, then one for the outside share where its rate is above zero.
+    choice: WeightedAliasIndex<f64>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct NumericSampler {
+    /// What a value the column does not list is drawn through: the column's inverse CDF, or where it
+    /// lists values, the inverse CDF of the share outside them.
     pub(crate) cdf: InverseCdf,
     pub(crate) rounding: Rounding,
     pub(crate) output: NumericOutput,
+    pub(crate) listed: Option<ListedValues>,
+    /// Where set, a value drawn through `cdf` is the one at an index the row draws.
+    pub(crate) index: Option<ValueIndex>,
+}
+
+/// The distinct values a column is to hold over the dataset, and the rows not null it draws them in.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DistinctTarget {
+    pub(crate) distinct: f64,
+    pub(crate) filled_rows: f64,
 }
 
 impl NumericSampler {
-    pub(crate) fn generate(&self, rng: &mut ChaCha8Rng, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
-        self.output
-            .drawn_array(rows, nulls, || self.rounding.apply(self.cdf.value_at(unit(rng))))
+    /// The sampler drawing through `cdf`, the column's inverse CDF. It fails only on unusable rates.
+    pub(crate) fn new(
+        cdf: InverseCdf,
+        stats: &NumericStats,
+        output: NumericOutput,
+        target: Option<DistinctTarget>,
+        source: Option<SourceCounts>,
+    ) -> Result<Self, String> {
+        let rounding = Rounding::for_column(Some(stats), &output);
+        let top_values = stats.top_values.as_deref().filter(|values| !values.is_empty());
+        let Some(top_values) = top_values else {
+            let index = target.and_then(|t| ValueIndex::for_distinct_in_bands(t.distinct, t.filled_rows, &variety(&cdf, rounding)));
+            return Ok(Self {
+                cdf,
+                rounding,
+                output,
+                listed: None,
+                index,
+            });
+        };
+        let mut listed: Vec<(f64, f64)> = top_values.iter().map(|top| (top.value, top.rate.0)).collect();
+        let other_rate = stats.other_rate.map_or(0.0, |r| r.0);
+        // Rows hidden beyond the extremes are part of the outside share, never added to it.
+        let hidden: Vec<(f64, f64)> = source
+            .map(|source| hidden_beyond(stats, rounding, &listed, source))
+            .unwrap_or_default()
+            .into_iter()
+            .scan(other_rate, |left, (value, rate)| {
+                let rate = rate.min(*left);
+                *left -= rate;
+                Some((value, rate))
+            })
+            .filter(|&(_, rate)| rate > 0.0)
+            .collect();
+        let outside_rate = (other_rate - hidden.iter().map(|&(_, rate)| rate).sum::<f64>()).max(0.0);
+        let outside = outside_cdf(&cdf, &listed, rounding, stats.histogram.as_ref()).unwrap_or(cdf);
+        let listed_count = (listed.len() + hidden.len()) as f64;
+        listed.extend(hidden);
+        let mut weights: Vec<f64> = listed.iter().map(|&(_, rate)| rate).collect();
+        if outside_rate > 0.0 {
+            weights.push(outside_rate);
+        }
+        let outside_share = outside_rate / weights.iter().sum::<f64>();
+        let choice = WeightedAliasIndex::new(weights).map_err(|error| format!("top_values rates are unusable: {error}"))?;
+        let index = target.and_then(|t| {
+            ValueIndex::for_distinct_in_bands(
+                t.distinct - listed_count,
+                t.filled_rows * outside_share,
+                &variety(&outside, rounding),
+            )
+        });
+        Ok(Self {
+            cdf: outside,
+            rounding,
+            output,
+            listed: Some(ListedValues {
+                values: listed.into_iter().map(|(value, _)| value).collect(),
+                choice,
+            }),
+            index,
+        })
+    }
+
+    pub(crate) fn generate(&self, at: &BlockPosition, keys: &StreamKeys, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
+        let mut values = rng_for(at.seed, keys.values, at.block);
+        let mut indices = rng_for(at.seed, keys.index, at.block);
+        let mut unlisted = |values: &mut ChaCha8Rng| {
+            let level = match self.index {
+                Some(index) => index.stratified_level(at.seed, keys, &mut indices),
+                None => unit(values),
+            };
+            self.rounding.apply(self.cdf.value_at(level))
+        };
+        match &self.listed {
+            None => self.output.drawn_array(rows, nulls, || unlisted(&mut values)),
+            Some(listed) => self
+                .output
+                .drawn_array(rows, nulls, || match listed.values.get(listed.choice.sample(&mut values)) {
+                    Some(&value) => value,
+                    None => unlisted(&mut values),
+                }),
+        }
     }
 }
 

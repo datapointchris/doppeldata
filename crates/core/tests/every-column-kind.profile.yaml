@@ -3,6 +3,7 @@
 profile_version: 1
 kind: table
 name: every_column_kind
+privacy: {k_min: 11}
 columns:
   - name: sequence
     physical_type: int64
@@ -122,6 +123,30 @@ columns:
       quantiles: {p50: 3.0, p99: 9.0}
       extremes: {low: 0.0, high: 30.0}
       fit: {family: gamma, params: {a: 3.0}}
+  # Value 3 held under k_min rows and folded into other. The source's six values are one more than
+  # its listed values and the integers between its extremes hold, so one is drawn beyond them.
+  - name: top_values_with_one_beyond_the_extremes
+    physical_type: int64
+    distinct: {approx: 6, ratio: 0.0001}
+    numeric:
+      integral: true
+      extremes: {low: 0, high: 4, method: trimmed_k}
+      quantiles: {p01: 0, p25: 1, p50: 1, p75: 1, p99: 4}
+      histogram: {kind: equal_depth, edges: [-0.5, 0.5, 1.5, 4.5], counts: [6060, 44500, 9440]}
+      top_values: [{value: 1, rate: 0.7417}, {value: 2, rate: 0.1347}, {value: 0, rate: 0.101}, {value: 4, rate: 0.01614}]
+      other_rate: 0.006431
+  # Cents on a lognormal whose support starts above the low extreme, so the tail below the body
+  # runs straight down to it, with the stated negative rate below zero. Fresh draws would hold
+  # more distinct values than the ratio states.
+  - name: cents_at_distinct_ratio
+    physical_type: double
+    distinct: {ratio: 0.02}
+    numeric:
+      scale: 2
+      negative_rate: 0.002
+      quantiles: {p01: 0.4, p25: 2.0, p50: 4.0, p75: 7.5, p99: 30.0}
+      extremes: {low: -5.0, high: 90.0}
+      fit: {family: lognorm, params: {s: 0.8, loc: 0.2, scale: 4.0}}
   - name: timestamp_uniform
     physical_type: "timestamp[us]"
     temporal: {extremes: {low: "2024-01-01T00:00:00", high: "2024-12-31T23:59:59", granularity: second}}

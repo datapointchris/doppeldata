@@ -32,10 +32,11 @@ use self::fitted_family::FittedFamily;
 pub use self::fitted_family::FittedFamilyKind;
 use self::nested::ListSampler;
 use self::nested::StructSampler;
+use self::numeric::DistinctTarget;
 use self::numeric::NumericOutput;
 use self::numeric::NumericSampler;
-use self::numeric::Rounding;
 use self::numeric::SequenceSampler;
+use self::numeric::SourceCounts;
 use self::temporal::TemporalOutput;
 use self::temporal::TemporalSampler;
 use self::text::CheckDigitDraw;
@@ -94,6 +95,8 @@ pub(crate) struct PlanContext<'a> {
     pub(crate) table: &'a str,
     pub(crate) seed: u64,
     pub(crate) rows: f64,
+    /// The profile's `privacy.k_min`, which bounds the rows its trimmed extremes leave beyond them.
+    pub(crate) k_min: Option<u64>,
 }
 
 /// Why a sampler cannot be built, before the column's place in the profile is known.
@@ -223,7 +226,7 @@ impl ValueSampler {
         let values = || rng_for(at.seed, keys.values, at.block);
         match self {
             Self::Sequence(sampler) => sampler.generate(at.first_row, rows, nulls),
-            Self::Numeric(sampler) => sampler.generate(&mut values(), rows, nulls),
+            Self::Numeric(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::Categorical(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::Temporal(sampler) => sampler.generate(&mut values(), rows, nulls),
             Self::Boolean(true_rate) => {
@@ -344,26 +347,15 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
 fn describe(column: &Column, values: &ValueSampler) -> String {
     match values {
         ValueSampler::Sequence(sequence) => format!("sequence from {} by {}", sequence.start, sequence.step),
-        ValueSampler::Numeric(_) => {
-            let numeric = column.numeric.as_ref();
-            let fit = numeric
-                .and_then(|n| n.fit.as_ref())
-                .filter(|fit| FittedFamily::from_fit(fit).is_ok_and(|family| family.is_some()));
-            let body = if numeric.and_then(|n| n.quantiles.as_ref()).is_some_and(|q| !q.0.is_empty()) {
-                "quantiles".to_string()
-            } else if numeric.and_then(|n| n.histogram.as_ref()).is_some() {
-                "histogram".to_string()
-            } else if let Some(fit) = fit {
-                return format!("fitted {}", fit.family);
-            } else if numeric.and_then(|n| n.extremes.as_ref()).is_some() {
-                return "uniform between the extremes".to_string();
-            } else {
-                return format!("uniform from {} to {}", numeric::DEFAULT_RANGE.0, numeric::DEFAULT_RANGE.1);
+        ValueSampler::Numeric(numeric) => {
+            let mut description = match &numeric.listed {
+                Some(listed) => format!("{} top values, the rest from {}", listed.values.len(), describe_curve(column)),
+                None => describe_curve(column),
             };
-            match fit {
-                Some(fit) => format!("{body} with fitted {} tails", fit.family),
-                None => format!("{body} with linear tails"),
+            if numeric.index.is_some() {
+                description.push_str(", at the profiled distinct ratio");
             }
+            description
         }
         ValueSampler::Categorical(categorical) => {
             let string = column.string.as_ref();
@@ -413,6 +405,29 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
         }
         ValueSampler::List(list) => format!("list of {}", list.element.sampler),
         ValueSampler::Struct(structure) => format!("struct of {} fields", structure.fields.len()),
+    }
+}
+
+/// What a numeric column's inverse CDF is built from.
+fn describe_curve(column: &Column) -> String {
+    let numeric = column.numeric.as_ref();
+    let fit = numeric
+        .and_then(|n| n.fit.as_ref())
+        .filter(|fit| FittedFamily::from_fit(fit).is_ok_and(|family| family.is_some()));
+    let body = if numeric.and_then(|n| n.quantiles.as_ref()).is_some_and(|q| !q.0.is_empty()) {
+        "quantiles".to_string()
+    } else if numeric.and_then(|n| n.histogram.as_ref()).is_some() {
+        "histogram".to_string()
+    } else if let Some(fit) = fit {
+        return format!("fitted {}", fit.family);
+    } else if numeric.and_then(|n| n.extremes.as_ref()).is_some() {
+        return "uniform between the extremes".to_string();
+    } else {
+        return format!("uniform from {} to {}", numeric::DEFAULT_RANGE.0, numeric::DEFAULT_RANGE.1);
+    };
+    match fit {
+        Some(fit) => format!("{body} with fitted {} tails", fit.family),
+        None => format!("{body} with linear tails"),
     }
 }
 
@@ -496,11 +511,24 @@ fn value_sampler(
             None => None,
         };
         let stats = numeric.cloned().unwrap_or_else(empty_numeric_stats);
-        return Ok(ValueSampler::Numeric(NumericSampler {
-            cdf: numeric::numeric_cdf(&stats, fit.as_ref()).map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/numeric"))?,
-            rounding: Rounding::for_column(numeric, &output),
-            output,
-        }));
+        let target = column.distinct.as_ref().and_then(|d| d.ratio).map(|ratio| DistinctTarget {
+            distinct: ratio.0 * context.rows,
+            filled_rows,
+        });
+        // The source's rows are its distinct count over its distinct ratio.
+        let source = column.distinct.as_ref().and_then(|d| {
+            let (distinct, ratio, k_min) = (d.approx?, d.ratio?.0, context.k_min?);
+            let null_rate = column.null_rate.map_or(0.0, |r| r.0);
+            (ratio > 0.0).then(|| SourceCounts {
+                distinct,
+                values: distinct as f64 / ratio * (1.0 - null_rate),
+                k_min,
+            })
+        });
+        let cdf = numeric::numeric_cdf(&stats, fit.as_ref()).map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/numeric"))?;
+        let sampler = NumericSampler::new(cdf, &stats, output, target, source)
+            .map_err(site.refuse_as(ColumnFault::UnusableRates, "/numeric/top_values"))?;
+        return Ok(ValueSampler::Numeric(sampler));
     }
     if let Some(output) = TemporalOutput::from_type(&scalar) {
         let gap_days = || rng_for(context.seed, keys.gap_days, 0);

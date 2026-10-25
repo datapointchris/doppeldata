@@ -162,6 +162,23 @@ impl FittedFamily {
         }
     }
 
+    /// The least and greatest value the family takes.
+    pub(crate) fn support(&self) -> (f64, f64) {
+        let (least, greatest) = match self.standard {
+            Standard::Normal | Standard::Logistic => (f64::NEG_INFINITY, f64::INFINITY),
+            Standard::LogNormal { .. } | Standard::Exponential | Standard::Weibull { .. } => (0.0, f64::INFINITY),
+            Standard::Pareto { .. } | Standard::Geometric { .. } => (1.0, f64::INFINITY),
+            Standard::Uniform | Standard::Triangular { .. } => (0.0, 1.0),
+            Standard::LogUniform { a, b } => (a, b),
+            Standard::DiscreteUniform { low, high } => (low, high - 1.0),
+        };
+        if self.discrete {
+            (self.loc + least, self.loc + greatest)
+        } else {
+            (self.loc + self.scale * least, self.loc + self.scale * greatest)
+        }
+    }
+
     /// P(X < x), which differs from [`Self::cdf`] only at a discrete family's support points.
     pub(crate) fn cdf_below(&self, x: f64) -> f64 {
         if self.discrete {

@@ -164,6 +164,7 @@ pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Re
         table: &table.name,
         seed,
         rows: rows as f64,
+        k_min: table.privacy.as_ref().and_then(|privacy| privacy.k_min),
     };
     let mut planned = Vec::with_capacity(columns.len());
     for (index, column) in columns.iter().enumerate() {
