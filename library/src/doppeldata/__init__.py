@@ -1,7 +1,7 @@
 """Profile a dataset into a reviewable file holding no rows, then generate synthetic data from it."""
 
 from doppeldata.dataset_generation import ColumnSampler
-from doppeldata.dataset_generation import PlannedFile
+from doppeldata.dataset_generation import PlannedRange
 from doppeldata.dataset_generation import WritePlan
 from doppeldata.dataset_generation import generate
 from doppeldata.dataset_generation import plan
@@ -14,6 +14,7 @@ from doppeldata.errors import PoorFits
 from doppeldata.errors import ProfilingEnginesMissing
 from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
+from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
 from doppeldata.errors import WriteInterrupted
 from doppeldata.manifest import Manifest
@@ -33,12 +34,13 @@ __all__ = [
     'InvalidProfile',
     'Issue',
     'Manifest',
-    'PlannedFile',
+    'PlannedRange',
     'PoorFits',
     'Profile',
     'ProfilingEnginesMissing',
     'ProfilingWarning',
     'SourceError',
+    'StoppedWrite',
     'UngenerableProfile',
     'WriteFailed',
     'WriteInterrupted',

@@ -16,6 +16,7 @@ use doppeldata_core::manifest::Manifest;
 use doppeldata_core::profile::Profile;
 use doppeldata_core::profile::SourceFormat;
 use doppeldata_writers::Destination;
+use doppeldata_writers::DestinationUrl;
 use doppeldata_writers::RunOptions;
 use doppeldata_writers::WriteChoices;
 use doppeldata_writers::WriteOptions;
@@ -100,20 +101,16 @@ fn example_profile(name: &str) -> Result<(Profile, String), String> {
 }
 
 fn destination(out: &str) -> Result<Destination, String> {
-    if out == "memory://" {
-        return Ok(Destination::new(Arc::new(InMemory::new()), Path::default(), out));
-    }
-    match out.strip_prefix("s3://") {
-        Some(rest) => {
-            let (bucket, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+    match DestinationUrl::parse(out).map_err(|error| error.to_string())? {
+        DestinationUrl::Memory => Ok(Destination::new(Arc::new(InMemory::new()), Path::default(), out)),
+        DestinationUrl::S3 { bucket, prefix } => {
             let store = AmazonS3Builder::from_env()
                 .with_bucket_name(bucket)
                 .build()
                 .map_err(|error| error.to_string())?;
-            let prefix = Path::parse(prefix.trim_end_matches('/')).map_err(|error| error.to_string())?;
             Ok(Destination::new(Arc::new(store), prefix, out))
         }
-        None => Destination::local(out).map_err(|error| error.to_string()),
+        DestinationUrl::Local(dir) => Destination::local(dir).map_err(|error| error.to_string()),
     }
 }
 

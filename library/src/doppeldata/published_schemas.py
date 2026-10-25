@@ -36,6 +36,11 @@ def output_formats() -> list[str]:
     return [branch['properties']['format']['const'] for branch in json.loads(schema_text('manifest'))['oneOf']]
 
 
+def partition_styles() -> list[str]:
+    """The partition directory styles a write takes, as the manifest schema names them."""
+    return [branch['const'] for branch in json.loads(schema_text('manifest'))['$defs']['PartitionStyle']['oneOf']]
+
+
 def schema_summaries() -> list[SchemaSummary]:
     """Every JSON Schema the library ships, by name, with the title and description each document carries."""
     documents = {name: json.loads(schema_text(name)) for name in schema_names()}

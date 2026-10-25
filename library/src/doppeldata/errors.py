@@ -17,20 +17,25 @@ class SourceError(DoppeldataError, ValueError):
         self.exit_code = exit_code
 
 
-class StoppedWrite(BaseException):
-    """A write that did not finish. `code` names why, such as `destination-not-empty` or `cancelled`.
+# Each kind of stopped write, and the exit status a command ends on for it.
+EXIT_CODES = {'failed': 1, 'refused': 2, 'unanswered': 4}
 
-    `manifest` is the record of what a run that claimed its destination wrote, marked partial when it
-    stopped early, and None for a refusal before the claim. `manifest_stored` says whether that record
-    is in the store, as `_manifest.partial.json` when partial.
+
+class StoppedWrite(BaseException):
+    """A write that did not finish, the base of WriteFailed and WriteInterrupted. `code` names why, such as `cancelled`.
+
+    `kind` is `refused` when the call must change and nothing was written, `unanswered` when the store never answered, and
+    `failed` otherwise. `manifest` is the record of what a run that claimed its destination wrote, marked partial when it
+    stopped early, and None for a refusal before the claim. `manifest_stored` says whether that record is in the store.
     """
 
     def __init__(
-        self, code: str, message: str, *, exit_code: int = 1, manifest_json: str | None = None, manifest_stored: bool = False
+        self, code: str, message: str, *, kind: str = 'failed', manifest_json: str | None = None, manifest_stored: bool = False
     ) -> None:
         super().__init__(message)
         self.code = code
-        self.exit_code = exit_code
+        self.kind = kind
+        self.exit_code = EXIT_CODES[kind]
         self.manifest = Manifest.from_json(manifest_json) if manifest_json is not None else None
         self.manifest_stored = manifest_stored
 

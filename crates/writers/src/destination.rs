@@ -20,6 +20,46 @@ use crate::WriteError;
 use crate::layout::PART_PREFIX;
 use crate::layout::identity8;
 
+/// What a destination URL names, read before any store is built for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DestinationUrl {
+    /// A local directory.
+    Local(std::path::PathBuf),
+    /// A bucket and the prefix under it, from `s3://` or Hadoop's `s3a://`.
+    S3 { bucket: String, prefix: Path },
+    /// `memory://`, a store that keeps nothing once the write returns.
+    Memory,
+}
+
+impl DestinationUrl {
+    /// The destination `url` names, or a refusal of a scheme doppeldata does not write to.
+    pub fn parse(url: &str) -> Result<Self, WriteError> {
+        if url == "memory://" {
+            return Ok(Self::Memory);
+        }
+        if let Some(rest) = url.strip_prefix("s3://").or_else(|| url.strip_prefix("s3a://")) {
+            let (bucket, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+            if bucket.is_empty() {
+                return Err(WriteError::Settings(format!("{url} names no bucket")));
+            }
+            let prefix = Path::parse(prefix.trim_end_matches('/')).map_err(|error| WriteError::ObjectName {
+                name: prefix.into(),
+                reason: error.to_string(),
+            })?;
+            return Ok(Self::S3 {
+                bucket: bucket.into(),
+                prefix,
+            });
+        }
+        if url.contains("://") {
+            return Err(WriteError::Settings(format!(
+                "{url} is not a local path, an s3:// or s3a:// URL, or memory://, the destinations doppeldata writes to"
+            )));
+        }
+        Ok(Self::Local(url.into()))
+    }
+}
+
 /// A store and the prefix the dataset is written under. The writers build no store, so credentials
 /// stay the caller's.
 #[derive(Debug, Clone)]

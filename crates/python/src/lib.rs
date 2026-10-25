@@ -20,11 +20,16 @@ mod _core {
     use doppeldata_core::PlanError;
     use doppeldata_core::profile::Profile;
     use doppeldata_writers::Destination;
+    use doppeldata_writers::DestinationUrl;
+    use doppeldata_writers::FailureKind;
     use doppeldata_writers::RunOptions;
     use doppeldata_writers::WriteChoices;
     use doppeldata_writers::WriteError;
     use doppeldata_writers::WriteFailure;
     use object_store::ObjectStore;
+    use object_store::client::HttpError;
+    use object_store::client::HttpErrorKind;
+    use object_store::memory::InMemory;
     use pyo3::exceptions::PyValueError;
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
@@ -44,6 +49,14 @@ mod _core {
     /// The rows in each batch the engine generates, every one but the last.
     #[pymodule_export]
     const BLOCK_ROWS: u64 = doppeldata_core::BLOCK_ROWS;
+
+    /// The version of the draws the engine makes, part of every dataset's identity.
+    #[pymodule_export]
+    const STREAM_VERSION: u32 = doppeldata_core::STREAM_VERSION;
+
+    /// The rows in each file a write makes when neither the caller nor the profile sizes them.
+    #[pymodule_export]
+    const DEFAULT_FILE_ROWS: u64 = doppeldata_core::manifest::DEFAULT_FILE_ROWS;
 
     /// How often a call waiting on the engine checks for a signal, such as the interrupt Ctrl-C sends.
     const SIGNAL_CHECK: Duration = Duration::from_millis(100);
@@ -150,13 +163,16 @@ mod _core {
             self.plan.block_count()
         }
 
-        /// Each top-level column's name, Arrow type, what draws its values, and the share of rows
-        /// drawn null, in schema order.
+        /// Each top-level column's name, type as a profile's ``physical_type`` spells it, what draws
+        /// its values, and the share of rows drawn null, in schema order.
         fn column_samplers(&self) -> Vec<(String, String, String, f64)> {
             self.plan
                 .column_samplers()
                 .into_iter()
-                .map(|column| (column.name, column.data_type.to_string(), column.sampler, column.null_share))
+                .map(|column| {
+                    let physical_type = doppeldata_core::physical_type_name(&column.data_type);
+                    (column.name, physical_type, column.sampler, column.null_share)
+                })
                 .collect()
         }
 
@@ -194,28 +210,35 @@ mod _core {
             Ok(WriteOptions { options })
         }
 
-        /// Each file the write would hold, as JSON: its name, its range and the range's rows. A
-        /// partitioned range is written once under each partition value's directory.
-        fn layout_json(&self, py: Python<'_>, options: PyRef<'_, WriteOptions>) -> PyResult<String> {
-            let layout = doppeldata_writers::layout(&self.plan, &options.options.layout, &options.options.output)
-                .map_err(|error| refused(py, WriteError::Layout(error)))?;
-            let files: Vec<_> = layout
-                .ranges
-                .iter()
-                .map(|range| json!({"path": layout.file_name(range), "range": range.index, "first_row": range.first_row, "rows": range.rows}))
+        /// Each row range the write would make, as a JSON list of objects keyed as the manifest
+        /// keys its files: ``path``, ``range``, ``first_row`` and ``range_rows``, with
+        /// ``objects_at_most``. A partitioned range's path holds ``*`` for each partition value.
+        fn ranges_json(&self, py: Python<'_>, options: PyRef<'_, WriteOptions>) -> PyResult<String> {
+            let ranges = doppeldata_writers::planned_ranges(&self.plan, &options.options).map_err(|error| refused(py, error))?;
+            let ranges: Vec<_> = ranges
+                .into_iter()
+                .map(|range| {
+                    json!({
+                        "path": range.path,
+                        "range": range.range,
+                        "first_row": range.first_row,
+                        "range_rows": range.range_rows,
+                        "objects_at_most": range.objects_at_most,
+                    })
+                })
                 .collect();
-            Ok(json!({"files": files}).to_string())
+            Ok(serde_json::Value::from(ranges).to_string())
         }
 
-        /// The bytes the write would store, its manifest left out, from the first four blocks
-        /// encoded with its settings.
+        /// The bytes the write would store, its manifest left out, from its first blocks encoded
+        /// with its settings.
         fn estimate_bytes(&self, py: Python<'_>, options: PyRef<'_, WriteOptions>) -> PyResult<u64> {
             let (plan, options) = (&*self.plan, &options.options);
             py.detach(|| doppeldata_writers::estimate_bytes(plan, options))
                 .map_err(|error| refused(py, error))
         }
 
-        /// Writes the dataset to ``destination``, a local directory or an ``s3://`` URL, and returns
+        /// Writes the dataset to ``destination``, a URL ``destination_scheme`` accepts, and returns
         /// the manifest as JSON. An S3 URL's store is built from ``s3_store``: the keyword arguments
         /// pyo3-object_store's ``S3Store`` takes, such as ``config`` and ``credential_provider``. An
         /// interrupt cancels the write, which leaves a partial manifest and raises.
@@ -229,13 +252,10 @@ mod _core {
             replace: bool,
             s3_store: Option<Bound<'_, PyDict>>,
         ) -> PyResult<String> {
-            let destination = match destination.strip_prefix("s3://") {
-                Some(_) => s3_destination(py, destination, s3_store)?,
-                None if destination.contains("://") => {
-                    let message = format!("{destination} is not a local path or an s3:// URL, the destinations doppeldata writes to");
-                    return Err(refused(py, WriteError::Settings(message)));
-                }
-                None => Destination::local(destination).map_err(|error| refused(py, error))?,
+            let destination = match DestinationUrl::parse(destination).map_err(|error| refused(py, error))? {
+                DestinationUrl::S3 { bucket, prefix } => s3_destination(py, &bucket, prefix, destination, s3_store)?,
+                DestinationUrl::Memory => Destination::new(Arc::new(InMemory::new()), Default::default(), destination),
+                DestinationUrl::Local(dir) => Destination::local(dir).map_err(|error| refused(py, error))?,
             };
             let cancel = Arc::new(AtomicBool::new(false));
             let run = RunOptions {
@@ -392,65 +412,43 @@ mod _core {
         })
     }
 
-    /// An S3 destination at ``url``, through a pyo3-object_store ``S3Store`` built with
+    /// ``bucket`` and ``prefix`` at ``url``, through a pyo3-object_store ``S3Store`` built with
     /// ``store_kwargs``.
-    fn s3_destination(py: Python<'_>, url: &str, store_kwargs: Option<Bound<'_, PyDict>>) -> PyResult<Destination> {
-        let rest = url.strip_prefix("s3://").expect("the caller checked the scheme");
-        let (bucket, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+    fn s3_destination(
+        py: Python<'_>,
+        bucket: &str,
+        prefix: object_store::path::Path,
+        url: &str,
+        store_kwargs: Option<Bound<'_, PyDict>>,
+    ) -> PyResult<Destination> {
         let store: PyS3Store = py.get_type::<PyS3Store>().call((bucket,), store_kwargs.as_ref())?.extract()?;
         let store: Arc<dyn ObjectStore> = store.into_inner();
-        let prefix = object_store::path::Path::parse(prefix.trim_end_matches('/')).map_err(|error| {
-            refused(
-                py,
-                WriteError::ObjectName {
-                    name: prefix.into(),
-                    reason: error.to_string(),
-                },
-            )
-        })?;
         Ok(Destination::new(store, prefix, url))
+    }
+
+    /// What ``url`` names as a write's destination: ``("local", None)``, ``("s3", bucket)`` or
+    /// ``("memory", None)``. Any other scheme raises the library's ``WriteFailed``.
+    #[pyfunction]
+    fn destination_scheme(py: Python<'_>, url: &str) -> PyResult<(&'static str, Option<String>)> {
+        Ok(match DestinationUrl::parse(url).map_err(|error| refused(py, error))? {
+            DestinationUrl::Local(_) => ("local", None),
+            DestinationUrl::S3 { bucket, .. } => ("s3", Some(bucket)),
+            DestinationUrl::Memory => ("memory", None),
+        })
     }
 
     /// The library's ``UngenerableProfile``, naming the column or section the engine refused.
     fn plan_refused(py: Python<'_>, source: &str, error: PlanError) -> PyErr {
-        let (code, field, message) = match &error {
-            PlanError::Column { code, field, message } => (code.code(), field.clone(), message.clone()),
-            PlanError::Bundle { .. } => ("bundle", "/kind".to_string(), error.to_string()),
-            PlanError::NoColumns { .. } => ("no-columns", "/columns".to_string(), error.to_string()),
-            PlanError::DuplicateColumn { .. } => ("duplicate-column", "/columns".to_string(), error.to_string()),
+        let message = match &error {
+            PlanError::Column { message, .. } => message.clone(),
             PlanError::ProfileDigest { .. } => return PyValueError::new_err(error.to_string()),
+            _ => error.to_string(),
         };
         library_error(|| {
             let module = py.import("doppeldata.profile_format")?;
-            let issue = module.getattr("Issue")?.call1((code, field, message))?;
+            let issue = module.getattr("Issue")?.call1((error.code(), error.field(), message))?;
             module.getattr("UngenerableProfile")?.call1((source, vec![issue]))
         })
-    }
-
-    /// The code a failed write is reported by, and the exit status a command ends on: 2 for what
-    /// the caller fixes by changing the call, 1 for any other failure.
-    fn failure_code(error: &WriteError) -> (&'static str, u8) {
-        match error {
-            WriteError::Layout(_) => ("invalid-layout", 2),
-            WriteError::Settings(_) => ("invalid-settings", 2),
-            WriteError::UnsupportedColumn { .. } => ("unsupported-column", 2),
-            WriteError::DestinationNotEmpty { .. } => ("destination-not-empty", 2),
-            WriteError::ForeignObject { .. } => ("foreign-object", 2),
-            WriteError::Unclaimable { .. } => ("unclaimable", 2),
-            WriteError::ObjectName { .. } => ("invalid-object-name", 2),
-            WriteError::DestinationClaimed { .. } => ("destination-claimed", 1),
-            WriteError::CurrentThreadRuntime => ("current-thread-runtime", 1),
-            WriteError::IdentityMismatch { .. } => ("identity-mismatch", 1),
-            WriteError::PartialManifest => ("partial-manifest", 1),
-            WriteError::RegeneratedFilesDiffer { .. } => ("regenerated-files-differ", 1),
-            WriteError::Cancelled => ("cancelled", 1),
-            WriteError::Format { .. } => ("unformattable-value", 1),
-            WriteError::Block(_) => ("block-out-of-range", 1),
-            WriteError::Store(_) => ("store", 1),
-            WriteError::Arrow(_) => ("arrow", 1),
-            WriteError::Parquet(_) => ("parquet", 1),
-            WriteError::Io(_) => ("io", 1),
-        }
     }
 
     /// The library's ``WriteFailed`` for an error raised before the write claimed its destination.
@@ -461,7 +459,11 @@ mod _core {
     /// The library's ``WriteFailed``, carrying the manifest of what the run wrote where it has one.
     /// ``interrupted`` says a signal arrived, which raises ``WriteInterrupted`` instead.
     fn write_failed(py: Python<'_>, failure: WriteFailure, interrupted: bool) -> PyErr {
-        let (code, exit_code) = failure_code(&failure.error);
+        let (code, kind) = match failure.error.code() {
+            _ if unanswered(&failure.error) => ("no-answer", "unanswered"),
+            (code, FailureKind::Refused) => (code, "refused"),
+            (code, FailureKind::Failed) => (code, "failed"),
+        };
         let mut message = match failure.error {
             WriteError::Cancelled if interrupted => "interrupted, so the write stopped before every file was written".to_string(),
             _ => failure.error.to_string(),
@@ -474,7 +476,7 @@ mod _core {
             .map(|manifest| serde_json::to_string(&manifest).expect("a manifest always serializes"));
         library_error(|| {
             let kwargs = PyDict::new(py);
-            kwargs.set_item("exit_code", exit_code)?;
+            kwargs.set_item("kind", kind)?;
             kwargs.set_item("manifest_json", manifest)?;
             kwargs.set_item("manifest_stored", failure.manifest_stored)?;
             let class = match interrupted {
@@ -483,6 +485,26 @@ mod _core {
             };
             py.import("doppeldata.errors")?.getattr(class)?.call((code, message), Some(&kwargs))
         })
+    }
+
+    /// Whether the store stopped answering: a connection or request that failed or timed out on
+    /// every retry. A 5xx or 429 on every retry reads as ``store``, because object_store keeps
+    /// the status inside an error type it does not export.
+    fn unanswered(error: &WriteError) -> bool {
+        let WriteError::Store(error) = error else {
+            return false;
+        };
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+        while let Some(current) = source {
+            if let Some(http) = current.downcast_ref::<HttpError>() {
+                return matches!(
+                    http.kind(),
+                    HttpErrorKind::Connect | HttpErrorKind::Request | HttpErrorKind::Timeout | HttpErrorKind::Interrupted
+                );
+            }
+            source = current.source();
+        }
+        false
     }
 
     /// The exception ``build`` makes, or the error building it raised.

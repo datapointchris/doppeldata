@@ -381,6 +381,10 @@ fn record(runtime: &Handle, destination: &Destination, manifest: Manifest, error
         return Err(failure(error, manifest, false, None));
     }
     if let Err(error) = runtime.block_on(destination.remove(PARTIAL_MANIFEST_FILE_NAME)) {
+        let error = WriteError::ClaimNotRemoved {
+            url: destination.url.trim_end_matches('/').to_string(),
+            error: Box::new(error),
+        };
         return Err(failure(error, manifest, true, None));
     }
     Ok(manifest)

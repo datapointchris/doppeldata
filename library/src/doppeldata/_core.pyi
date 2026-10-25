@@ -10,9 +10,19 @@ BLOCK_ROWS: Final[int]
 The rows in each batch the engine generates, every one but the last.
 """
 
+DEFAULT_FILE_ROWS: Final[int]
+"""
+The rows in each file a write makes when neither the caller nor the profile sizes them.
+"""
+
 FORMAT_VERSION: Final[int]
 """
 The profile format version the engine reads.
+"""
+
+STREAM_VERSION: Final[int]
+"""
+The version of the draws the engine makes, part of every dataset's identity.
 """
 
 VERSION: Final[str]
@@ -31,8 +41,8 @@ class Plan:
     def block_count(self, /) -> int: ...
     def column_samplers(self, /) -> list[tuple[str, str, str, float]]:
         """
-        Each top-level column's name, Arrow type, what draws its values, and the share of rows
-        drawn null, in schema order.
+        Each top-level column's name, type as a profile's ``physical_type`` spells it, what draws
+        its values, and the share of rows drawn null, in schema order.
         """
     @property
     def dataset_digest(self, /) -> str:
@@ -41,8 +51,8 @@ class Plan:
         """
     def estimate_bytes(self, /, options: WriteOptions) -> int:
         """
-        The bytes the write would store, its manifest left out, from the first four blocks
-        encoded with its settings.
+        The bytes the write would store, its manifest left out, from its first blocks encoded
+        with its settings.
         """
     def generate(self, /, *, threads: SupportsIndex) -> Any:
         """
@@ -55,10 +65,11 @@ class Plan:
         The dataset identity's RFC 8785 canonical JSON: the five values its rows are a pure
         function of.
         """
-    def layout_json(self, /, options: WriteOptions) -> str:
+    def ranges_json(self, /, options: WriteOptions) -> str:
         """
-        Each file the write would hold, as JSON: its name, its range and the range's rows. A
-        partitioned range is written once under each partition value's directory.
+        Each row range the write would make, as a JSON list of objects keyed as the manifest
+        keys its files: ``path``, ``range``, ``first_row`` and ``range_rows``, with
+        ``objects_at_most``. A partitioned range's path holds ``*`` for each partition value.
         """
     def stream(self, /, *, threads: SupportsIndex) -> Any:
         """
@@ -67,7 +78,7 @@ class Plan:
         """
     def write(self, /, options: WriteOptions, destination: str, *, threads: SupportsIndex, replace: bool, s3_store: dict |None = None) -> str:
         """
-        Writes the dataset to ``destination``, a local directory or an ``s3://`` URL, and returns
+        Writes the dataset to ``destination``, a URL ``destination_scheme`` accepts, and returns
         the manifest as JSON. An S3 URL's store is built from ``s3_store``: the keyword arguments
         pyo3-object_store's ``S3Store`` takes, such as ``config`` and ``credential_provider``. An
         interrupt cancels the write, which leaves a partial manifest and raises.
@@ -89,6 +100,12 @@ class WriteOptions:
         """
         The format, every setting it writes with, and the layout, as the manifest records them.
         """
+
+def destination_scheme(url: str) -> tuple[str, str |None]:
+    """
+    What ``url`` names as a write's destination: ``("local", None)``, ``("s3", bucket)`` or
+    ``("memory", None)``. Any other scheme raises the library's ``WriteFailed``.
+    """
 
 def determinism_values_digest(profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, *, threads: SupportsIndex) -> str:
     """

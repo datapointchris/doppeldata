@@ -8,7 +8,6 @@ from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
-import boto3
 import botocore.exceptions
 
 from doppeldata.errors import SourceError
@@ -20,9 +19,9 @@ from doppeldata.profiling.backend import SourceFormat
 from doppeldata.s3_access import CREDENTIAL_ADVICE
 from doppeldata.s3_access import CREDENTIAL_ERRORS
 from doppeldata.s3_access import S3_ATTEMPTS
-from doppeldata.s3_access import S3_CLIENT_CONFIG
 from doppeldata.s3_access import UNANSWERED_ERRORS
 from doppeldata.s3_access import endpoint_named
+from doppeldata.s3_access import s3_session
 
 SUFFIX_FORMATS = {suffix: source_format for source_format, traits in FORMAT_TRAITS.items() for suffix in traits.suffixes}
 # DuckDB reads a text file through any of these, so the format is the suffix before it.
@@ -119,7 +118,10 @@ def s3_files(url: str) -> list[SourceFile]:
     """The objects at an `s3://` URL, listed with the credentials and endpoint boto3 resolves from the environment."""
     parsed = urlparse(url)
     bucket, key = parsed.netloc, parsed.path.lstrip('/')
-    client = boto3.client('s3', config=S3_CLIENT_CONFIG)
+    try:
+        _, client = s3_session()
+    except ValueError as error:
+        raise SourceError(f'{url} could not be listed: {error}', exit_code=2) from error
     with s3_errors(url, endpoint_named(client)):
         # Spark writes a table as a `name.parquet/` directory, so a key with a suffix may still be a prefix.
         if format_of(key) and not key.endswith('/') and (head := object_head(client, bucket, key)):

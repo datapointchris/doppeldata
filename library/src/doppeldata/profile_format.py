@@ -70,6 +70,8 @@ class InvalidProfile(DoppeldataError, ValueError):
 class UngenerableProfile(InvalidProfile):
     """A valid profile the engine cannot generate, such as one holding a statistic it does not draw from yet."""
 
+    exit_code = 2
+
     def __init__(self, source: str, issues: list[Issue]) -> None:
         super().__init__(source, issues)
         listed = '\n'.join(f'  {issue.field or "/"}: {issue.message} [{issue.code}]' for issue in issues)

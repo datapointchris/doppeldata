@@ -13,6 +13,7 @@ use crate::encoders;
 use crate::layout::layout;
 use crate::partition::Partitioner;
 use crate::partition::Piece;
+use crate::planned_ranges::planned_ranges;
 use crate::write_options::WriteOptions;
 
 /// Counts what an encoder writes and keeps none of it.
@@ -47,9 +48,9 @@ const SAMPLE_BLOCKS: u64 = 4;
 /// The bytes writing `plan` with `options` would store, its manifest left out.
 ///
 /// An object's bytes are taken as a fixed part plus a part per row. Encoding the first block as
-/// one object and the first four as another gives both: the difference is what three blocks of
-/// rows add, and the rest of the first object is fixed, such as a header, a footer and a
-/// dictionary. A partitioned write counts one object per partition value in every range.
+/// one object and the first `SAMPLE_BLOCKS` as another gives both: the difference is what the
+/// later blocks' rows add, and the rest of the first object is fixed, such as a header, a footer
+/// and a dictionary. Each range counts as many objects as `planned_ranges` bounds it to.
 pub fn estimate_bytes(plan: &Plan, options: &WriteOptions) -> Result<u64, WriteError> {
     let layout = layout(plan, &options.layout, &options.output)?;
     let partitioner = Partitioner::new(&plan.schema(), &layout.partition_by, layout.partition_style);
@@ -82,13 +83,6 @@ pub fn estimate_bytes(plan: &Plan, options: &WriteOptions) -> Result<u64, WriteE
         false => small as f64 / small_rows.max(1) as f64,
     };
     let fixed = (small as f64 - per_row * small_rows as f64).max(0.0);
-    let objects: u64 = match layout.partition_by.is_empty() {
-        true => layout.ranges.len() as u64,
-        false => layout
-            .ranges
-            .iter()
-            .map(|range| range.rows.min(options.layout.partition_values))
-            .sum(),
-    };
+    let objects: u64 = planned_ranges(plan, options)?.iter().map(|range| range.objects_at_most).sum();
     Ok((fixed * objects as f64 + per_row * plan.identity().rows() as f64).round() as u64)
 }
