@@ -59,15 +59,30 @@ class WriteInterrupted(StoppedWrite, KeyboardInterrupt):
     """A write a signal stopped, such as Ctrl-C. It is a KeyboardInterrupt, so `except Exception` never swallows it."""
 
 
-class ProfilingEnginesMissing(DoppeldataError, ImportError):
+class PackagesMissing(DoppeldataError, ImportError):
+    """`feature` imports packages doppeldata does not install, and `missing` names each distribution not installed.
+
+    `doing` says what needed them, and the message names the `pip install` line.
+    """
+
+    kind = 'refused'
+    exit_code = EXIT_CODES['refused']
+
+    def __init__(self, feature: str, missing: list[str], *, doing: str, installed_by: str = '') -> None:
+        self.feature = feature
+        self.missing = missing
+        super().__init__(
+            f'{doing} needs {", ".join(missing)}, which doppeldata does not install; run `pip install {" ".join(missing)}`{installed_by}'
+        )
+
+
+class ProfilingEnginesMissing(PackagesMissing):
     """Profiling was asked of an engine whose packages are not installed."""
 
     def __init__(self, engine: str, missing: list[str]) -> None:
         self.engine = engine
-        self.missing = missing
         super().__init__(
-            f'profiling with {engine} needs {", ".join(missing)}, which doppeldata does not install; '
-            f'run `pip install {" ".join(missing)}`, or install doppeldata-cli, which declares them'
+            'profiling', missing, doing=f'profiling with {engine}', installed_by=', or install doppeldata-cli, which declares them'
         )
 
 

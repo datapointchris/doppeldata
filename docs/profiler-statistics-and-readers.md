@@ -246,7 +246,8 @@ S3. `ENGINES` in `doppeldata.profiling` names each engine's packages, each with 
 files it reads or sniffs, and whether a source of any format needs it. CleverCSV, for one, is
 needed only for CSV and TSV. `LISTING_PACKAGES` names the ones listing S3 needs whatever the engine.
 `profile()` checks those any source needs before it imports one, and a format's own once the source
-is listed. Either check raises `ProfilingEnginesMissing` naming each missing distribution.
+is listed. Either check raises `ProfilingEnginesMissing` naming each missing distribution, and a
+command it stops exits 2.
 `generated.readers` records the version of each package that reads the source's format, from the
 same table. `doppeldata-cli` declares every one, because `profile create` is one of its verbs.
 
