@@ -166,8 +166,8 @@ profiles it through Spark in each image named, one container at a time, on `loca
 driver. Both profiles must pass `profile check`, and the Spark one is held to the Polars one:
 
 - row and null counts, types, nullability and extremes exactly;
-- each quantile within a rank error of 1%, measured against the file's own values;
-- each distinct count within 3%, three of HyperLogLog++'s 1% standard errors;
+- each quantile within a rank error of `RANK_ERROR`, measured against the file's own values;
+- each distinct count within `DISTINCT_ERROR`, three of HyperLogLog++'s 1% standard errors;
 - the repeated rows, keys, dependencies and relationships exactly, and each cell of a conditional
   table both profiles state;
 - any other field that differs is printed. So are the correlations and any conditional table one

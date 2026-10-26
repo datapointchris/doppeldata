@@ -542,8 +542,8 @@ counted over the rows profiled, which `--sample` makes its sample.
   row, and Spark by `xxhash64` over each value and whether it is null. Over 10^8 rows, two distinct
   rows share a hash with odds under one in a thousand. Fewer than `k_min` repeated rows are written
   as 0.
-- **A key is a column at most 1% of whose rows share their value with another row**, as
-  `KEY_SHARE` sets. A candidate is an integer or string column holding no null, whose distinct
+- **A key is a column whose rows holding a value no other row holds reach `KEY_SHARE` of its
+  rows.** A candidate is an integer or string column holding no null, whose distinct
   values reach `NOMINATED_SHARE` of the rows. That sits three of HyperLogLog++'s standard errors
   under `KEY_SHARE`, so Spark's estimate misses no key Polars' count finds. Its `uniqueness` is the
   share of rows holding a value no other row holds. Fewer than `k_min` rows sharing a value are written as a
@@ -709,7 +709,7 @@ already give that value away, so storing it leaks nothing more.
 A strictly rising or falling integer column with gaps, such as an id after rejected rows were
 dropped, is a `sequence` too. It counts at its least step, where the values between its trimmed
 extremes fill at least `SEQUENCE_FILL` of the places that step leaves between them. Its `start`
-is `k_min − 1` steps before the trimmed extreme, the value `profile check` already derives. So a
+is `k_min − 1` steps before the trimmed extreme, the value `profile check` derives. So a
 generated id repeats no value, where its quantiles alone would repeat some.
 
 ## A sampled profile counts distinct values in every row

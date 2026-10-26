@@ -316,8 +316,10 @@ def profile_create(
         typer.Option(
             '--tables',
             help=(
-                'Profile every table DATA holds into a bundle. A directory or prefix is grouped as an AWS Glue crawler groups one: '
-                'folders sharing most of their column names are one table, named for their common stem.'
+                'Profile every table DATA holds into a bundle, with the foreign keys between them. Each path named is grouped '
+                'on its own, so two files are two tables, and naming their directory makes them one. A directory or prefix is '
+                'grouped as an AWS Glue crawler groups one: folders sharing most of their column names are one table, named for '
+                'their common stem.'
             ),
         ),
     ] = False,

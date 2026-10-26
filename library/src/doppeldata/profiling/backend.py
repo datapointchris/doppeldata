@@ -246,7 +246,11 @@ class ParsedType:
 
 
 class Backend(Protocol):
-    """A profiling engine. `aggregate` answers every request it is given, in as few queries as the engine compiles."""
+    """A profiling engine. `aggregate` answers every request it is given, in as few queries as the engine compiles.
+
+    A statistic of one column or of the whole table is a `statistic_catalog` entry that `aggregate` answers. One measured
+    over pairs of columns, or across two tables, is a method of its own, because each engine shapes that query its own way.
+    """
 
     name: str
     # The version of the session that reads the files, as a Spark cluster's, or None for an engine running in this process.
