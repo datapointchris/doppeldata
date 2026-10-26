@@ -77,6 +77,10 @@ values `determinism-contract.md` names, and their digest as a quick equality che
 names the dataset, because every file of it carries the same schema. One part file reading
 `rows: 10000000` would mislead.
 
+A write asked to embed the profile adds `doppeldata.profile`, the canonical JSON the profile digest
+is taken over. [profile-exports-and-embedded-profiles.md](profile-exports-and-embedded-profiles.md)
+says what reads it.
+
 ## Sketches are an optional sidecar, never written for a sensitive column
 
 Mergeable sketches (KLL, HLL, theta, frequent items) live in a binary file beside the profile, in

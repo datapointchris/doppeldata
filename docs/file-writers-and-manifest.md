@@ -166,6 +166,9 @@ never decodes that key, such as DuckDB's `parquet_kv_metadata` or Polars, would 
 `doppeldata.*` key. So the writers also write each metadata key as a plain key-value pair, in key
 order, as pyarrow does. `created_by` is `doppeldata <version>`.
 
+An embedded profile, `doppeldata.profile`, is the one key written once, as a plain key-value pair
+alone. It runs to kilobytes, and a second copy in `ARROW:schema` would double them.
+
 ## INT96 is written only as a fault, and no sort order is declared
 
 - **`timestamp_unit` casts timestamp columns to s, ms, us or ns.** parquet's Arrow writer has no
@@ -274,6 +277,9 @@ select count(*) from read_json_auto('out/part-*.json')
 - **`regenerate()` compares every file it writes with the record.** A file whose rows, bytes or
   SHA-256 differ fails the call with `RegeneratedFilesDiffer`, which names it. One tool version and
   one set of writer settings write the same bytes.
+- **`profile.embedded` is true where each Parquet and Arrow file holds the profile's JSON.**
+  `regenerate()` refuses such a manifest before writing, because a plan holds the profile's digest
+  and never its JSON. The key is left out of every other manifest.
 - **`faults` counts the faults `_faults.jsonl` lists, by kind.** It is null for a write that lists
   none: one with no `malformed_rows`, and no `cdc` with a fault rate. A partial manifest counts the
   faults in the objects it lists.

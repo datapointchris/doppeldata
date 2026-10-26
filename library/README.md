@@ -34,6 +34,11 @@ beside it. `sd.Profile.from_odcs()`, `from_json_schema()`, `from_table_schema()`
 `sd.Profile.from_glue()` reads a Glue Data Catalog table, and needs boto3, with pyarrow too where
 it is given `detected_entities`.
 
+`sd.export(profile, 'odcs')` writes the profile's contract as ODCS, Table Schema, a JSON Schema,
+DQDL, pandera, dataframely or PySpark schemas, with none of those tools installed.
+`sd.write(..., embed_profile=True)` puts the profile in each Parquet and Arrow file, and
+`sd.Profile.from_data_file()` reads it back.
+
 The library installs no profiling engine, so a job that only generates carries none.
 `doppeldata.profile()` needs polars, duckdb, pyarrow and boto3 installed beside it, and names any
 that are missing. `profile(data, engine='spark')` computes the profile in Spark instead: of a Spark
