@@ -101,8 +101,14 @@ manifest, and names any whose bytes moved.
 A test pins a SHA-256 beside the stream version, as one pair. The hash covers the values and text
 cells of a fixture holding one column of every kind, fitted family and provider, and of every
 profile field the engine reads. A second hash covers the same fixture under a scenario fixture
-holding a patch and every op that writes rows. A change that moves a value fails it until both are updated
-together. The fixtures are the test's own, so editing a bundled example moves no pin.
+holding a patch and every op that writes rows. A third covers it under a `cdc` scenario fixture,
+`every-column-kind.cdc.scenario.yaml`, beside a row op and a `schema_drift`. That hash covers the
+full load, every change file and the expected table. A change that moves a value fails a pin until
+it is updated with the others. The fixtures are the test's own, so editing a bundled example moves no
+pin.
+
+A new op adds a pin of its own rather than moving one. No released scenario names it, so no
+released dataset's bytes move, and the stream version holds.
 
 ## Every exp, log and pow that feeds a value is libm's, so values match on every platform
 

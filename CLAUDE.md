@@ -49,7 +49,9 @@ malformed-file-readers/
   The determinism contract test pins the stream version and a hash over what
   `crates/core/tests/every-column-kind.profile.yaml` generates, as one pair. A second hash covers it
   under `every-column-kind.scenario.yaml` beside it. A column kind, family, provider or profile field
-  the engine gains adds a column there, and a perturbation op that writes rows adds an entry.
+  the engine gains adds a column there, and a perturbation op that writes rows adds an entry. A
+  third hash, `PINNED_CDC_VALUES`, covers it under `every-column-kind.cdc.scenario.yaml`: the full
+  load, every change file and the expected table. A change to how `cdc` draws moves it.
 - **Nothing that feeds a generated value calls std's `exp`, `ln`, `powf`, `powi` or any other
   transcendental.** Call the `libm` crate's function instead. std's may round differently by
   platform, and a dataset must regenerate to the same bits anywhere. `crates/clippy.toml` refuses
