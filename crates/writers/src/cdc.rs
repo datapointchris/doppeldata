@@ -82,13 +82,13 @@ pub(crate) fn stream_output(output: &Output, cdc: &CdcPlan) -> Output {
     }
 }
 
-/// The output a change file takes: the stream's, without an embedded profile. A stream holds many
-/// small change files, each of which a copy of the profile can outweigh, and every load file and
-/// `_expected` part already holds it.
+/// The output a change file takes: the stream's, without the embedded documents. A stream holds
+/// many small change files, each of which a copy of the profile can outweigh, and every load file
+/// and `_expected` part already holds them.
 pub(crate) fn change_output(output: &Output) -> Output {
     match output {
         Output::Parquet(settings) => Output::Parquet(ParquetSettings {
-            embedded_profile: None,
+            embedded: None,
             ..settings.clone()
         }),
         other => other.clone(),

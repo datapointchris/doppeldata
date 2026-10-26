@@ -71,9 +71,13 @@ mod _core {
     #[pymodule_export]
     const MANIFEST_FILE_NAME: &str = doppeldata_core::manifest::MANIFEST_FILE_NAME;
 
-    /// The metadata key a file holds the profile's canonical JSON under, where its write embeds it.
+    /// The metadata key a file holds the whole profile's canonical JSON under, where its write embeds it.
     #[pymodule_export]
     const PROFILE_KEY: &str = doppeldata_core::profile::provenance::PROFILE;
+
+    /// The metadata key a file holds its scenario's canonical document under, where its write embeds the profile.
+    #[pymodule_export]
+    const SCENARIO_KEY: &str = doppeldata_core::profile::provenance::SCENARIO;
 
     /// The metadata key every Parquet and Arrow IPC file holds its dataset's seed under.
     #[pymodule_export]
@@ -82,6 +86,22 @@ mod _core {
     /// The metadata key every Parquet and Arrow IPC file holds its dataset's generated rows under.
     #[pymodule_export]
     const DATASET_ROWS_KEY: &str = doppeldata_core::profile::provenance::DATASET_ROWS;
+
+    /// The metadata key every Parquet and Arrow IPC file holds its profile's digest under.
+    #[pymodule_export]
+    const PROFILE_DIGEST_KEY: &str = doppeldata_core::profile::provenance::PROFILE_DIGEST;
+
+    /// The metadata key a Parquet or Arrow IPC file written under a scenario holds its digest under.
+    #[pymodule_export]
+    const SCENARIO_DIGEST_KEY: &str = doppeldata_core::profile::provenance::SCENARIO_DIGEST;
+
+    /// The metadata key every Parquet and Arrow IPC file holds the engine's stream version under.
+    #[pymodule_export]
+    const STREAM_VERSION_KEY: &str = doppeldata_core::profile::provenance::STREAM_VERSION;
+
+    /// The metadata key every Parquet and Arrow IPC file holds its dataset's digest under.
+    #[pymodule_export]
+    const DATASET_DIGEST_KEY: &str = doppeldata_core::profile::provenance::DATASET_DIGEST;
 
     /// The name of the claim a write holds its destination with, and the record a stopped write leaves.
     #[pymodule_export]

@@ -13,6 +13,8 @@ use serde::de::DeserializeOwned;
 use serde::de::Error;
 use serde_json::Value;
 
+use crate::profile::provenance;
+
 /// Reads a profile's copy of a writer's settings past any key the settings do not take, as every
 /// profile section is read, so a profile a later release wrote still loads. A caller's settings,
 /// read as the type itself, still refuse an unknown key. The keys taken are those the type's
@@ -83,23 +85,38 @@ impl Output {
         }
     }
 
-    /// The profile's canonical JSON each file holds, where a Parquet or Arrow IPC write embeds it.
-    pub fn embedded_profile(&self) -> Option<&str> {
+    /// The documents each file holds, where a Parquet or Arrow IPC write embeds the profile.
+    pub fn embedded(&self) -> Option<&EmbeddedDocuments> {
         match self {
-            Self::Parquet(settings) => settings.embedded_profile.as_deref(),
-            Self::Arrow(settings) => settings.embedded_profile.as_deref(),
+            Self::Parquet(settings) => settings.embedded.as_ref(),
+            Self::Arrow(settings) => settings.embedded.as_ref(),
             Self::Csv(_) | Self::Tsv(_) | Self::Json(_) | Self::Ndjson(_) => None,
         }
+    }
+}
+
+/// The JSON a write embeds in each file's metadata: the whole profile, and the scenario's document
+/// where one applies. Only a write's caller sets it, so neither a profile nor a manifest holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedDocuments {
+    pub profile: Arc<str>,
+    pub scenario: Option<Arc<str>>,
+}
+
+impl EmbeddedDocuments {
+    /// Each document beside the metadata key it is written under.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &str)> {
+        let scenario = self.scenario.as_deref().map(|scenario| (provenance::SCENARIO, scenario));
+        std::iter::once((provenance::PROFILE, self.profile.as_ref())).chain(scenario)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ParquetSettings {
-    /// The profile's canonical JSON, which each file's metadata holds under `doppeldata.profile`.
-    /// Only a write's caller sets it, so neither a profile nor a manifest holds it.
+    /// What each file's key-value metadata holds beside the provenance keys.
     #[serde(skip)]
-    pub embedded_profile: Option<Arc<str>>,
+    pub embedded: Option<EmbeddedDocuments>,
     pub compression: ParquetCompression,
     /// The codec's level, which must fall in the codec's range. Null takes the codec's default.
     pub compression_level: Option<i32>,
@@ -116,7 +133,7 @@ pub struct ParquetSettings {
 impl Default for ParquetSettings {
     fn default() -> Self {
         Self {
-            embedded_profile: None,
+            embedded: None,
             compression: ParquetCompression::Zstd,
             compression_level: None,
             row_group_rows: 1024 * 1024,
@@ -161,10 +178,9 @@ pub enum TimestampUnit {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ArrowSettings {
-    /// The profile's canonical JSON, which each file's schema metadata holds under
-    /// `doppeldata.profile`. Only a write's caller sets it, so neither a profile nor a manifest holds it.
+    /// What each file's schema metadata holds beside the provenance keys.
     #[serde(skip)]
-    pub embedded_profile: Option<Arc<str>>,
+    pub embedded: Option<EmbeddedDocuments>,
     pub ipc: IpcFormat,
     pub compression: IpcCompression,
 }

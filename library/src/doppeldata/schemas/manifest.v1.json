@@ -712,7 +712,7 @@
       "type": "object",
       "properties": {
         "embedded": {
-          "description": "Whether each Parquet and Arrow IPC file holds the profile's canonical JSON, under the\nmetadata key `doppeldata.profile`. Left out when false.",
+          "description": "Whether each file `files` and `cdc.expected` list holds the whole profile's canonical JSON,\nunder the metadata key `doppeldata.profile`, and the scenario's document under\n`doppeldata.scenario` where one applies. A `cdc` change file never holds either. Left out\nwhen false.",
           "type": "boolean"
         },
         "name": {

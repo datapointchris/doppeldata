@@ -16,13 +16,13 @@ use arrow_schema::TimeUnit;
 use doppeldata_core::FileFault;
 use doppeldata_core::RowFaults;
 use doppeldata_core::TextCell;
+use doppeldata_core::format_settings::EmbeddedDocuments;
 use doppeldata_core::format_settings::ParquetCompression;
 use doppeldata_core::format_settings::ParquetSettings;
 use doppeldata_core::format_settings::ParquetStatistics;
 use doppeldata_core::format_settings::TimestampUnit;
 use doppeldata_core::manifest::FaultRecord;
 use doppeldata_core::physical_type_name;
-use doppeldata_core::profile::provenance;
 use doppeldata_core::scenario::FaultKind;
 use parquet::arrow::ArrowSchemaConverter;
 use parquet::arrow::ArrowWriter;
@@ -222,9 +222,9 @@ fn retyped(schema: &Schema, retype: impl Fn(&DataType) -> Option<DataType>) -> S
 /// parquet's `ArrowWriter` stores the Arrow schema, metadata and all, only inside `ARROW:schema`.
 /// Each metadata key is also written as a plain key-value pair, in key order, as pyarrow writes
 /// them, so a reader that never decodes `ARROW:schema` still finds the provenance. An embedded
-/// profile is written only as a key-value pair, so the footer holds it once.
+/// document is written only as a key-value pair, so the footer holds it once.
 fn properties(settings: &ParquetSettings, schema: &Schema) -> Result<WriterProperties, WriteError> {
-    let embedded = settings.embedded_profile.as_deref().map(|profile| (provenance::PROFILE, profile));
+    let embedded = settings.embedded.iter().flat_map(EmbeddedDocuments::entries);
     let mut metadata: Vec<(&str, &str)> = schema
         .metadata()
         .iter()

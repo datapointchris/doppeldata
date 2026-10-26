@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use doppeldata_core::format_settings::ArrowSettings;
+use doppeldata_core::format_settings::EmbeddedDocuments;
 use doppeldata_core::format_settings::IpcCompression;
 use doppeldata_core::format_settings::JsonSettings;
 use doppeldata_core::format_settings::Output;
@@ -47,9 +48,11 @@ pub struct WriteChoices {
     pub profile_path: Option<String>,
     /// The scenario applied, as the manifest records it.
     pub scenario: Option<ManifestScenario>,
-    /// The profile's canonical JSON, for each file's metadata to hold. Only a Parquet or Arrow IPC
-    /// write takes it.
+    /// The whole profile's canonical JSON, for each file's metadata to hold. Only a Parquet or Arrow
+    /// IPC write takes it.
     pub embedded_profile: Option<String>,
+    /// The scenario's canonical document, held beside an embedded profile.
+    pub embedded_scenario: Option<String>,
 }
 
 impl WriteOptions {
@@ -77,16 +80,19 @@ impl WriteOptions {
             options.layout.partition_style = style;
         }
         if let Some(profile) = choices.embedded_profile {
-            options.embed_profile(profile.into())?;
+            options.embed(EmbeddedDocuments {
+                profile: profile.into(),
+                scenario: choices.embedded_scenario.map(Arc::from),
+            })?;
         }
         Ok(options)
     }
 
-    /// Embeds `profile` in each file's metadata, which only Parquet and Arrow IPC files hold.
-    fn embed_profile(&mut self, profile: Arc<str>) -> Result<(), WriteError> {
+    /// Embeds `documents` in each file's metadata, which only Parquet and Arrow IPC files hold.
+    fn embed(&mut self, documents: EmbeddedDocuments) -> Result<(), WriteError> {
         match &mut self.output {
-            Output::Parquet(settings) => settings.embedded_profile = Some(profile),
-            Output::Arrow(settings) => settings.embedded_profile = Some(profile),
+            Output::Parquet(settings) => settings.embedded = Some(documents),
+            Output::Arrow(settings) => settings.embedded = Some(documents),
             other => {
                 return Err(WriteError::Settings(format!(
                     "a {} file holds no metadata to embed the profile in; embed it in a parquet or arrow write",
