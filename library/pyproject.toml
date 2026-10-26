@@ -20,15 +20,6 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/datapointchris/doppeldata"
 
-# The tools the tests check each export with. A consumer of an export installs its tool, never the library's.
-[dependency-groups]
-dev = [
-    "dataframely>=3.1.2",
-    "frictionless>=5.21.0",
-    "pandera[polars]>=0.34.1",
-    "polars>=2.0.0",
-]
-
 [build-system]
 requires = ["maturin>=1.9,<2"]
 build-backend = "maturin"

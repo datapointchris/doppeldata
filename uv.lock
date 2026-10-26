@@ -14,8 +14,12 @@ members = [
 
 [manifest.dependency-groups]
 dev = [
+    { name = "dataframely", specifier = ">=3.1.2" },
+    { name = "frictionless", specifier = ">=5.21.0" },
     { name = "maturin", specifier = "==1.15.0" },
     { name = "mypy", specifier = ">=2.4.0" },
+    { name = "pandera", extras = ["polars"], specifier = ">=0.34.1" },
+    { name = "polars", specifier = ">=2.0.0" },
     { name = "ruff", specifier = "==0.17.1" },
 ]
 
@@ -363,27 +367,11 @@ dependencies = [
     { name = "ruamel-yaml" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "dataframely" },
-    { name = "frictionless" },
-    { name = "pandera", extra = ["polars"] },
-    { name = "polars" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "rfc8785", specifier = ">=0.1.4" },
     { name = "ruamel-yaml", specifier = ">=0.19.1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "dataframely", specifier = ">=3.1.2" },
-    { name = "frictionless", specifier = ">=5.21.0" },
-    { name = "pandera", extras = ["polars"], specifier = ">=0.34.1" },
-    { name = "polars", specifier = ">=2.0.0" },
 ]
 
 [[package]]

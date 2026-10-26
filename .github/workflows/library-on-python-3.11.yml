@@ -28,7 +28,7 @@ jobs:
         run: |
           uv venv --python 3.11 "$RUNNER_TEMP/library"
           uv pip install --python "$RUNNER_TEMP/library" ./library
-          uv pip install --python "$RUNNER_TEMP/library" --group library/pyproject.toml:dev pytest
+          uv pip install --python "$RUNNER_TEMP/library" --group pyproject.toml:dev pytest
 
       # An abi3 feature in library/pyproject.toml naming a later Python still
       # builds here, and fails only on import, with an undefined symbol.
