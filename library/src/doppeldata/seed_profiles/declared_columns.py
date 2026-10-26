@@ -35,6 +35,7 @@ from doppeldata.inline_columns import decimals
 from doppeldata.inline_columns import integers
 from doppeldata.name_hinted_types import GENERAL
 from doppeldata.profile_format import INTEGER_FORMAT_RANGES
+from doppeldata.published_schemas import published_enum
 from doppeldata.short_profiles import named_column
 
 NULL_RATE = 0.05
@@ -87,7 +88,7 @@ FORMAT_TYPES = {
 
 # The facts `generated.declared` names, in the profile model's order: each one a schema can declare and an importer
 # otherwise fills with a draw default.
-DECLARED_FACTS = ('low', 'high', 'scale', 'min_length', 'max_length', 'min_items', 'max_items', 'format', 'pattern', 'top_values')
+DECLARED_FACTS = tuple(published_enum('DeclaredFact'))
 
 Bound = int | float | str | dt.date
 Ordered = TypeVar('Ordered', int, float, dt.date, dt.datetime)
