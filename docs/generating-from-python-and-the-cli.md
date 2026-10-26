@@ -236,8 +236,9 @@ the uploads alike.
   asks once per interval rather than on every request.
 - **Credentials boto3 cannot refresh are handed over once**, such as keys in the environment. The
   store uses them for the whole write.
-- **The uploads retry as boto3 does.** They make `S3_ATTEMPTS` attempts, and give up connecting
-  after `S3_CONNECT_TIMEOUT`.
+- **The uploads retry as boto3 does.** They make `ATTEMPTS` attempts, and give up connecting
+  after `CONNECT_TIMEOUT`. `aws_access.py` holds both, beside the client config every boto3 client
+  of doppeldata's takes.
 - **A write through boto3's chain stores the same bytes as a local write with the same flags.**
 - **boto3 is imported only for an S3 destination**, and declared nowhere. Without it, `plan` and
   `write` both refuse with `boto3-missing`, exit 2.

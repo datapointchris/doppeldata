@@ -91,10 +91,10 @@ def glue_client(region: str | None) -> Any:
     """A Glue client of the AWS environment's, in `region` where it is given."""
     boto3 = importlib.import_module('boto3')
     exceptions = importlib.import_module('botocore.exceptions')
-    from doppeldata.s3_access import S3_CLIENT_CONFIG
+    from doppeldata.aws_access import CLIENT_CONFIG
 
     try:
-        return boto3.Session().client('glue', region_name=region, config=S3_CLIENT_CONFIG)
+        return boto3.Session().client('glue', region_name=region, config=CLIENT_CONFIG)
     except exceptions.NoRegionError as error:
         message = "the Glue Data Catalog is regional, and the AWS environment names no region; give the catalog's, or set AWS_REGION"
         raise SourceError(message, role='region') from error
@@ -110,29 +110,27 @@ def glue_client(region: str | None) -> Any:
 @contextlib.contextmanager
 def catalog_errors(named: str, endpoint: str) -> Iterator[None]:
     """Each boto3 failure reading `named` as a SourceError: exit 2 for a table the catalog lacks, 4 when no answer came."""
-    from doppeldata.s3_access import CREDENTIAL_ADVICE
-    from doppeldata.s3_access import CREDENTIAL_ERRORS
-    from doppeldata.s3_access import S3_ATTEMPTS
-    from doppeldata.s3_access import UNANSWERED_ERRORS
+    from doppeldata.aws_access import AWS_ERRORS
+    from doppeldata.aws_access import CREDENTIAL_ADVICE
+    from doppeldata.aws_access import CREDENTIAL_ERRORS
+    from doppeldata.aws_access import answered
+    from doppeldata.aws_access import error_code
+    from doppeldata.aws_access import no_answer
+    from doppeldata.aws_access import unanswered
 
     exceptions = importlib.import_module('botocore.exceptions')
     try:
         yield
-    except exceptions.ClientError as error:
-        reported = error.response.get('Error', {})
-        status = error.response.get('ResponseMetadata', {}).get('HTTPStatusCode', 0)
-        answer = f'{reported.get("Code")}, {reported.get("Message")}'
-        if status == 429 or status >= 500 or reported.get('Code') == 'ThrottlingException':
-            raise SourceError(f'no answer from {endpoint}: Glue answered {answer} on every attempt', exit_code=4, role='schema') from error
-        if reported.get('Code') == 'EntityNotFoundException':
-            raise SourceError(f'{named} names no table the catalog holds: {answer}', exit_code=2, role='schema') from error
-        raise SourceError(f'{named} could not be read: {endpoint} answered {answer}', exit_code=1, role='schema') from error
     except CREDENTIAL_ERRORS as error:
         raise SourceError(f'{named} could not be read: {error}; {CREDENTIAL_ADVICE}', exit_code=1, role='schema') from error
-    except UNANSWERED_ERRORS as error:
-        raise SourceError(f'no answer from {endpoint}: {error}, {S3_ATTEMPTS} attempts', exit_code=4, role='schema') from error
-    except exceptions.BotoCoreError as error:
-        raise SourceError(f'{named} could not be read through {endpoint}: {error}', exit_code=1, role='schema') from error
+    except AWS_ERRORS as error:
+        if unanswered(error):
+            raise SourceError(no_answer(endpoint, 'Glue', error), exit_code=4, role='schema') from error
+        if not isinstance(error, exceptions.ClientError):
+            raise SourceError(f'{named} could not be read through {endpoint}: {error}', exit_code=1, role='schema') from error
+        if error_code(error) == 'EntityNotFoundException':
+            raise SourceError(f'{named} names no table the catalog holds: {answered(error)}', exit_code=2, role='schema') from error
+        raise SourceError(f'{named} could not be read: {endpoint} answered {answered(error)}', exit_code=1, role='schema') from error
 
 
 def catalog_table(

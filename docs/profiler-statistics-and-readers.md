@@ -231,9 +231,11 @@ itself. So boto3 lists the prefix, and the profile credentials a workstation use
 *Rejected:* obstore for the listing. It needs boto3 for profile credentials too, which would make it
 a second S3 client doing one job.
 
-A listing makes `S3_ATTEMPTS` attempts, as the AWS CLI's standard mode does. A failure names the
-endpoint and the setting that chose it. `profile create` exits 4 when no answer came, and 1 when S3
-answered and refused. A key with a format's suffix that holds no object is listed as a prefix,
+A listing makes `aws_access.ATTEMPTS` attempts, as the AWS CLI's standard mode does. A failure
+names the endpoint and the setting that chose it. `profile create` exits 4 when no answer came, and
+1 when S3 answered and refused. `aws_access.unanswered` decides which is which, for a listing, a
+write and a Glue import alike. A throttling answer counts as none. The throttling codes are the
+ones boto3's standard retry mode retries as throttling. A key with a format's suffix that holds no object is listed as a prefix,
 because Spark writes a table as a `name.parquet/` directory.
 
 Hadoop's `s3a://` and `s3n://` are written as `s3://` before anything is listed, so grouping, the

@@ -12,33 +12,21 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import boto3
-import botocore.config
 import botocore.credentials
 import botocore.exceptions
 
+from doppeldata.aws_access import ATTEMPTS
+from doppeldata.aws_access import AWS_ERRORS
+from doppeldata.aws_access import CLIENT_CONFIG
+from doppeldata.aws_access import CONNECT_TIMEOUT
+from doppeldata.aws_access import CREDENTIAL_ADVICE
+from doppeldata.aws_access import CREDENTIAL_ERRORS
+from doppeldata.aws_access import answered
+from doppeldata.aws_access import http_status
+from doppeldata.aws_access import no_answer
+from doppeldata.aws_access import unanswered
 from doppeldata.errors import WriteFailed
 
-# A request gives up rather than hang on an endpoint that never answers, after as many attempts as the AWS CLI's standard mode makes.
-# boto3's client and a write's upload store both take these.
-S3_ATTEMPTS = 3
-S3_CONNECT_TIMEOUT = dt.timedelta(seconds=5)
-S3_CLIENT_CONFIG = botocore.config.Config(
-    connect_timeout=S3_CONNECT_TIMEOUT.total_seconds(), read_timeout=20, retries={'max_attempts': S3_ATTEMPTS, 'mode': 'standard'}
-)
-CREDENTIAL_ERRORS = (
-    botocore.exceptions.NoCredentialsError,
-    botocore.exceptions.PartialCredentialsError,
-    botocore.exceptions.CredentialRetrievalError,
-    botocore.exceptions.SSOError,
-    botocore.exceptions.TokenRetrievalError,
-)
-UNANSWERED_ERRORS = (
-    botocore.exceptions.EndpointConnectionError,
-    botocore.exceptions.ConnectTimeoutError,
-    botocore.exceptions.ReadTimeoutError,
-    botocore.exceptions.ConnectionClosedError,
-)
-CREDENTIAL_ADVICE = 'run `aws sso login`, or set AWS_PROFILE to a profile with credentials'
 # The store asks for refreshable credentials again this often. botocore refreshes them at least ten minutes before they expire, so
 # each answer outlives the interval.
 REFRESH_EVERY = dt.timedelta(minutes=5)
@@ -57,7 +45,7 @@ def s3_session() -> tuple[Any, Any]:
     """
     try:
         session = boto3.Session()
-        return session, session.client('s3', config=S3_CLIENT_CONFIG)
+        return session, session.client('s3', config=CLIENT_CONFIG)
     except botocore.exceptions.ProfileNotFound as error:
         raise ValueError(f'{error}; set AWS_PROFILE to a profile the AWS config holds') from error
     except ValueError as error:
@@ -102,23 +90,16 @@ def write_errors(url: str, endpoint: str) -> Iterator[None]:
     """Each boto3 failure reaching `url` as a WriteFailed naming the endpoint, `unanswered` when no answer came."""
     try:
         yield
-    except botocore.exceptions.ClientError as error:
-        reported = error.response.get('Error', {})
-        status = error.response.get('ResponseMetadata', {}).get('HTTPStatusCode', 0)
-        answer = f'{reported.get("Code")}, {reported.get("Message")}'
-        if status == 429 or status >= 500:
-            message = f'no answer from {endpoint}: S3 answered {answer} on every attempt'
-            raise WriteFailed('no-answer', message, kind='unanswered') from error
-        if status == 404:
-            raise WriteFailed('bucket-missing', f'{url} names a bucket {endpoint} does not hold', kind='refused') from error
-        raise WriteFailed('bucket-refused', f'{url} cannot be written: {endpoint} answered {answer}') from error
     except CREDENTIAL_ERRORS as error:
         raise WriteFailed('no-credentials', f'{url} cannot be written: {error}; {CREDENTIAL_ADVICE}') from error
-    except UNANSWERED_ERRORS as error:
-        message = f'no answer from {endpoint}: {error}, {S3_ATTEMPTS} attempts'
-        raise WriteFailed('no-answer', message, kind='unanswered') from error
-    except botocore.exceptions.BotoCoreError as error:
-        raise WriteFailed('store', f'{url} cannot be written through {endpoint}: {error}') from error
+    except AWS_ERRORS as error:
+        if unanswered(error):
+            raise WriteFailed('no-answer', no_answer(endpoint, 'S3', error), kind='unanswered') from error
+        if not isinstance(error, botocore.exceptions.ClientError):
+            raise WriteFailed('store', f'{url} cannot be written through {endpoint}: {error}') from error
+        if http_status(error) == 404:
+            raise WriteFailed('bucket-missing', f'{url} names a bucket {endpoint} does not hold', kind='refused') from error
+        raise WriteFailed('bucket-refused', f'{url} cannot be written: {endpoint} answered {answered(error)}') from error
 
 
 def s3_store_settings(url: str, bucket: str) -> dict[str, Any]:
@@ -138,13 +119,13 @@ def s3_store_settings(url: str, bucket: str) -> dict[str, Any]:
             raise botocore.exceptions.NoCredentialsError()
         head = client.head_bucket(Bucket=bucket)
         region = head['ResponseMetadata']['HTTPHeaders'].get('x-amz-bucket-region') or client.meta.region_name
-        endpoint = session.client('s3', region_name=region, config=S3_CLIENT_CONFIG).meta.endpoint_url
-    client_options: dict[str, Any] = {'connect_timeout': S3_CONNECT_TIMEOUT}
+        endpoint = session.client('s3', region_name=region, config=CLIENT_CONFIG).meta.endpoint_url
+    client_options: dict[str, Any] = {'connect_timeout': CONNECT_TIMEOUT}
     if endpoint.startswith('http://'):
         client_options['allow_http'] = True
     return {
         'config': {'region': region, 'endpoint': endpoint},
         'client_options': client_options,
-        'retry_config': {'max_retries': S3_ATTEMPTS - 1},
+        'retry_config': {'max_retries': ATTEMPTS - 1},
         'credential_provider': Boto3Credentials(credentials),
     }
