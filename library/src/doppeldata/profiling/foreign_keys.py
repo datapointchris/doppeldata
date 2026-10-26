@@ -67,15 +67,17 @@ def relationships(backend: Backend, members: list[BundleMember], k_min: int) -> 
 
 def one_way(found: list[Reference], members: list[BundleMember]) -> list[Reference]:
     """`found` with two keys that refer to each other kept in one direction: toward the table whose primary key it is
-    where only one is, else toward the key holding more of the other's values, else toward the earlier table."""
+    where only one is, else toward the table it is named for, as `user_id` is for `users`, else toward the key holding
+    more of the other's values, else toward the earlier table."""
     order = {member.name: index for index, member in enumerate(members)}
     by_ends = {(reference.child.name, reference.column, reference.parent.name, reference.key): reference for reference in found}
 
-    def standing(reference: Reference) -> tuple[bool, float, int]:
+    def standing(reference: Reference) -> tuple[bool, bool, float, int]:
         toward_primary = (
             primary_key(reference.parent.document) == reference.key and primary_key(reference.child.document) != reference.column
         )
-        return toward_primary, reference.written['containment'], -order[reference.parent.name]
+        named_for_parent = squeezed(reference.key) == singular(squeezed(reference.parent.name)) + 'id'
+        return toward_primary, named_for_parent, reference.written['containment'], -order[reference.parent.name]
 
     def kept(reference: Reference) -> bool:
         mirror = by_ends.get((reference.parent.name, reference.key, reference.child.name, reference.column))
