@@ -69,9 +69,12 @@ orders = sd.generate(schema, rows=1000)
   schema validates the rows with pandera's `coerce=True` or dataframely's `cast=True`.
 - **A list or a struct column writes to Parquet or NDJSON.** A CSV holds neither, so a write to
   one refuses the column.
-- **A Spark field takes its type from its Hive name, the one `simpleString()` prints.** So `bigint`,
-  `decimal(10,2)`, `varchar(6)`, `array<string>` and `struct<city:string>` read as a Glue column
-  does. `TimestampType` is an instant, so it is UTC. `TimestampNTZType` is a wall-clock reading.
+- **A Spark field or a Polars type takes the Arrow type its profiler writes.** One table,
+  `spark_polars_arrow_types.py`, serves the Spark and Polars profilers and the seeds alike. It
+  reads a type by its class's name, and its precision, unit and zone by attribute. A pandera-polars
+  column and every dataframely column carry a Polars type, so both read through it.
+- **A Spark `TimestampType` is an instant, so it is UTC.** `TimestampNTZType` is a wall-clock
+  reading. A `VarcharType` or `CharType` takes its lengths from its Hive name, `varchar(6)`.
 - **A type the engine draws nothing of is left out, named in a warning**: `binary`, `map`, and in a
   file schema `geopoint`, `duration`, `vector` and the like.
 

@@ -60,6 +60,19 @@ DEFAULT_PHYSICAL_TYPES = {
     'timestamp': 'timestamp[us]',
     'time': 'time64[us]',
 }
+# The logical type of each Arrow type a seed draws, by the type's name ahead of its parameters, such as `decimal128`.
+LOGICAL_TYPES = {
+    **{f'{sign}int{bits}': 'integer' for sign in ('', 'u') for bits in (8, 16, 32, 64)},
+    'float': 'number',
+    'double': 'number',
+    'decimal128': 'number',
+    'string': 'string',
+    'bool': 'boolean',
+    'date32': 'date',
+    'time64': 'time',
+    'timestamp': 'timestamp',
+}
+ARROW_TYPE_NAME = re.compile(r'\w+')
 # A format JSON Schema, ODCS or Table Schema names, and the general pack's type a column in it is given.
 FORMAT_TYPES = {
     'email': 'email',
@@ -74,6 +87,12 @@ FORMAT_TYPES = {
 
 Bound = int | float | str | dt.date
 Ordered = TypeVar('Ordered', int, float, dt.date, dt.datetime)
+
+
+def logical_type_of(arrow_type: str) -> str | None:
+    """The logical type of an Arrow type a seed draws, such as `number` for `decimal128(12, 2)`, else None."""
+    name = ARROW_TYPE_NAME.match(arrow_type)
+    return LOGICAL_TYPES.get(name[0]) if name else None
 
 
 def warn_left_out(message: str) -> None:

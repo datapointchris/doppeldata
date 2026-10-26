@@ -11,10 +11,15 @@ from typing import Any
 
 from doppeldata.profile_format import Profile
 from doppeldata.seed_profiles.declared_columns import DeclaredColumn
+from doppeldata.seed_profiles.declared_columns import logical_type_of
 from doppeldata.seed_profiles.declared_columns import warn_left_out
 from doppeldata.seed_profiles.declared_tables import DeclaredTable
 from doppeldata.seed_profiles.hive_types import hive_column
 from doppeldata.short_profiles import INLINE_TABLE
+from doppeldata.spark_polars_arrow_types import DECIMAL_PRECISION
+from doppeldata.spark_polars_arrow_types import polars_arrow_type
+from doppeldata.spark_polars_arrow_types import spark_arrow_type
+from doppeldata.spark_polars_arrow_types import type_name
 
 LIBRARIES = ('pandera', 'dataframely', 'pyspark')
 # The pandera built-in checks a seed reads, by the name each gives itself.
@@ -30,38 +35,12 @@ READ_CHECKS = (
     'str_matches',
     'str_length',
 )
-# pandera's dtype classes, by their names in lower case. A parameter is read off the dtype or the Polars type it wraps.
+# pandas-backed pandera's dtype classes, by their names in lower case, each parameter read off the dtype.
 INTEGER_DTYPE = re.compile(r'(?P<unsigned>u?)int(?P<bits>8|16|32|64)')
 TEXT_DTYPES = ('string', 'object')
 # The engine draws no dictionary type, so these are drawn as text.
 DICTIONARY_DTYPES = ('category', 'categorical', 'enum')
 FLOAT_DTYPES = {'float32': 'float', 'float64': 'double'}
-# A decimal with no stated precision takes Arrow's widest.
-DECIMAL_PRECISION = 38
-# Polars holds a time of day in nanoseconds.
-TIME_TYPE = 'time64[ns]'
-# Each dataframely column class read as a scalar, and its Arrow type.
-DATAFRAMELY_SCALARS = {
-    **{f'{sign}Int{bits}': f'{sign.lower()}int{bits}' for sign in ('', 'U') for bits in (8, 16, 32, 64)},
-    'Float32': 'float',
-    'Float64': 'double',
-    'Float': 'double',
-    'Integer': 'int64',
-    'Bool': 'bool',
-    'Date': 'date32[day]',
-    'Time': TIME_TYPE,
-    'String': 'string',
-    'Categorical': 'string',
-    'Enum': 'string',
-}
-LOGICAL_OF_ARROW = {
-    'bool': 'boolean',
-    'date32[day]': 'date',
-    TIME_TYPE: 'time',
-    'string': 'string',
-    'float': 'number',
-    'double': 'number',
-}
 
 
 def schema_library(source: Any) -> str | None:
@@ -160,13 +139,19 @@ def checked(checks: Any) -> tuple[dict[str, Any], list[str]]:
 
 
 def frame_column(name: str, dtype: Any) -> DeclaredColumn | None:
-    """The column a pandera dtype declares, by its class, such as `INT32`, `STRING` or `DateTime`, and a text column
-    where it declares none.
+    """The column a pandera dtype declares: by the Polars type it wraps, where it wraps one, else by its class, such as
+    `INT32`, `STRING` or `DateTime`. A column declaring no dtype is text.
     """
     if dtype is None:
         return DeclaredColumn(name=name, logical_type='string')
     kind = type(dtype).__name__.lower()
+    if kind in DICTIONARY_DTYPES:
+        categories = getattr(dtype, 'categories', None)
+        values = tuple(str(value) for value in categories) if categories is not None else ()
+        return DeclaredColumn(name=name, logical_type='string', values=values)
     wrapped = getattr(dtype, 'type', None)
+    if is_polars_type(wrapped):
+        return polars_column(name, wrapped)
     integer = INTEGER_DTYPE.fullmatch(kind)
     if integer is not None:
         return DeclaredColumn(name=name, logical_type='integer', physical_type=f'{integer["unsigned"]}int{integer["bits"]}')
@@ -178,21 +163,33 @@ def frame_column(name: str, dtype: Any) -> DeclaredColumn | None:
         return DeclaredColumn(name=name, logical_type='number', physical_type=physical)
     if kind in TEXT_DTYPES:
         return DeclaredColumn(name=name, logical_type='string')
-    if kind in DICTIONARY_DTYPES:
-        categories = getattr(dtype, 'categories', None)
-        values = tuple(str(value) for value in categories) if categories is not None else ()
-        return DeclaredColumn(name=name, logical_type='string', values=values)
     if kind in ('bool', 'boolean'):
         return DeclaredColumn(name=name, logical_type='boolean')
     if kind == 'date':
         return DeclaredColumn(name=name, logical_type='date')
-    if kind == 'time':
-        return DeclaredColumn(name=name, logical_type='time', physical_type=TIME_TYPE)
     if kind == 'datetime':
-        unit = getattr(dtype, 'unit', None) or getattr(wrapped, 'time_unit', None) or 'us'
-        zone = getattr(dtype, 'tz', None) or getattr(wrapped, 'time_zone', None)
-        return timestamp_column(name, str(unit), str(zone) if zone is not None else None)
+        zone = getattr(dtype, 'tz', None)
+        return timestamp_column(name, str(getattr(dtype, 'unit', None) or 'us'), str(zone) if zone is not None else None)
     return None
+
+
+def is_polars_type(value: Any) -> bool:
+    """Whether `value` is a Polars data type, a class or an instance, told apart without importing polars."""
+    return value is not None and (value if isinstance(value, type) else type(value)).__module__.partition('.')[0] == 'polars'
+
+
+def polars_column(name: str, dtype: Any) -> DeclaredColumn | None:
+    """The column a Polars type declares, of the Arrow type the Polars profiler writes for it. A dictionary type is drawn
+    as text, and a datetime naming a zone is an instant in UTC.
+    """
+    kind = type_name(dtype)
+    if kind in ('Categorical', 'Enum'):
+        return DeclaredColumn(name=name, logical_type='string')
+    if kind == 'Datetime':
+        return timestamp_column(name, getattr(dtype, 'time_unit', None) or 'us', getattr(dtype, 'time_zone', None))
+    physical = polars_arrow_type(dtype)
+    logical = logical_type_of(physical)
+    return DeclaredColumn(name=name, logical_type=logical, physical_type=physical) if logical else None
 
 
 def drawn_as_text(named: str, columns: list[str], validated_with: str) -> None:
@@ -248,17 +245,8 @@ def dataframely_column(name: str, column: Any) -> DeclaredColumn | None:
             min_items=getattr(column, 'min_length', None),
             max_items=getattr(column, 'max_length', None),
         )
-    if kind == 'Decimal':
-        precision = getattr(column, 'precision', None) or DECIMAL_PRECISION
-        physical = f'decimal128({precision}, {getattr(column, "scale", 0) or 0})'
-        declared = DeclaredColumn(name=name, logical_type='number', physical_type=physical)
-    elif kind == 'Datetime':
-        declared = timestamp_column(name, getattr(column, 'time_unit', None) or 'us', getattr(column, 'time_zone', None))
-    elif kind in DATAFRAMELY_SCALARS:
-        physical = DATAFRAMELY_SCALARS[kind]
-        logical = LOGICAL_OF_ARROW.get(physical, 'integer')
-        declared = DeclaredColumn(name=name, logical_type=logical, physical_type=physical)
-    else:
+    declared = polars_column(name, getattr(column, 'dtype', None))
+    if declared is None:
         return None
     low, high = getattr(column, 'min', None), getattr(column, 'max', None)
     low_exclusive, high_exclusive = getattr(column, 'min_exclusive', None), getattr(column, 'max_exclusive', None)
@@ -291,8 +279,10 @@ def spark_table(struct: Any) -> DeclaredTable:
 
 
 def spark_column(name: str, data_type: Any, nullable: bool) -> DeclaredColumn | None:
-    """A Spark field's column. A `TimestampType` is an instant, so it is UTC, where `timestamp_ntz` is not."""
-    kind = type(data_type).__name__
+    """A Spark field's column, of the Arrow type the Spark profiler writes for it. A `TimestampType` is an instant, so it
+    is UTC, where `timestamp_ntz` is not. A varchar's or a char's lengths are read from its Hive name.
+    """
+    kind = type_name(data_type)
     if kind == 'StructType':
         fields = [spark_column(field.name, field.dataType, field.nullable) for field in data_type.fields]
         if not all(fields):
@@ -301,8 +291,11 @@ def spark_column(name: str, data_type: Any, nullable: bool) -> DeclaredColumn | 
     if kind == 'ArrayType':
         element = spark_column('element', data_type.elementType, False)
         return DeclaredColumn(name=name, logical_type='array', required=not nullable, element=element) if element else None
-    if kind == 'TimestampType':
-        return DeclaredColumn(
-            name=name, logical_type='timestamp', physical_type='timestamp[us, tz=UTC]', timezone='UTC', required=not nullable
-        )
-    return hive_column(name, data_type.simpleString(), required=not nullable)
+    if kind in ('VarcharType', 'CharType'):
+        return hive_column(name, data_type.simpleString(), required=not nullable)
+    physical = spark_arrow_type(data_type)
+    logical = logical_type_of(physical)
+    if logical is None:
+        return None
+    timezone = 'UTC' if kind == 'TimestampType' else None
+    return DeclaredColumn(name=name, logical_type=logical, physical_type=physical, timezone=timezone, required=not nullable)
