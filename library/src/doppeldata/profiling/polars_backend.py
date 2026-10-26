@@ -382,14 +382,17 @@ class PolarsBackend:
     def parse(self, table: pl.LazyFrame, types: dict[str, ParsedType]) -> pl.LazyFrame:
         return table.with_columns(parsed(pl.col(name), parsed_type).alias(name) for name, parsed_type in types.items())
 
+    def average_ranks(self, table: pl.LazyFrame, names: list[str]) -> list[pl.Expr]:
+        """Each named column's values as their average ranks over its own values, a null left null, aliased `r0`, `r1`
+        and on."""
+        kinds = {spec.name: spec.kind for spec in self.schema(table)}
+        return [numeric_value(pl.col(name), kinds[name]).rank('average').cast(pl.Float64).alias(f'r{at}') for at, name in enumerate(names)]
+
     def rank_correlations(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:
         if not pairs:
             return []
-        kinds = {spec.name: spec.kind for spec in self.schema(table)}
         names = list(dict.fromkeys(name for pair in pairs for name in pair))
-        ranked = table.select(
-            numeric_value(pl.col(name), kinds[name]).rank('average').alias(f'r{index}') for index, name in enumerate(names)
-        )
+        ranked = table.select(self.average_ranks(table, names))
         measured = []
         for index, (a, b) in enumerate(pairs):
             first, second = pl.col(f'r{names.index(a)}'), pl.col(f'r{names.index(b)}')
@@ -409,19 +412,12 @@ class PolarsBackend:
         return [[(a, b, int(rows)) for a, b, rows in frame.iter_rows()] for frame in pl.collect_all(frames, engine='streaming')]
 
     def rank_moments(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
-        kinds = {spec.name: spec.kind for spec in self.schema(table)}
         numerics = list(dict.fromkeys(numeric for numeric, _ in pairs))
         by_category: dict[str, list[int]] = {}
         for index, (_, categorical) in enumerate(pairs):
             by_category.setdefault(categorical, []).append(index)
         categoricals = list(by_category)
-        ranked = table.select(
-            *(pl.col(name).alias(f'c{at}') for at, name in enumerate(categoricals)),
-            *(
-                numeric_value(pl.col(name), kinds[name]).rank('average').cast(pl.Float64).alias(f'r{at}')
-                for at, name in enumerate(numerics)
-            ),
-        )
+        ranked = table.select(*(pl.col(name).alias(f'c{at}') for at, name in enumerate(categoricals)), *self.average_ranks(table, numerics))
         frames = []
         for at, indexes in enumerate(by_category.values()):
             moments = []

@@ -876,21 +876,25 @@ class SparkBackend:
             for request in requests
         }
 
-    def rank_correlations(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:
-        """Each column ranked by one window over the table, a tie at the mean of its first and last rank. A null sorts
-        first and is ranked too, which moves every value's rank alike and leaves the correlation as it is."""
-        if not pairs:
-            return []
+    def average_ranks(self, table: DataFrame, names: list[str]) -> list[Column]:
+        """Each named column's values as their ranks by one window over the table, a tie at the mean of its first and
+        last rank, aliased `r0`, `r1` and on. A null sorts first and is ranked too, which moves every value's rank alike
+        and leaves a correlation or a share of variance as it is. Its own rank is null."""
         specs = {spec.name: spec for spec in self.schema(table)}
-        names = list(dict.fromkeys(name for pair in pairs for name in pair))
         rows = self.row_count(table)
         ranks = []
         for index, name in enumerate(names):
             value = Operand(column(name), specs[name], self.major).ordered
             order = Window.orderBy(value.asc_nulls_first())
             mean_rank = (sf.rank().over(order) + sf.round(sf.cume_dist().over(order) * rows)) / 2
-            ranks.append(sf.when(value.isNotNull(), mean_rank).alias(f'r{index}'))
-        ranked = self.persist(table.select(*ranks))
+            ranks.append(sf.when(value.isNotNull(), mean_rank).cast('double').alias(f'r{index}'))
+        return ranks
+
+    def rank_correlations(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:
+        if not pairs:
+            return []
+        names = list(dict.fromkeys(name for pair in pairs for name in pair))
+        ranked = self.persist(table.select(*self.average_ranks(table, names)))
         found: list[tuple[float | None, int]] = []
         for start in range(0, len(pairs), PAIRS_PER_QUERY):
             chunk = pairs[start : start + PAIRS_PER_QUERY]
@@ -924,29 +928,21 @@ class SparkBackend:
         return found
 
     def rank_moments(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
-        """Each numeric column ranked by one window as `rank_correlations` ranks it, then every categorical column's values
-        as one stream of (column, value), each row carrying the ranks, grouped once."""
+        """Each numeric column's `average_ranks`, then every categorical column's values as one stream of (column, value),
+        each row carrying the ranks, grouped once."""
         if not pairs:
             return []
-        specs = {spec.name: spec for spec in self.schema(table)}
         categoricals = list(dict.fromkeys(categorical for _, categorical in pairs))
         numerics = list(dict.fromkeys(numeric for numeric, _ in pairs))
-        rows = self.row_count(table)
-        ranks = []
-        for index, name in enumerate(numerics):
-            value = Operand(column(name), specs[name], self.major).ordered
-            order = Window.orderBy(value.asc_nulls_first())
-            mean_rank = (sf.rank().over(order) + sf.round(sf.cume_dist().over(order) * rows)) / 2
-            ranks.append(sf.when(value.isNotNull(), mean_rank).cast('double').alias(f'x{index}'))
         texts = [column(name).cast('string').alias(f'c{index}') for index, name in enumerate(categoricals)]
-        ranked = self.persist(table.select(*texts, *ranks))
+        ranked = self.persist(table.select(*texts, *self.average_ranks(table, numerics)))
         keyed = sf.inline(
             sf.array(*(sf.struct(sf.lit(index).alias('n'), sf.col(f'c{index}').alias('v')) for index in range(len(categoricals))))
         )
         moments = [
-            moment for index in range(len(numerics)) for moment in (sf.count(f'x{index}'), sf.mean(f'x{index}'), sf.var_pop(f'x{index}'))
+            moment for index in range(len(numerics)) for moment in (sf.count(f'r{index}'), sf.mean(f'r{index}'), sf.var_pop(f'r{index}'))
         ]
-        held = [sf.col(f'x{index}') for index in range(len(numerics))]
+        held = [sf.col(f'r{index}') for index in range(len(numerics))]
         by_column: dict[int, list[Any]] = {}
         for row in ranked.select(keyed, *held).where(sf.col('v').isNotNull()).groupBy('n', 'v').agg(*moments).collect():
             by_column.setdefault(row[0], []).append(row)
