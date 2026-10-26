@@ -5,9 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from doppeldata.embedded_profiles import data_file_metadata
-from doppeldata.errors import CheckFailed
-from doppeldata.privacy_policy.file_check import ProfileFileCheck
-from doppeldata.privacy_policy.file_check import table_check
+from doppeldata.privacy_policy.file_check import refuse_failed_check
 from doppeldata.profile_exports.contract_columns import ContractDocument
 from doppeldata.profile_exports.contract_columns import contract_document
 from doppeldata.profile_exports.dataframely_schemas import dataframely_module
@@ -53,17 +51,18 @@ def export(profile: Profile | Bundle | str | os.PathLike[str], format: str, *, t
     example's name. `table` exports one table of a bundle alone.
 
     - `odcs`: an Open Data Contract Standard v3.2.0 contract, a bundle's tables each a schema object. Each property's
-      `examples` are generated from the profile with seed 0, never read from data.
+      `examples` are generated from the profile with a fixed seed, never read from data.
     - `table-schema`: a Frictionless Table Schema v2, and for a bundle a Data Package v2 with its foreign keys.
     - `json-schema`: the record schema, a JSON Schema 2020-12 of one record. A bundle takes `table`.
-    - `dqdl`: an AWS Glue Data Quality ruleset of each table, with each share's threshold three standard errors below it.
+    - `dqdl`: an AWS Glue Data Quality ruleset of each table, its header naming how many standard errors below each share
+      its threshold lies.
     - `pandera`: a module of a `pandera.polars.DataFrameModel` of each table.
     - `dataframely`: a module of a `dataframely.Schema` of each table.
     - `pyspark-schemas`: a module of each table's `StructType` and `pandera.pyspark.DataFrameModel`.
 
     pandera, dataframely, Table Schema, the record schema and ODCS's `logicalTypeOptions` carry a range, listed values,
     lengths or a pattern only where the profile states it of every value, and name in their own description what they left
-    out. DQDL, and ODCS's quality checks, carry a share as a floor three standard errors below the profile's. A seed exports
+    out. DQDL, and ODCS's quality checks, carry a share as a floor some standard errors below the profile's. A seed exports
     only what its schema declared. Data generated from the profile passes each export, except a column whose `type_mix`
     holds several types: the engine draws it as one, and a strict format types it string.
 
@@ -77,7 +76,7 @@ def export(profile: Profile | Bundle | str | os.PathLike[str], format: str, *, t
     found = loaded(profile)
     if table is not None:
         found = one_table(found, table)
-    checked(found)
+    refuse_failed_check(found)
     return exporter(contract_document(found))
 
 
@@ -106,16 +105,3 @@ def one_table(found: Profile | Bundle, table: str) -> Profile:
     if found.document['name'] != table:
         raise ValueError(f'the profile is of {found.document["name"]}, not {table}; table= names one table of a bundle')
     return found
-
-
-def checked(found: Profile | Bundle) -> None:
-    """Raise CheckFailed where a table made from data fails `profile check`. A seed was written under no policy."""
-    tables = found.tables if isinstance(found, Bundle) else {found.document['name']: found}
-    at = ('tables',) if isinstance(found, Bundle) else ()
-    checks = [
-        table_check(profile.to_plain(), (*at, name) if at else ())
-        for name, profile in tables.items()
-        if (profile.document.get('generated') or {}).get('engine') != 'import'
-    ]
-    if any(check.violations for check in checks):
-        raise CheckFailed(ProfileFileCheck.of(str(found.document['name']), checks))

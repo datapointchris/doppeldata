@@ -11,6 +11,7 @@ from typing import Any
 
 from doppeldata.embedded_profiles import data_file_metadata
 from doppeldata.embedded_profiles import embedded_document
+from doppeldata.errors import CheckFailed
 from doppeldata.privacy_policy.column_treatment import CHECKED_POLICIES
 from doppeldata.privacy_policy.column_treatment import ColumnFacts
 from doppeldata.privacy_policy.column_treatment import Policy
@@ -24,8 +25,10 @@ from doppeldata.privacy_policy.literal_fields import faults
 from doppeldata.privacy_policy.treatment_rules import conditional_faults
 from doppeldata.privacy_policy.treatment_rules import refused
 from doppeldata.privacy_policy.treatment_rules import treatment_faults
+from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import PointerParts
+from doppeldata.profile_format import Profile
 from doppeldata.profile_format import check
 from doppeldata.profile_format import pointer
 from doppeldata.profile_format import read_document
@@ -127,6 +130,20 @@ def member_check(member: Path, name: str) -> TableCheck:
     if document.get('name') != name:
         return refusal('table-name-mismatch', f'{member} is named {document.get("name")!r}; expected {name!r}, as the bundle names it')
     return table_check(document, ())
+
+
+def refuse_failed_check(found: Profile | Bundle) -> None:
+    """Raise CheckFailed where a table made from data fails `profile check`, before its literals leave the profile. A seed
+    was written under no policy."""
+    tables = found.tables if isinstance(found, Bundle) else {found.document['name']: found}
+    at = ('tables',) if isinstance(found, Bundle) else ()
+    checks = [
+        table_check(profile.to_plain(), (*at, name) if at else ())
+        for name, profile in tables.items()
+        if (profile.document.get('generated') or {}).get('engine') != 'import'
+    ]
+    if any(result.violations for result in checks):
+        raise CheckFailed(ProfileFileCheck.of(str(found.document['name']), checks))
 
 
 def table_check(table: Any, at: PointerParts) -> TableCheck:

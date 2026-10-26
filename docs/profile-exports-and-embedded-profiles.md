@@ -42,7 +42,7 @@ Without `--out` the export prints.
 - **Data a profile was made from passes its exports.** A test checks each export with the tool
   that reads it, against rows generated from a profile and against rows a profile was made from.
 - **The same profile exports the same bytes.** An export names the profile's digest and holds no
-  time. ODCS `examples` are generated from the profile with seed 0, never read from data.
+  time. ODCS `examples` are generated from the profile with a fixed seed, never read from data.
 - **A profile made from data is checked first.** One that fails `profile check` is refused, exit 2,
   as `CheckFailed` in Python. An export never carries a literal the privacy policy did not pass.
 - **No validator is a dependency.** The modules import pandera, dataframely or pyspark when they
@@ -170,7 +170,7 @@ description or comment, with the share that holds:
 ## DQDL carries each share as a threshold three standard errors below it
 
 A ruleset is a statistical check, so it carries what a strict format leaves out. A share takes
-three standard errors at the profile's row count, and at least one row's worth. A mean takes 3σ/√n
+three standard errors, `STANDARD_ERRORS`, at the profile's row count, and at least one row's worth. A mean takes 3σ/√n
 and a standard deviation 3σ/√(2(n−1)). A range between trimmed extremes holds the share inside
 them, 1 − 2(`k_min` − 1)/n. So `orders`' `amount` range, over 100,000 rows, takes
 `with threshold >= 0.999665`.
@@ -183,7 +183,7 @@ them, 1 − 2(`k_min` − 1)/n. So `orders`' `amount` range, over 100,000 rows, 
   the mean of a 15-digit claim id wraps.
 - **Read a CSV with the `pyspark-schemas` `StructType`, never with `inferSchema`.** Inference types
   a column of digit strings, such as an NPI, as a long, which its `matches` rule then fails.
-- **Deequ 2.1.0 ignores `with threshold` on a numeric or string `ColumnValues` rule.** It asserts
+- **Deequ ignores `with threshold` on a numeric or string `ColumnValues` rule.** It asserts
   every row and reports the share in its failure reason. The DQDL reference documents the
   threshold as the share of rows that must pass. The carrier claims export passes Deequ on the file
   it was profiled from, once each reported share is compared with its threshold.
@@ -228,8 +228,8 @@ ReferentialIntegrity "customer_id" "customers.customer_id" >= 0.99945,
   `foreignKeys` exports them again, and DQDL as `ReferentialIntegrity ... = 1.0`.
 - **A profiled bundle's Data Package names each relationship it left out.** The privacy floor
   writes fewer than `k_min` orphans as none, so no relationship of it holds for every row. DQDL
-  takes a threshold three standard errors below the share the profile states, less the rows the
-  floor may hide.
+  takes a threshold below the share the profile states, as for any share, less the rows the floor
+  may hide.
 - **`ReferentialIntegrity` names the parent by its table name.** A run passes the parent's frame as
   an additional data source under that alias.
 - **The record schema describes one record, so a bundle takes `--table`**, or `table=` in Python.
@@ -268,10 +268,15 @@ provenance keys already name. Every PROFILE argument takes such a file.
   it in the schema metadata.
 - **Only Parquet and Arrow IPC hold it.** A write in another format refuses `--embed-profile`
   before writing a byte, exit 2, and Python raises `WriteFailed`.
+- **A profile made from data that fails `profile check` is refused**, before writing a byte, exit
+  2, and Python raises `CheckFailed`. The file carries every literal the profile holds, so it must
+  pass the check an export passes.
 - **`data generate FILE` defaults `--seed`, `--rows` and `--scenario` to what the file's write
   recorded**, and prints each value it took from the file. So the last command above writes the
-  dataset `orders/` holds. Python's `generate`, `stream`, `plan`, `write` and `spark` verbs take a
-  data file the same way, each value left None.
+  dataset `orders/` holds. `data plan` takes the same defaults, and `scenario check` takes the
+  seed and rows. Python's `generate`, `stream`, `plan`, `write` and `spark` verbs take a data file
+  the same way, each value left None. A key is read only where its value is left unset, so a
+  malformed seed is refused only when the seed is not given.
 - **Given none of the three, a file whose dataset this release would not make again is refused**,
   exit 2, naming the key that differs, such as `doppeldata.stream_version`. Given any of them, the
   write generates the dataset they make.

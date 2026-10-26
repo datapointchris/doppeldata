@@ -110,7 +110,7 @@ def test_a_bundle_directory_and_its_single_file_form_share_one_digest(tmp_path):
 
 @pytest.mark.parametrize('suffix', ['parquet', 'arrow'])
 def test_a_file_written_with_its_profile_embedded_gives_the_profile_back_and_a_plain_one_names_its_absence(tmp_path, suffix):
-    orders = Profile.load(EXAMPLE)
+    orders = Profile.example('orders')
     embedded, plain = tmp_path / f'embedded.{suffix}', tmp_path / f'plain.{suffix}'
     sd.write(orders, embedded, rows=100, embed_profile=True)
     sd.write(orders, plain, rows=100)

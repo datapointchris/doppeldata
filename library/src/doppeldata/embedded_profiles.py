@@ -29,14 +29,22 @@ IDENTITY_KEYS = {
 @dc.dataclass(frozen=True)
 class WrittenDataFile:
     """What a write recorded in one Parquet or Arrow IPC file: the profile and scenario it embedded, each checked against its
-    digest, the seed and rows, and the metadata they were read from."""
+    digest, and the metadata they were read from."""
 
     path: str
     profile: Profile
     scenario: Scenario | None
-    seed: int | None
-    rows: int | None
     metadata: dict[str, str]
+
+    def recorded(self, key: str) -> int | None:
+        """The count the write recorded under `key`, such as its seed, or None. One that is not a whole number of zero or
+        more raises SourceError, so a caller reads a key only where it takes the value."""
+        value = self.metadata.get(key)
+        if value is None:
+            return None
+        if not (value.isascii() and value.isdecimal()):
+            raise SourceError(f'{self.path} holds {key} as {value!r}, which is not a whole number', role='profile')
+        return int(value)
 
     def identity_differences(self, identity: dict[str, Any]) -> list[str]:
         """The metadata keys whose value differs from the plan `identity` names, in key order."""
@@ -80,9 +88,7 @@ def written_data_file(path: str | os.PathLike[str], metadata: dict[str, str] | N
         if issues:
             raise InvalidScenario(f'the scenario {name} holds', issues)
         matching_digest(name, 'scenario', scenario.digest, metadata.get(_core.SCENARIO_DIGEST_KEY))
-    seed = recorded_integer(name, metadata, _core.SEED_KEY)
-    rows = recorded_integer(name, metadata, _core.DATASET_ROWS_KEY)
-    return WrittenDataFile(name, profile, scenario, seed, rows, metadata)
+    return WrittenDataFile(name, profile, scenario, metadata)
 
 
 def embedded_document(path: str | os.PathLike[str], metadata: dict[str, str]) -> Any:
@@ -109,16 +115,6 @@ def matching_digest(name: str, document: str, digest: str, recorded: str | None)
         raise SourceError(
             f'{name} holds a {document} whose digest is {digest}, not the {recorded} its write recorded beside it', role='profile'
         )
-
-
-def recorded_integer(name: str, metadata: dict[str, str], key: str) -> int | None:
-    value = metadata.get(key)
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except ValueError as error:
-        raise SourceError(f'{name} holds {key} as {value!r}, which is not an integer', role='profile') from error
 
 
 def data_file_profile(path: str | os.PathLike[str], metadata: dict[str, str] | None = None) -> Profile:

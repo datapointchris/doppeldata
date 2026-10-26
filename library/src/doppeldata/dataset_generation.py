@@ -30,6 +30,7 @@ from doppeldata.manifest import FAULTS_FILE_NAME
 from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import Manifest
 from doppeldata.name_hinted_types import with_type_hints
+from doppeldata.privacy_policy.file_check import refuse_failed_check
 from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import UngenerableProfile
@@ -324,8 +325,8 @@ def generation_source(
         return GenerationSource(profile, rows, 0 if seed is None else seed, scenario)
     return GenerationSource(
         written.profile,
-        written.rows if rows is None else rows,
-        (written.seed or 0) if seed is None else seed,
+        written.recorded(_core.DATASET_ROWS_KEY) if rows is None else rows,
+        (written.recorded(_core.SEED_KEY) or 0) if seed is None else seed,
         written.scenario if scenario is None else scenario,
         written,
         regenerates=rows is None and seed is None and scenario is None,
@@ -436,6 +437,8 @@ def prepared_write(
         out, choices, applied = one_file.parent, one_file_choices(choices, one_file), one_file_scenario(generation.scenario)
     destination, scheme, bucket = destination_of(out)
     profile = profile_from(generation.profile)
+    if choices.embed_profile:
+        refuse_failed_check(profile)
     arguments = engine_arguments(profile, generation.rows, generation.seed, applied)
     engine = generation.checked(arguments.plan())
     choices_json = choices.engine_json(profile, applied)
@@ -583,7 +586,8 @@ def write(
     `embed_profile` writes the whole profile's canonical JSON into each Parquet or Arrow IPC file's metadata, under
     `doppeldata.profile`, where `Profile.from_data_file` reads it back. It is the profile given, before any scenario's patch.
     The scenario's document goes under `doppeldata.scenario`, so the file alone regenerates the dataset as `profile`. Any
-    other format raises WriteFailed.
+    other format raises WriteFailed. A profile made from data that fails `profile check` raises CheckFailed before a byte is
+    written, as `export` refuses it, because the file carries every literal the profile holds.
     """
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer, embed_profile)
     prepared = prepared_write(profile, out, rows, seed, choices, scenario)
