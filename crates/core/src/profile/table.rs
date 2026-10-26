@@ -90,6 +90,9 @@ pub struct Privacy {
     pub suppressed: Option<Vec<Suppression>>,
     /// Every literal kept, and the rule that admitted it.
     pub audit: Option<Vec<AuditEntry>>,
+    /// Every dataset-level field a floor holds, such as a conditional table's cells or a dependency's left-hand
+    /// values, and the rule it met.
+    pub dataset_audit: Option<Vec<DatasetAuditEntry>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -138,13 +141,25 @@ pub enum SuppressionReason {
 /// One field holding literals, and the rule that admitted them.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct AuditEntry {
-    /// The RFC 6901 pointer to the field, such as `/columns/4/string/top_values`.
+    /// The RFC 6901 pointer to the field within `column`, such as `/string/top_values`.
     pub field: Option<String>,
     pub column: String,
     /// How many literals or cells the field holds.
     pub values: Option<u64>,
     pub rule: AuditRule,
     /// The fewest rows any literal or cell of the field rests on.
+    pub min_count: Option<u64>,
+}
+
+/// One dataset-level field a floor holds, and the rule it met.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct DatasetAuditEntry {
+    /// The RFC 6901 pointer to the field from the profile's root, such as `/dataset/conditionals/0`.
+    pub field: String,
+    /// How many cells or counted values the field holds.
+    pub values: Option<u64>,
+    pub rule: AuditRule,
+    /// The fewest rows any cell or counted value of the field rests on.
     pub min_count: Option<u64>,
 }
 
@@ -172,6 +187,9 @@ pub enum AuditRule {
     /// The sequence's start follows from the trimmed extreme at its end and its step.
     #[serde(rename = "follows the trimmed extreme")]
     FollowsTrimmedExtreme,
+    /// Each left-hand value a dependency is counted over is held by at least `k_min` rows.
+    #[serde(rename = "lhs >= k_min")]
+    LhsAtLeastKMin,
 }
 
 /// The files the data came from. `csv`, `parquet` and `json` take the keys a manifest's `writer`
@@ -402,6 +420,10 @@ pub struct Dataset {
     pub duplicate_row_rate: Option<Rate>,
     pub keys: Option<Keys>,
     pub correlations: Option<Vec<Correlation>>,
+    /// Each correlation ratio η between a numeric column and a categorical one: the square root of the share of the
+    /// variance of the numeric column's ranks that the categorical column's values explain, corrected for the share
+    /// they explain by chance. `a` and `b` follow the columns' order, and the column kinds tell which is the category.
+    pub correlation_ratios: Option<Vec<CorrelationRatio>>,
     pub conditionals: Option<Vec<Conditional>>,
     pub dependencies: Option<Vec<Dependency>>,
 }
@@ -421,11 +443,16 @@ pub struct Key {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Correlation {
-    /// Under `correlation_ratio`, the numeric column.
     pub a: String,
-    /// Under `correlation_ratio`, the categorical column whose values explain `a`.
     pub b: String,
     pub method: CorrelationMethod,
+    pub value: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct CorrelationRatio {
+    pub a: String,
+    pub b: String,
     pub value: f64,
 }
 
@@ -437,12 +464,12 @@ pub enum CorrelationMethod {
     Kendall,
     /// Bias-corrected Cramér's V between two categorical columns.
     CramersV,
-    /// η, the square root of the share of a numeric column's variance that a categorical column's values explain,
-    /// corrected for the share they explain by chance.
-    CorrelationRatio,
 }
 
 /// The distribution of `column` within each value of `given`. Each row of `table` sums to 1.
+///
+/// Both columns are strings, integers or booleans, and each value is a key as its text: a string as
+/// itself, an integer in decimal, and a boolean as `true` or `false`.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Conditional {
     pub given: String,

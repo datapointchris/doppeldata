@@ -75,8 +75,8 @@ class DependenceColumn:
 
 @dc.dataclass(frozen=True)
 class Dependence:
-    """The dataset's `correlations`, `conditionals` and `dependencies`, and the fewest rows a cell of each conditional
-    table rests on, by its given and child column, which the policy's audit records."""
+    """The dataset's `correlations`, `correlation_ratios`, `conditionals` and `dependencies`, and the fewest rows a cell
+    of each conditional table rests on, by its given and child column, which the policy's audit records."""
 
     sections: dict[str, Any]
     cell_floors: dict[tuple[str, str], int]
@@ -88,10 +88,12 @@ def column_dependence(
     """The dependence between `columns`, measured on `sample` and counted on `described`, which holds `rows` rows."""
     position = {column.name: index for index, column in enumerate(columns)}
     measured = measured_pairs(backend, sample, columns, k_min)
-    correlations = kept_correlations(measured, position)
+    correlations, ratios = kept_correlations(measured, position)
     sections: dict[str, Any] = {}
     if correlations:
         sections['correlations'] = correlations
+    if ratios:
+        sections['correlation_ratios'] = ratios
     conditionals, floors = conditional_tables(backend, described, columns, measured, k_min)
     if conditionals:
         sections['conditionals'] = conditionals
@@ -174,12 +176,24 @@ def enough_spread(groups: list[tuple[int, float, float]], off_mode: float, least
     return rows >= max(least, floor) and rows * off_mode >= floor
 
 
-def kept_correlations(found: list[tuple[str, str, str, float | None]], position: dict[str, int]) -> list[dict[str, Any]]:
-    """Every pair whose correlation reaches the floor, the strongest kept, in the order of the columns."""
+def kept_correlations(
+    found: list[tuple[str, str, str, float | None]], position: dict[str, int]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Every pair whose correlation reaches the floor, the strongest kept, in the order of the columns: the dataset's
+    `correlations`, and its `correlation_ratios`, whose `a` and `b` follow the columns' order too."""
     strong = [(a, b, method, value) for a, b, method, value in found if value is not None and abs(value) >= CORRELATION_FLOOR]
     kept = sorted(strong, key=lambda pair: -abs(pair[3]))[:CORRELATIONS_KEPT]
-    kept.sort(key=lambda pair: (min(position[pair[0]], position[pair[1]]), max(position[pair[0]], position[pair[1]])))
-    return [{'a': a, 'b': b, 'method': method, 'value': significant(value, RATE_DIGITS) + 0.0} for a, b, method, value in kept]
+    kept = [(a, b, method, value) if position[a] < position[b] else (b, a, method, value) for a, b, method, value in kept]
+    kept.sort(key=lambda pair: (position[pair[0]], position[pair[1]]))
+    correlations = [
+        {'a': a, 'b': b, 'method': method, 'value': significant(value, RATE_DIGITS) + 0.0}
+        for a, b, method, value in kept
+        if method != CORRELATION_RATIO
+    ]
+    ratios = [
+        {'a': a, 'b': b, 'value': significant(value, RATE_DIGITS) + 0.0} for a, b, method, value in kept if method == CORRELATION_RATIO
+    ]
+    return correlations, ratios
 
 
 def cramers_v(cells: list[tuple[str, str, int]]) -> float | None:

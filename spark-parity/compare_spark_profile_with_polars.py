@@ -110,6 +110,8 @@ def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
             yield 'keys', f'{role} {"+".join(key["columns"])}', key.get('uniqueness')
     for correlation in dataset.get('correlations') or []:
         yield f'correlations {correlation["method"]}', f'{correlation["a"]} x {correlation["b"]}', correlation['value']
+    for ratio in dataset.get('correlation_ratios') or []:
+        yield 'correlation_ratios', f'{ratio["a"]} x {ratio["b"]}', ratio['value']
     for conditional in dataset.get('conditionals') or []:
         rows = {
             **{f'{conditional["given"]}={given}': row for given, row in conditional['table'].items()},
@@ -175,7 +177,7 @@ def compared(polars: dict[str, Any], spark: dict[str, Any], frame: pl.LazyFrame)
     shared = stated[0] & stated[1]
 
     def sampled(field: str, described: str) -> bool:
-        return field.startswith('correlations') or (field == 'conditionals' and described.split(': ', 1)[0] not in shared)
+        return field.startswith('correlation') or (field == 'conditionals' and described.split(': ', 1)[0] not in shared)
 
     failures = entries_compared(dataset_entries(polars['dataset']), dataset_entries(spark['dataset']), sampled)
     found_columns = {column['name']: column for column in spark['columns']}

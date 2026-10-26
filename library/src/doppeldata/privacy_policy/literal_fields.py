@@ -46,6 +46,7 @@ class FieldKind(enum.Enum):
     FIT = ('fit', 'fitted within the trimmed extremes', 'fitted family')
     SEQUENCE = ('sequence', 'follows the trimmed extreme', 'sequence start')
     CONDITIONAL = ('conditional', 'cell >= k_min', 'conditional table')
+    DEPENDENCY = ('dependency', 'lhs >= k_min', 'functional dependency')
 
     @property
     def rule(self) -> str:
@@ -116,8 +117,8 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
         'by_hour': FieldKind.CALENDAR_SHARES,
     },
     # A key, a correlation and a dependency name columns, and a repeated row's share is written as 0 under k_min rows.
-    'Dataset': dict.fromkeys(('row_count', 'duplicate_row_rate', 'keys', 'correlations', 'dependencies'))
-    | {'conditionals': FieldKind.CONDITIONAL},
+    'Dataset': dict.fromkeys(('row_count', 'duplicate_row_rate', 'keys', 'correlations', 'correlation_ratios'))
+    | {'conditionals': FieldKind.CONDITIONAL, 'dependencies': FieldKind.DEPENDENCY},
 }
 
 
@@ -278,17 +279,20 @@ def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None,
             yield LiteralField((*at, 'temporal', name), FieldKind.CALENDAR_SHARES, sum(1 for rate in temporal[name] if rate), cells)
 
 
-def conditional_literals(table: dict[str, Any]) -> Iterator[tuple[str, LiteralField]]:
-    """Each conditional table as one field, beside the column it distributes, which `privacy.audit` names it by.
+def dataset_literals(table: dict[str, Any]) -> Iterator[LiteralField]:
+    """Each conditional table and each dependency as one field, which `privacy.dataset_audit` names by its pointer.
 
-    A cell's share is of the rows whose child value the table distributes, which the file does not count, so its rows
-    are not recomputed from the file and `min_count` in the audit is what states them.
+    The file counts neither a cell's rows nor a dependency's left-hand values, so neither is recomputed from it, and
+    `min_count` in the audit is what states them.
     """
-    for index, conditional in enumerate((table.get('dataset') or {}).get('conditionals') or []):
+    dataset = table.get('dataset') or {}
+    for index, conditional in enumerate(dataset.get('conditionals') or []):
         if isinstance(conditional, dict):
             rows = [*(conditional.get('table') or {}).values(), conditional.get('other') or {}]
             cells = sum(len(row) for row in rows if isinstance(row, dict))
-            yield str(conditional.get('column')), LiteralField(('dataset', 'conditionals', index), FieldKind.CONDITIONAL, cells)
+            yield LiteralField(('dataset', 'conditionals', index), FieldKind.CONDITIONAL, cells)
+    for index, _ in enumerate(dataset.get('dependencies') or []):
+        yield LiteralField(('dataset', 'dependencies', index), FieldKind.DEPENDENCY, 1)
 
 
 def listed_values(column: dict[str, Any]) -> list[str] | None:
@@ -381,7 +385,7 @@ def sequence_start(end: int, step: int, k_min: int) -> int:
 
 def min_count(field: LiteralField, k_min: int) -> int | None:
     """The fewest rows any literal or cell of the field rests on, as `privacy.audit` records it."""
-    if field.kind in (FieldKind.NUMERIC_EXTREMES, FieldKind.TEMPORAL_EXTREMES):
+    if field.kind in (FieldKind.NUMERIC_EXTREMES, FieldKind.TEMPORAL_EXTREMES, FieldKind.DEPENDENCY):
         return k_min
     counts = [round(cell.rows) for cell in field.cells if cell.rows is not None and round(cell.rows) > 0]
     return min(counts) if counts else None

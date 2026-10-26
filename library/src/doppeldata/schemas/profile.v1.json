@@ -39,7 +39,7 @@
           "type": "string"
         },
         "field": {
-          "description": "The RFC 6901 pointer to the field, such as `/columns/4/string/top_values`.",
+          "description": "The RFC 6901 pointer to the field within `column`, such as `/string/top_values`.",
           "type": [
             "string",
             "null"
@@ -109,6 +109,11 @@
           "description": "The sequence's start follows from the trimmed extreme at its end and its step.",
           "type": "string",
           "const": "follows the trimmed extreme"
+        },
+        {
+          "description": "Each left-hand value a dependency is counted over is held by at least `k_min` rows.",
+          "type": "string",
+          "const": "lhs >= k_min"
         }
       ]
     },
@@ -433,7 +438,7 @@
       ]
     },
     "Conditional": {
-      "description": "The distribution of `column` within each value of `given`. Each row of `table` sums to 1.",
+      "description": "The distribution of `column` within each value of `given`. Each row of `table` sums to 1.\n\nBoth columns are strings, integers or booleans, and each value is a key as its text: a string as\nitself, an integer in decimal, and a boolean as `true` or `false`.",
       "type": "object",
       "properties": {
         "column": {
@@ -472,11 +477,9 @@
       "type": "object",
       "properties": {
         "a": {
-          "description": "Under `correlation_ratio`, the numeric column.",
           "type": "string"
         },
         "b": {
-          "description": "Under `correlation_ratio`, the categorical column whose values explain `a`.",
           "type": "string"
         },
         "method": {
@@ -508,12 +511,27 @@
           "description": "Bias-corrected Cramér's V between two categorical columns.",
           "type": "string",
           "const": "cramers_v"
-        },
-        {
-          "description": "η, the square root of the share of a numeric column's variance that a categorical column's values explain,\ncorrected for the share they explain by chance.",
-          "type": "string",
-          "const": "correlation_ratio"
         }
+      ]
+    },
+    "CorrelationRatio": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "string"
+        },
+        "b": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "a",
+        "b",
+        "value"
       ]
     },
     "CsvSource": {
@@ -683,6 +701,16 @@
             "$ref": "#/$defs/Conditional"
           }
         },
+        "correlation_ratios": {
+          "description": "Each correlation ratio η between a numeric column and a categorical one: the square root of the share of the\nvariance of the numeric column's ranks that the categorical column's values explain, corrected for the share\nthey explain by chance. `a` and `b` follow the columns' order, and the column kinds tell which is the category.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/CorrelationRatio"
+          }
+        },
         "correlations": {
           "type": [
             "array",
@@ -731,6 +759,41 @@
           "minimum": 0
         }
       }
+    },
+    "DatasetAuditEntry": {
+      "description": "One dataset-level field a floor holds, and the rule it met.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "The RFC 6901 pointer to the field from the profile's root, such as `/dataset/conditionals/0`.",
+          "type": "string"
+        },
+        "min_count": {
+          "description": "The fewest rows any cell or counted value of the field rests on.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "rule": {
+          "$ref": "#/$defs/AuditRule"
+        },
+        "values": {
+          "description": "How many cells or counted values the field holds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "field",
+        "rule"
+      ]
     },
     "Dependency": {
       "type": "object",
@@ -2099,6 +2162,16 @@
           ],
           "items": {
             "$ref": "#/$defs/AuditEntry"
+          }
+        },
+        "dataset_audit": {
+          "description": "Every dataset-level field a floor holds, such as a conditional table's cells or a dependency's left-hand\nvalues, and the rule it met.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DatasetAuditEntry"
           }
         },
         "dp": {

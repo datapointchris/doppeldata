@@ -164,11 +164,6 @@
           "description": "Bias-corrected Cramér's V between two categorical columns.",
           "type": "string",
           "const": "cramers_v"
-        },
-        {
-          "description": "η, the square root of the share of a numeric column's variance that a categorical column's values explain,\ncorrected for the share they explain by chance.",
-          "type": "string",
-          "const": "correlation_ratio"
         }
       ]
     },

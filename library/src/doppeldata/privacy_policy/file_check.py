@@ -14,9 +14,10 @@ from doppeldata.privacy_policy.column_treatment import ColumnFacts
 from doppeldata.privacy_policy.column_treatment import Policy
 from doppeldata.privacy_policy.column_treatment import column_treatment
 from doppeldata.privacy_policy.column_treatment import oldest_birth_year
+from doppeldata.privacy_policy.literal_fields import FieldKind
 from doppeldata.privacy_policy.literal_fields import LiteralField
 from doppeldata.privacy_policy.literal_fields import column_literals
-from doppeldata.privacy_policy.literal_fields import conditional_literals
+from doppeldata.privacy_policy.literal_fields import dataset_literals
 from doppeldata.privacy_policy.literal_fields import faults
 from doppeldata.privacy_policy.treatment_rules import conditional_faults
 from doppeldata.privacy_policy.treatment_rules import refused
@@ -164,28 +165,34 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
                 violations += audit_faults(audit[index], (*at, 'privacy', 'audit', index), field, k_min)
             for fault in faults(field, column, k_min):
                 violations.append(Violation(fault.code, pointer((*at, *fault.path)), field.kind.rule, None, fault.detail))
-    for child, field in conditional_literals(table):
-        fields += 1
-        for fault in conditional_faults(table, int(field.path[-1]), policy):
-            violations.append(Violation(fault.code, pointer((*at, *fault.path)), field.kind.rule, None, fault.detail))
-        audited_at = audited.get((child, field.pointer))
-        if audited_at is None:
-            expected = f'expected one with column {child} and field {field.pointer}'
-            detail = f'no privacy.audit entry for the conditional table of {child}; {expected}'
-            violations.append(Violation('unaudited-literal', pointer((*at, *field.path)), field.kind.rule, None, detail))
-            continue
-        seen.add(audited_at)
-        violations += audit_faults(audit[audited_at], (*at, 'privacy', 'audit', audited_at), field, k_min)
-        if audit[audited_at].get('min_count') is None:
-            detail = (
-                f'the audit entry states no min_count, which is all that holds the cells of {child} to k_min; expected at least {k_min}'
-            )
-            violations.append(Violation('rows-not-stated', pointer((*at, 'privacy', 'audit', audited_at)), field.kind.rule, None, detail))
     for index, entry in enumerate(audit):
         if index not in seen:
             named = f'{entry.get("column")} holds no literal at {entry.get("field")}'
             detail = f'{named}; expected the column and pointer of a field this file holds'
             violations.append(Violation('stale-audit-entry', pointer((*at, 'privacy', 'audit', index)), None, None, detail))
+    dataset_audit = privacy.get('dataset_audit') or []
+    dataset_audited = {entry.get('field'): index for index, entry in enumerate(dataset_audit)}
+    dataset_seen: set[int] = set()
+    for field in dataset_literals(table):
+        fields += 1
+        if field.kind is FieldKind.CONDITIONAL:
+            for fault in conditional_faults(table, int(field.path[-1]), policy):
+                violations.append(Violation(fault.code, pointer((*at, *fault.path)), field.kind.rule, None, fault.detail))
+        audited_at = dataset_audited.get(field.pointer)
+        if audited_at is None:
+            detail = f'no privacy.dataset_audit entry for the {field.kind.label} at {field.pointer}; expected one with that field'
+            violations.append(Violation('unaudited-literal', pointer((*at, *field.path)), field.kind.rule, None, detail))
+            continue
+        dataset_seen.add(audited_at)
+        entry_at = (*at, 'privacy', 'dataset_audit', audited_at)
+        violations += audit_faults(dataset_audit[audited_at], entry_at, field, k_min)
+        if dataset_audit[audited_at].get('min_count') is None:
+            detail = f'the entry states no min_count, which is all that holds the {field.kind.label} to k_min; expected at least {k_min}'
+            violations.append(Violation('rows-not-stated', pointer(entry_at), field.kind.rule, None, detail))
+    for index, entry in enumerate(dataset_audit):
+        if index not in dataset_seen:
+            detail = f'the file holds no conditional table or dependency at {entry.get("field")}; expected the pointer of one it holds'
+            violations.append(Violation('stale-audit-entry', pointer((*at, 'privacy', 'dataset_audit', index)), None, None, detail))
     return TableCheck(name, policy.value, k_min, fields, violations)
 
 
