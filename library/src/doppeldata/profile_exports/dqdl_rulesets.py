@@ -2,8 +2,9 @@
 
 A rule on a column's values runs `where` the column holds a value, so a null fails none of them, and its threshold is a
 share of the values held. A fact the profile states of every value gets a rule with no threshold. A share gets one
-three standard errors below it, at the rows it was measured over, and a range the privacy trim cut gets one allowing
-the `k_min − 1` rows trimmed from each end. `between` excludes both ends, so a range is widened by one step of its type.
+`STANDARD_ERRORS` standard errors below it, at the rows it was measured over, and a range the privacy trim cut gets one
+allowing the `k_min − 1` rows trimmed from each end. `between` excludes both ends, so a range is widened by one step of
+its type.
 A bundle's rulesets follow one another, each under a comment naming its table.
 """
 

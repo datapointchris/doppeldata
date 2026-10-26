@@ -3,7 +3,7 @@
 A seed declares its facts, so each holds for every row. A profile made from data states its extremes and lengths trimmed
 at `k_min` rows from each end, and its listed values, pattern and format as shares of the rows. A strict format, such as
 a Table Schema, carries a fact only where it holds for every row, and names each fact it leaves out. DQDL and ODCS
-quality checks carry a share as a floor three standard errors below it, at the rows it was measured over.
+quality checks carry a share as a floor `STANDARD_ERRORS` standard errors below it, at the rows it was measured over.
 """
 
 import dataclasses as dc
@@ -69,7 +69,8 @@ class Share:
         return self.value >= 1.0 and self.short_of is None
 
     def tolerance(self) -> float:
-        """Three standard errors of a proportion at `rows`, at least one row's worth, and nothing for a declared share."""
+        """`STANDARD_ERRORS` standard errors of a proportion at `rows`, at least one row's worth, and nothing for a declared
+        share."""
         if not self.rows:
             return 0.0
         share = min(max(self.value, 0.0), 1.0)
@@ -94,7 +95,8 @@ class Share:
 
 @dc.dataclass(frozen=True)
 class Moment:
-    """A column's mean or standard deviation, and how far it may move: three standard errors and its written rounding."""
+    """A column's mean or standard deviation, and how far it may move: `STANDARD_ERRORS` standard errors and its written
+    rounding."""
 
     value: float
     margin: float
@@ -591,8 +593,8 @@ def shape_value(shape: str) -> str:
 
 
 def moments(numeric: Mapping[str, Any], rows: int) -> dict[str, Moment]:
-    """The mean within three standard errors, σ/√n, and the standard deviation within three of its own, σ/√(2(n − 1)),
-    each widened by its written rounding."""
+    """The mean within `STANDARD_ERRORS` standard errors, σ/√n, and the standard deviation within as many of its own,
+    σ/√(2(n − 1)), each widened by its written rounding."""
     mean, std = numeric.get('mean'), numeric.get('std')
     if not isinstance(mean, int | float) or not isinstance(std, int | float) or rows < 2:
         return {}
