@@ -1,6 +1,8 @@
 """Profile DATA with engine spark in the session spark-submit started, and save it to OUT, for check-profiler-parity.sh.
 
-profile_on_spark.py DATA OUT POLICY
+profile_on_spark.py DATA OUT POLICY [tables]
+
+With `tables`, DATA's tables are profiled into one bundle with the relationships between them.
 """
 
 import sys
@@ -15,7 +17,8 @@ def main() -> None:
     spark = SparkSession.builder.getOrCreate()
     spark.sparkContext.setLogLevel('ERROR')
     started = time.monotonic()
-    sd.profile(data, engine='spark', policy=policy).save(out)
+    profiled = sd.profile_tables if sys.argv[4:] == ['tables'] else sd.profile
+    profiled(data, engine='spark', policy=policy).save(out)
     print(f'Spark {spark.version} profiled {data} in {time.monotonic() - started:.1f} s', file=sys.stderr)
 
 

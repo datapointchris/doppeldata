@@ -7,7 +7,8 @@
 #
 # WHEEL is the library's manylinux2014 x86_64 wheel. DATA is a CSV, TSV or Parquet file, or a directory of one table's
 # files. POLICY names the privacy policy, `default` when unset. KEEP names a directory each profile is copied into. With no
-# IMAGE, it checks each image spark-images.txt lists.
+# IMAGE, it checks each image spark-images.txt lists. TABLES, when set, profiles DATA, a directory holding each table in a
+# folder of its name, into one bundle, so the relationships between its tables are compared too.
 set -euo pipefail
 
 readonly CONTAINER_MEMORY=8g DRIVER_MEMORY=4g SPARK_MASTER='local[8]'
@@ -37,7 +38,7 @@ main() {
   packages="$(uv run --project "$here/.." python -c \
     'import importlib.metadata as m, sys; print(" ".join(f"{d}=={m.version(d)}" for d in sys.argv[1:]))' "${READING_DISTRIBUTIONS[@]}") $OTHER_PACKAGES"
   mkdir -p "$cache" ${KEEP:+"$KEEP"}
-  uv run --project "$here/.." doppeldata profile create "$data" --policy "$policy" --out "$work/polars.yaml" >&2
+  uv run --project "$here/.." doppeldata profile create "$data" ${TABLES:+"--tables"} --policy "$policy" --out "$work/polars.yaml" >&2
   uv run --project "$here/.." doppeldata profile check "$work/polars.yaml" >&2 || status=1
   [[ -z "${KEEP:-}" ]] || cp "$work/polars.yaml" "$KEEP/${name%.*}.polars.yaml"
   for image in "$@"; do
@@ -48,7 +49,7 @@ main() {
       -v "$(command -v uv):/opt/uv:ro" -v "$cache:/uv" -v "$here:/parity:ro" \
       -v "$data:/data/$name:ro" -v "$work:/work" -v "$wheel:/wheel/$(basename "$wheel"):ro" --entrypoint bash "$image" \
       /parity/inside-spark-image.sh "/wheel/$(basename "$wheel")" "$SPARK_MASTER" "$DRIVER_MEMORY" \
-      /parity/profile_on_spark.py "/data/$name" /work/spark.yaml "$policy" || {
+      /parity/profile_on_spark.py "/data/$name" /work/spark.yaml "$policy" ${TABLES:+"tables"} || {
       status=1
       continue
     }

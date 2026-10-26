@@ -1,4 +1,4 @@
-"""Hold a Spark profile of one table to a Polars profile of the same data, for check-profiler-parity.sh.
+"""Hold a Spark profile of one table, or a bundle of several, to a Polars profile of the same data, for check-profiler-parity.sh.
 
 compare_spark_profile_with_polars.py POLARS SPARK DATA
 
@@ -6,10 +6,17 @@ Row counts, null rates, types and the trimmed extremes must be equal, but for a 
 as microseconds. Each Spark quantile's rank error is measured
 against the data and must stay within RANK_ERROR. Each distinct count must stay within DISTINCT_ERROR of Polars' exact
 count. Every other field that differs is printed, except those a sample or a float sum's order decides.
+
+The dataset section and a bundle's relationships must hold the same entries, and each value the same. Correlations are read
+from each engine's own sample, as the fits are, and so is which correlated pairs get a conditional table. So their
+differences are printed and fail nothing, while a conditional table both profiles state must match cell for cell. A
+bundle's DATA is a directory holding each table in a folder of the table's name.
 """
 
+import collections
 import re
 import sys
+from collections.abc import Callable
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -17,7 +24,9 @@ from typing import Any
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
+from doppeldata import Bundle
 from doppeldata import Profile
+from doppeldata.profile_format import read_document
 
 # The bar the Spark backend's Greenwald-Khanna accuracy of 10,000 stays far inside.
 RANK_ERROR = 0.01
@@ -91,10 +100,84 @@ def rank_error(values: pl.Series, value: float, level: float) -> float:
     return 0.0 if low <= level <= high else min(abs(level - low), abs(level - high))
 
 
+def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
+    """Each value the dataset section states, as the field, what the value describes, and the value."""
+    yield 'row_count', '', dataset.get('row_count')
+    yield 'duplicate_row_rate', '', dataset.get('duplicate_row_rate')
+    keys = dataset.get('keys') or {}
+    for role, key in [('primary', keys.get('primary')), *(('candidate', key) for key in keys.get('candidates') or [])]:
+        if key:
+            yield 'keys', f'{role} {"+".join(key["columns"])}', key.get('uniqueness')
+    for correlation in dataset.get('correlations') or []:
+        yield f'correlations {correlation["method"]}', f'{correlation["a"]} x {correlation["b"]}', correlation['value']
+    for conditional in dataset.get('conditionals') or []:
+        rows = {
+            **{f'{conditional["given"]}={given}': row for given, row in conditional['table'].items()},
+            '(other)': conditional.get('other') or {},
+        }
+        for given, row in rows.items():
+            for value, rate in row.items():
+                yield 'conditionals', f'{conditional_name(conditional)}: {conditional["column"]}={value} | {given}', rate
+    for dependency in dataset.get('dependencies') or []:
+        yield 'dependencies', f'{"+".join(dependency["lhs"])} -> {dependency["rhs"]}', dependency.get('violation_rate')
+
+
+def relationship_entries(relationships: list[dict[str, Any]]) -> Iterator[tuple[str, str, Any]]:
+    """Each value a bundle's relationships state, as the field, the relationship and part, and the value."""
+    for relationship in relationships:
+        named = f'{relationship["from"]} -> {relationship["to"]}'
+        for field in ('containment', 'orphan_rate', 'cardinality'):
+            yield f'relationships {field}', named, relationship.get(field)
+        fanout = relationship.get('fanout') or {}
+        for part in ('quantiles', 'top_share'):
+            for level, value in (fanout.get(part) or {}).items():
+                yield f'relationships fanout {part}', f'{named} {level}', value
+        yield 'relationships fanout zipf_s', named, fanout.get('zipf_s')
+
+
+def conditional_name(conditional: dict[str, Any]) -> str:
+    return f'{conditional["column"]} given {conditional["given"]}'
+
+
+def entries_compared(
+    expected: Iterator[tuple[str, str, Any]], found: Iterator[tuple[str, str, Any]], sampled: Callable[[str, str], bool] = lambda *_: False
+) -> list[str]:
+    """Print the worst difference in each field, and return a failure for each entry one side lacks or values that differ.
+    An entry `sampled` names is printed and fails nothing."""
+    want, got = ({(field, described): value for field, described, value in entries} for entries in (expected, found))
+    failures: list[str] = []
+    worst: dict[str, tuple[float, str]] = {}
+    alone: collections.Counter[tuple[str, str]] = collections.Counter()
+    for entry in sorted(want.keys() | got.keys()):
+        field, described = entry
+        if entry not in got or entry not in want:
+            if sampled(field, described):
+                alone[field, 'Polars' if entry in want else 'Spark'] += 1
+            else:
+                failures.append(f'{field} {described}: only the {"Polars" if entry in want else "Spark"} profile states it')
+            continue
+        a, b = want[entry], got[entry]
+        numeric = isinstance(a, int | float) and isinstance(b, int | float) and not isinstance(a, bool)
+        difference = abs(a - b) if numeric else float(a != b)
+        if difference >= worst.get(field, (-1.0, ''))[0]:
+            worst[field] = (difference, f'{described}: {a!r} against {b!r}')
+        if difference > 0 and not sampled(field, described):
+            failures.append(f'{field} {described}: {a!r} against {b!r}')
+    for field, (difference, described) in sorted(worst.items()):
+        print(f'worst {field} difference {difference:.6g} ({described})')
+    for (field, side), count in sorted(alone.items()):
+        print(f'{field}: {count} entries only the {side} profile states, from its own sample')
+    return failures
+
+
 def compared(polars: dict[str, Any], spark: dict[str, Any], frame: pl.LazyFrame) -> list[str]:
-    failures = []
-    if polars['dataset']['row_count'] != spark['dataset']['row_count']:
-        failures.append(f'row_count {polars["dataset"]["row_count"]} against {spark["dataset"]["row_count"]}')
+    stated = [{conditional_name(entry) for entry in profile['dataset'].get('conditionals') or []} for profile in (polars, spark)]
+    shared = stated[0] & stated[1]
+
+    def sampled(field: str, described: str) -> bool:
+        return field.startswith('correlations') or (field == 'conditionals' and described.split(': ', 1)[0] not in shared)
+
+    failures = entries_compared(dataset_entries(polars['dataset']), dataset_entries(spark['dataset']), sampled)
     found_columns = {column['name']: column for column in spark['columns']}
     worst_rank: tuple[float, str] = (0.0, '')
     worst_distinct: tuple[float, str] = (0.0, '')
@@ -147,9 +230,25 @@ def compared(polars: dict[str, Any], spark: dict[str, Any], frame: pl.LazyFrame)
     return failures
 
 
+def bundle_compared(polars: dict[str, Any], spark: dict[str, Any], data: Path) -> list[str]:
+    failures = entries_compared(
+        relationship_entries(polars.get('relationships') or []), relationship_entries(spark.get('relationships') or [])
+    )
+    for name, table in polars['tables'].items():
+        print(f'== table {name}')
+        if name not in spark['tables']:
+            failures.append(f'{name}: missing from the Spark bundle')
+            continue
+        failures += [f'{name}: {failure}' for failure in compared(table, spark['tables'][name], scanned(data / name))]
+    return failures
+
+
 def main() -> None:
     polars_path, spark_path, data = sys.argv[1:4]
-    failures = compared(Profile.load(polars_path).to_plain(), Profile.load(spark_path).to_plain(), scanned(Path(data)))
+    if read_document(Path(polars_path)).get('kind') == 'bundle':
+        failures = bundle_compared(Bundle.load(polars_path).to_plain(), Bundle.load(spark_path).to_plain(), Path(data))
+    else:
+        failures = compared(Profile.load(polars_path).to_plain(), Profile.load(spark_path).to_plain(), scanned(Path(data)))
     for failure in failures:
         print('FAIL', failure)
     sys.exit(1 if failures else 0)
