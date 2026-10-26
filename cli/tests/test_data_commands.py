@@ -54,16 +54,18 @@ def test_profile_expand_writes_the_profile_a_short_yaml_stands_for_which_generat
     assert checked.exit_code == 0, checked.output
 
 
-def test_a_part_file_written_with_its_profile_embedded_regenerates_its_dataset_at_the_seed_and_rows_it_names(tmp_path):
+def test_a_part_file_written_under_a_scenario_with_its_profile_embedded_regenerates_its_dataset_alone(tmp_path):
+    # A colleague handed one part file, written under a scenario, regenerates its dataset with no other flag.
     runner = CliRunner()
-    flags = ['--format', 'parquet', '--out']
-    first = runner.invoke(
-        app, ['data', 'generate', 'orders', '--seed', '7', '--rows', '1234', '--embed-profile', *flags, str(tmp_path / 'first')]
-    )
+    written = ['--seed', '7', '--rows', '1234', '--scenario', 'hot-key', '--embed-profile', '--format']
+    first = runner.invoke(app, ['data', 'generate', 'orders', *written, 'parquet', '--out', str(tmp_path / 'first')])
     assert first.exit_code == 0, first.output
     part = next((tmp_path / 'first').rglob('*.parquet'))
 
-    again = runner.invoke(app, ['data', 'generate', str(part), *flags, str(tmp_path / 'again')])
+    again = runner.invoke(app, ['data', 'generate', str(part), '--format', 'parquet', '--out', str(tmp_path / 'again')])
     assert again.exit_code == 0, again.output
     manifests = [json.loads((tmp_path / out / '_manifest.json').read_text()) for out in ('first', 'again')]
     assert manifests[0]['dataset_digest'] == manifests[1]['dataset_digest']
+    assert manifests[1]['scenario']['name'] == 'hot-key'
+    as_csv = runner.invoke(app, ['data', 'generate', 'orders', *written, 'csv', '--out', str(tmp_path / 'csv')])
+    assert as_csv.exit_code == 2, as_csv.output

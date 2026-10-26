@@ -33,6 +33,7 @@ from doppeldata.dataset_generation import EngineArguments
 from doppeldata.dataset_generation import PreparedWrite
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.dataset_generation import engine_arguments
+from doppeldata.dataset_generation import generation_source
 from doppeldata.dataset_generation import prepared_write
 from doppeldata.dataset_generation import rows_only
 from doppeldata.dataset_generation import s3_store_of
@@ -253,7 +254,7 @@ def generate(
     profile: ProfileSource,
     *,
     rows: int | None = None,
-    seed: int = 0,
+    seed: int | None = None,
     partitions: int | None = None,
     scenario: Scenario | Sequence[Scenario] | None = None,
 ) -> DataFrame:
@@ -261,10 +262,13 @@ def generate(
 
     Each task generates whole chunks of `CHUNK_BLOCKS` engine blocks through `mapInArrow`, so `partitions`, one per chunk when
     None, changes which task makes a row and never its value. Write it with any Spark writer, partitioned as the run needs.
-    Every executor must have the driver's doppeldata release installed. `scenario` is taken as `doppeldata.generate` takes it.
+    Every executor must have the driver's doppeldata release installed. `profile`, `rows`, `seed` and `scenario` are taken as
+    `doppeldata.generate` takes them.
     """
-    applied = one_process_scenario(scenario)
-    planned, engine = executor_plan(profile, rows, seed, rows_only(applied, 'spark.generate', 'doppeldata.spark.write'))
+    generation = generation_source(profile, rows, seed, scenario)
+    applied = rows_only(one_process_scenario(generation.scenario), 'spark.generate', 'doppeldata.spark.write')
+    planned, engine = executor_plan(generation.profile, generation.rows, generation.seed, applied)
+    generation.checked(engine)
     schema = arrow_struct_type(engine)
     chunks = -(-engine.block_count // CHUNK_BLOCKS)
     numbers = spark.range(chunks, numPartitions=checked_partitions(partitions, chunks))
@@ -277,7 +281,7 @@ def write(
     out: str | os.PathLike[str],
     *,
     rows: int | None = None,
-    seed: int = 0,
+    seed: int | None = None,
     format: str | None = None,
     file_rows: int | None = None,
     partition_by: list[str] | None = None,

@@ -36,11 +36,11 @@ from doppeldata import diff
 from doppeldata import example_scenarios
 from doppeldata import profile
 from doppeldata import profile_tables
+from doppeldata.dataset_generation import GenerationSource
 from doppeldata.dataset_generation import WriteChoices
+from doppeldata.dataset_generation import generation_source
 from doppeldata.dataset_generation import one_file_of
 from doppeldata.dataset_generation import prepared_write
-from doppeldata.embedded_profiles import data_file_metadata
-from doppeldata.embedded_profiles import provenance_defaults
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_resource
 from doppeldata.example_profiles import example_text
@@ -67,6 +67,7 @@ from doppeldata.published_schemas import partition_styles
 from doppeldata.published_schemas import schema_names
 from doppeldata.published_schemas import schema_summaries
 from doppeldata.published_schemas import schema_text
+from doppeldata.scenario_format import composed
 from doppeldata.scenario_format import op_schemas
 from doppeldata.scenario_format import scenario_schema
 from doppeldata.scenario_format import unknown_name
@@ -821,8 +822,9 @@ def profile_export(
 ) -> None:
     """Export a profile's contract for another tool to validate data with: doppeldata profile export orders.profile.yaml --format dqdl
 
-    Each format but dqdl carries a range, listed values, lengths or a pattern only where the profile states it of every
-    value, and names what it left out in its own description. dqdl checks a share three standard errors below the profile's.
+    pandera, dataframely, Table Schema, the record schema and ODCS's logicalTypeOptions carry a range, listed values, lengths
+    or a pattern only where the profile states it of every value, and name what they left out in their own description.
+    dqdl, and ODCS's quality checks, carry a share as a floor three standard errors below the profile's.
 
     A profile made from data that fails profile check is refused, so no export carries a literal the privacy policy did not pass.
     """
@@ -834,7 +836,7 @@ def profile_export(
         raise typer.BadParameter(f'{out.parent} is not a directory; create it, or name a FILE in one that exists', param_hint='--out')
     try:
         text = export(profile_name, export_format, table=table)
-    except (OSError, InvalidProfile) as error:
+    except (OSError, InvalidProfile, SourceError) as error:
         raise typer.BadParameter(str(error), param_hint='PROFILE') from error
     except CheckFailed as error:
         message = f'{error}; doppeldata profile check {profile_name} names each violation'
@@ -901,18 +903,31 @@ def checked_table_line(check: TableCheck) -> str:
 
 @dc.dataclass(frozen=True)
 class DataChoices:
-    """What data plan and data generate share: the profile, the rows and seed, --out, what the write lays over the profile,
-    and the scenario."""
+    """What data plan and data generate share: PROFILE or the --columns profile, the rows, seed and scenario the flags give,
+    --out, what the write lays over the profile, and what the library generates from once a data file fills in the rest."""
 
-    profile: Profile
+    profile: str | Profile
     rows: int | None
-    seed: int
+    seed: int | None
     out: str
     write: WriteChoices
     scenario: Scenario | None
+    generation: GenerationSource
 
     def arguments(self) -> dict[str, Any]:
         return {'rows': self.rows, 'seed': self.seed, **dc.asdict(self.write), 'scenario': self.scenario}
+
+    def written_values_line(self) -> str | None:
+        """The values a data file's write gave in place of a flag, as one line naming the file."""
+        written = self.generation.written
+        if written is None:
+            return None
+        taken = [f'seed {self.generation.seed}'] if self.seed is None else []
+        if self.rows is None and self.generation.rows is not None:
+            taken.append(counted(self.generation.rows, 'row'))
+        if self.scenario is None and written.scenario is not None:
+            taken.append(f'scenario {written.scenario.name}')
+        return f'doppeldata: {", ".join(taken)}, as {written.path} was written' if taken else None
 
 
 def data_choices(
@@ -925,14 +940,24 @@ def data_choices(
     scenario: list[str] | None,
 ) -> DataChoices:
     """The flags both data verbs take, each refused here with exit 2 when it names nothing doppeldata writes. A Parquet or
-    Arrow PROFILE's provenance gives the seed and rows where the flags give none."""
+    Arrow PROFILE's write gives the seed, rows and scenario the flags leave out, and the library reads it from PROFILE."""
     profile = profile_or_columns(profile_name, columns)
-    metadata = data_file_metadata(profile_name) if profile_name is not None and Path(profile_name).is_file() else None
-    if metadata is not None:
-        written_seed, written_rows = provenance_defaults(metadata)
-        seed = written_seed if seed is None else seed
-        rows = written_rows if rows is None else rows
-    return DataChoices(profile, rows, seed or 0, out, write, loaded_scenario(scenario))
+    applied = loaded_scenario(scenario)
+    source = profile_name if profile_name is not None else profile
+    with refused_as_profile():
+        generation = generation_source(source, rows, seed, applied)
+    return DataChoices(source, rows, seed, out, write, applied, generation)
+
+
+@contextlib.contextmanager
+def refused_as_profile() -> Iterator[None]:
+    """Refuse PROFILE with exit 2 where the library refuses the data file it names."""
+    try:
+        yield
+    except SourceError as error:
+        if error.role != 'profile':
+            raise
+        raise typer.BadParameter(str(error), param_hint='PROFILE') from error
 
 
 def write_choices(
@@ -1002,7 +1027,10 @@ def data_plan(
     """
     write = write_choices(file_format, file_rows, partition_by, no_partitions, partition_style, writer, embed_profile)
     choices = data_choices(profile_name, columns, rows, seed, out, write, scenario)
-    planned = doppeldata.plan(choices.profile, choices.out, **choices.arguments())
+    with refused_as_profile():
+        planned = doppeldata.plan(choices.profile, choices.out, **choices.arguments())
+    if (written := choices.written_values_line()) is not None:
+        typer.echo(written, err=True)
     if as_json:
         typer.echo(json.dumps(planned.to_json(), indent=2))
         return
@@ -1034,8 +1062,8 @@ def data_plan(
         f'estimate   {size(planned.estimated_bytes)}, from the first blocks encoded with these settings',
         '',
     ]
-    if choices.scenario is not None:
-        lines.insert(2, f'scenario   {choices.scenario.name} {identity["scenario_digest"]}')
+    if (applied := composed(choices.generation.scenario)) is not None:
+        lines.insert(2, f'scenario   {applied.name} {identity["scenario_digest"]}')
     if planned.rows_written != int(identity['dataset_rows']):
         lines.insert(3, f'rows       {planned.rows_written:,} written, the generated rows and the copies duplicates adds')
     width = max(len(column.name) for column in planned.columns)
@@ -1092,17 +1120,20 @@ def data_generate(
     written with the AWS environment's credentials.
 
     A Parquet or Arrow file written with --embed-profile regenerates its dataset as PROFILE: doppeldata data generate
-    orders/part-00000-fe89a3c3.parquet --out again/. Its seed and rows are the defaults, and a scenario it was written
-    under is given again with --scenario.
+    orders/part-00000-fe89a3c3.parquet --out again/. Its seed, rows and scenario are the defaults, and with none of the
+    three given, a file whose dataset this release would not make again is refused.
     """
     write = write_choices(file_format, file_rows, partition_by, no_partitions, partition_style, writer, embed_profile)
     choices = data_choices(profile_name, columns, rows, seed, out, write, scenario)
     one_file = one_file_of(choices.out)
+    if (written := choices.written_values_line()) is not None:
+        typer.echo(written, err=True)
     terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
-        manifest = doppeldata.write(
-            choices.profile, choices.out, **choices.arguments(), threads=threads, replace=replace, manifest=manifest_beside
-        )
+        with refused_as_profile():
+            manifest = doppeldata.write(
+                choices.profile, choices.out, **choices.arguments(), threads=threads, replace=replace, manifest=manifest_beside
+            )
     finally:
         signal.signal(signal.SIGTERM, terminate)
     document = manifest.document

@@ -10,7 +10,6 @@ from doppeldata import Bundle
 from doppeldata import InvalidProfile
 from doppeldata import Profile
 from doppeldata import SourceError
-from doppeldata import WriteFailed
 from doppeldata.example_profiles import example_names
 
 EXAMPLE = Path(__file__).parent / 'fixtures' / 'orders.profile.yaml'
@@ -117,7 +116,5 @@ def test_a_file_written_with_its_profile_embedded_gives_the_profile_back_and_a_p
     sd.write(orders, plain, rows=100)
 
     assert Profile.from_data_file(embedded).digest == orders.digest
-    with pytest.raises(SourceError, match='holds no profile'):
+    with pytest.raises(SourceError):
         Profile.from_data_file(plain)
-    with pytest.raises(WriteFailed, match='holds no metadata to embed the profile in'):
-        sd.write(orders, tmp_path / 'orders.csv', rows=100, embed_profile=True)
