@@ -9,6 +9,7 @@ Every verb that reads a profile reads a seed. `profile create` replaces it once 
 ```python
 import dataframely as dy
 import doppeldata as sd
+import polars as pl
 
 class Orders(dy.Schema):
     order_id = dy.Int64(primary_key=True, min=1)
@@ -17,6 +18,7 @@ class Orders(dy.Schema):
     customer_email = dy.String(nullable=True)
 
 orders = sd.generate(Orders, rows=1000)
+Orders.validate(pl.DataFrame(orders), cast=True)
 ```
 
 ```python
@@ -52,13 +54,21 @@ orders = sd.generate(schema, rows=1000)
   library imports none of pandera, dataframely and pyspark. A class is recognized by the module that
   defines it or a class it derives from. So a Glue job that only generates installs none of them.
 - **pandera's built-in checks give the bounds, values, pattern and lengths.** `Field`'s `ge`, `le`,
-  `gt`, `lt`, `in_range`, `isin`, `eq`, `str_matches` and `str_length` each build one, read by its
-  name and statistics. `nullable` decides nulls, and pandera defaults it to false. `unique` makes a
-  key.
-  A custom check is a function the library cannot read, so it shapes nothing.
+  `gt`, `lt`, `in_range`, `isin`, `unique_values_eq`, `eq`, `str_matches` and `str_length` each
+  build one, read by its name and statistics. `nullable` decides nulls, and pandera defaults it to
+  false. `unique` makes a key.
+- **A check the seed cannot read shapes nothing, and a warning names it.** That is a custom check, a
+  frame-wide one, a built-in such as `not_equal_to` or `str_startswith`, and a dataframely column's
+  `check`.
 - **dataframely's rules are attributes of each column**: `min`, `max`, `min_exclusive`,
   `max_exclusive`, `regex`, `min_length`, `max_length`, `nullable`, `primary_key`, an `Enum`'s
-  categories, and a `Decimal`'s precision and scale. `List` and `Struct` nest.
+  categories, and a `Decimal`'s precision and scale. `List` and `Struct` nest, and a `List`'s
+  `min_length` and `max_length` bound its items.
+- **A dictionary type is drawn as text, and a warning names it.** That is pandas' `category`,
+  Polars' `Categorical` and `Enum`, and dataframely's. The engine draws no dictionary type, so the
+  schema validates the rows with pandera's `coerce=True` or dataframely's `cast=True`.
+- **A list or a struct column writes to Parquet or NDJSON.** A CSV holds neither, so a write to
+  one refuses the column.
 - **A Spark field takes its type from its Hive name, the one `simpleString()` prints.** So `bigint`,
   `decimal(10,2)`, `varchar(6)`, `array<string>` and `struct<city:string>` read as a Glue column
   does. `TimestampType` is an instant, so it is UTC. `TimestampNTZType` is a wall-clock reading.
@@ -93,28 +103,30 @@ Without `--out` the seed prints as YAML. A file names its table up to its first 
   or a Data Package's resources. It is refused for the other sources, which hold one table.
 - **A contract of several objects with no `--table` is refused, naming each.** A bundle would be no
   use to `data generate`, which reads one table, and taking the first would pick silently.
-- **A Data Package with no `--table` imports as a bundle.** Each resource is a table, and each
-  foreign key of one field a relationship, as `orders.customer_id` to `customers.id`. A key of
-  several fields, or naming a resource the package lacks, is left out with a warning. A resource's
-  schema may be a file beside the package. A schema at a URL is refused.
+- **A Data Package with no `--table` imports as a bundle, recording every table and its keys.** Each
+  resource is a table, and each foreign key of one field a relationship, as `orders.customer_id` to
+  `customers.id`. A key of several fields, or naming a resource the package lacks, is left out with
+  a warning. A resource's schema may be a file beside the package. A schema at a URL is refused.
+- **`data generate` reads one table, so it refuses a bundle, naming `--table`.** No verb generates
+  related tables from a bundle, so a foreign key's values are not drawn from its parent's.
 - **`Profile.from_table_schema` reads one table and records no relationship.** A foreign key names a
   resource, and only a package declares one.
-- **A failure exits as profiling's do.** A file that cannot be read or parsed, or a Glue table the
-  catalog lacks, exits 2. A Glue call refused, such as for its credentials, exits 1. Throttling, a
-  5xx or no answer exits 4.
+- **A failure exits as profiling's do.** A file that cannot be read, decoded as UTF-8 or parsed, or
+  a Glue table the catalog lacks, exits 2. A Glue call refused, such as for its credentials, or
+  failing before an answer, such as at a proxy, exits 1. Throttling, a 5xx or no answer exits 4.
 
 ## Where a schema is silent, a column draws a fixed default
 
-`declared_columns.py` names each default once.
+`declared_columns.py` names each default once, and the table names its constant beside its value.
 
 | A column | draws |
 | --- | --- |
-| number | uniformly between its bounds. A missing end lies 1,000,000 beyond the given one, and neither gives 0 to 1,000,000, each kept inside its type |
-| date or timestamp | uniformly inside 2025-01-01 to 2025-12-31, a missing end the window's length beyond the given one. A timestamp draws whole seconds |
-| text | its pattern, else its values, else its format's type, else the fake its name hints, else 8 to 16 letters and digits, kept inside its declared lengths |
-| sole integer key, no upper bound | 1, 2, 3 and on, or counting from its lower bound |
-| list | between its declared item counts, else the engine's 0 to 4 |
-| any | nulls in 5% of rows where the schema allows them, and none where it requires a value |
+| number | uniformly between its bounds. A missing end lies `NUMBER_SPAN` (1,000,000) beyond the given one, and neither gives 0 to `NUMBER_SPAN`, each kept inside its type |
+| date or timestamp | uniformly inside `DATE_WINDOW` (2025-01-01 to 2025-12-31), a missing end the window's length beyond the given one. A timestamp draws whole seconds |
+| text | its values, else its pattern, else its format's type, else the fake its name hints, else letters and digits `TEXT_LENGTH` (8 to 16) long |
+| sole integer key | 1, 2, 3 and on, or counting from its lower bound, bounded above or not |
+| list | between its declared item counts, else the engine's default list length |
+| any | nulls in `NULL_RATE` (5%) of rows where the schema allows them, and none where it requires a value |
 
 - **The window is fixed rather than counted back from today.** So one seed generates the same rows
   on any day, as the determinism contract asks of any profile.
@@ -123,6 +135,12 @@ Without `--out` the seed prints as YAML. A file names its table up to its first 
   no fake may be a typo, so it is refused there.
 - **A format names a general-pack type**: `email`, `uuid`, `uri` and `url`, `ipv4` and `ipv6`. A
   pattern the engine cannot draw is left out with a warning, so the column falls to the next source.
+- **A declared length bounds only the letters and digits.** Values, a pattern and a fake are drawn
+  whole, so a `country` declared 2 characters long draws country names. The engine states no
+  longest value of a fake, so the seed cannot tell which fit. Give such a column values or a
+  pattern in the seed.
+- **A key bounded above passes its bound once the rows outnumber the values between its bounds.**
+  It counts up so that no two rows share a value.
 
 ## A seed records where it came from, and passes `data check` but not `profile check`
 
@@ -132,11 +150,14 @@ generated:
   imported_from: odcs:orders.odcs.yaml#orders
 ```
 
-- **`imported_from` names the kind of schema and the file, never its directory.** A Glue table is
-  `glue:<region>/<database>/<table>`, never its ARN, which holds the account id. A seed is a file
-  people commit.
-- **`imported_from` is left out of the digest**, as `at` is. So a schema imported again from a copy
-  elsewhere gives the same profile digest.
+- **`imported_from` is `<kind>:<name>[#<table>]`, naming a file but never its directory.** A Glue
+  table is `glue:<region>/<database>/<table>@<version>`, with the catalog's version of it, and never
+  its ARN, which holds the account id. A seed is a file people commit. A schema class is its module
+  and class, such as `pandera:shop.Orders`.
+- **`imported_from` is part of the profile digest.** An older release hashes every `generated` field
+  it does not know, so leaving it out would give one seed two profile digests. A copy of the schema
+  elsewhere keeps the profile digest. A renamed file, or a Glue table at a new catalog version,
+  gives a new one.
 - **Data generated from a seed passes `data check` against it**, as any profile's does.
 - **`profile check` fails a seed, exiting 3.** A seed was never written under a privacy policy, so
   its declared values are literals no policy audited.
@@ -144,9 +165,12 @@ generated:
 ## A Glue table gives its format, dialect, header and partitions
 
 `Profile.from_glue` calls `glue:GetTable`, then `glue:GetPartitions` for a partitioned table, with
-boto3 and the AWS environment's credentials. doppeldata-cli installs boto3. The library does not,
-and without it the import is refused with exit 2, naming `pip install boto3`. `detected_entities`
-reads the detector packs, which import pyarrow, so it needs pyarrow too.
+boto3 and the AWS environment's credentials. Without boto3 the import is refused with exit 2, naming
+`pip install boto3`. `detected_entities` reads the detector packs, which import pyarrow, so it needs
+pyarrow too.
+
+- **A Lake Formation resource link is followed to the table it shares**, in that table's account and
+  region. A table holding no column the engine draws is refused, naming the types left out.
 
 - **The format comes from the table's `classification`, else its SerDe.** csv, tsv, parquet and
   json are read. ORC and Avro are written by no doppeldata writer, so neither is recorded.
@@ -158,13 +182,19 @@ reads the detector packs, which import pyarrow, so it needs pyarrow too.
   `GetPartitions` lists, so a write makes their directories alone. A date key draws every day from
   the least listed to the most. A profile's temporal column holds no list of values, so a gap in the
   listed days is filled. `__HIVE_DEFAULT_PARTITION__`, Hive's null partition, is no value.
+- **A listed value that is no value of its key's type is left out, and a warning names it**, such as
+  `2025-1-2` on a date key.
+- **A table the catalog lists no partition of draws its partition projection.** Athena's `enum`
+  projection gives its `values`. An `integer` or `date` projection gives its `range` where both
+  ends are values of the key's type. A key with neither, such as a range ending at `NOW`, draws its
+  type's default, and a warning names it. That default may write a directory for every row.
 - **The row count is the table's `recordCount` or `numRows`**, as a crawler or a statistics run
   writes it.
 - **`detected_entities` gives a column the type a shipped detector pack declares for it.** It maps
   each column to the Glue entity types `classifyColumns` found in it, such as `{"email": ["EMAIL"]}`.
   The first type a pack's `glue_type` names wins, with the pack's sensitivity. A type no pack
-  declares is named in a warning and left off. `--detected-entities FILE` reads the same map as
-  JSON.
+  declares is named in a warning and left off. A column the table lacks is refused with exit 2.
+  `--detected-entities FILE` reads the same map as JSON.
 
 ## An ODCS contract's properties each become a column
 

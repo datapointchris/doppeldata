@@ -31,8 +31,8 @@ stands for. [Generating from Python and the command line](docs/generating-from-p
 climbs from there to a profile of real data.
 
 A project's existing schema generates rows too. `sd.generate(OrdersSchema, rows=1000)` takes a pandera,
-dataframely or Spark schema, and `doppeldata profile import` writes a seed profile from an ODCS
-contract, a JSON Schema, a Table Schema or a Glue table.
+dataframely or Spark schema, and `doppeldata profile import` writes a seed profile from a schema file
+or a Glue table.
 [Seed profiles imported from a schema](docs/seed-profiles-from-schemas.md) says what each becomes.
 
 doppeldata is experimental. So far it profiles a table's columns and its files, generates a table from a profile

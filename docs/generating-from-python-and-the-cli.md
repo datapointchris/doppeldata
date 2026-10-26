@@ -155,7 +155,7 @@ doppeldata profile import --from odcs orders.odcs.yaml --out orders.profile.yaml
 ```
 
 A pandera, dataframely or Spark schema goes wherever a profile is taken. `profile import` writes a
-seed from an ODCS contract, a JSON Schema, a Table Schema or Data Package, or a Glue table.
+seed from a schema file or a Glue table, and `--help` lists the kinds it reads.
 [seed-profiles-from-schemas.md](seed-profiles-from-schemas.md) says what each source's declarations
 become and what a column the schema is silent on draws.
 

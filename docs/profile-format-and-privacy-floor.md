@@ -42,9 +42,10 @@ null.
 
 The determinism contract keys on the profile's SHA-256, so formatting, comments and key order must
 not change it. The hash is taken over the RFC 8785 canonical JSON form of the profile.
-Each `generated` field `GENERATED_FIELDS` in `doppeldata.profile_format` marks unhashed, such as
-`at`, `tool` and `source_fingerprint`, is left out. So re-profiling unchanged data gives the same
-identity, wherever the copy that was read sits.
+Of the `generated` fields, only those `GENERATED_FIELDS` in `doppeldata.profile_format` marks
+hashed are kept, such as `engine`. So `at`, `tool` and `source_fingerprint` are left out, and
+re-profiling unchanged data gives the same identity, wherever the copy that was read sits. A field
+the reading release does not know is left out too.
 
 The library alone computes the digest, and the generator takes it as an argument. Every way into
 the generator passes through the library, so one implementation leaves nothing to disagree with.
