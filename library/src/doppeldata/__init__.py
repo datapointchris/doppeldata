@@ -40,6 +40,7 @@ from doppeldata.profile_comparison.reports import CheckReport
 from doppeldata.profile_comparison.reports import DiffReport
 from doppeldata.profile_comparison.reports import ExpectationResult
 from doppeldata.profile_comparison.thresholds import Thresholds
+from doppeldata.profile_exports import export
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Issue
@@ -88,6 +89,7 @@ __all__ = [
     'dates',
     'decimals',
     'diff',
+    'export',
     'fakes',
     'generate',
     'integers',
