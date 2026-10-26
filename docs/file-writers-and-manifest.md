@@ -272,7 +272,8 @@ Every other kind's `detail` is empty.
   `doppeldata.spark.write` lists the faults a local write of the same plan does.
 - **A run holds every record in memory until it stores the list.** A local write holds them in
   its process, and `doppeldata.spark.write` collects them to the driver. So the process storing the
-  list bounds how many faults one write can place.
+  list bounds how many faults one write can place. On Spark, `spark.driver.maxResultSize` bounds the
+  collect too, and a job past it fails with a partial manifest that records no object.
 - **A write to one file keeps its list beside the file, named for it.** `--out landing/orders.csv`
   writes `landing/_orders.csv.faults.jsonl`, with each record's `file` naming `orders.csv`. So
   several one-file writes share a directory. `replace` replaces a file's list with the file, and
