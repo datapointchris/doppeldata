@@ -241,13 +241,12 @@ of 4 vCPUs and a 10 GB heap beside the driver.
 Polars ran on the host's 16 cores, timed with `/usr/bin/time -v doppeldata profile create FILE`,
 its elapsed time and maximum resident set. Spark ran in the Glue image on `local[8]` with a 4 GB
 driver, timed by the seconds `check-profiler-parity.sh` prints for the image. Both ran under the
-default policy.
+default policy, on a host other work shared, so each time is an upper bound.
 
 | Data | Rows | Columns | Polars | Spark |
 | --- | --- | --- | --- | --- |
-| taxi trips, three Parquet files | 10,104,443 | 19 | 9.6 s, 3.4 GB peak | 75.6 s |
-| carrier claims, one CSV | 2,370,667 | 142 | 36 s, 12 GB peak | 548 s |
-| beneficiary summary, one CSV | 116,352 | 32 | 5 s | 48 s |
+| taxi trips, three Parquet files | 10,104,443 | 19 | 23 s, 3.1 GB peak | 209 s |
+| carrier claims, one CSV | 2,370,667 | 142 | 71 s, 12 GB peak | 937 s |
 
 Polars computes each pass as one streaming query over the files. Spark runs a query per pass over a
 table persisted to disk, and a CSV adds the passes that type its text. On the claims no query
