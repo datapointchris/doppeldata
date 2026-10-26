@@ -290,6 +290,11 @@ and `write`. [scenario-overlays.md](scenario-overlays.md) holds the format and w
 
 - **`data plan` prints the scenario's name and digest under the identity.** Under a `duplicates`
   op it also prints the rows written, and `--json` holds them as `rows_written`.
+- **Under `cdc`, `data plan` prints a `stream` line, and `--json` holds it as `cdc`.** It draws
+  every change to count them by operation, and counts the change files and `_expected` parts the
+  write makes at most. The ranges are the `LOAD` files, the writer shows the stream's
+  `timestamp_unit`, and the file count and the estimate take in the stream. A stopped write's
+  report counts the change files and `_expected` parts its partial manifest lists.
 - **`--rows` counts the rows generated.** A `duplicates` op writes copies beside them, so
   `data generate` then names both counts.
 - **`data check` refuses a `--scenario` other than the one DATA was written under, exit 2.** It

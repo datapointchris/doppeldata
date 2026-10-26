@@ -202,17 +202,18 @@ Each reason in `source.csv.malformed.by_type` becomes the kind DuckDB rejects fo
 ## `cdc` writes an AWS DMS change stream, and `_expected` holds the table its merge must reach
 
 A pipeline that merges change data capture output is tested against a stream whose answer is
-known. The `cdc-dms` example writes a week of changes to `orders`, as AWS DMS writes them to Amazon
-S3:
+known. The `cdc-dms` example writes changes to `orders` across its `period`, as AWS DMS writes them
+to Amazon S3:
 
 ```bash
 doppeldata data generate orders --scenario cdc-dms --format parquet --out orders-cdc/
 ```
 
-The full load is `sales/orders/LOAD00000001.parquet`. The changes follow, one file a minute,
-under `sales/orders/2026/10/01/` to `07/`. Each change record starts with `Op`, which is `I`, `U`
-or `D`, then `dms_commit_ts`. `_expected/sales/orders/` holds the table the merge must produce.
-[file-writers-and-manifest.md](file-writers-and-manifest.md) gives the layout.
+The full load is `sales/orders/LOAD00000001.parquet`. The changes follow, one file for each
+`file_interval` that holds a change, under date folders below `sales/orders/`. Each change record
+starts with `Op`, which is `I`, `U` or `D`, then `dms_commit_ts`. `_expected/sales/orders/` holds
+the table the merge must produce. [file-writers-and-manifest.md](file-writers-and-manifest.md)
+gives the layout.
 
 A merge keeps each key's last change by commit time, and drops a key whose last change is a
 delete. In DuckDB, against `_expected`:
@@ -260,15 +261,16 @@ Each parameter stands for a DMS endpoint setting, as the
 | Parameter | DMS setting |
 | --- | --- |
 | the write's format, `csv` or `parquet` | `DataFormat` |
-| the CSV writer's `header` | `AddColumnName`, whose default is `false` |
+| the CSV writer's `header` | `AddColumnName` |
 | `timestamp_column` | `TimestampColumnName` |
-| `file_interval` | `CdcMaxBatchInterval`, whose default is 60 seconds |
+| `file_interval` | `CdcMaxBatchInterval` |
 | `date_partition` `sequence` and `delimiter` | `DatePartitionSequence` and `DatePartitionDelimiter` |
 | `include_op_for_full_load` | `IncludeOpForFullLoad` |
-| `timestamp_unit: ms` | `ParquetTimestampInMillisecond` |
+| `timestamp_unit: ms`, or the Parquet writer's where the op sets none | `ParquetTimestampInMillisecond` |
+| every full-load row stamped with the period's `start` | `UseTaskStartTimeForFullLoadTimestamp: true` |
 
-- **A CSV write prints a header unless the writer's `header` is false.** DMS writes none by
-  default, so `--writer '{"header": false}'` writes what an unchanged endpoint does.
+- **A CSV write prints a header unless the writer's `header` is false.** `--writer '{"header":
+  false}'` writes what an endpoint with `AddColumnName` off does.
 - **A CSV stream carries no types, so its reader declares them.** Spark's `inferSchema` reads
   `ship_zip` as an integer and drops its leading zeros. A reader with the profile's types
   declared merges to `_expected` exactly.
@@ -278,15 +280,18 @@ Each parameter stands for a DMS endpoint setting, as the
 ## `cdc` draws every change from the period, and places a fault only where a file-order merge breaks
 
 - **The full load is the table the profile generates.** `inserts`, `updates` and `deletes` are
-  shares of its rows. An insert continues the key past the full load, so `orders` inserts take
-  `order_id` 100,001 on.
+  shares of its rows. An insert continues the key past the full load's last value. An inserted key
+  is then updated and deleted at the same shares as a full-load key.
 - **Every commit time is drawn across `period`, never read from the clock.** So the same seed
   writes the same bytes on any day. The full load's `dms_commit_ts` is `start`, as DMS stamps a
-  full load with its transfer time. A key's changes commit in order: its insert first, its delete
-  last.
-- **An update redraws every column but the key and the profile's `keys.primary`.** Its new values
-  come from each column's sampler, on the op's own stream. `updates_per_row` sets how many times an
-  updated row changes.
+  full load under `UseTaskStartTimeForFullLoadTimestamp`, and every change commits after it. A
+  key's changes commit in order: its insert first, its delete last.
+- **Commit times are drawn to the microsecond, so no key's two changes share one.** A source whose
+  commit times are coarser, such as MySQL's whole seconds, ties two changes to one key. The op does
+  not model that.
+- **An update redraws at least one column other than the key and the profile's `keys.primary`, and
+  leaves the rest as they were.** Its new values come from each column's sampler, on the op's own
+  stream. `updates_per_row` sets how many times an updated row changes.
 - **An op that writes rows applies to the full load and the inserts.** An update's new values
   come from the samplers alone, so no other op reaches them.
 - **A change file holds the changes committed in one `file_interval`.** It is named for the
@@ -308,6 +313,8 @@ Each parameter stands for a DMS endpoint setting, as the
 - **A drifted CSV stream is written, since DMS writes a source's column change into its CSV files
   too.** Each file's header names its own columns. A merge maps a renamed column back, as with
   `coalesce(amount_usd, amount)`.
+- **The stream is held in memory while it is written.** A `cdc` write takes about 200 bytes a
+  change beyond what a plain write of the same rows holds. `data plan` counts the changes first.
 
 ## The engine applies the patch and the perturbations, inside the block path
 
@@ -371,11 +378,15 @@ local run does.
 `small_files` and `cdc`, which act across files.
 
 - **`doppeldata.spark` refuses `cdc` as `op-needs-one-process`**, from `generate`, `struct_type`
-  and `write` alike. The stream orders the whole table's changes by commit time, so one process
-  writes it, and the refusal names `doppeldata.write`.
+  and `write` alike, as it refuses any op the engine says orders the whole table. The stream orders
+  the whole table's changes by commit time, so one process writes it, and the refusal names
+  `doppeldata.write`.
 - **A `cdc` write refuses a format other than CSV or Parquet** as `op-not-for-format`, and
   `timestamp_unit` on CSV the same way. It refuses `partition_by` as `invalid-parameter`, because
   the change files are filed by commit date.
+- **A Parquet writer's `timestamp_unit` of `ms` or `us` sets the stream's where the op sets none.**
+  The writer's `s` or `ns`, and a writer's unit apart from the op's, are refused as
+  `invalid-parameter`, since DMS stores every timestamp at one unit.
 - **A file drifts when its first row lies at or past `after_fraction` of the rows.** Beside `cdc`,
   the cut is that fraction of the period instead. The writers apply the drift to the whole block
   before a range takes its rows. Its steps run as drop, widen, rename, add, then reorder.
@@ -449,8 +460,9 @@ The data is measured against the effective profile, so a patched null rate is th
   `partition_share_delta` is named for its column, so `partition_skew` moves it.
 - **A column change on a column a perturbation writes passes**, its message naming it, as the
   columns a drift adds do.
-- **A `cdc` write is checked by its full load alone.** The check reads `<schema>/<table>/LOAD*`
-  and prints one notice that it left the change files and `_expected` unmeasured. They are a
+- **A `cdc` write is checked by its full load alone.** The check reads the full-load files the
+  manifest's `files` lists, and prints one notice naming them, that it left the change files and
+  `_expected` unmeasured. They are a
   merge test's input and its answer, and their statistics move by design. The commit column passes
   as a column `cdc` writes.
 - **Each expectation is measured by `Scenario.verify`.** `hot_keys.share` is the share of rows

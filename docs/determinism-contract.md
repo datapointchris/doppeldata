@@ -98,17 +98,22 @@ moves bytes and leaves every value alone. The manifest's `tool` names the versio
 bytes. `regenerate()` compares every file it writes with the
 manifest, and names any whose bytes moved.
 
-A test pins a SHA-256 beside the stream version, as one pair. The hash covers the values and text
-cells of a fixture holding one column of every kind, fitted family and provider, and of every
-profile field the engine reads. A second hash covers the same fixture under a scenario fixture
-holding a patch and every op that writes rows. A third covers it under a `cdc` scenario fixture,
-`every-column-kind.cdc.scenario.yaml`, beside a row op and a `schema_drift`. That hash covers the
-full load, every change file and the expected table. A change that moves a value fails a pin until
-it is updated with the others. The fixtures are the test's own, so editing a bundled example moves no
-pin.
+A test pins SHA-256 hashes beside the stream version, each named `PINNED_*VALUES`:
 
-A new op adds a pin of its own rather than moving one. No released scenario names it, so no
-released dataset's bytes move, and the stream version holds.
+- `PINNED_VALUES` covers the values and text cells of a fixture holding one column of every kind,
+  fitted family and provider, and of every profile field the engine reads.
+- `PINNED_SCENARIO_VALUES` covers the same fixture under a scenario fixture holding a patch and
+  every op that writes rows.
+- `PINNED_CDC_VALUES` covers it under `every-column-kind.cdc.scenario.yaml`, a `cdc` beside a row
+  op and a `schema_drift`. It covers the full load, every change file and the expected table.
+
+A change that moves a value fails a pin until it is updated with the others. The fixtures are the
+test's own, so editing a bundled example moves no pin. Both pin scripts refuse a `PINNED_*VALUES`
+hash they name no fixture for.
+
+An op whose output the scenario fixture cannot hold, as `cdc`'s cannot, takes a pin of its own. A
+pin no release has frozen may be set without raising the stream version, because no released
+dataset holds its bytes. Once released, it is frozen like the others.
 
 ## Every exp, log and pow that feeds a value is libm's, so values match on every platform
 
