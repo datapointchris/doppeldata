@@ -18,12 +18,15 @@ use crate::identity::is_sha256_digest;
 use crate::perturbations;
 use crate::perturbations::Block;
 use crate::perturbations::BlockPerturbation;
+use crate::perturbations::CdcPlan;
+use crate::perturbations::CdcStream;
 use crate::perturbations::MalformedPlan;
 use crate::perturbations::Planned;
 use crate::perturbations::Planning;
 use crate::perturbations::RowFaults;
 use crate::perturbations::ScenarioFault;
 use crate::perturbations::SchemaDriftPlan;
+use crate::perturbations::StreamOutline;
 use crate::perturbations::plan_perturbation;
 use crate::profile::DEFAULT_K_MIN;
 use crate::profile::FORMAT_VERSION;
@@ -38,6 +41,7 @@ use crate::samplers::ColumnSite;
 use crate::samplers::PlanContext;
 use crate::samplers::TextCell;
 use crate::samplers::column_plan;
+use crate::scenario::OPERATION_COLUMN;
 use crate::scenario::Perturbation;
 use crate::scenario::Scenario;
 
@@ -180,9 +184,12 @@ pub struct Plan {
     drift: Option<SchemaDriftPlan>,
     file_rows: Option<Quantiles>,
     malformed: Option<MalformedPlan>,
+    cdc: Option<CdcPlan>,
     /// Each perturbation copying rows from across the dataset: the pointer to the parameter that
     /// sets it, and the fewest dataset rows between a copy's home and its source.
     across_files: Vec<(String, u64)>,
+    /// The first perturbation ordering the whole table: its pointer and its op.
+    one_process: Option<(String, &'static str)>,
 }
 
 /// One perturbation applied to every block, and the schema its rows carry after it.
@@ -357,7 +364,9 @@ pub fn plan_with_scenario(
         drift: None,
         file_rows: None,
         malformed: None,
+        cdc: None,
         across_files: Vec::new(),
+        one_process: None,
     };
     if let Some(applied) = scenario {
         plan.apply_scenario(table, applied.scenario)?;
@@ -384,10 +393,57 @@ pub(crate) fn plan_context<'a>(table: &TableProfile, name: &'a str, seed: u64, r
     }
 }
 
+/// Refuses an op beside `cdc` that would break its stream: one copying rows, which would hold a
+/// key twice, one breaking records, and one writing a column every change holds or adds.
+fn refuse_beside_cdc(scenario: &Scenario, cdc: &CdcPlan) -> Result<(), PlanError> {
+    for (index, perturbation) in scenario.perturbations.iter().enumerate() {
+        let refuse = |message: String| PlanError::Scenario {
+            code: ScenarioFault::InvalidParameter,
+            field: format!("/perturbations/{index}"),
+            message,
+        };
+        match perturbation {
+            Perturbation::Cdc(_) => {}
+            Perturbation::Duplicates(_) => {
+                return Err(refuse(
+                    "duplicates copies rows, so a key would appear twice in cdc's full load".into(),
+                ));
+            }
+            Perturbation::MalformedRows(_) => {
+                return Err(refuse(
+                    "malformed_rows breaks records, and cdc's faults are its duplicate_delivery_rate and out_of_order_rate".into(),
+                ));
+            }
+            Perturbation::HotKeys(_)
+            | Perturbation::LateArrival(_)
+            | Perturbation::Missingness(_)
+            | Perturbation::OutOfRange(_)
+            | Perturbation::SwappedValues(_)
+            | Perturbation::CategoricalShift(_)
+            | Perturbation::Noise(_)
+            | Perturbation::Scaling(_)
+            | Perturbation::BrokenCharacters(_)
+            | Perturbation::Outliers(_)
+            | Perturbation::PartitionSkew(_)
+            | Perturbation::SchemaDrift(_)
+            | Perturbation::SmallFiles(_) => {
+                let held = |column: &&str| cdc.holds_fixed(column) || *column == OPERATION_COLUMN || *column == cdc.timestamp_column();
+                if let Some(column) = perturbation.written_columns().into_iter().find(held) {
+                    return Err(refuse(format!(
+                        "{} writes {column:?}, a column every change record of cdc holds as it is",
+                        perturbation.op_name()
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Plan {
     /// Plans each of `scenario`'s perturbations against the schema the one before it leaves. A
-    /// schema drift is planned last, against every other op's rows, because the writers apply it
-    /// to a file's rows after every op has written them.
+    /// `cdc` is planned against every other op's rows, which are its full load. A schema drift is
+    /// planned last, because the writers apply it to a file's rows after every op has written them.
     fn apply_scenario(&mut self, table: &TableProfile, scenario: &Scenario) -> Result<(), PlanError> {
         let ids = scenario.resolved_ids().map_err(|duplicate| PlanError::Scenario {
             code: ScenarioFault::DuplicatePerturbationId,
@@ -399,6 +455,7 @@ impl Plan {
         })?;
         let mut schema = self.generated_schema.clone();
         let mut drift_at: Option<usize> = None;
+        let mut cdc_at: Option<usize> = None;
         for (index, perturbation) in scenario.perturbations.iter().enumerate() {
             let planning = Planning {
                 table,
@@ -409,6 +466,9 @@ impl Plan {
                 index,
                 id: &ids[index],
             };
+            if perturbation.needs_one_process() && self.one_process.is_none() {
+                self.one_process = Some((format!("/perturbations/{index}"), perturbation.op_name()));
+            }
             let one_only = || {
                 planning.refuse(
                     ScenarioFault::InvalidParameter,
@@ -416,8 +476,13 @@ impl Plan {
                     format!("a dataset takes one {}, and an earlier perturbation is one", perturbation.op_name()),
                 )
             };
-            if matches!(perturbation, Perturbation::SchemaDrift(_)) {
-                if drift_at.replace(index).is_some() {
+            let deferred = match perturbation {
+                Perturbation::SchemaDrift(_) => Some(&mut drift_at),
+                Perturbation::Cdc(_) => Some(&mut cdc_at),
+                _ => None,
+            };
+            if let Some(at) = deferred {
+                if at.replace(index).is_some() {
                     return Err(one_only());
                 }
                 continue;
@@ -445,6 +510,22 @@ impl Plan {
                 }
                 Planned::SchemaDrift(_) => unreachable!("a schema drift is planned after the loop"),
             }
+        }
+        if let Some(index) = cdc_at
+            && let Perturbation::Cdc(op) = &scenario.perturbations[index]
+        {
+            let planning = Planning {
+                table,
+                seed: self.identity.seed(),
+                rows: self.identity.rows(),
+                block_count: self.block_count,
+                schema: &schema,
+                index,
+                id: &ids[index],
+            };
+            let cdc = perturbations::plan_cdc(op, &planning, &self.columns)?;
+            refuse_beside_cdc(scenario, &cdc)?;
+            self.cdc = Some(cdc);
         }
         if let Some(index) = drift_at {
             let planning = Planning {
@@ -484,6 +565,35 @@ impl Plan {
     /// What a scenario's `malformed_rows` breaks, where it has one.
     pub fn malformed(&self) -> Option<&MalformedPlan> {
         self.malformed.as_ref()
+    }
+
+    /// The change stream a scenario's `cdc` writes beside the full load, where it has one.
+    pub fn cdc(&self) -> Option<&CdcPlan> {
+        self.cdc.as_ref()
+    }
+
+    /// The pointer to the first perturbation ordering the whole table, and its op, where one does.
+    /// One process writes such a dataset.
+    pub fn one_process_op(&self) -> Option<(&str, &str)> {
+        self.one_process.as_ref().map(|(field, op)| (field.as_str(), *op))
+    }
+
+    /// The stream a scenario's `cdc` writes, counted on `threads` threads, or None without one. It
+    /// refuses what [`Plan::cdc_stream`] refuses.
+    pub fn cdc_outline(&self, threads: usize) -> Result<Option<StreamOutline>, PlanError> {
+        self.cdc
+            .as_ref()
+            .map(|cdc| perturbations::cdc_outline(self, cdc, threads))
+            .transpose()
+    }
+
+    /// The stream a scenario's `cdc` writes, built on `threads` threads, or None without one. It
+    /// is refused where a schema drift's cut falls past every change.
+    pub fn cdc_stream(&self, threads: usize) -> Result<Option<CdcStream>, PlanError> {
+        self.cdc
+            .as_ref()
+            .map(|cdc| perturbations::cdc_stream(self, cdc, threads))
+            .transpose()
     }
 
     /// Where a perturbation copies rows from across the dataset: the pointer to the parameter
@@ -550,22 +660,32 @@ impl Plan {
     /// asks for the text cells too.
     pub(crate) fn block_through(&self, block: u64, through: usize, cells: bool) -> Block {
         let (position, rows) = self.position(block).expect("a perturbation reads a block inside the plan");
-        let arrays = self.columns.iter().map(|column| column.generate(&position, rows)).collect();
+        self.staged(&position, rows, through, cells)
+    }
+
+    /// `rows` rows drawn at `position`, every perturbation up to `through` applied.
+    fn staged(&self, position: &BlockPosition, rows: usize, through: usize, cells: bool) -> Block {
+        let arrays = self.columns.iter().map(|column| column.generate(position, rows)).collect();
         let options = RecordBatchOptions::new().with_row_count(Some(rows));
         let batch = RecordBatch::try_new_with_options(self.generated_schema.clone(), arrays, &options)
             .expect("every column's array matches its field");
-        let cells = cells.then(|| self.columns.iter().map(|column| column.text_cells(&position, rows)).collect());
+        let cells = cells.then(|| self.columns.iter().map(|column| column.text_cells(position, rows)).collect());
         let mut placed = Block { batch, cells, homes: None };
         for (index, stage) in self.stages[..through].iter().enumerate() {
             let at = perturbations::Stage {
                 plan: self,
                 index,
-                block,
+                block: position.block,
                 schema: &stage.schema,
             };
             placed = stage.op.apply(&at, placed);
         }
         placed
+    }
+
+    /// `rows` rows drawn at `position`, which may lie past the plan's blocks, every op applied.
+    pub(crate) fn rows_at(&self, position: &BlockPosition, rows: usize) -> RecordBatch {
+        self.staged(position, rows, self.stages.len(), false).batch
     }
 
     /// The rows of `block`, a pure function of the plan and the block number.

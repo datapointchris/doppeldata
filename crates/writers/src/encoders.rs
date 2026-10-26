@@ -63,7 +63,7 @@ pub(crate) fn fault_record(
         file: String::new(),
         line,
         row,
-        kind,
+        kind: kind.into(),
         column: column.map(String::from),
         detail,
     }

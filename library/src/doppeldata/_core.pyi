@@ -95,6 +95,11 @@ class Plan:
         The bytes the write would store, its manifest left out, from its first blocks encoded
         with its settings.
         """
+    def file_columns(self, /, partition_by: SupportsGetItem[int, str]) -> list[str]:
+        """
+        The names of the columns each file of the rows holds, in order: the plan's less those
+        ``partition_by`` names, or under ``cdc`` the full load's record.
+        """
     def generate(self, /, *, threads: SupportsIndex) -> Any:
         """
         Every row, as one table holding a batch per block, generated on ``threads`` threads,
@@ -127,6 +132,12 @@ class Plan:
         Blocks ``start`` up to ``stop`` in order, as a reader made the way ``stream`` makes
         every block, so they are the batches ``stream`` yields for those blocks.
         """
+    def stream_json(self, /, options: WriteOptions) -> str |None:
+        """
+        The change stream a ``cdc`` write makes beside its full load, as a JSON object keyed
+        ``style``, ``prefix``, ``expected_prefix``, ``changes``, ``change_files_at_most`` and
+        ``expected_parts``, or None without a ``cdc``. Every change is drawn to count it.
+        """
     def write(self, /, options: WriteOptions, destination: str, *, threads: SupportsIndex, replace: bool, s3_store: dict |None = None) -> str:
         """
         Writes the dataset to ``destination``, a URL ``destination_scheme`` accepts, and returns
@@ -146,6 +157,11 @@ class Plan:
         lists, the bytes ``write`` writes for them, on one thread. It returns their manifest
         records and the faults ``malformed_rows`` placed in them as one JSON object, ``files``
         and ``faults``. It neither claims ``destination`` nor stores a manifest.
+        """
+    def written_settings_json(self, /, options: WriteOptions) -> str:
+        """
+        The format and every setting the write's manifest records, as ``WriteOptions``'s
+        ``settings_json`` spells them, with a ``cdc`` stream's timestamp unit applied.
         """
 
 @final
@@ -175,8 +191,8 @@ def determinism_values_digest(profile_json: str, profile_digest: str, seed: Supp
     """
     The determinism contract's SHA-256 over every value and text cell generated from a profile,
     with the scenario ``scenario`` gives as its JSON and its digest, made on ``threads`` threads
-    the way ``Plan.generate`` makes its blocks. A wheel's build compares it with the hash the
-    contract pins.
+    the way ``Plan.generate`` makes its blocks. Under ``cdc`` it also covers every change file
+    and the expected table. A wheel's build compares it with the hash the contract pins.
     """
 
 def expected_metric_op(metric: str) -> str:
@@ -234,11 +250,12 @@ def pattern_problem(pattern: str) -> str |None:
     refuses it, or None when it can.
     """
 
-def perturbation_facts(scenario_json: str) -> list[tuple[str, list[str], bool, bool]]:
+def perturbation_facts(scenario_json: str) -> list[tuple[str, list[str], bool, bool, bool]]:
     """
     Each of a valid scenario's perturbations, in list order: its id, the columns it writes, adds,
-    drops or renames, whether it shapes the files a write makes rather than the rows, and whether
-    it acts across several files, so a one-file write cannot hold it.
+    drops or renames, whether it shapes the files a write makes rather than the rows, whether it
+    acts across several files, so a one-file write cannot hold it, and whether it orders the whole
+    table, so one process writes the dataset.
     """
 
 def scenario_ids(scenario_json: str) -> tuple[list[str], tuple[int, str] |None]:

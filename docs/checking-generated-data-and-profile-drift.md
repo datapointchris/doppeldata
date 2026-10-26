@@ -10,6 +10,12 @@ Generated data has its own `source_fingerprint`, so the stats cache never hands 
 unchanged. DATA is typed with the detector packs PROFILE records, so a type one of them declares can
 be confirmed.
 
+CSV or TSV a doppeldata write left `_manifest.json` beside is read in the dialect the manifest
+records, header included, and no sniffer reads it. Files written with no header take their column
+names from the engine, for the plan the manifest records: PROFILE's columns, less any partition
+column, or under `cdc` the full load's record. So a headerless write checks as its headed twin
+does. Sniffing would read such a file's columns as `column0` on, and fail every one as dropped.
+
 `profile diff A B` measures B against A with the same metrics. B profiled with `--edges-from A`
 carries overflow counts, so its boundary adherence and overflow can be measured. A B binned
 afresh leaves `boundary_adherence` unmeasured, and every other metric measures it.
@@ -322,7 +328,7 @@ Drift between two months of one dataset is expected, so `profile diff` exits 1, 
 - **DATA holding a fault the profiler cannot read back as one table exits 2**, in one line naming
   the kinds, before any row is read. The engine's fault kinds say which, by format:
   - In CSV and TSV, `header_drift`, `mixed_line_endings` and `wrong_delimiter`. The profiler reads
-    every file in the first one's dialect and header.
+    every file in one dialect and header.
   - In JSON and NDJSON, `truncated_line`, `json_unbalanced` and `json_layout_mix`. The profiler's
     JSON read stops at a record it cannot parse, and at one that is not an object.
   - In Parquet, every `parquet_` kind. The profiler reads every file under one Arrow schema.

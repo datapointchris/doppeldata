@@ -118,8 +118,11 @@ thread only waits for them.
   own exit status.
 - **A destination holding anything is refused unless `replace` is set.** With `replace`, every
   object must be a manifest or `_faults.jsonl` at the prefix, or a part whose name ends with the
-  `identity8` and extension one of those manifests records. Anything else, such as Spark's `_SUCCESS` or pyarrow's
-  `part-0.parquet`, refuses the write with nothing deleted.
+  `identity8` and extension one of those manifests records. Under a `prefix` a manifest's `cdc`
+  records, a `LOAD` file and a dated change file, named as the stream names them, are the
+  dataset's too. So is a part directly under its `expected_prefix` named for the `identity8`.
+  Anything else, such as Spark's `_SUCCESS`, pyarrow's `part-0.parquet`, or a merge's output
+  written beside the stream, refuses the write with nothing deleted.
 - **`replace` deletes before it writes.** An interrupted replace leaves the old dataset gone and at
   most its own claim behind. The claim records the profile, seed and row count that regenerate it.
 - *Rejected:* writing the new objects first and deleting the old ones after. A reader globbing the
@@ -190,6 +193,56 @@ and writes one object per value under `key=value/` for the `hive` style, or `val
 - **The object list is known only once the run writes.** The layout still fixes every range, and
   each object records its range and its partition values.
 
+## A `cdc` write lays out DMS's S3 target: `LOAD` files, dated change files and `_expected`
+
+AWS DMS writes a table's full load, then its changes, under `<schema>/<table>/`, as its
+[S3 target guide](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Target.S3.html) gives
+them. The `cdc-dms` example written as Parquet lays out this way:
+
+```text
+orders-cdc/
+  _manifest.json
+  _faults.jsonl
+  sales/orders/LOAD00000001.parquet                    the full load
+  sales/orders/2026/10/01/20261001-0000000000.parquet  the changes of one file_interval
+  _expected/sales/orders/part-00000-{identity8}.parquet   the full load's keys, merged
+  _expected/sales/orders/part-00001-{identity8}.parquet   the inserts that survive
+```
+
+- **The full load is planned as any write's parts are**, one `LOAD` file a range, counted from 1 in
+  eight hex digits as DMS counts them. `files` lists them with their ranges, so `regenerate()`
+  reads them as it reads any write's.
+- **A change record holds `Op`, the commit column, then the table's columns.** A change file's
+  records run in commit order. A full-load record holds no `Op` unless `include_op_for_full_load`
+  sets it.
+- **The commit column is a string, `yyyy-MM-dd HH:mm:ss.SSSSSS`**, as DMS writes
+  `TimestampColumnName`. So it sorts as text in commit order.
+- **`_expected` holds one part per full-load range, then one of the inserts that survive.** It is
+  Parquet at the write's Parquet settings, or the defaults under CSV. Its name starts with `_`, so
+  Spark, Hive and Glue skip it.
+- **A DuckDB glob from the root reads `_expected` as data.** `orders-cdc/**/*.parquet` matches its
+  parts beside the stream's. Glob under the prefix instead, which `_expected` is not under:
+
+```sql
+select count(*) from read_parquet('orders-cdc/sales/orders/LOAD*.parquet');
+select count(*) from read_parquet('orders-cdc/sales/orders/**/[0-9]*.parquet', union_by_name = true);
+```
+
+- **The stream is built whole before the claim.** It orders the table's changes by commit time, so
+  one process holds every change. The split writes `claim`, `write_ranges` and `commit` refuse it as
+  `op-needs-one-process`, as they refuse any op `Perturbation::needs_one_process` names. Every draw
+  is keyed by block, so the bytes are the same at any thread count.
+- **The manifest's `cdc` records what lies beside the full load.** It holds the `style`, the
+  `prefix` and `expected_prefix`, and the `changes` counted by operation, a second delivery left
+  out. `files` and `expected` list each change file and each expected part with its rows, bytes and
+  SHA-256. `regenerate()` compares them as it compares the full load. It is null for any other
+  write.
+- **The manifest's own `files` lists the full load alone under `cdc`.** A reader checking every
+  object's SHA-256 reads `cdc.files` and `cdc.expected` too.
+- **A release reads a manifest no newer than itself.** One released before `cdc` ignores the
+  manifest's `cdc`. Its `replace` then refuses the change files as foreign and deletes nothing,
+  and its `regenerate()` refuses the scenario's `cdc` op.
+
 ## The manifest is the regeneration record
 
 `_manifest.json` sits beside the data. Spark, Hive and Glue skip a file whose name starts with `_`,
@@ -221,22 +274,23 @@ select count(*) from read_json_auto('out/part-*.json')
 - **`regenerate()` compares every file it writes with the record.** A file whose rows, bytes or
   SHA-256 differ fails the call with `RegeneratedFilesDiffer`, which names it. One tool version and
   one set of writer settings write the same bytes.
-- **`faults` counts the faults `_faults.jsonl` lists, by kind.** It is null for a write with no
-  `malformed_rows`. A partial manifest counts the faults in the objects it lists.
+- **`faults` counts the faults `_faults.jsonl` lists, by kind.** It is null for a write that lists
+  none: one with no `malformed_rows`, and no `cdc` with a fault rate. A partial manifest counts the
+  faults in the objects it lists.
 
-## `_faults.jsonl` lists each fault `malformed_rows` placed, one JSON object a line
+## `_faults.jsonl` lists each fault `malformed_rows` or `cdc` placed, one JSON object a line
 
-A write under `malformed_rows` stores it beside `_manifest.json`, and a write without the op stores
-none. Its name starts with `_`, so Spark, Hive and Glue skip it as they skip the manifest. Its
+A write under `malformed_rows`, or under a `cdc` with a fault rate, stores it beside
+`_manifest.json`. Any other write stores none. Its name starts with `_`, so Spark, Hive and Glue skip it as they skip the manifest. Its
 `.jsonl` suffix keeps a `*.json` glob over JSON output from reading it. A line's schema is
 `doppeldata schemas show faults`, and `detail` is an open object whose keys the second table
 lists.
 
 | Field | Holds |
 | --- | --- |
-| `file` | the object's path under the destination, as `files` names it |
-| `line` | the 1-based physical line the broken record starts on, the header counted. Null for a fault of the whole file, and in a JSON array |
-| `row` | the dataset row the record was generated as. Null for a copy `duplicates` adds, and for a fault of the whole file |
+| `file` | the object's path under the destination, as `files` names it, or `cdc.files` for a fault in a change stream |
+| `line` | the 1-based physical line the broken record starts on, the header counted. Null for a fault of the whole file, in a JSON array, and in a Parquet file |
+| `row` | the dataset row the record was generated as, or in a change stream the row of its key, past `dataset_rows` for a key the stream inserts. Null for a copy `duplicates` adds, and for a fault of the whole file |
 | `kind` | the fault kind |
 | `column` | the column the fault is in, or null where it breaks the record or the file |
 | `detail` | what the kind wrote, by the keys below |
@@ -257,11 +311,16 @@ lists.
 | `parquet_timestamp_unit_drift` | the `unit`, and the `columns` written at it |
 | `parquet_int96` | the `columns` stored as INT96 |
 | `parquet_decimal_scale_drift` | the `columns`, each with the type written |
+| `out_of_order` | the change's `commit_ts`, its 0-based `record` in the file, and the `due_file` its commit time belongs in |
+| `duplicate_delivery` | the copy's `commit_ts`, its 0-based `record` in the file, and the `original_file` holding the first delivery |
 
-Every other kind's `detail` is empty.
+Every other kind's `detail` is empty. A later release may add a kind, so a reader passes a kind it
+does not know through rather than refusing the line.
 
 - **The records run by file.** Within one, the faults of the whole file come first, then its
   `truncated_line`, then its row faults in the order written.
+- **A `cdc` fault's `file` is the change file the faulted record lies in.** A merge in file order
+  takes that record as the key's last change, and keeps the wrong row.
 - **A `truncated_line` names the cut line with no `row`.** Its record replaces any the cut row
   held.
 - **A run stores it before its manifest.** So a reader that waits for `_manifest.json` finds it

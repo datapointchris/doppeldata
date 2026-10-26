@@ -37,7 +37,8 @@ class Manifest:
 
     @property
     def files(self) -> list[dict[str, Any]]:
-        """Every object written, in path order, each with its rows, bytes and SHA-256."""
+        """Every object of the rows written, in path order, each with its rows, bytes and SHA-256. Under `cdc` these are the
+        full-load files, and `cdc` lists the change files and the expected table."""
         files: list[dict[str, Any]] = self.document['files']
         return files
 
@@ -53,9 +54,17 @@ class Manifest:
 
     @property
     def faults(self) -> dict[str, int] | None:
-        """The faults the write's fault list holds, counted by kind, or None for a write with no `malformed_rows`."""
+        """The faults the write's fault list holds, counted by kind, or None for a write that lists none: one with no
+        `malformed_rows`, and no `cdc` with a fault rate."""
         faults: dict[str, int] | None = self.document.get('faults')
         return faults
+
+    @property
+    def cdc(self) -> dict[str, Any] | None:
+        """What a `cdc` write stores beside its full load: the stream's prefixes, change counts, change files and expected
+        parts. None for any other write."""
+        cdc: dict[str, Any] | None = self.document.get('cdc')
+        return cdc
 
 
 def written_manifest(data: Any) -> Manifest | None:

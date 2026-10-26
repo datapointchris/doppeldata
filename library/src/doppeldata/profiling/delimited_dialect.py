@@ -4,7 +4,8 @@ DuckDB's sniffer reads first, and CleverCSV confirms it on the block. DuckDB mis
 rows disagree, as one with an unbalanced quote, a short row and a long row does, where CleverCSV
 does not. So where the two disagree, CleverCSV's dialect is read, and where neither names one, the
 format's own. The header is decided as AWS Glue's CSV classifier decides it. Every other file's
-first record is checked against the dialect, so a source mixing two is refused.
+first record is checked against the dialect, so a source mixing two is refused. A dialect the
+files are known to be written in, as a doppeldata manifest records one, is read as given.
 """
 
 import codecs
@@ -58,11 +59,14 @@ class Field:
     quoted: bool
 
 
-def detected(files: tuple[SourceFile, ...], delimiter: str | None, config: dict[str, Any]) -> DialectFound:
+def detected(files: tuple[SourceFile, ...], delimiter: str | None, config: dict[str, Any], known: CsvDialect | None = None) -> DialectFound:
     """The dialect the source's files are read with, from the first file holding a record. `delimiter` fixes the
-    delimiter, as a TSV's is.
+    delimiter, as a TSV's is. `known` is the dialect the files were written in, read with no sniffer. Where it names
+    no columns, they are the header's, or numbered, as a sniffed dialect's are.
     """
     path, raw = first_record_block(files)
+    if known is not None:
+        return known_dialect(files, path, raw, known)
     bom = raw.startswith(UTF8_BOM)
     detected_encoding, encoding = encodings_of(raw)
     text = block_text(raw, encoding)
@@ -96,8 +100,34 @@ def detected(files: tuple[SourceFile, ...], delimiter: str | None, config: dict[
         bom=bom,
         line_terminators=line_terminators(text),
         quoting=quoting_of(records),
-        trailing_delimiter=bool(records) and all(len(record) > 1 and record[-1].text == '' and not record[-1].quoted for record in records),
+        trailing_delimiter=ends_in_delimiter(records),
     )
+
+
+def known_dialect(files: tuple[SourceFile, ...], path: str, raw: bytes, dialect: CsvDialect) -> DialectFound:
+    """`dialect`, which the files were written in, with what `path`'s first block `raw` holds read in it."""
+    text = block_text(raw, dialect.encoding)
+    records = split_records(text, dialect.delimiter, dialect.quote, dialect.escape)
+    if not dialect.names:
+        dialect = dc.replace(dialect, names=column_names(records, dialect.header))
+    check_first_records(files, path, dialect, records[0])
+    return DialectFound(
+        dialect=dialect,
+        named={},
+        agreed=None,
+        chosen=None,
+        confidence=consistency(records),
+        detected_encoding=None,
+        bom=raw.startswith(UTF8_BOM),
+        line_terminators=line_terminators(text),
+        quoting=quoting_of(records),
+        trailing_delimiter=ends_in_delimiter(records),
+    )
+
+
+def ends_in_delimiter(records: list[list[Field]]) -> bool:
+    """Whether every record ends in an empty, unquoted field, which a reader takes as one more empty column."""
+    return bool(records) and all(len(record) > 1 and record[-1].text == '' and not record[-1].quoted for record in records)
 
 
 def first_record_block(files: tuple[SourceFile, ...]) -> tuple[str, bytes]:

@@ -46,10 +46,13 @@ malformed-file-readers/
   The engine's tests read the profile unfilled, so `library/tests/test_typed_column_hints.py` pins
   a hash over the fill beside the stream version. The stream version is part
   of a generated dataset's identity. `docs/determinism-contract.md` says what else must never change.
-  The determinism contract test pins the stream version and a hash over what
-  `crates/core/tests/every-column-kind.profile.yaml` generates, as one pair. A second hash covers it
-  under `every-column-kind.scenario.yaml` beside it. A column kind, family, provider or profile field
-  the engine gains adds a column there, and a perturbation op that writes rows adds an entry.
+  The determinism contract test pins the stream version beside each `PINNED_*VALUES` hash.
+  `PINNED_VALUES` covers what `crates/core/tests/every-column-kind.profile.yaml` generates, and
+  `PINNED_SCENARIO_VALUES` covers it under `every-column-kind.scenario.yaml` beside it. A column
+  kind, family, provider or profile field the engine gains adds a column there, and a perturbation
+  op that writes rows adds an entry. `PINNED_CDC_VALUES` covers it under
+  `every-column-kind.cdc.scenario.yaml`: the full load, every change file and the expected table. A
+  change to how `cdc` draws moves it.
 - **Nothing that feeds a generated value calls std's `exp`, `ln`, `powf`, `powi` or any other
   transcendental.** Call the `libm` crate's function instead. std's may round differently by
   platform, and a dataset must regenerate to the same bits anywhere. `crates/clippy.toml` refuses

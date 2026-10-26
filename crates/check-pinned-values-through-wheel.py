@@ -29,10 +29,18 @@ def main() -> int:
         return 1
     profile_json = json.dumps(Profile.load(TESTS / 'every-column-kind.profile.yaml').to_plain(), allow_nan=False)
     scenario_json = json.dumps(YAML(typ='safe').load(TESTS / 'every-column-kind.scenario.yaml'), allow_nan=False)
+    cdc_json = json.dumps(YAML(typ='safe').load(TESTS / 'every-column-kind.cdc.scenario.yaml'), allow_nan=False)
     runs = {
         'PINNED_VALUES': None,
         'PINNED_SCENARIO_VALUES': (scenario_json, constants['SCENARIO_DIGEST']),
+        'PINNED_CDC_VALUES': (cdc_json, constants['SCENARIO_DIGEST']),
     }
+    unrun = sorted(name for name in constants if name.startswith('PINNED_') and name.endswith('VALUES') and name not in runs)
+    if unrun:
+        print(
+            f'check-pinned-values-through-wheel: the test pins {", ".join(unrun)}, and this script names no fixture for it', file=sys.stderr
+        )
+        return 1
     for pin, scenario in runs.items():
         values = _core.determinism_values_digest(
             profile_json, constants['PROFILE_DIGEST'], int(constants['SEED']), int(constants['ROWS']), threads=0, scenario=scenario

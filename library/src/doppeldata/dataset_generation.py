@@ -75,7 +75,9 @@ class WritePlan:
 
     `identity` and `dataset_digest` are what the manifest will record. `rows_written` is the identity's `dataset_rows` and
     every copy a scenario's `duplicates` adds. `estimated_bytes` comes from the write's first blocks encoded with its own
-    settings, and leaves the manifest out. The shape of `to_json` may change before 1.0.
+    settings, and leaves the manifest out. Under a scenario's `cdc`, `ranges` are the full-load files, `cdc` is the stream
+    beside them as the manifest's `cdc` will describe it, and `files_at_most` and `estimated_bytes` count the change files
+    and the expected table too. The shape of `to_json` may change before 1.0.
     """
 
     destination: str
@@ -89,6 +91,7 @@ class WritePlan:
     files_at_most: int
     rows_written: int
     estimated_bytes: int
+    cdc: dict[str, Any] | None = None
 
     def to_json(self) -> dict[str, Any]:
         return dc.asdict(self)
@@ -436,10 +439,13 @@ def plan(
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
     prepared = prepared_write(profile, out, rows, seed, choices, scenario)
     engine, options, target = prepared.engine, prepared.options, prepared.one_file
-    settings = json.loads(options.settings_json)
+    settings = json.loads(engine.written_settings_json(options))
     ranges = [PlannedRange(**planned) for planned in json.loads(engine.ranges_json(options))]
     if target is not None:
         ranges = [dc.replace(planned, path=target.name) for planned in ranges]
+    stream_json = engine.stream_json(options)
+    stream = json.loads(stream_json) if stream_json is not None else None
+    stream_files = stream['change_files_at_most'] + stream['expected_parts'] if stream is not None else 0
     return WritePlan(
         destination=prepared.destination,
         identity=json.loads(engine.identity_json),
@@ -449,9 +455,10 @@ def plan(
         layout=settings['layout'],
         columns=[ColumnSampler(*column) for column in engine.column_samplers()],
         ranges=ranges,
-        files_at_most=sum(planned.objects_at_most for planned in ranges),
+        files_at_most=sum(planned.objects_at_most for planned in ranges) + stream_files,
         rows_written=engine.rows_written,
         estimated_bytes=engine.estimate_bytes(options),
+        cdc=stream,
     )
 
 

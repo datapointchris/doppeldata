@@ -491,7 +491,7 @@ def read_delimited(source: Source) -> SourceRead:
     string, where a bare one is null.
     """
     found = importlib.import_module(DELIMITED_DIALECT_MODULE).detected(
-        source.files, '\t' if source.format is SourceFormat.TSV else None, DUCKDB_CONFIG
+        source.files, '\t' if source.format is SourceFormat.TSV else None, DUCKDB_CONFIG, source.dialect
     )
     dialect = found.dialect
     query = (

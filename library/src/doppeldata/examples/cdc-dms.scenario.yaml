@@ -1,0 +1,18 @@
+# Written for the orders example profile, whose dataset.keys.primary, order_id, keys every change.
+# The write's format, csv or parquet, is the files' format, as DMS's DataFormat sets it.
+scenario: cdc-dms
+description: A week of changes to orders as AWS DMS writes them to Amazon S3, LOAD files then one change file a minute with changes in it, beside _expected, the table a correct merge produces.
+perturbations:
+  - op: cdc
+    style: dms
+    schema: sales
+    inserts: 0.05
+    updates: 0.10
+    deletes: 0.01
+    updates_per_row: {family: geometric, mean: 1.4}
+    period: {start: "2026-10-01T00:00:00Z", duration: 7d}
+    file_interval: 1m
+    timestamp_column: dms_commit_ts
+    date_partition: {enabled: true, sequence: YYYYMMDD, delimiter: SLASH}
+    duplicate_delivery_rate: 0.001
+    out_of_order_rate: 0.002

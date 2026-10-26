@@ -17,15 +17,15 @@
       "additionalProperties": true
     },
     "file": {
-      "description": "The object's path under the destination, as the manifest's `files` names it. Beside a\none-file write, that file's name.",
+      "description": "The object's path under the destination, as the manifest's `files` names it, or its\n`cdc.files` for a fault in a change stream. Beside a one-file write, that file's name.",
       "type": "string"
     },
     "kind": {
-      "description": "What broke, as `malformed_rows` names it in `kinds`.",
-      "$ref": "#/$defs/FaultKind"
+      "description": "What broke: a kind `malformed_rows` names in `kinds`, or a fault `cdc` places in a change\nstream.",
+      "$ref": "#/$defs/ListedFault"
     },
     "line": {
-      "description": "The 1-based line the broken record starts on, a header counted. Null in a JSON array, and\nfor a fault of the whole file.",
+      "description": "The 1-based line the broken record starts on, a header counted. Null in a JSON array or a\nParquet file, and for a fault of the whole file.",
       "type": [
         "integer",
         "null"
@@ -34,7 +34,7 @@
       "minimum": 0
     },
     "row": {
-      "description": "The dataset row the record was generated as. Null for a copy, and for a fault of the whole\nfile.",
+      "description": "The dataset row the record was generated as, or in a change stream the row of its key, which\nlies past `dataset_rows` for a key the stream inserts. Null for a copy `duplicates` wrote,\nand for a fault of the whole file.",
       "type": [
         "integer",
         "null"
@@ -146,6 +146,32 @@
           "description": "A file whose decimal columns are stored one digit of scale wider than the rest.",
           "type": "string",
           "const": "parquet_decimal_scale_drift"
+        }
+      ]
+    },
+    "ListedFault": {
+      "description": "A fault a fault list names: one `malformed_rows` writes, or one `cdc` places.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FaultKind"
+        },
+        {
+          "$ref": "#/$defs/StreamFault"
+        }
+      ]
+    },
+    "StreamFault": {
+      "description": "A fault `cdc` places in a change stream, listed in `_faults.jsonl` beside it.",
+      "oneOf": [
+        {
+          "description": "A change written a second time, after its key's last change.",
+          "type": "string",
+          "const": "duplicate_delivery"
+        },
+        {
+          "description": "A change written after its key's last change, in a later file than its commit time.",
+          "type": "string",
+          "const": "out_of_order"
         }
       ]
     }

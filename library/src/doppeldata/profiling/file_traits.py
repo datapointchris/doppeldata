@@ -120,7 +120,6 @@ def csv_section(found: DialectFound, rejected: dict[str, int], profiled: Profile
     """The writer's dialect, what the first block's bytes hold, how the two sniffers read it, and the malformed rows."""
     dialect = found.dialect
     breaks = sum(found.line_terminators.values())
-    primary, confirm = found.named
     section = {
         'delimiter': dialect.delimiter,
         'quote': dialect.quote,
@@ -133,19 +132,27 @@ def csv_section(found: DialectFound, rejected: dict[str, int], profiled: Profile
         'detected_encoding': found.detected_encoding,
         'line_terminator_mix': {name: rate(count, breaks) for name, count in found.line_terminators.items() if count},
         'trailing_delimiter': found.trailing_delimiter,
-        'detector': {
-            'primary': primary,
-            'confirm': confirm,
-            'agreed': found.agreed,
-            'chosen': found.chosen,
-            'confidence': significant(found.confidence, RATE_DIGITS),
-            'sniffed': [sniffed_dialect(sniffer, named) for sniffer, named in found.named.items()],
-        },
+        'detector': detector_section(found),
         'malformed': malformed_rows(rejected, profiled.unparsed_rows, rows, profiled.described, k_min),
     }
     if dialect.encoding in WRITTEN_ENCODINGS:
         section['encoding'] = WRITTEN_ENCODINGS[dialect.encoding]
     return section
+
+
+def detector_section(found: DialectFound) -> dict[str, Any] | None:
+    """How the two sniffers read the first block, or None where the dialect was known and neither read it."""
+    if not found.named:
+        return None
+    primary, confirm = found.named
+    return {
+        'primary': primary,
+        'confirm': confirm,
+        'agreed': found.agreed,
+        'chosen': found.chosen,
+        'confidence': significant(found.confidence, RATE_DIGITS),
+        'sniffed': [sniffed_dialect(sniffer, named) for sniffer, named in found.named.items()],
+    }
 
 
 def sniffed_dialect(sniffer: str, named: tuple[str, str, str] | None) -> dict[str, Any]:

@@ -199,6 +199,123 @@ Each reason in `source.csv.malformed.by_type` becomes the kind DuckDB rejects fo
 - **A profile recording none of these is refused** as `invalid-parameter`, because the op would
   write nothing.
 
+## `cdc` writes an AWS DMS change stream, and `_expected` holds the table its merge must reach
+
+A pipeline that merges change data capture output is tested against a stream whose answer is
+known. The `cdc-dms` example writes changes to `orders` across its `period`, as AWS DMS writes them
+to Amazon S3:
+
+```bash
+doppeldata data generate orders --scenario cdc-dms --format parquet --out orders-cdc/
+```
+
+The full load is `sales/orders/LOAD00000001.parquet`. The changes follow, one file for each
+`file_interval` that holds a change, under date folders below `sales/orders/`. Each change record
+starts with `Op`, which is `I`, `U` or `D`, then `dms_commit_ts`. `_expected/sales/orders/` holds
+the table the merge must produce. [file-writers-and-manifest.md](file-writers-and-manifest.md)
+gives the layout.
+
+A merge keeps each key's last change by commit time, and drops a key whose last change is a
+delete. In DuckDB, against `_expected`:
+
+```sql
+create view stream as
+  select 'I' as Op, * from read_parquet('orders-cdc/sales/orders/LOAD*.parquet')
+  union all by name
+  select * from read_parquet('orders-cdc/sales/orders/**/[0-9]*.parquet', union_by_name = true);
+create view merged as
+  select * exclude (Op, dms_commit_ts) from stream
+  qualify row_number() over (partition by order_id order by dms_commit_ts desc) = 1 and Op <> 'D';
+create view expected as from read_parquet('orders-cdc/_expected/sales/orders/*.parquet');
+select (select count(*) from (from merged except all from expected)) as merged_only,
+       (select count(*) from (from expected except all from merged)) as expected_only;
+```
+
+Both counts are 0. A merge ordered by file name instead differs on exactly the keys of the
+records `_faults.jsonl` lists. Each is a change delivered late or twice.
+
+A scenario of your own sets the stream's shape. `doppeldata scenario show cdc` lists every
+parameter:
+
+```yaml
+scenario: orders-day
+perturbations:
+  - op: cdc
+    style: dms
+    schema: sales
+    updates: 0.2
+    deletes: 0.01
+    updates_per_row: {family: geometric, mean: 2}
+    period: {start: "2026-10-01T00:00:00Z", duration: 1d}
+    file_interval: 10m
+    out_of_order_rate: 0.01
+```
+
+```bash
+doppeldata data generate orders --scenario orders-day.scenario.yaml --format csv --writer '{"header": false}' --out orders-day/
+```
+
+Each parameter stands for a DMS endpoint setting, as the
+[S3 target guide](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Target.S3.html) names it:
+
+| Parameter | DMS setting |
+| --- | --- |
+| the write's format, `csv` or `parquet` | `DataFormat` |
+| the CSV writer's `header` | `AddColumnName` |
+| `timestamp_column` | `TimestampColumnName` |
+| `file_interval` | `CdcMaxBatchInterval` |
+| `date_partition` `sequence` and `delimiter` | `DatePartitionSequence` and `DatePartitionDelimiter` |
+| `include_op_for_full_load` | `IncludeOpForFullLoad` |
+| `timestamp_unit: ms`, or the Parquet writer's where the op sets none | `ParquetTimestampInMillisecond` |
+| every full-load row stamped with the period's `start` | `UseTaskStartTimeForFullLoadTimestamp: true` |
+
+- **A CSV write prints a header unless the writer's `header` is false.** `--writer '{"header":
+  false}'` writes what an endpoint with `AddColumnName` off does.
+- **A CSV stream carries no types, so its reader declares them.** Spark's `inferSchema` reads
+  `ship_zip` as an integer and drops its leading zeros. A reader with the profile's types
+  declared merges to `_expected` exactly.
+- **`_expected` is Parquet whatever the stream's format.** It is the merge's answer, so it keeps
+  every column's type.
+
+## `cdc` draws every change from the period, and places a fault only where a file-order merge breaks
+
+- **The full load is the table the profile generates.** `inserts`, `updates` and `deletes` are
+  shares of its rows. An insert continues the key past the full load's last value. An inserted key
+  is then updated and deleted at the same shares as a full-load key.
+- **Every commit time is drawn across `period`, never read from the clock.** So the same seed
+  writes the same bytes on any day. The full load's `dms_commit_ts` is `start`, as DMS stamps a
+  full load under `UseTaskStartTimeForFullLoadTimestamp`, and every change commits after it. A
+  key's changes commit in order: its insert first, its delete last.
+- **Commit times are drawn to the microsecond, so no key's two changes share one.** A source whose
+  commit times are coarser, such as MySQL's whole seconds, ties two changes to one key. The op does
+  not model that.
+- **An update redraws at least one column other than the key and the profile's `keys.primary`, and
+  leaves the rest as they were.** Its new values come from each column's sampler, on the op's own
+  stream. `updates_per_row` sets how many times an updated row changes.
+- **An op that writes rows applies to the full load and the inserts.** An update's new values
+  come from the samplers alone, so no other op reaches them.
+- **A change file holds the changes committed in one `file_interval`.** It is named for the
+  interval's start, as DMS names one `20141029-1134010000.csv`: the date, the time to the second,
+  then four digits of 100 µs. An interval with no change writes no file.
+- **Each fault rate is the chance an eligible change takes the fault.** A change is eligible when
+  its key's last change comes after it, and deletes the row or leaves it different from this
+  change's. A change file must also follow the one holding that last change. The faulted change
+  goes into that next file, after the key's last change, so a merge in file order keeps the wrong
+  row. The manifest's `faults` counts the faults placed.
+- **One draw per change picks its fault.** Below `out_of_order_rate` the change moves to the later
+  file. Below the two rates' sum it stays, and a second copy goes there. So the rates sum to 1 at
+  most.
+- **`schema_drift` beside `cdc` reshapes the changes committed past its cut.** The cut is
+  `after_fraction` of the period, so the stream changes shape mid-period, as a source table's
+  column change does. The interval holding the cut splits into two files there. A file starting at
+  or past the cut drifts, and the full load never does. `_expected` takes the drifted shape. A column the drift adds is null where
+  a key's last change came before the cut.
+- **A drifted CSV stream is written, since DMS writes a source's column change into its CSV files
+  too.** Each file's header names its own columns. A merge maps a renamed column back, as with
+  `coalesce(amount_usd, amount)`.
+- **The stream is held in memory while it is written.** A `cdc` write takes about 200 bytes a
+  change beyond what a plain write of the same rows holds. `data plan` counts the changes first.
+
 ## The engine applies the patch and the perturbations, inside the block path
 
 1. The engine applies the patch, giving the effective profile.
@@ -255,20 +372,31 @@ local run does.
 
 ## The ops that shape files apply only where files are written
 
-`schema_drift`, `small_files` and `malformed_rows` change the files rather than the rows.
+`schema_drift`, `small_files`, `malformed_rows` and `cdc` change the files rather than the rows.
 `generate`, `stream` and `doppeldata.spark.generate` write no files, so each refuses them as
-`op-needs-files`, naming the write that takes them. A write to one file refuses `schema_drift` and
-`small_files`, which act across files.
+`op-needs-files`, naming the write that takes them. A write to one file refuses `schema_drift`,
+`small_files` and `cdc`, which act across files.
 
-- **A file drifts when its first row lies at or past `after_fraction` of the rows.** The writers
-  apply the drift to the whole block before a range takes its rows. Its steps run as drop, widen,
-  rename, add, then reorder.
+- **`doppeldata.spark` refuses `cdc` as `op-needs-one-process`**, from `generate`, `struct_type`
+  and `write` alike, as it refuses any op the engine says orders the whole table. The stream orders
+  the whole table's changes by commit time, so one process writes it, and the refusal names
+  `doppeldata.write`.
+- **A `cdc` write refuses a format other than CSV or Parquet** as `op-not-for-format`, and
+  `timestamp_unit` on CSV the same way. It refuses `partition_by` as `invalid-parameter`, because
+  the change files are filed by commit date.
+- **A Parquet writer's `timestamp_unit` of `ms` or `us` sets the stream's where the op sets none.**
+  The writer's `s` or `ns`, and a writer's unit apart from the op's, are refused as
+  `invalid-parameter`, since DMS stores every timestamp at one unit.
+- **A file drifts when its first row lies at or past `after_fraction` of the rows.** Beside `cdc`,
+  the cut is that fraction of the period instead. The writers apply the drift to the whole block
+  before a range takes its rows. Its steps run as drop, widen, rename, add, then reorder.
 - **A drift no file reaches is refused**, naming `after_fraction`. A one-file dataset drifts
   nothing, which would leave the scenario silently unapplied.
 - **A partition key the drift drops or renames is refused**, because a drifted file could not be
   filed under it.
 - **A drift written as CSV, TSV or Arrow is refused** as `op-not-for-format`. Their files must
   share one header or schema to read as one table. Parquet, JSON and NDJSON read back as the union.
+  A `cdc` stream is the exception, because a CSV change stream changes shape as DMS writes one.
 - **An added column is drawn per written row**, so a copy and its source differ in it.
 - **`small_files` sizes the files from a lognormal**, tabulated as the layout's `rows_per_file`
   quantiles. Its sizes lay over the profile's, and a `file_rows` given to the write lays over both.
@@ -291,6 +419,14 @@ local run does.
   extremes come from the profile's `extremes`, else the outer quantiles.
 - **`partition_skew` gives each value named its share**, so a write partitioned by the column fills
   its directories in those shares.
+- **`cdc` keys every change by `key`, else the profile's one-column `dataset.keys.primary`.** A
+  profile stating neither, or a primary key of several columns, is refused as `no-primary-key`. A
+  key column must draw unique values, such as a sequence or a UUID with no nulls, or it is refused
+  as `op-not-for-column`.
+- **`cdc` refuses `duplicates` and `malformed_rows` beside it**, as `invalid-parameter`. A copied
+  row would hold its key twice in the full load, and the stream's own faults are its two rates. An
+  op writing the key, a `keys.primary` column, `Op` or the commit column is refused too, since
+  every change holds those as they are.
 
 ## Each refusal names its JSON Pointer before anything is generated
 
@@ -324,6 +460,12 @@ The data is measured against the effective profile, so a patched null rate is th
   `partition_share_delta` is named for its column, so `partition_skew` moves it.
 - **A column change on a column a perturbation writes passes**, its message naming it, as the
   columns a drift adds do.
+- **A `cdc` write is checked by its full load alone.** The check reads the full-load files the
+  manifest's `files` lists, and prints one notice naming them, that it left the change files and
+  `_expected` unmeasured. They are a
+  merge test's input and its answer, and their statistics move by design. The commit column passes
+  as a column `cdc` writes. A CSV full load written with no header is read in the dialect the
+  manifest records, its columns named as the plan names them, so it checks as a headed one does.
 - **Each expectation is measured by `Scenario.verify`.** `hot_keys.share` is the share of rows
   holding the column's `keys` most frequent values. `late_arrival.rate` is the share whose column
   is earlier than its `ingest`. `missingness.rate` is the share that is null, the profile's own

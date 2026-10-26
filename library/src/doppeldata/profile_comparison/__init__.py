@@ -15,9 +15,11 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from doppeldata import _core
+from doppeldata.dataset_generation import engine_plan
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import PoorFits
+from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
 from doppeldata.manifest import Manifest
 from doppeldata.manifest import written_manifest
@@ -47,10 +49,12 @@ from doppeldata.profile_comparison.scenario_moves import uncompared_malformed_ra
 from doppeldata.profile_comparison.thresholds import Thresholds
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import SampledTable
-from doppeldata.profiling import profile as profile_data
+from doppeldata.profiling import profile_in_dialect
 from doppeldata.profiling import sampled_table
+from doppeldata.profiling.backend import CsvDialect
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
+from doppeldata.profiling.file_traits import WRITTEN_ENCODINGS
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
@@ -85,7 +89,10 @@ def check(
     Where `data` names a directory or prefix a doppeldata write left `_manifest.json` in, or one file a manifest beside it
     records alone, InvalidScenario refuses a `scenario` other than the one it records, and no `scenario` where it records one.
     InvalidScenario also refuses data holding a fault a check cannot read back in its format, before any row is read.
-    `malformed_rate_delta` decides nothing on data that no malformed_rows asked for malformed rows in.
+    `malformed_rate_delta` decides nothing on data that no malformed_rows asked for malformed rows in. Where the manifest
+    records a `cdc` write, the check reads its full load alone, and a ProfilingWarning says the change files and the
+    expected table went unmeasured. Delimited files a manifest records are read in the dialect it records, never one
+    sniffed from them, and files with no header take their column names from the plan it records.
 
     `against` is the real data, read as `data` is. Each of `SCORES` then scores a seeded sample of `against_sample` rows
     from each side, `DEFAULT_SAMPLE_ROWS` unless given, as SDMetrics defines it. A score decides only where `thresholds`
@@ -112,6 +119,9 @@ def check(
     thresholds.check_scores(scoring=against is not None, refusing='no real data is named to score it against')
     columns = real_data_scores.scored_columns(source)
     named = data_named(data)
+    dialect = written_dialect(written, profile, applied) if written is not None else None
+    if written is not None and written.cdc is not None:
+        data = full_load(written, data)
     sample_rows = against_sample or DEFAULT_SAMPLE_ROWS
     real = None
     if against is not None:
@@ -131,7 +141,9 @@ def check(
         warnings.simplefilter('ignore', ColumnsNotFrozen)
         # Generated data is never the data the profile was made from, so the profile is always made again.
         warnings.simplefilter('ignore', EarlierProfileNotReused)
-        checked = profile_data(data, policy=policy, k_min=k_min, edges_from=effective, packs=[each.pack.name for each in packs])
+        checked = profile_in_dialect(
+            data, dialect, policy=policy, k_min=k_min, edges_from=effective, packs=[each.pack.name for each in packs]
+        )
     observed = checked.to_plain()
     fingerprint = (observed.get('generated') or {}).get('source_fingerprint')
     # A check vouches for the data, so a statistic the profile states and the data cannot supply fails.
@@ -167,6 +179,9 @@ def unreadable_refusal(scenario: Scenario | None, written: Manifest | None, data
     in the data's format, of the kinds the manifest counts where there is one, else of those the scenario's malformed_rows
     names. A local path that does not exist is left to the profiler, which says so."""
     cannot = 'which a check cannot read back as one table; check data written without them'
+    if written is not None and written.cdc is not None:
+        # A change stream's faults lie in its change files, which a check does not read.
+        return None
     if written is not None:
         held = unreadable(written.faults or {}, written.format)
         return f'holds {" and ".join(held)} faults, {cannot}' if held else None
@@ -177,6 +192,43 @@ def unreadable_refusal(scenario: Scenario | None, written: Manifest | None, data
     data_format = format_of_data(data) if named_kinds else None
     named = unreadable(named_kinds, data_format) if data_format is not None else []
     return f'is checked under a scenario writing {" and ".join(named)} faults, {cannot}' if named else None
+
+
+def full_load(written: Manifest, data: str | os.PathLike[str]) -> list[str]:
+    """The full-load files of the `cdc` write at `data`, which a check reads in place of the whole write, warned of once."""
+    root = os.fspath(data).rstrip('/')
+    stream = written.cdc or {}
+    loads = [file['path'] for file in written.files]
+    named = ' to '.join(dict.fromkeys([loads[0], loads[-1]])) if loads else 'no file'
+    message = (
+        f'{root} holds a cdc change stream, so the check read its full load, {named}, and left its '
+        f'{len(stream.get("files") or []):,} change files and {stream.get("expected_prefix")} unmeasured: they are a merge '
+        "test's input and its answer"
+    )
+    warnings.warn(message, ProfilingWarning, stacklevel=3)
+    return [f'{root}/{file["path"]}' for file in written.files]
+
+
+def written_dialect(written: Manifest, profile: Profile, scenario: Scenario | None) -> CsvDialect | None:
+    """The dialect a delimited write's manifest records, or None for another format. Where the files hold no header,
+    the columns are named as the engine names them for the plan the manifest records."""
+    if written.format not in ('csv', 'tsv'):
+        return None
+    writer = written.document['writer']
+    names: tuple[str, ...] = ()
+    if not writer['header']:
+        identity = written.identity
+        plan = engine_plan(profile, int(identity['dataset_rows']), int(identity['seed']), scenario)
+        names = tuple(plan.file_columns(written.document['layout']['partition_by']))
+    read_encodings = {spelled: read for read, spelled in WRITTEN_ENCODINGS.items()}
+    return CsvDialect(
+        delimiter=writer['delimiter'] or ('\t' if written.format == 'tsv' else ','),
+        quote=writer['quote'],
+        escape=writer['escape'] or writer['quote'],
+        header=writer['header'],
+        encoding=read_encodings[writer['encoding']],
+        names=names,
+    )
 
 
 def unreadable(kinds: Iterable[str], data_format: str) -> list[str]:

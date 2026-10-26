@@ -73,16 +73,17 @@ class CsvDialect:
 
 @dc.dataclass(frozen=True)
 class DialectFound:
-    """A delimited source's dialect, how each sniffer read the first block, and what that block's bytes hold."""
+    """A delimited source's dialect, how each sniffer read the first block, and what that block's bytes hold. A dialect
+    the source was known to be written in is read with no sniffer, so `named` is empty and `agreed` and `chosen` None."""
 
     dialect: CsvDialect
     # Each sniffer's delimiter, quote and escape by its name, the one read first leading, or None where it found no
     # dialect. A quote or escape it named none of is empty.
     named: dict[str, tuple[str, str, str] | None]
     # Whether the two read the same delimiter and quote, a quote neither names being read as `"`.
-    agreed: bool
+    agreed: bool | None
     # The sniffer whose dialect was read, or `default` where neither named one.
-    chosen: str
+    chosen: str | None
     # The share of the block's records that split into the most common number of fields under `dialect`.
     confidence: float
     # charset-normalizer's name for the block's encoding, such as `ascii` or `cp1252`.
@@ -189,7 +190,8 @@ class Source:
     files: tuple[SourceFile, ...] = ()
     # Any object exporting the Arrow PyCapsule stream interface, such as a pyarrow, Polars or pandas table.
     table: Any = None
-    dialect: CsvDialect = CsvDialect()
+    # The dialect a delimited source is known to be written in, read with no sniffer, or None to sniff it.
+    dialect: CsvDialect | None = None
     # The name the profile takes when none is given: the file's stem or the directory's name.
     name: str = 'table'
     # The paths and URLs as they were named, which an error about the source quotes.

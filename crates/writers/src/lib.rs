@@ -6,6 +6,7 @@
 //! [`write_ranges`] and [`commit`] split one write across processes, such as Spark executors.
 
 mod byte_sink;
+mod cdc;
 mod destination;
 mod encoders;
 mod layout;
@@ -31,7 +32,11 @@ pub use layout::layout;
 pub use layout::layout_from_manifest;
 pub use partition::DEFAULT_PARTITION;
 pub use planned_ranges::PlannedRange;
+pub use planned_ranges::PlannedStream;
+pub use planned_ranges::file_columns;
+pub use planned_ranges::planned_output;
 pub use planned_ranges::planned_ranges;
+pub use planned_ranges::planned_stream;
 pub use size_estimate::estimate_bytes;
 pub use write::RangesWritten;
 pub use write::RunOptions;

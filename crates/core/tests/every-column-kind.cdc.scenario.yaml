@@ -1,0 +1,21 @@
+# A change stream over the determinism fixture, whose files and expected table the contract test
+# pins. Every cdc parameter that moves a draw is set. A row op shapes the full load and the
+# inserts, and appends a column no update changes. A schema drift cuts the change files by commit
+# time, so the pin covers the drifted shape and the expected table's added column.
+scenario: every-column-kind-cdc
+perturbations:
+  - {op: late_arrival, column: timestamp_uniform, rate: 0.1, lag: {family: lognormal, median: 2d}, ingest: ingested_at}
+  - op: cdc
+    style: dms
+    schema: fixture
+    key: sequence
+    inserts: 0.05
+    updates: 0.2
+    deletes: 0.05
+    updates_per_row: {family: geometric, mean: 2}
+    period: {start: "2026-10-01T00:00:00Z", duration: 2d}
+    file_interval: 10m
+    date_partition: {sequence: YYYYMMDDHH}
+    duplicate_delivery_rate: 0.03
+    out_of_order_rate: 0.03
+  - {op: schema_drift, after_fraction: 0.5, add: [{name: drifted_note, type: utf8}], rename: {status: drifted_status}, widen: {narrow_int8: int64}}

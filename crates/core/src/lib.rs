@@ -17,6 +17,8 @@ pub mod scenario;
 mod values_digest;
 
 pub use identity::DatasetIdentity;
+pub use perturbations::CdcPlan;
+pub use perturbations::CdcStream;
 pub use perturbations::FileFault;
 pub use perturbations::LineEnd;
 pub use perturbations::MalformedPlan;
@@ -24,6 +26,9 @@ pub use perturbations::RowFault;
 pub use perturbations::RowFaults;
 pub use perturbations::ScenarioFault;
 pub use perturbations::SchemaDriftPlan;
+pub use perturbations::StreamFaultRecord;
+pub use perturbations::StreamOutline;
+pub use perturbations::names_stream_file;
 pub use physical_type::physical_type_name;
 pub use plan::AppliedScenario;
 pub use plan::BlockOutOfRange;
@@ -43,6 +48,7 @@ pub use samplers::check_digit_holds;
 pub use samplers::file_rows_draws;
 pub use samplers::pattern_problem;
 pub use samplers::shape_of;
+pub use values_digest::plan_values_digest;
 pub use values_digest::values_digest;
 
 /// The engine's release, which is the tag the wheel was built from.

@@ -9,16 +9,18 @@ use arrow_array::RecordBatch;
 use doppeldata_core::AppliedScenario;
 use doppeldata_core::BLOCK_ROWS;
 use doppeldata_core::DatasetIdentity;
+use doppeldata_core::Plan;
 use doppeldata_core::STREAM_VERSION;
 use doppeldata_core::TextCell;
+use doppeldata_core::plan_values_digest;
 use doppeldata_core::profile::Profile;
 use doppeldata_core::scenario::Scenario;
 use doppeldata_core::values_digest;
 use rayon::prelude::*;
 
 // `crates/check-pinned-values-through-wheel.py` reads PROFILE_DIGEST, SCENARIO_DIGEST, SEED, ROWS,
-// PINNED_STREAM_VERSION, PINNED_VALUES and PINNED_SCENARIO_VALUES from this file, and generates the
-// fixture through the built wheel, so each stays a literal on one line.
+// PINNED_STREAM_VERSION, PINNED_VALUES, PINNED_SCENARIO_VALUES and PINNED_CDC_VALUES from this
+// file, and generates the fixture through the built wheel, so each stays a literal on one line.
 const PROFILE_DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const SCENARIO_DIGEST: &str = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 const SEED: u64 = 20_251_025;
@@ -28,13 +30,16 @@ const _: () = assert!(
     "two whole blocks and part of a third"
 );
 
-/// The stream version the fixture's values were generated under, and a SHA-256 over them, without a
-/// scenario and with the scenario fixture. A release freezes all three: once released, a change to
-/// any value raises STREAM_VERSION. `crates/check-stream-version-raised.sh` reads these lines and
-/// refuses a new hash at a released version.
+/// The stream version the fixture's values were generated under, and a SHA-256 over them:
+/// PINNED_VALUES without a scenario, PINNED_SCENARIO_VALUES with the scenario fixture, and
+/// PINNED_CDC_VALUES with the cdc fixture, whose hash also covers every change file and the
+/// expected table. A release freezes the version and every hash beside it: once released, a change
+/// to any value raises STREAM_VERSION. `crates/check-stream-version-raised.sh` reads these lines
+/// and refuses a new hash at a released version.
 const PINNED_STREAM_VERSION: u32 = 9;
 const PINNED_VALUES: &str = "5b1f0e247a6e63037c68c74370b06d3c9ff321427de3eed57ee6b348fdf14f03";
 const PINNED_SCENARIO_VALUES: &str = "b41a2f0cf005eea2961f4c01edd10cce28762df492da6fc619812bef83daf6e7";
+const PINNED_CDC_VALUES: &str = "f9032a90598cad987720a5143c89e0bcf0c21fb7b0d74dd5d5df98fbf37a1a7b";
 
 fn document(path: &Path) -> serde_json::Value {
     let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -46,8 +51,11 @@ fn fixture() -> serde_json::Value {
 }
 
 fn scenario_fixture() -> Scenario {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/every-column-kind.scenario.yaml");
-    serde_json::from_value(document(&path)).unwrap()
+    scenario_at("tests/every-column-kind.scenario.yaml")
+}
+
+fn scenario_at(path: &str) -> Scenario {
+    serde_json::from_value(document(&Path::new(env!("CARGO_MANIFEST_DIR")).join(path))).unwrap()
 }
 
 type Block = (RecordBatch, Vec<Vec<TextCell>>);
@@ -61,13 +69,20 @@ fn generate_with(document: &serde_json::Value, scenario: Option<&Scenario>, thre
 }
 
 fn generate_rows(document: &serde_json::Value, scenario: Option<&Scenario>, seed: u64, rows: u64, threads: usize) -> Vec<Block> {
+    blocks(&planned(document, scenario, seed, rows), threads)
+}
+
+fn planned(document: &serde_json::Value, scenario: Option<&Scenario>, seed: u64, rows: u64) -> Plan {
     let patched = scenario.map_or_else(|| document.clone(), |scenario| scenario.patched_profile(document).unwrap());
     let profile: Profile = serde_json::from_value(patched).unwrap();
     let applied = scenario.map(|scenario| AppliedScenario {
         scenario,
         digest: SCENARIO_DIGEST,
     });
-    let plan = doppeldata_core::plan_with_scenario(&profile, PROFILE_DIGEST, applied, seed, rows).unwrap();
+    doppeldata_core::plan_with_scenario(&profile, PROFILE_DIGEST, applied, seed, rows).unwrap()
+}
+
+fn blocks(plan: &Plan, threads: usize) -> Vec<Block> {
     let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
     pool.install(|| {
         (0..plan.block_count())
@@ -75,6 +90,11 @@ fn generate_rows(document: &serde_json::Value, scenario: Option<&Scenario>, seed
             .map(|block| (plan.generate_block(block).unwrap(), plan.text_cells(block).unwrap()))
             .collect()
     })
+}
+
+fn pinned_hash(document: &serde_json::Value, scenario: Option<&Scenario>, seed: u64, rows: u64, threads: usize) -> String {
+    let plan = planned(document, scenario, seed, rows);
+    plan_values_digest(&plan, &blocks(&plan, threads), threads).unwrap()
 }
 
 #[test]
@@ -124,6 +144,23 @@ fn a_scenario_values_depend_on_no_thread_count() {
     );
 }
 
+#[test]
+fn a_change_stream_depends_on_no_thread_count() {
+    let document = fixture();
+    let scenario = scenario_at("tests/every-column-kind.cdc.scenario.yaml");
+    let one_thread = pinned_hash(&document, Some(&scenario), SEED, ROWS, 1);
+    assert_eq!(
+        one_thread,
+        pinned_hash(&document, Some(&scenario), SEED, ROWS, 16),
+        "16 threads changed a change file or the expected table"
+    );
+    assert_eq!(
+        (STREAM_VERSION, one_thread.as_str()),
+        (PINNED_STREAM_VERSION, PINNED_CDC_VALUES),
+        "the change stream changed; a change to a released stream version's draws raises STREAM_VERSION"
+    );
+}
+
 /// The fixtures of the last release, generated by this build. `crates/check-stream-version-raised.sh`
 /// runs it when a fixture changed since that release at the same stream version, and names the
 /// release's fixtures, seed, rows and pinned hash in the environment.
@@ -139,7 +176,7 @@ fn a_released_fixture_generates_the_values_its_release_pinned() {
     let seed = given("DOPPELDATA_RELEASED_SEED").parse().unwrap();
     let rows = given("DOPPELDATA_RELEASED_ROWS").parse().unwrap();
     assert_eq!(
-        values_digest(&generate_rows(&profile, scenario.as_ref(), seed, rows, 4)),
+        pinned_hash(&profile, scenario.as_ref(), seed, rows, 4),
         given("DOPPELDATA_RELEASED_VALUES"),
         "a released fixture's values changed at its stream version; a change to a released stream version's draws raises STREAM_VERSION"
     );

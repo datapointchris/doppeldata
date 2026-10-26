@@ -26,6 +26,9 @@ which task makes them.
 - **A scenario's perturbations apply inside each block, so `scenario=` moves no value with the
   partition count either.** `generate` refuses `schema_drift`, `small_files` and `malformed_rows`
   as `op-needs-files`, because they shape files and a DataFrame has none. `write` applies them.
+- **`generate`, `struct_type` and `write` refuse `cdc` as `op-needs-one-process`.** A change
+  stream orders the whole table's changes by commit time, so no task can write its share alone.
+  The refusal names `doppeldata.write`, which writes the stream from one process.
 - **An executor running another doppeldata release or stream version than the driver refuses the
   task.** A dataset's bytes are the build's that writes them, so a mixed cluster would write a
   manifest that names one build over files from two. Every unstamped build reports version 0.0.0,

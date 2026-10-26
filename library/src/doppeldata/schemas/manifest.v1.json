@@ -4,6 +4,18 @@
   "description": "The record of a generated dataset, which with its profile and scenario regenerates every file byte for byte.",
   "type": "object",
   "properties": {
+    "cdc": {
+      "description": "The change stream and the expected table a `cdc` write adds beside its full load, which\n`files` lists. Null for any other write. A release reads a manifest no newer than itself.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ManifestCdc"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "dataset_digest": {
       "description": "`sha256:` and the hex SHA-256 of `identity`'s RFC 8785 canonical JSON.",
       "type": "string"
@@ -18,7 +30,7 @@
       "minimum": 0
     },
     "faults": {
-      "description": "The faults the write's fault list holds, counted by kind, or null for a write with no\n`malformed_rows`. A partial manifest counts the faults of the objects it lists.",
+      "description": "The faults the write's fault list holds, counted by kind, or null for a write that lists\nnone: one with no `malformed_rows`, and no `cdc` with a fault rate. A partial manifest counts\nthe faults of the objects it lists.",
       "type": [
         "object",
         "null"
@@ -31,7 +43,7 @@
       "default": null
     },
     "files": {
-      "description": "Every object written, in path order.",
+      "description": "Every object of the rows written, in path order. Under `cdc` these are the full-load\nfiles, and `cdc` lists the change files and the expected table.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/ManifestFile"
@@ -218,6 +230,31 @@
       },
       "additionalProperties": false
     },
+    "ChangeCounts": {
+      "type": "object",
+      "properties": {
+        "delete": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "insert": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "update": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "insert",
+        "update",
+        "delete"
+      ]
+    },
     "Decimal": {
       "description": "A 64-bit unsigned integer in decimal, because a JSON number is exact only to 2^53.",
       "type": "string",
@@ -328,6 +365,106 @@
       },
       "additionalProperties": false
     },
+    "FaultKind": {
+      "description": "One way a file is broken. A row kind breaks one record, and a file kind a whole file.",
+      "oneOf": [
+        {
+          "description": "A record ending before its last 1 to n − 1 fields.",
+          "type": "string",
+          "const": "ragged_short"
+        },
+        {
+          "description": "A record carrying 1 or 2 fields past the last.",
+          "type": "string",
+          "const": "ragged_long"
+        },
+        {
+          "description": "A lone quote inside a quoted field.",
+          "type": "string",
+          "const": "unescaped_quote"
+        },
+        {
+          "description": "A line break inside a quoted string field, which is legal CSV.",
+          "type": "string",
+          "const": "embedded_newline"
+        },
+        {
+          "description": "`N/A`, `-`, `?` or a unit suffix in place of a typed value, or text of another type.",
+          "type": "string",
+          "const": "type_invalid"
+        },
+        {
+          "description": "A lone continuation byte or the bytes C3 28 inside a field.",
+          "type": "string",
+          "const": "invalid_utf8"
+        },
+        {
+          "description": "A record past DuckDB's default `max_line_size`.",
+          "type": "string",
+          "const": "line_too_long"
+        },
+        {
+          "description": "The file's last record cut mid-field, with no line break, as a cut-off upload leaves it.",
+          "type": "string",
+          "const": "truncated_line"
+        },
+        {
+          "description": "A file starting with the UTF-8 byte order mark.",
+          "type": "string",
+          "const": "bom"
+        },
+        {
+          "description": "A file whose records end in LF, CRLF and CR mixed.",
+          "type": "string",
+          "const": "mixed_line_endings"
+        },
+        {
+          "description": "A file written with another delimiter than the rest.",
+          "type": "string",
+          "const": "wrong_delimiter"
+        },
+        {
+          "description": "A file whose header renames a column or swaps two, its values swapped with it.",
+          "type": "string",
+          "const": "header_drift"
+        },
+        {
+          "description": "A file encoded windows-1252 among UTF-8 ones.",
+          "type": "string",
+          "const": "latin1_file"
+        },
+        {
+          "description": "A JSON array among NDJSON files, or an NDJSON file among JSON arrays.",
+          "type": "string",
+          "const": "json_layout_mix"
+        },
+        {
+          "description": "A record missing its closing brace.",
+          "type": "string",
+          "const": "json_unbalanced"
+        },
+        {
+          "description": "A number or boolean written as a string.",
+          "type": "string",
+          "const": "json_type_flip"
+        },
+        {
+          "description": "A file whose timestamp columns are stored at another unit than the rest.",
+          "type": "string",
+          "const": "parquet_timestamp_unit_drift"
+        },
+        {
+          "description": "A file whose timestamp columns are stored as INT96, as Hive and Impala wrote them.",
+          "type": "string",
+          "const": "parquet_int96"
+        },
+        {
+          "description": "A file whose decimal columns are stored one digit of scale wider than the rest.",
+          "type": "string",
+          "const": "parquet_decimal_scale_drift"
+        }
+      ]
+    },
     "FileRows": {
       "description": "The rows each object holds, before a range is scaled by its partition values.",
       "anyOf": [
@@ -423,6 +560,50 @@
       "enum": [
         "lf",
         "crlf"
+      ]
+    },
+    "ManifestCdc": {
+      "description": "What a `cdc` write adds beside its full load.",
+      "type": "object",
+      "properties": {
+        "changes": {
+          "description": "The changes the stream holds, counted by operation, a fault's second delivery left out.",
+          "$ref": "#/$defs/ChangeCounts"
+        },
+        "expected": {
+          "description": "Every part of the table a correct merge of the stream produces, in path order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StreamFile"
+          }
+        },
+        "expected_prefix": {
+          "description": "Where the expected table lies under the destination, `_expected/<schema>/<table>/`.",
+          "type": "string"
+        },
+        "files": {
+          "description": "Every change file, in path order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StreamFile"
+          }
+        },
+        "prefix": {
+          "description": "Where the full load and the change files lie under the destination, `<schema>/<table>/`.",
+          "type": "string"
+        },
+        "style": {
+          "description": "The layout the stream takes, as the op's `style` names it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "style",
+        "prefix",
+        "expected_prefix",
+        "changes",
+        "files",
+        "expected"
       ]
     },
     "ManifestFile": {
@@ -756,6 +937,51 @@
       "required": [
         "name",
         "digest"
+      ]
+    },
+    "StreamFault": {
+      "description": "A fault `cdc` places in a change stream, listed in `_faults.jsonl` beside it.",
+      "oneOf": [
+        {
+          "description": "A change written a second time, after its key's last change.",
+          "type": "string",
+          "const": "duplicate_delivery"
+        },
+        {
+          "description": "A change written after its key's last change, in a later file than its commit time.",
+          "type": "string",
+          "const": "out_of_order"
+        }
+      ]
+    },
+    "StreamFile": {
+      "description": "One object a `cdc` write stores beside its full load.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "path": {
+          "description": "The object's path under the destination, `/`-separated.",
+          "type": "string"
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sha256": {
+          "description": "`sha256:` and the hex SHA-256 of the object's bytes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "rows",
+        "bytes",
+        "sha256"
       ]
     },
     "TextCompression": {

@@ -18,6 +18,7 @@ use std::time::SystemTime;
 
 use doppeldata_core::BLOCK_ROWS;
 use doppeldata_core::Plan;
+use doppeldata_core::ScenarioFault;
 use doppeldata_core::format_settings::Output;
 use doppeldata_core::manifest::FAULTS_FILE_NAME;
 use doppeldata_core::manifest::FaultRecord;
@@ -34,12 +35,14 @@ use tokio::runtime::RuntimeFlavor;
 use crate::WriteError;
 use crate::byte_sink::ByteSink;
 use crate::byte_sink::ObjectSink;
+use crate::cdc;
 use crate::destination::Destination;
 use crate::encoders;
 use crate::encoders::Faulting;
 use crate::encoders::FileEncoder;
 use crate::layout::FileLayout;
 use crate::layout::FileRange;
+use crate::layout::LayoutError;
 use crate::layout::layout;
 use crate::layout::layout_from_manifest;
 use crate::partition::PartitionValues;
@@ -99,13 +102,30 @@ const UPLOAD_THREADS: usize = 2;
 /// Writes `plan`'s dataset to `destination`, and the manifest beside it, which is also returned.
 pub fn write(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination: &Destination) -> Result<Manifest, WriteFailure> {
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
-    execute(plan, &layout, new_manifest(plan, options, destination), run, destination)
+    match plan.cdc() {
+        Some(cdc) => cdc::write(plan, cdc, &layout, new_manifest(plan, options, destination), run, destination),
+        None => execute(plan, &layout, new_manifest(plan, options, destination), run, destination),
+    }
+}
+
+/// Refuses a write split across processes under an op that orders the whole table.
+fn refuse_split(plan: &Plan) -> Result<(), WriteError> {
+    match plan.one_process_op() {
+        Some((field, op)) => Err(LayoutError::Scenario {
+            fault: ScenarioFault::OpNeedsOneProcess,
+            field: field.into(),
+            message: format!("{op} orders the whole table, so one process writes the dataset; call write"),
+        }
+        .into()),
+        None => Ok(()),
+    }
 }
 
 /// Claims `destination` for the dataset [`write`] would write there, as `write` does before its
 /// first object. Any process holding the same plan and options then writes ranges with
 /// [`write_ranges`], and one calls [`commit`] with every range's records.
 pub fn claim(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination: &Destination) -> Result<(), WriteFailure> {
+    refuse_split(plan)?;
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
     let manifest = claimed(plan, &layout, new_manifest(plan, options, destination))?;
     on_upload_runtime(run, |runtime| Ok(runtime.block_on(destination.prepare(run.replace, &manifest))?))
@@ -139,6 +159,7 @@ pub fn write_ranges(
     run: &RunOptions,
     destination: &Destination,
 ) -> Result<RangesWritten, WriteFailure> {
+    refuse_split(plan)?;
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
     let selected = ranges
         .iter()
@@ -185,6 +206,7 @@ pub fn commit(
     run: &RunOptions,
     destination: &Destination,
 ) -> Result<Manifest, WriteFailure> {
+    refuse_split(plan)?;
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
     let files: BTreeMap<String, ManifestFile> = written.files.into_iter().map(|file| (file.path.clone(), file)).collect();
     let mut manifest = new_manifest(plan, options, destination);
@@ -252,8 +274,12 @@ pub fn regenerate(plan: &Plan, manifest: &Manifest, run: &RunOptions, destinatio
         manifest.layout.clone(),
         destination.url.clone(),
     );
-    let written = execute(plan, &layout, fresh, run, destination)?;
-    let differ = differing_files(&manifest.files, &written.files);
+    let written = match plan.cdc() {
+        Some(cdc) => cdc::write(plan, cdc, &layout, fresh, run, destination)?,
+        None => execute(plan, &layout, fresh, run, destination)?,
+    };
+    let mut differ = differing_files(&manifest.files, &written.files);
+    differ.extend(cdc::differing_stream_files(manifest.cdc.as_ref(), written.cdc.as_ref()));
     if differ.is_empty() {
         Ok(written)
     } else {
@@ -295,52 +321,79 @@ fn profile_record(plan: &Plan, path: Option<String>) -> ManifestProfile {
 struct Run<'a> {
     plan: &'a Plan,
     layout: &'a FileLayout,
-    ranges: &'a [FileRange],
     output: &'a Output,
     partitioner: Partitioner,
     drifted_partitioner: Option<Partitioner>,
     destination: &'a Destination,
     runtime: Handle,
     prints_text_cells: bool,
-    cancel: Option<Arc<AtomicBool>>,
-    next_range: AtomicUsize,
-    completed_ranges: AtomicUsize,
-    stop: AtomicBool,
     files: Mutex<Vec<ManifestFile>>,
     faults: Mutex<Vec<FaultRecord>>,
-    error: Mutex<Option<WriteError>>,
+}
+
+/// Whether a run's jobs stop: one failed, or the caller cancelled.
+pub(crate) struct Stop<'a> {
+    failed: AtomicBool,
+    cancel: Option<&'a AtomicBool>,
+}
+
+impl Stop<'_> {
+    pub(crate) fn stopped(&self) -> bool {
+        self.failed.load(Ordering::Relaxed) || self.cancelled()
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+    }
+}
+
+/// Runs `work` over `jobs` on up to `threads` threads, each taking the next job in turn, until one
+/// fails or `cancel` is set. Returns the first failure, else [`WriteError::Cancelled`] where a job
+/// was left unfinished by `cancel`. A job checks the [`Stop`] it is handed between its steps.
+pub(crate) fn run_jobs<J: Sync>(
+    jobs: &[J],
+    threads: usize,
+    cancel: Option<&AtomicBool>,
+    work: impl Fn(&J, &Stop) -> Result<(), WriteError> + Sync,
+) -> Option<WriteError> {
+    let stop = Stop {
+        failed: AtomicBool::new(false),
+        cancel,
+    };
+    let (next, completed, first_error) = (AtomicUsize::new(0), AtomicUsize::new(0), Mutex::new(None));
+    thread::scope(|scope| {
+        for _ in 0..threads.min(jobs.len()).max(1) {
+            scope.spawn(|| {
+                while !stop.stopped() {
+                    let Some(job) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) else {
+                        return;
+                    };
+                    if let Err(error) = work(job, &stop) {
+                        if !matches!(error, WriteError::Cancelled) {
+                            first_error.lock().expect("no worker panics holding it").get_or_insert(error);
+                        }
+                        stop.failed.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                    completed.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+        }
+    });
+    let unfinished = completed.load(Ordering::Relaxed) < jobs.len();
+    let cancelled = unfinished && stop.cancelled();
+    first_error
+        .into_inner()
+        .expect("no worker panics holding it")
+        .or_else(|| cancelled.then_some(WriteError::Cancelled))
 }
 
 impl Run<'_> {
-    fn stopped(&self) -> bool {
-        self.stop.load(Ordering::Relaxed) || self.cancel.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed))
-    }
-
-    fn work(&self) {
-        while !self.stopped() {
-            let Some(range) = self.ranges.get(self.next_range.fetch_add(1, Ordering::Relaxed)) else {
-                return;
-            };
-            match self.write_range(range) {
-                Ok(()) => {
-                    self.completed_ranges.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(error) => {
-                    if !matches!(error, WriteError::Cancelled) {
-                        self.error.lock().expect("no worker panics holding it").get_or_insert(error);
-                    }
-                    self.stop.store(true, Ordering::Relaxed);
-                    return;
-                }
-            }
-        }
-    }
-
     /// Generates `range`'s blocks, takes the rows filed with the range's generated rows, and
     /// encodes them into one object per partition value. A range at or past a schema drift's cut
     /// takes them in the drifted shape. A block shared with the neighboring range is generated by
     /// both.
-    fn write_range(&self, range: &FileRange) -> Result<(), WriteError> {
+    fn write_range(&self, range: &FileRange, stop: &Stop) -> Result<(), WriteError> {
         let mut open: BTreeMap<PartitionValues, (String, Box<dyn FileEncoder>, u64)> = BTreeMap::new();
         let end = range.first_row + range.rows;
         let drifted = self.plan.drift().is_some_and(|drift| range.first_row >= drift.first_row());
@@ -349,7 +402,7 @@ impl Run<'_> {
             _ => &self.partitioner,
         };
         for block in range.first_row / BLOCK_ROWS..=(end - 1) / BLOCK_ROWS {
-            if self.stopped() {
+            if stop.stopped() {
                 return Err(WriteError::Cancelled);
             }
             let block_first = block * BLOCK_ROWS;
@@ -423,11 +476,11 @@ fn store_faults(runtime: &Handle, destination: &Destination, faults: &[FaultReco
     Ok(())
 }
 
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn worker_threads(threads: usize) -> usize {
+pub(crate) fn worker_threads(threads: usize) -> usize {
     match threads {
         0 => thread::available_parallelism().map_or(1, |count| count.get()),
         threads => threads,
@@ -436,7 +489,10 @@ fn worker_threads(threads: usize) -> usize {
 
 /// Runs `work` on a thread this module spawns, with `run`'s upload runtime or one built for the
 /// call, so no caller's thread is ever blocked on from within a runtime.
-fn on_upload_runtime<T: Send>(run: &RunOptions, work: impl FnOnce(&Handle) -> Result<T, WriteFailure> + Send) -> Result<T, WriteFailure> {
+pub(crate) fn on_upload_runtime<T: Send>(
+    run: &RunOptions,
+    work: impl FnOnce(&Handle) -> Result<T, WriteFailure> + Send,
+) -> Result<T, WriteFailure> {
     if run
         .runtime
         .as_ref()
@@ -488,34 +544,18 @@ fn write_ranges_on(
     let shared = Run {
         plan,
         layout,
-        ranges,
         output,
         partitioner: partitioner(plan, layout),
         drifted_partitioner: drifted_partitioner(plan, layout),
         destination,
         runtime: runtime.clone(),
         prints_text_cells: output.is_text(),
-        cancel: run.cancel.clone(),
-        next_range: AtomicUsize::new(0),
-        completed_ranges: AtomicUsize::new(0),
-        stop: AtomicBool::new(false),
         files: Mutex::new(Vec::new()),
         faults: Mutex::new(Vec::new()),
-        error: Mutex::new(None),
     };
-    let workers = worker_threads(run.threads).min(ranges.len()).max(1);
-    thread::scope(|workers_scope| {
-        for _ in 0..workers {
-            workers_scope.spawn(|| shared.work());
-        }
+    let error = run_jobs(ranges, worker_threads(run.threads), run.cancel.as_deref(), |range, stop| {
+        shared.write_range(range, stop)
     });
-    let unwritten = shared.completed_ranges.load(Ordering::Relaxed) < ranges.len();
-    let cancelled = unwritten && shared.cancel.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed));
-    let error = shared
-        .error
-        .into_inner()
-        .expect("no worker panics holding it")
-        .or_else(|| cancelled.then_some(WriteError::Cancelled));
     let mut files = shared.files.into_inner().expect("no worker panics holding it");
     files.sort_by(|a, b| a.path.cmp(&b.path));
     let mut faults = shared.faults.into_inner().expect("no worker panics holding it");
@@ -546,7 +586,7 @@ fn execute(
 /// Stores the record of a run that wrote `manifest.files`, and `faults` before it where the run
 /// wrote under `malformed_rows`. It is partial, and the run fails, when `error` stopped the run or
 /// a range of `layout` has no object recorded.
-fn finish(
+pub(crate) fn finish(
     runtime: &Handle,
     destination: &Destination,
     layout: &FileLayout,

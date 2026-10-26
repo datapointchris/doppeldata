@@ -63,6 +63,7 @@ doppeldata scenario check hot-key orders                            # a scenario
 doppeldata data generate orders --scenario hot-key --out orders/    # five customers place 60% of the orders
 doppeldata data check orders orders/ --scenario hot-key             # and the check verifies that share
 doppeldata data generate orders --scenario bad-csv --out orders-bad/  # CSV with broken rows and files, each fault in _faults.jsonl
+doppeldata data generate orders --scenario cdc-dms --format parquet --out orders-cdc/  # an AWS DMS change stream, beside _expected
 ```
 
 `data generate` writes every format `doppeldata schemas show manifest` lists, to a local directory, a
