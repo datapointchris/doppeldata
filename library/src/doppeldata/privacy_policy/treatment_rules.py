@@ -152,7 +152,7 @@ def conditional_faults(table: dict[str, Any], index: int, policy: Policy) -> lis
                 )
             )
             continue
-        if policy in (Policy.STRICT, Policy.HEALTHCARE) and (column.get('semantic') or {}).get('sensitivity') == 'quasi_identifier':
+        if not policy.joins_quasi_identifiers and (column.get('semantic') or {}).get('sensitivity') == 'quasi_identifier':
             detail = f'{name} is a quasi-identifier under {policy.value}; expected no conditional table naming it'
             found.append(Fault('conditional-quasi-identifier', (*at, role), detail))
         unlisted = sorted(values - set(listed))
