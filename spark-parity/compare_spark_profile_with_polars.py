@@ -27,6 +27,7 @@ import pyarrow.parquet as pq
 from doppeldata import Bundle
 from doppeldata import Profile
 from doppeldata.profile_format import read_document
+from doppeldata.published_schemas import published_fields
 
 # The bar the Spark backend's Greenwald-Khanna accuracy of 10,000 stays far inside.
 RANK_ERROR = 0.01
@@ -58,6 +59,25 @@ UNCOMPARED = (
     '/pattern',
 )
 TIMESTAMP_UNIT = re.compile(r'^timestamp\[(s|ms|us|ns)')
+# The fields `dataset_entries` and `relationship_entries` read, by schema definition. A field the format gains stops the
+# script until one of them reads it, so no field goes uncompared.
+READ_FIELDS = {
+    'Dataset': {'row_count', 'duplicate_row_rate', 'keys', 'correlations', 'correlation_ratios', 'conditionals', 'dependencies'},
+    'Keys': {'primary', 'candidates'},
+    'Key': {'columns', 'uniqueness'},
+    'Correlation': {'a', 'b', 'method', 'value'},
+    'CorrelationRatio': {'a', 'b', 'value'},
+    'Conditional': {'given', 'column', 'table', 'other'},
+    'Dependency': {'kind', 'lhs', 'rhs', 'violation_rate'},
+    'Relationship': {'from', 'to', 'containment', 'orphan_rate', 'cardinality', 'fanout'},
+    'Fanout': {'quantiles', 'top_share', 'zipf_s'},
+}
+for definition, read in READ_FIELDS.items():
+    unread = sorted(set(published_fields(definition)) - read)
+    if unread:
+        raise SystemExit(
+            f'the parity check reads no {definition} field {", ".join(unread)}; compare it in dataset_entries or relationship_entries'
+        )
 
 
 def as_spark_holds(physical_type: Any) -> Any:
@@ -121,7 +141,8 @@ def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
             for value, rate in row.items():
                 yield 'conditionals', f'{conditional_name(conditional)}: {conditional["column"]}={value} | {given}', rate
     for dependency in dataset.get('dependencies') or []:
-        yield 'dependencies', f'{"+".join(dependency["lhs"])} -> {dependency["rhs"]}', dependency.get('violation_rate')
+        described = f'{dependency["kind"]} {"+".join(dependency["lhs"])} -> {dependency["rhs"]}'
+        yield 'dependencies', described, dependency.get('violation_rate')
 
 
 def relationship_entries(relationships: list[dict[str, Any]]) -> Iterator[tuple[str, str, Any]]:
