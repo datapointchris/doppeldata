@@ -45,10 +45,10 @@ A test pins the digest of one fixed identity, which the library's `rfc8785` pack
 Every (seed, table, column path, perturbation) derives its own ChaCha8 stream from a hash of its
 name. So adding, removing or reordering a column leaves every other column's values unchanged.
 
-Within a column, each kind of draw has its own stream: the values, the null mask, the `type_mix`
-errors, the missing-value tokens, the wrong check digits, a list's lengths and a drawn value's
-index. The values stream draws a value for every row, a null row's included. So a
-column's values do not move when its null rate, its error rate or its tokens change. A nested
+Within a column, each kind of draw has its own stream: the values, the null mask, the missing-value
+tokens, the wrong check digits, a list's lengths and a drawn value's index. The values stream draws
+a value for every row, a null row's included. So a column's values do not move when its null rate,
+its error rate or its tokens change. A nested
 field's streams are named by its dotted path, so it draws the same whatever its siblings are.
 
 A column drawn by index takes each value from its `indexed_values` stream, positioned at the index
@@ -83,6 +83,8 @@ The guarantees, strongest first:
 1. Arrow values are identical for one stream version, under any split, thread count or format.
 2. File bytes, and the split drawn from `rows_per_file`, are identical for one tool version and one
    set of writer settings.
+3. The faults `malformed_rows` breaks those bytes with, and the `_faults.jsonl` naming them, hold
+   as the bytes do, under any thread count or split across processes. The op moves no value.
 
 Any change to a sampler's draw order raises the stream version. So does the engine starting to read
 a profile field it ignored before, because a profile that carries the field then generates

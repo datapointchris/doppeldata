@@ -20,6 +20,7 @@ from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
 from doppeldata.errors import not_installed
 from doppeldata.errors import uninstalled
+from doppeldata.manifest import FAULTS_FILE_NAME
 from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import Manifest
 from doppeldata.name_hinted_types import with_type_hints
@@ -175,10 +176,10 @@ def refuse_other_extension(target: Path, ranges_json: str) -> None:
 
 
 def one_file_scenario(scenario: Scenario | Sequence[Scenario] | None) -> Scenario | None:
-    """The scenario `scenario=` names, refused where it shapes the files, which a write to one file cannot."""
+    """The scenario `scenario=` names, refused where it acts across several files, which a write to one file cannot."""
     applied = composed(scenario)
     if applied is not None:
-        refuse_file_shaping(applied, 'a write to one file', cannot='makes only one')
+        refuse_file_shaping(applied, 'a write to one file', cannot='makes only one', across_files=True)
     return applied
 
 
@@ -191,7 +192,9 @@ def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, rep
     alone describes the rows this write replaces, so it goes before the file moves, whether or not `manifest` writes
     another. One recording other files makes that directory their dataset, so it refuses the write. The manifest returned
     names `target`'s directory as its destination, and `target` as its one file. No rows write no file, as they write none
-    in a directory.
+    in a directory. Under `malformed_rows` the write lists its faults beside `target` every time, in the list
+    `_core.one_file_faults_name` names for it, such as `_orders.csv.faults.jsonl`. One already there describes the bytes
+    this write replaces, so it is held as the file is.
     """
     if target.is_dir():
         message = f'{target} is a directory; end the path with / to write the dataset into it'
@@ -203,9 +206,14 @@ def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, rep
         message = f'{recorded} records {", ".join(others)} as its dataset, so {target.name} cannot join it; write it to another directory'
         raise WriteFailed('manifest-records-another-file', message, kind='refused')
     staging = target.parent / f'.{target.name}{STAGING_SUFFIX}'
+    # Each record the engine leaves beside the data, as it is staged and where it lands beside `target`.
+    sidecars = [
+        (staging / MANIFEST_FILE_NAME, recorded),
+        (staging / FAULTS_FILE_NAME, target.parent / _core.one_file_faults_name(target.name)),
+    ]
     held = [
         (f'{target} already exists', target.exists()),
-        (f'{recorded} already exists', listed is not None),
+        *((f'{beside} already exists', beside.is_file()) for _, beside in sidecars),
         (f'{staging} holds a write to {target.name} that was killed or is still running', staging.exists()),
     ]
     refusals = [message for message, holds in held if holds]
@@ -223,14 +231,23 @@ def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, rep
         moved = Manifest({**written.document, 'destination': str(target.parent), 'files': files})
         if manifest:
             (staging / MANIFEST_FILE_NAME).write_text(json.dumps(moved.document, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
-        if listed is not None:
-            recorded.unlink()
+        else:
+            (staging / MANIFEST_FILE_NAME).unlink(missing_ok=True)
+        staged_faults = staging / FAULTS_FILE_NAME
+        if staged_faults.is_file():
+            renamed = [{**json.loads(line), 'file': target.name} for line in staged_faults.read_text(encoding='utf-8').splitlines()]
+            lines = ''.join(json.dumps(fault, ensure_ascii=False, separators=(',', ':')) + '\n' for fault in renamed)
+            staged_faults.write_text(lines, encoding='utf-8')
+        # An old record beside `target` describes the bytes this write replaces, so it goes before they do.
+        for _, beside in sidecars:
+            beside.unlink(missing_ok=True)
         for file in written.files:
             os.replace(staging / file['path'], target)
         if not files:
             target.unlink(missing_ok=True)
-        if manifest:
-            os.replace(staging / MANIFEST_FILE_NAME, recorded)
+        for staged, beside in sidecars:
+            if staged.is_file():
+                os.replace(staged, beside)
     except StoppedWrite as error:
         # The partial manifest was in the staging directory, which goes with everything else the write made.
         error.manifest_stored = False
@@ -296,11 +313,11 @@ def engine_plan(profile: ProfileSource, rows: int | None, seed: int, scenario: S
     return engine_arguments(profile, rows, seed, scenario).plan()
 
 
-def rows_only(scenario: Scenario | Sequence[Scenario] | None, run: str) -> Scenario | None:
-    """The scenario `scenario=` names, refused where it shapes files, because `run` writes none."""
+def rows_only(scenario: Scenario | Sequence[Scenario] | None, run: str, write_with: str) -> Scenario | None:
+    """The scenario `scenario=` names, refused where it shapes files, because `run` writes none and `write_with` does."""
     applied = composed(scenario)
     if applied is not None:
-        refuse_file_shaping(applied, run)
+        refuse_file_shaping(applied, run, write_with=write_with)
     return applied
 
 
@@ -370,11 +387,12 @@ def generate(
     `{'email': sd.fakes.email, 'age': sd.integers(18, 90)}`, a short or full YAML file, or an example's name.
 
     The values are a pure function of the profile, the scenario, `seed` and `rows`, whatever `threads` is. `scenario` is a
-    Scenario or a list composed in order. One that shapes files, as schema_drift and small_files do, is refused as
-    InvalidScenario, because nothing here writes files. `rows` counts the rows generated, so a scenario's `duplicates`
-    returns more.
+    Scenario or a list composed in order. One that shapes files, as schema_drift, small_files and malformed_rows do, is
+    refused as InvalidScenario, because nothing here writes files. `rows` counts the rows generated, so a scenario's
+    `duplicates` returns more.
     """
-    table: ArrowStreamExportable = engine_plan(profile, rows, seed, rows_only(scenario, 'generate')).generate(threads=threads)
+    applied = rows_only(scenario, 'generate', 'doppeldata.write')
+    table: ArrowStreamExportable = engine_plan(profile, rows, seed, applied).generate(threads=threads)
     return table
 
 
@@ -393,7 +411,8 @@ def stream(
     so Ctrl-C reaches it only when its consumer returns to Python between batches. `profile` and `scenario` are taken as
     `generate` takes them.
     """
-    reader: ArrowStreamExportable = engine_plan(profile, rows, seed, rows_only(scenario, 'stream')).stream(threads=threads)
+    applied = rows_only(scenario, 'stream', 'doppeldata.write')
+    reader: ArrowStreamExportable = engine_plan(profile, rows, seed, applied).stream(threads=threads)
     return reader
 
 

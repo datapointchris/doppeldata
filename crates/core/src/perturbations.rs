@@ -8,6 +8,7 @@ mod categorical_shift;
 mod duplicates;
 mod hot_keys;
 mod late_arrival;
+mod malformed_rows;
 mod missingness;
 mod noise;
 mod out_of_range;
@@ -30,6 +31,11 @@ use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
 use rand_chacha::ChaCha8Rng;
 
+pub use self::malformed_rows::FileFault;
+pub use self::malformed_rows::LineEnd;
+pub use self::malformed_rows::MalformedPlan;
+pub use self::malformed_rows::RowFault;
+pub use self::malformed_rows::RowFaults;
 pub use self::schema_drift::SchemaDriftPlan;
 use crate::physical_type::physical_type_name;
 use crate::plan::Plan;
@@ -153,6 +159,8 @@ pub(crate) enum Planned {
     SchemaDrift(SchemaDriftPlan),
     /// File sizes in rows, drawn as the layout draws a profile's.
     SmallFiles(Quantiles),
+    /// Rows and files the writers break.
+    Malformed(MalformedPlan),
 }
 
 /// Everything one perturbation is planned against.
@@ -321,5 +329,6 @@ pub(crate) fn plan_perturbation(perturbation: &Perturbation, planning: &Planning
         Perturbation::SchemaDrift(op) => schema_drift::plan(op, planning),
         Perturbation::SmallFiles(op) => small_files::plan(op, planning),
         Perturbation::PartitionSkew(op) => partition_skew::plan(op, planning),
+        Perturbation::MalformedRows(op) => malformed_rows::plan(op, planning),
     }
 }

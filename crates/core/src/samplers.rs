@@ -197,8 +197,6 @@ impl ColumnSite {
 pub(crate) struct StreamKeys {
     values: u64,
     nulls: u64,
-    type_mix: u64,
-    type_mix_text: u64,
     missing_tokens: u64,
     invalid: u64,
     lengths: u64,
@@ -216,8 +214,6 @@ impl StreamKeys {
         Self {
             values: key("values"),
             nulls: key("nulls"),
-            type_mix: key("type_mix"),
-            type_mix_text: key("type_mix_text"),
             missing_tokens: key("missing_tokens"),
             invalid: key("invalid"),
             lengths: key("lengths"),
@@ -289,16 +285,10 @@ pub(crate) struct ColumnPlan {
 
 impl ColumnPlan {
     pub(crate) fn generate(&self, at: &BlockPosition, rows: usize) -> ArrayRef {
-        let drawn_nulls = self.drawn_nulls(at, rows);
-        let own_type = self
-            .text_only
-            .as_ref()
-            .and_then(|text_only| text_only.own_type_rows(&mut rng_for(at.seed, self.keys.type_mix, at.block), rows));
-        let valid = match (drawn_nulls.map(|nulls| !&nulls), own_type) {
-            (Some(not_null), Some(own_type)) => Some(&not_null & &own_type),
-            (valid, None) | (None, valid) => valid,
-        };
-        let nulls = valid.map(NullBuffer::new).filter(|nulls| nulls.null_count() > 0);
+        let nulls = self
+            .drawn_nulls(at, rows)
+            .map(|nulls| NullBuffer::new(!&nulls))
+            .filter(|nulls| nulls.null_count() > 0);
         self.values.generate(at, &self.keys, rows, nulls)
     }
 
@@ -314,14 +304,8 @@ impl ColumnPlan {
         let Some(text_only) = &self.text_only else {
             return Vec::new();
         };
-        let stream = |key| rng_for(at.seed, key, at.block);
-        text_only.cells(
-            self.drawn_nulls(at, rows).as_ref(),
-            &mut stream(self.keys.type_mix),
-            &mut stream(self.keys.type_mix_text),
-            &mut stream(self.keys.missing_tokens),
-            rows,
-        )
+        let mut tokens = rng_for(at.seed, self.keys.missing_tokens, at.block);
+        text_only.cells(self.drawn_nulls(at, rows).as_ref(), &mut tokens, rows)
     }
 }
 
@@ -341,31 +325,18 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
         0.0
     };
     let values = value_sampler(context, column, site, &keys, context.rows * (1.0 - null_share))?;
-    let string_column = matches!(values.data_type(), DataType::Utf8 | DataType::LargeUtf8);
-    let text_only = TextOnlyValues::new(column.type_mix.as_ref(), column.missing_tokens.as_ref(), null_share, string_column)
-        .map_err(site.refuse("/missing_tokens"))?;
-    if site.nested
-        && let Some(text_only) = &text_only
-    {
-        let field = if text_only.has_foreign_values() {
-            "/type_mix"
-        } else {
-            "/missing_tokens"
-        };
-        let message = "a text cell names no nested field, so a nested field's text-only values are not generated yet".to_string();
-        return Err(site.refuse_as(ColumnFault::NotGeneratedYet, field)(message));
+    let text_only = TextOnlyValues::new(column.missing_tokens.as_ref(), null_share).map_err(site.refuse("/missing_tokens"))?;
+    if site.nested && text_only.is_some() {
+        let message = "a text cell names no nested field, so a nested field's missing-value tokens are not generated yet".to_string();
+        return Err(site.refuse_as(ColumnFault::NotGeneratedYet, "/missing_tokens")(message));
     }
     let nulls = Some(Bernoulli::new(null_share)).filter(|null| !null.never());
-    let nullable = may_be_null || text_only.as_ref().is_some_and(TextOnlyValues::has_foreign_values);
     let mut sampler = describe(column, &values);
-    if column.type_mix.as_ref().is_some_and(|mix| !mix.is_empty()) {
-        sampler.push_str(", with values of other types as text");
-    }
     if column.missing_tokens.as_ref().is_some_and(|tokens| !tokens.is_empty()) {
         sampler.push_str(", with missing-value tokens as text");
     }
     Ok(ColumnPlan {
-        field: Arc::new(Field::new(&column.name, values.data_type(), nullable)),
+        field: Arc::new(Field::new(&column.name, values.data_type(), may_be_null)),
         sampler,
         null_share: nulls.map_or(0.0, |_| null_share),
         keys,

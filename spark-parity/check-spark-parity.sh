@@ -29,6 +29,7 @@ main() {
   wheel=$(realpath "$1")
   shift
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  source "$here/run-spark-image-as-caller.sh"
   (($# > 0)) || mapfile -t images <"$here/spark-images.txt"
   (($# > 0)) || set -- "${images[@]}"
   fixture=$here/../crates/core/tests/every-column-kind.profile.yaml
@@ -41,14 +42,8 @@ main() {
     --file-rows "$FILE_ROWS" --out "$work/local" "${scenario[@]}" >&2
   for image in "$@"; do
     echo "== $image" >&2
-    # Hadoop's login refuses a uid with no name, so the container runs as this user under the image's own passwd plus one line.
-    {
-      docker run --rm --entrypoint cat "$image" /etc/passwd
-      echo "parity:x:$(id -u):$(id -g):parity:/tmp:/bin/bash"
-    } >"$work/passwd"
-    docker run --rm --memory "$CONTAINER_MEMORY" --user "$(id -u):$(id -g)" -e HOME=/tmp \
-      -e UV_CACHE_DIR=/uv/cache -e UV_PYTHON_INSTALL_DIR=/uv/python -v "$work/passwd:/etc/passwd:ro" \
-      -v "$(command -v uv):/opt/uv:ro" -v "$cache:/uv" -v "$here:/parity:ro" -v "$work/local:/work/local:ro" \
+    run_spark_image_as_caller "$work" "$image" --memory "$CONTAINER_MEMORY" \
+      -e UV_CACHE_DIR=/uv/cache -e UV_PYTHON_INSTALL_DIR=/uv/python -v "$(command -v uv):/opt/uv:ro" -v "$cache:/uv" -v "$here:/parity:ro" -v "$work/local:/work/local:ro" \
       -v "$fixture:/work/every-column-kind.profile.yaml:ro" "${mounted[@]}" \
       -v "$wheel:/wheel/$(basename "$wheel"):ro" --entrypoint bash "$image" \
       /parity/inside-spark-image.sh "/wheel/$(basename "$wheel")" "$SPARK_MASTER" "$DRIVER_MEMORY" \

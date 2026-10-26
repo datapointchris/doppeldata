@@ -20,9 +20,29 @@ DEFAULT_K_MIN: Final[int]
 The fewest rows a stored literal or cell rests on, where a profile states no `privacy.k_min`.
 """
 
+FAULTS_FILE_NAME: Final[str]
+"""
+The name of the list of faults a write under `malformed_rows` leaves beside its files.
+"""
+
+FIRST_BLOCK_BYTES: Final[int]
+"""
+The head of a text file the profiler reads its dialect, JSON layout and encoding from.
+"""
+
 FORMAT_VERSION: Final[int]
 """
 The profile format version the engine reads.
+"""
+
+MANIFEST_FILE_NAME: Final[str]
+"""
+The name of the record a whole write leaves beside its files.
+"""
+
+PARTIAL_MANIFEST_FILE_NAME: Final[str]
+"""
+The name of the claim a write holds its destination with, and the record a stopped write leaves.
 """
 
 STREAM_VERSION: Final[int]
@@ -57,12 +77,13 @@ class Plan:
         Each top-level column's name, type as a profile's ``physical_type`` spells it, what draws
         its values, and the share of rows drawn null, in schema order.
         """
-    def commit(self, /, options: WriteOptions, destination: str, files_json: str, *, tasks: SupportsIndex, elapsed_ms: SupportsIndex, s3_store: dict |None = None) -> str:
+    def commit(self, /, options: WriteOptions, destination: str, written: SupportsGetItem[int, str], *, tasks: SupportsIndex, elapsed_ms: SupportsIndex, s3_store: dict |None = None) -> str:
         """
-        Stores the manifest of a write ``claim`` claimed, from every record ``write_ranges``
-        returned, given as one JSON list, and returns it as JSON. ``tasks`` is how many the
-        ranges were divided among, and ``elapsed_ms`` the time from the claim. A range with no
-        record leaves the partial manifest under the claim's name, and raises.
+        Stores the manifest of a write ``claim`` claimed, and the fault list under
+        ``malformed_rows``, from what each ``write_ranges`` call returned, each string as it
+        returned it, and returns the manifest as JSON. ``tasks`` is how many the ranges were
+        divided among, and ``elapsed_ms`` the time from the claim. A range with no record leaves
+        the partial manifest under the claim's name, and raises.
         """
     @property
     def dataset_digest(self, /) -> str:
@@ -122,8 +143,9 @@ class Plan:
     def write_ranges(self, /, options: WriteOptions, destination: str, ranges: SupportsGetItem[int, SupportsIndex], *, s3_store: dict |None = None) -> str:
         """
         Writes the objects of the ranges numbered ``ranges`` in the layout ``ranges_json``
-        lists, the bytes ``write`` writes for them, on one thread, and returns their manifest
-        records as a JSON list. It neither claims ``destination`` nor stores a manifest.
+        lists, the bytes ``write`` writes for them, on one thread. It returns their manifest
+        records and the faults ``malformed_rows`` placed in them as one JSON object, ``files``
+        and ``faults``. It neither claims ``destination`` nor stores a manifest.
         """
 
 @final
@@ -163,6 +185,18 @@ def expected_metric_op(metric: str) -> str:
     ``hot_keys.share``.
     """
 
+def expected_metric_takes_column(metric: str) -> bool:
+    """
+    Whether an expectation's metric measures one column, so the expectation names ``column``.
+    """
+
+def fault_kind_facts(kind: str, format: str) -> tuple[bool, bool, bool]:
+    """
+    Of the fault kind ``kind`` and files written as ``format``: whether the kind breaks whole
+    files, whether the files can hold it, and whether ``data check`` reads them back as one table
+    while they hold it.
+    """
+
 def fitted_families() -> dict[str, bool]:
     """
     Whether each scipy.stats family a profile's ``fit`` can name is discrete, by its name. Any
@@ -173,6 +207,12 @@ def generalize_pattern(values: SupportsGetItem[int, str]) -> str |None:
     """
     The anchored regular expression grex generalizes the values to, with each digit as a digit
     class, or None when it would hold a literal or a character class only some values have.
+    """
+
+def one_file_faults_name(file_name: str) -> str:
+    """
+    The fault list a write to the one file ``file_name`` keeps beside it, such as
+    ``_orders.csv.faults.jsonl``.
     """
 
 def patched_profile(profile_json: str, scenario_json: str) -> tuple[str, list[str]]:
@@ -194,10 +234,11 @@ def pattern_problem(pattern: str) -> str |None:
     refuses it, or None when it can.
     """
 
-def perturbation_facts(scenario_json: str) -> list[tuple[str, list[str], bool]]:
+def perturbation_facts(scenario_json: str) -> list[tuple[str, list[str], bool, bool]]:
     """
     Each of a valid scenario's perturbations, in list order: its id, the columns it writes, adds,
-    drops or renames, and whether it shapes the files a write makes rather than the rows.
+    drops or renames, whether it shapes the files a write makes rather than the rows, and whether
+    it acts across several files, so a one-file write cannot hold it.
     """
 
 def scenario_ids(scenario_json: str) -> tuple[list[str], tuple[int, str] |None]:

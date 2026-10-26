@@ -7,7 +7,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-MANIFEST_FILE_NAME = '_manifest.json'
+from doppeldata import _core
+
+MANIFEST_FILE_NAME = _core.MANIFEST_FILE_NAME
+PARTIAL_MANIFEST_FILE_NAME = _core.PARTIAL_MANIFEST_FILE_NAME
+FAULTS_FILE_NAME = _core.FAULTS_FILE_NAME
 
 
 @dc.dataclass(frozen=True)
@@ -38,9 +42,20 @@ class Manifest:
         return files
 
     @property
+    def format(self) -> str:
+        """The format every file was written in, as `doppeldata schemas show manifest` names it, such as `csv`."""
+        return str(self.document['format'])
+
+    @property
     def partial(self) -> bool:
         """True when the run stopped early, so `files` lists only the objects that completed."""
         return bool(self.document['partial'])
+
+    @property
+    def faults(self) -> dict[str, int] | None:
+        """The faults the write's fault list holds, counted by kind, or None for a write with no `malformed_rows`."""
+        faults: dict[str, int] | None = self.document.get('faults')
+        return faults
 
 
 def written_manifest(data: Any) -> Manifest | None:

@@ -33,6 +33,7 @@ pub use partition::DEFAULT_PARTITION;
 pub use planned_ranges::PlannedRange;
 pub use planned_ranges::planned_ranges;
 pub use size_estimate::estimate_bytes;
+pub use write::RangesWritten;
 pub use write::RunOptions;
 pub use write::SplitRun;
 pub use write::WriteFailure;
@@ -43,6 +44,11 @@ pub use write::write;
 pub use write::write_ranges;
 pub use write_options::WriteChoices;
 pub use write_options::WriteOptions;
+
+/// The head of a text file doppeldata's profiler reads its dialect, JSON layout and encoding from.
+/// One invalid UTF-8 byte there reads the file as Latin-1, where no row is rejected, so no
+/// `invalid_utf8` fault starts in it.
+pub const FIRST_BLOCK_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {

@@ -26,6 +26,179 @@ So a dataset regenerates with no scenario file, and an edited member shows which
 misspelled column would then generate a new column from a fragment. It is refused as
 `unknown-column`.
 
+## `malformed_rows` writes broken files, and `_faults.jsonl` names every fault in them
+
+A pipeline's bad-row handling is tested against files broken on purpose. The `bad-csv` example
+writes a profile like `orders` as CSV. It breaks the share of rows its `rate` sets with ragged,
+quoting, encoding and type faults. It gives the share of files its `files_share` sets a byte order
+mark or a cut last line. A profile with no string column, or none of another type, is refused as
+`op-not-for-column`:
+
+```bash
+doppeldata data generate orders --scenario bad-csv --out orders-bad/
+doppeldata scenario show bad-csv     # its kinds and shares, to start a scenario of your own from
+```
+
+A scenario of your own names the kinds. `rate` is the chance each row is broken, shared evenly by
+the row kinds named. `files_share` is the chance each file is broken, shared evenly by the file
+kinds. `doppeldata scenario show malformed_rows` lists every kind.
+
+```yaml
+scenario: ragged-rows
+perturbations:
+  - {op: malformed_rows, rate: 0.01, kinds: [ragged_short, ragged_long, bom], files_share: 0.25}
+```
+
+```bash
+doppeldata data generate orders --scenario ragged-rows.scenario.yaml --format csv --out orders-ragged/
+```
+
+`_faults.jsonl` beside the data lists each fault, one JSON object a line, and the manifest's
+`faults` counts them by kind. `doppeldata schemas show faults` is a line's schema, and
+[file-writers-and-manifest.md](file-writers-and-manifest.md) gives each kind's `detail`.
+
+```bash
+jq -r .kind orders-bad/_faults.jsonl | sort | uniq -c
+```
+
+```json
+{"file":"part-00000-1cf678fb.csv","line":25,"row":23,"kind":"unescaped_quote","column":"customer_email","detail":{}}
+```
+
+A pipeline test then asserts that its quarantine holds exactly the lines `_faults.jsonl` names.
+DuckDB's `reject_errors.line` counts records, where `line` counts physical lines, so an
+`embedded_newline` earlier in the file shifts every record after it. A reject is placed by its
+`line_byte_position` instead:
+
+```python
+import bisect, json, re
+from pathlib import Path
+
+import duckdb
+
+data = Path('orders-bad')
+columns = {'order_id': 'BIGINT', 'customer_id': 'BIGINT', 'amount': 'DECIMAL(12,2)', 'quantity': 'INTEGER',
+           'status': 'VARCHAR', 'ordered_at': 'TIMESTAMPTZ', 'customer_email': 'VARCHAR', 'ship_zip': 'VARCHAR'}
+faults = [json.loads(line) for line in (data / '_faults.jsonl').read_text().splitlines()]
+# CSV allows a newline inside quotes, so a strict reader takes an embedded_newline row whole.
+expected = {(f['file'], f['line']) for f in faults if f['line'] is not None and f['kind'] != 'embedded_newline'}
+
+quarantined = set()
+for path in sorted(data.glob('part-*.csv')):
+    connection = duckdb.connect()
+    connection.execute(
+        'create table orders as select * from read_csv($path, columns = $columns, header = true, '
+        'auto_detect = false, strict_mode = true, store_rejects = true)',
+        {'path': str(path), 'columns': columns},
+    )
+    breaks = [match.start() for match in re.finditer(b'\n', path.read_bytes())]
+    for (at,) in connection.execute('select min(line_byte_position) from reject_errors group by line').fetchall():
+        quarantined.add((path.name, bisect.bisect_left(breaks, at) + 1))
+assert quarantined == expected
+```
+
+`doppeldata data check orders orders-bad/ --scenario bad-csv` verifies the example's
+`malformed.rate` bound.
+
+With no `rate`, `kinds` or `files_share`, the op reproduces what a profile records of its CSV
+source. So a profile of a landing zone's files writes files broken as those were:
+
+```bash
+doppeldata profile create source/ --out source.profile.yaml
+doppeldata data generate source.profile.yaml --scenario reproduce.scenario.yaml --out reproduced/
+```
+
+```yaml
+scenario: reproduce
+perturbations:
+  - {op: malformed_rows}
+```
+
+## Strict DuckDB rejects each CSV row fault but `embedded_newline`, and Spark reads three as values
+
+`malformed-file-readers/read-every-fault-kind.sh [IMAGE...]` writes `orders` under `bad-csv`, and
+once for each kind alone in a format that holds it, at the shares `write_every_fault_kind.py`
+sets. It then prints, per kind, what each reader caught of what `_faults.jsonl` names.
+
+- DuckDB reads on the host with the columns declared. Its CSV read sets `strict_mode` and
+  `store_rejects`.
+- Spark reads in each image named, or each one `spark-parity/spark-images.txt` lists. Its CSV and
+  JSON reads are PERMISSIVE with `_corrupt_record` declared. The images agree on every row below
+  but decimal drift read as one table.
+
+| Kind | DuckDB | Spark |
+| --- | --- | --- |
+| `ragged_short` | rejects each as `missing_columns` | a corrupt record for each |
+| `ragged_long` | rejects each as `too_many_columns` | a corrupt record for each |
+| `unescaped_quote` | rejects each as `unquoted_value` | reads each as a value. `unescapedQuoteHandling` `RAISE_ERROR` fails the read |
+| `embedded_newline` | reads each whole, as CSV allows | splits each in two rows. The second is corrupt, and so is the first unless the break is in the last column. `multiLine` reads each whole |
+| `type_invalid` | rejects each as `cast` | a corrupt record for each |
+| `invalid_utf8` | rejects each as `invalid_encoding` | reads each as a value |
+| `line_too_long` | rejects each as `line_size_over_maximum` | reads each as a value |
+| `truncated_line` | rejects it as `missing_columns` | a corrupt record |
+| `bom` | rejects nothing | rejects nothing, and leaves it off a header it infers |
+| `mixed_line_endings` | fails the read: "reached an invalid state" | reads every row |
+| `wrong_delimiter` | rejects each row of the file as `cast` | a corrupt record for each row of the file |
+| `header_drift` | rejects nothing, and reads a swapped column's values under the other's name | the same. `enforceSchema` false fails the read: "CSV header does not conform to the schema" |
+| `latin1_file` | rejects each line holding a character past ASCII as `invalid_encoding` | reads every row |
+| `type_invalid`, JSON | fails the read. `ignore_errors` keeps every row | a corrupt record for each |
+| `truncated_line`, JSON | fails the read: "Malformed JSON". `ignore_errors` keeps every row | a corrupt record |
+| `json_unbalanced` | fails the read: "Malformed JSON". `ignore_errors` keeps every row | a corrupt record for each |
+| `json_type_flip` | reads each, casting the string | a corrupt record for an integer, and a decimal read as its number |
+| `json_layout_mix` | fails a newline-delimited read. `ignore_errors` reads each array as one row | reads each array's records as rows, because the array is one line |
+| `parquet_timestamp_unit_drift` | reads each file at one type | reads each file at one type, with or without `mergeSchema` |
+| `parquet_int96` | as one table, takes the first file's type, so an INT96 first file gives `TIMESTAMP`. By name, `TIMESTAMPTZ` | reads as `timestamp`, with or without `mergeSchema` |
+| `parquet_decimal_scale_drift` | widens to the larger scale, as one table or by name | `mergeSchema` fails: `CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE`. As one table, Spark 3.5, Glue 5's included, fails with `SchemaColumnConvertNotSupportedException`, and Spark 4 widens |
+
+## `malformed_rows` breaks bytes, so no value moves and the faults are the same on any split
+
+- **Every write without the op is clean.** A profile's malformed rows, line-break mix and `type_mix`
+  shape no plain write, whatever its source held.
+- **The op breaks the encoded bytes, never the rows.** Each block generates the rows a clean write
+  does. So no other perturbation moves, and the determinism fixtures hold no fault.
+- **A row's fault is drawn from the op's stream, keyed by the block.** A file's fault is drawn from
+  a stream keyed by its range and its partition directory. So the files and `_faults.jsonl` are
+  byte for byte the same at any thread count and any Spark partition count.
+- **A row takes at most one fault, and a file at most one file fault.** A copy `duplicates` adds is
+  broken as any row is, and its record has no `row`.
+- **A kind a format cannot hold is refused as `op-not-for-format` before any row is written.** CSV
+  and TSV hold every row kind and every file kind but the JSON and Parquet ones. JSON and NDJSON
+  hold `type_invalid`, `truncated_line` and the `json_` kinds. Parquet holds the `parquet_` kinds,
+  and Arrow none. A kind a column must exist for, such as `embedded_newline` on a table with no
+  string column, is refused as `op-not-for-column`.
+- **An `invalid_utf8` fault never starts in a file's first block.** doppeldata's profiler guesses
+  the encoding from that block, as many readers do. One invalid byte there reads the file as
+  Latin-1, where nothing is rejected. A fault drawn there is written clean and not listed. So a
+  file of a few hundred rows holds none, and a write whose largest file ends inside the first
+  block is refused as `invalid-parameter`, naming the rows a file needs.
+- **`truncated_line` cuts the file's last record mid-field**, as a cut-off upload leaves it.
+- **A `latin1_file` holding only ASCII is not listed.** windows-1252 writes ASCII as UTF-8 does,
+  so the file is unchanged.
+- **The op applies only where files are written.** A one-file write keeps its list beside the file,
+  named for it: `--out landing/orders.csv` writes `landing/_orders.csv.faults.jsonl`. So several
+  one-file writes share a directory, and `replace` replaces a file's list with the file.
+
+## With no rate, `malformed_rows` reproduces the profile's rejected rows by type
+
+Each reason in `source.csv.malformed.by_type` becomes the kind DuckDB rejects for it, at its share:
+
+| `by_type` | Kind written |
+| --- | --- |
+| `missing_columns` | `ragged_short` |
+| `too_many_columns` | `ragged_long` |
+| `unquoted_value` | `unescaped_quote` |
+| `line_size_over_maximum` | `line_too_long` |
+| `invalid_encoding` | `invalid_utf8` |
+| `cast` | each typed column's `type_mix` values of other types, at their shares, or `type_invalid` where no column records one |
+
+- **The profile's `line_terminator_mix` is not reproduced.** The profiler refuses a file whose
+  records mix line breaks, so a mix it records comes from breaks inside quoted fields, in a file
+  every reader opens. `kinds: [mixed_line_endings]` writes the fault where a test asks for it.
+- **`invalid_state` is not reproduced.** No bytes were found that DuckDB stores as an
+  `invalid_state` reject rather than refusing the whole read.
+- **A profile recording none of these is refused** as `invalid-parameter`, because the op would
+  write nothing.
+
 ## The engine applies the patch and the perturbations, inside the block path
 
 1. The engine applies the patch, giving the effective profile.
@@ -82,8 +255,10 @@ local run does.
 
 ## The ops that shape files apply only where files are written
 
-`schema_drift` and `small_files` change the files rather than the rows. `generate`, `stream` and
-`doppeldata.spark.generate` write no files, so each refuses them as `op-needs-files`.
+`schema_drift`, `small_files` and `malformed_rows` change the files rather than the rows.
+`generate`, `stream` and `doppeldata.spark.generate` write no files, so each refuses them as
+`op-needs-files`, naming the write that takes them. A write to one file refuses `schema_drift` and
+`small_files`, which act across files.
 
 - **A file drifts when its first row lies at or past `after_fraction` of the rows.** The writers
   apply the drift to the whole block before a range takes its rows. Its steps run as drop, widen,
@@ -156,6 +331,9 @@ The data is measured against the effective profile, so a patched null rate is th
 - **`duplicates.rate` is the share whose `column` repeats an earlier row's**, a key each copy
   shares with its source. A later perturbation writing that column is refused, because a copy's
   key would then differ from its source's.
+- **`malformed.rate` is the share of rows a strict reader rejects**, as a profile's
+  `source.csv.malformed.rate` counts them. It measures the whole table, so it takes no `column`.
+  Data that is neither CSV nor TSV leaves it unmeasured.
 - **An expectation on a column the data lacks fails**, with `unmeasured` naming the column. A
   drift that drops it reaches this.
 - **`verified` is false when an expectation misses its bounds**, and `data check` then exits 3.

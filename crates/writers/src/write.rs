@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::btree_map::Entry;
+use std::io::Write as _;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -18,6 +19,8 @@ use std::time::SystemTime;
 use doppeldata_core::BLOCK_ROWS;
 use doppeldata_core::Plan;
 use doppeldata_core::format_settings::Output;
+use doppeldata_core::manifest::FAULTS_FILE_NAME;
+use doppeldata_core::manifest::FaultRecord;
 use doppeldata_core::manifest::MANIFEST_FILE_NAME;
 use doppeldata_core::manifest::Manifest;
 use doppeldata_core::manifest::ManifestFile;
@@ -29,9 +32,11 @@ use tokio::runtime::Handle;
 use tokio::runtime::RuntimeFlavor;
 
 use crate::WriteError;
+use crate::byte_sink::ByteSink;
 use crate::byte_sink::ObjectSink;
 use crate::destination::Destination;
 use crate::encoders;
+use crate::encoders::Faulting;
 use crate::encoders::FileEncoder;
 use crate::layout::FileLayout;
 use crate::layout::FileRange;
@@ -39,6 +44,7 @@ use crate::layout::layout;
 use crate::layout::layout_from_manifest;
 use crate::partition::PartitionValues;
 use crate::partition::Partitioner;
+use crate::size_estimate::check_invalid_utf8_reach;
 use crate::write_options::WriteOptions;
 
 /// How to run a write. None of it changes a byte written.
@@ -106,12 +112,21 @@ pub fn claim(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination:
 }
 
 /// The record a claim stores as `_manifest.partial.json`, once the output's format can encode the
-/// files `layout` makes.
+/// files `layout` makes, and they can hold every fault the scenario names.
 fn claimed(plan: &Plan, layout: &FileLayout, mut manifest: Manifest) -> Result<Manifest, WriteError> {
     check_encodable(plan, layout, &manifest.output)?;
+    check_invalid_utf8_reach(plan, layout, &manifest.output)?;
     manifest.partial = true;
     manifest.written_at = now_rfc3339();
     Ok(manifest)
+}
+
+/// What [`write_ranges`] wrote: each object's record, and each fault `malformed_rows` placed in
+/// them, by path and then in the order written.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct RangesWritten {
+    pub files: Vec<ManifestFile>,
+    pub faults: Vec<FaultRecord>,
 }
 
 /// Writes the objects of the ranges numbered `ranges` in the layout [`write`] makes, and returns
@@ -123,7 +138,7 @@ pub fn write_ranges(
     ranges: &[u32],
     run: &RunOptions,
     destination: &Destination,
-) -> Result<Vec<ManifestFile>, WriteFailure> {
+) -> Result<RangesWritten, WriteFailure> {
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
     let selected = ranges
         .iter()
@@ -139,7 +154,10 @@ pub fn write_ranges(
         let written = write_ranges_on(plan, &layout, &selected, &options.output, run, destination, runtime);
         match written.error {
             Some(error) => Err(error.into()),
-            None => Ok(written.files),
+            None => Ok(RangesWritten {
+                files: written.files,
+                faults: written.faults,
+            }),
         }
     })
 }
@@ -155,25 +173,29 @@ pub struct SplitRun {
     pub elapsed_ms: u64,
 }
 
-/// Records a write [`claim`] claimed and [`write_ranges`] filled: `_manifest.json` when `files`
-/// holds an object of every range in the layout, replacing the claim. Otherwise it stores the
-/// partial manifest under the claim's name and fails with [`WriteError::RangesUnrecorded`].
+/// Records a write [`claim`] claimed and [`write_ranges`] filled: `_manifest.json` when `written`
+/// holds an object of every range in the layout, replacing the claim, and `_faults.jsonl` before
+/// it under `malformed_rows`. Otherwise it stores the partial manifest under the claim's name and
+/// fails with [`WriteError::RangesUnrecorded`].
 pub fn commit(
     plan: &Plan,
     options: &WriteOptions,
-    files: Vec<ManifestFile>,
+    written: RangesWritten,
     split: SplitRun,
     run: &RunOptions,
     destination: &Destination,
 ) -> Result<Manifest, WriteFailure> {
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
-    let files: BTreeMap<String, ManifestFile> = files.into_iter().map(|file| (file.path.clone(), file)).collect();
+    let files: BTreeMap<String, ManifestFile> = written.files.into_iter().map(|file| (file.path.clone(), file)).collect();
     let mut manifest = new_manifest(plan, options, destination);
     manifest.files = files.into_values().collect();
     manifest.threads = split.threads;
     manifest.tasks = Some(split.tasks);
     manifest.elapsed_ms = split.elapsed_ms;
-    on_upload_runtime(run, |runtime| finish(runtime, destination, &layout, manifest, None))
+    let mut faults = written.faults;
+    faults.sort_by(|a, b| a.file.cmp(&b.file));
+    let faults = plan.malformed().map(|_| faults);
+    on_upload_runtime(run, |runtime| finish(runtime, destination, &layout, manifest, faults, None))
 }
 
 fn new_manifest(plan: &Plan, options: &WriteOptions, destination: &Destination) -> Manifest {
@@ -285,6 +307,7 @@ struct Run<'a> {
     completed_ranges: AtomicUsize,
     stop: AtomicBool,
     files: Mutex<Vec<ManifestFile>>,
+    faults: Mutex<Vec<FaultRecord>>,
     error: Mutex<Option<WriteError>>,
 }
 
@@ -337,39 +360,67 @@ impl Run<'_> {
             let start = range.first_row.max(block_first) - block_first;
             let stop = end.min(block_first + BLOCK_ROWS) - block_first;
             let placed = placed.rows_homed_in(start as u32, stop as u32);
-            for piece in partitioner.split(placed.batch, placed.text_cells)? {
+            for piece in partitioner.split(placed)? {
                 let (_, encoder, rows) = match open.entry(piece.values) {
                     Entry::Occupied(entry) => entry.into_mut(),
                     Entry::Vacant(entry) => {
-                        let relative = format!("{}{}", partitioner.directory(entry.key()), self.layout.file_name(range));
+                        let directory = partitioner.directory(entry.key());
+                        let relative = format!("{directory}{}", self.layout.file_name(range));
                         let sink = ObjectSink::new(
                             self.destination.store.clone(),
                             self.destination.object(&relative)?,
                             self.runtime.clone(),
                         );
-                        let encoder = encoders::open(self.output, partitioner.file_schema(), Box::new(sink))?;
+                        let faulting = self.plan.malformed().map(|malformed| Faulting {
+                            file: malformed.file_fault(range.index, &directory),
+                        });
+                        let encoder = encoders::open(self.output, partitioner.file_schema(), Box::new(sink), faulting)?;
                         entry.insert((relative, encoder, 0))
                     }
                 };
-                encoder.write(&piece.batch, &piece.cells)?;
+                encoder.write(&piece.batch, &piece.cells, &piece.faults)?;
                 *rows += piece.batch.num_rows() as u64;
             }
         }
         for (values, (path, encoder, rows)) in open {
-            let written = encoder.finish()?;
+            let finished = encoder.finish()?;
+            let faults: Vec<FaultRecord> = finished
+                .faults
+                .into_iter()
+                .map(|record| FaultRecord {
+                    file: path.clone(),
+                    ..record
+                })
+                .collect();
+            self.faults.lock().expect("no worker panics holding it").extend(faults);
             self.files.lock().expect("no worker panics holding it").push(ManifestFile {
                 path,
                 range: range.index,
                 first_row: range.first_row,
                 range_rows: range.rows,
                 rows,
-                bytes: written.bytes,
-                sha256: written.sha256,
+                bytes: finished.object.bytes,
+                sha256: finished.object.sha256,
                 partition: partitioner.record(values),
             });
         }
         Ok(())
     }
+}
+
+/// Writes `faults` as `_faults.jsonl`, one JSON object a line, through the sink a data object
+/// takes, so a long list uploads in parts.
+fn store_faults(runtime: &Handle, destination: &Destination, faults: &[FaultRecord]) -> Result<(), WriteError> {
+    let mut sink = ObjectSink::new(destination.store.clone(), destination.object(FAULTS_FILE_NAME)?, runtime.clone());
+    let mut line = Vec::new();
+    for fault in faults {
+        line.clear();
+        serde_json::to_writer(&mut line, fault).expect("a fault record always serializes");
+        line.push(b'\n');
+        sink.write_all(&line)?;
+    }
+    Box::new(sink).finish()?;
+    Ok(())
 }
 
 fn now_rfc3339() -> String {
@@ -416,9 +467,11 @@ fn on_upload_runtime<T: Send>(run: &RunOptions, work: impl FnOnce(&Handle) -> Re
     })
 }
 
-/// What writing some ranges left: every object completed, in path order, and why the rest stopped.
+/// What writing some ranges left: every object completed and the faults placed in them, in path
+/// order, and why the rest stopped.
 struct WrittenRanges {
     files: Vec<ManifestFile>,
+    faults: Vec<FaultRecord>,
     error: Option<WriteError>,
 }
 
@@ -447,6 +500,7 @@ fn write_ranges_on(
         completed_ranges: AtomicUsize::new(0),
         stop: AtomicBool::new(false),
         files: Mutex::new(Vec::new()),
+        faults: Mutex::new(Vec::new()),
         error: Mutex::new(None),
     };
     let workers = worker_threads(run.threads).min(ranges.len()).max(1);
@@ -464,7 +518,9 @@ fn write_ranges_on(
         .or_else(|| cancelled.then_some(WriteError::Cancelled));
     let mut files = shared.files.into_inner().expect("no worker panics holding it");
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    WrittenRanges { files, error }
+    let mut faults = shared.faults.into_inner().expect("no worker panics holding it");
+    faults.sort_by(|a, b| a.file.cmp(&b.file));
+    WrittenRanges { files, faults, error }
 }
 
 fn execute(
@@ -482,17 +538,20 @@ fn execute(
         let written = write_ranges_on(plan, layout, &layout.ranges, &manifest.output, run, destination, runtime);
         manifest.files = written.files;
         manifest.elapsed_ms = started.elapsed().as_millis() as u64;
-        finish(runtime, destination, layout, manifest, written.error)
+        let faults = plan.malformed().map(|_| written.faults);
+        finish(runtime, destination, layout, manifest, faults, written.error)
     })
 }
 
-/// Stores the record of a run that wrote `manifest.files`. It is partial, and the run fails, when
-/// `error` stopped the run or a range of `layout` has no object recorded.
+/// Stores the record of a run that wrote `manifest.files`, and `faults` before it where the run
+/// wrote under `malformed_rows`. It is partial, and the run fails, when `error` stopped the run or
+/// a range of `layout` has no object recorded.
 fn finish(
     runtime: &Handle,
     destination: &Destination,
     layout: &FileLayout,
     mut manifest: Manifest,
+    faults: Option<Vec<FaultRecord>>,
     error: Option<WriteError>,
 ) -> Result<Manifest, WriteFailure> {
     let recorded: BTreeSet<u32> = manifest.files.iter().map(|file| file.range).collect();
@@ -511,17 +570,41 @@ fn finish(
     });
     manifest.partial = error.is_some();
     manifest.written_at = now_rfc3339();
-    record(runtime, destination, manifest, error)
+    if let Some(faults) = &faults {
+        let mut counts = BTreeMap::new();
+        for fault in faults {
+            *counts.entry(fault.kind).or_insert(0) += 1;
+        }
+        manifest.faults = Some(counts);
+    }
+    record(runtime, destination, manifest, faults, error)
 }
 
 /// Stores the finished run's manifest: as `_manifest.json` once every object is whole, replacing the
-/// claim, and as `_manifest.partial.json`, over the claim, when `error` stopped the run.
-fn record(runtime: &Handle, destination: &Destination, manifest: Manifest, error: Option<WriteError>) -> Result<Manifest, WriteFailure> {
+/// claim, and as `_manifest.partial.json`, over the claim, when `error` stopped the run. The run's
+/// `faults` are stored first, as `_faults.jsonl`, so a stopped run lists the faults of the objects
+/// it completed. A whole run whose list cannot be stored leaves a partial manifest of every object.
+fn record(
+    runtime: &Handle,
+    destination: &Destination,
+    mut manifest: Manifest,
+    faults: Option<Vec<FaultRecord>>,
+    error: Option<WriteError>,
+) -> Result<Manifest, WriteFailure> {
     let failure = |error, manifest, manifest_stored, manifest_error| WriteFailure {
         error,
         manifest: Some(Box::new(manifest)),
         manifest_stored,
         manifest_error,
+    };
+    let error = match faults.as_ref().map(|faults| store_faults(runtime, destination, faults)) {
+        Some(Err(unlisted)) => {
+            // The counts would describe a list that is not there.
+            manifest.faults = None;
+            manifest.partial = true;
+            Some(error.unwrap_or(unlisted))
+        }
+        _ => error,
     };
     if let Some(error) = error {
         let stored = runtime.block_on(destination.put_manifest(PARTIAL_MANIFEST_FILE_NAME, &manifest, PutMode::Overwrite));

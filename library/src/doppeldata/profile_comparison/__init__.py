@@ -5,16 +5,21 @@ the source profile's edges frozen, so histograms and value lists compare bin for
 """
 
 import dataclasses as dc
+import importlib.util
+import os
 import warnings
+from collections.abc import Iterable
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 
+from doppeldata import _core
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import PoorFits
 from doppeldata.errors import SourceError
+from doppeldata.manifest import Manifest
 from doppeldata.manifest import written_manifest
 from doppeldata.privacy_policy import Policy
 from doppeldata.profile_comparison import real_data_scores
@@ -38,6 +43,7 @@ from doppeldata.profile_comparison.reports import ReportedScenario
 from doppeldata.profile_comparison.scenario_moves import attributed
 from doppeldata.profile_comparison.scenario_moves import moves
 from doppeldata.profile_comparison.scenario_moves import skipped
+from doppeldata.profile_comparison.scenario_moves import uncompared_malformed_rates
 from doppeldata.profile_comparison.thresholds import Thresholds
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import SampledTable
@@ -45,6 +51,7 @@ from doppeldata.profiling import profile as profile_data
 from doppeldata.profiling import sampled_table
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
+from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
 from doppeldata.scenario_format import refuse_other_scenario
@@ -77,6 +84,8 @@ def check(
 
     Where `data` names a directory or prefix a doppeldata write left `_manifest.json` in, or one file a manifest beside it
     records alone, InvalidScenario refuses a `scenario` other than the one it records, and no `scenario` where it records one.
+    InvalidScenario also refuses data holding a fault a check cannot read back in its format, before any row is read.
+    `malformed_rate_delta` decides nothing on data that no malformed_rows asked for malformed rows in.
 
     `against` is the real data, read as `data` is. Each of `SCORES` then scores a seeded sample of `against_sample` rows
     from each side, `DEFAULT_SAMPLE_ROWS` unless given, as SDMetrics defines it. A score decides only where `thresholds`
@@ -88,6 +97,9 @@ def check(
     written = written_manifest(data)
     if written is not None:
         refuse_other_scenario(applied, written, data_named(data))
+    unreadable = unreadable_refusal(applied, written, data)
+    if unreadable is not None:
+        raise InvalidScenario(data_named(data), [], refusal=unreadable)
     effective = applied.apply(profile) if applied is not None else profile
     source = effective.to_plain()
     refusal = refused(source, against, against_sample, html)
@@ -123,7 +135,7 @@ def check(
     observed = checked.to_plain()
     fingerprint = (observed.get('generated') or {}).get('source_fingerprint')
     # A check vouches for the data, so a statistic the profile states and the data cannot supply fails.
-    metrics = measured(source, observed, thresholds, unmeasured_passes=False)
+    metrics = uncompared_malformed_rates(measured(source, observed, thresholds, unmeasured_passes=False), applied)
     against_scored = None
     if real is not None:
         against_scored = scored(real, data, named, fingerprint, columns, thresholds, data_named(against), sample_rows)
@@ -147,6 +159,43 @@ def check(
     if html is not None and against_scored is not None:
         side_by_side_html.write_side_by_side(against_scored.real_frame, against_scored.checked_frame, html)
     return report
+
+
+# Each breaks the one dialect and header a check reads every file in.
+def unreadable_refusal(scenario: Scenario | None, written: Manifest | None, data: Any) -> str | None:
+    """Why a check cannot read `data` back as one table, or None. The engine says which fault kinds a check cannot read back
+    in the data's format, of the kinds the manifest counts where there is one, else of those the scenario's malformed_rows
+    names. A local path that does not exist is left to the profiler, which says so."""
+    cannot = 'which a check cannot read back as one table; check data written without them'
+    if written is not None:
+        held = unreadable(written.faults or {}, written.format)
+        return f'holds {" and ".join(held)} faults, {cannot}' if held else None
+    if isinstance(data, str | os.PathLike) and not os.fspath(data).startswith('s3://') and not Path(data).exists():
+        return None
+    entries = (scenario.to_plain().get('perturbations') or []) if scenario is not None else []
+    named_kinds = {kind for entry in entries if entry['op'] == 'malformed_rows' for kind in entry.get('kinds') or []}
+    data_format = format_of_data(data) if named_kinds else None
+    named = unreadable(named_kinds, data_format) if data_format is not None else []
+    return f'is checked under a scenario writing {" and ".join(named)} faults, {cannot}' if named else None
+
+
+def unreadable(kinds: Iterable[str], data_format: str) -> list[str]:
+    """Each of `kinds` the engine says a check cannot read back in files of `data_format`."""
+    return sorted(kind for kind in kinds if not _core.fault_kind_facts(kind, data_format)[2])
+
+
+def format_of_data(data: Any) -> str | None:
+    """The format of the files `data` names, or None where it names none, leaving the profiler to say why."""
+    # Listing the files imports boto3, and without it profiling the data refuses next, naming boto3.
+    if importlib.util.find_spec('boto3') is None:
+        return None
+    from doppeldata.profiling import sources
+
+    try:
+        found = sources.resolve(data).format
+    except SourceError:
+        return None
+    return found.value if found is not None else None
 
 
 def refused(source: Document, against: Any, against_sample: int | None, html: str | Path | None) -> str | None:

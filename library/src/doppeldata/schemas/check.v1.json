@@ -178,7 +178,11 @@
           "format": "double"
         },
         "column": {
-          "type": "string"
+          "description": "The column measured, or null for a metric of the whole table, such as `malformed.rate`.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "metric": {
           "description": "The statistic expected, such as `hot_keys.share`.",
@@ -205,7 +209,6 @@
       },
       "required": [
         "metric",
-        "column",
         "passed"
       ]
     },
@@ -264,7 +267,7 @@
           ]
         },
         "decides": {
-          "description": "False on a row the report's verdict leaves out: a score against the real data whose\nthreshold no thresholds file sets. Such a row passes, and its `threshold` is the score's\nreference, which `value` and `bound` say whether it meets.",
+          "description": "False on a row the report's verdict leaves out: a score against the real data whose\nthreshold no thresholds file sets, and `malformed_rate_delta` on data written with no\n`malformed_rows`. Such a row passes. A score's `threshold` is its reference, which `value`\nand `bound` say whether it meets.",
           "type": "boolean"
         },
         "expected": {
@@ -310,7 +313,7 @@
           "format": "double"
         },
         "unmeasured": {
-          "description": "Why the metric has no value: the source profile states what it compares, and the other\nprofile holds nothing to compare it with, as a column under `k_min` values holds no\nquantiles.",
+          "description": "Why the metric has no value: the source profile states what it compares, and the other\nprofile holds nothing to compare it with, as a column under `k_min` values holds no\nquantiles. Or the data was written so as not to hold it, as clean files hold none of the\nsource's malformed rows.",
           "type": [
             "string",
             "null"

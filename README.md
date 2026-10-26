@@ -9,7 +9,8 @@ Parquet, Arrow and Spark DataFrames, and to write any of them back at any size: 
 to S3, or inside Spark executors.
 
 A scenario file layered on a profile bends the data on purpose: a hot join key, late rows, a flood
-of small files. The same profile, scenario and seed always produce the same data.
+of small files, or broken rows a pipeline must quarantine, each listed in `_faults.jsonl`. The same
+profile, scenario and seed always produce the same data.
 
 Rows need no profile to start. Each column takes the fake its name hints:
 
@@ -55,6 +56,7 @@ doppeldata scenario list               # the ops a scenario applies, its metrics
 doppeldata scenario check hot-key orders                            # a scenario against a profile, generating nothing
 doppeldata data generate orders --scenario hot-key --out orders/    # five customers place 60% of the orders
 doppeldata data check orders orders/ --scenario hot-key             # and the check verifies that share
+doppeldata data generate orders --scenario bad-csv --out orders-bad/  # CSV with broken rows and files, each fault in _faults.jsonl
 ```
 
 `data generate` writes every format `doppeldata schemas show manifest` lists, to a local directory, a

@@ -25,6 +25,11 @@ pub fn all() -> Vec<PublishedSchema> {
             derive: manifest::json_schema,
         },
         PublishedSchema {
+            name: "faults",
+            file_name: format!("faults.v{}.json", manifest::FAULTS_VERSION),
+            derive: manifest::faults_json_schema,
+        },
+        PublishedSchema {
             name: "check",
             file_name: format!("check.v{}.json", profile_comparison::CHECK_VERSION),
             derive: profile_comparison::check_json_schema,

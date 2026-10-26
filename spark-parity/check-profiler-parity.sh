@@ -27,6 +27,7 @@ main() {
   name=$(basename "$data")
   shift 2
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  source "$here/run-spark-image-as-caller.sh"
   (($# > 0)) || mapfile -t images <"$here/spark-images.txt"
   (($# > 0)) || set -- "${images[@]}"
   # Global, because errexit drops main's locals before the EXIT trap runs.
@@ -42,14 +43,9 @@ main() {
   for image in "$@"; do
     echo "== $image" >&2
     rm -f "$work/spark.yaml"
-    # Hadoop's login refuses a uid with no name, so the container runs as this user under the image's own passwd plus one line.
-    {
-      docker run --rm --entrypoint cat "$image" /etc/passwd
-      echo "parity:x:$(id -u):$(id -g):parity:/tmp:/bin/bash"
-    } >"$work/passwd"
-    docker run --rm --memory "$CONTAINER_MEMORY" --user "$(id -u):$(id -g)" -e HOME=/tmp \
+    run_spark_image_as_caller "$work" "$image" --memory "$CONTAINER_MEMORY" \
       -e UV_CACHE_DIR=/uv/cache -e UV_PYTHON_INSTALL_DIR=/uv/python -e EXTRA_PACKAGES="$packages" \
-      -v "$work/passwd:/etc/passwd:ro" -v "$(command -v uv):/opt/uv:ro" -v "$cache:/uv" -v "$here:/parity:ro" \
+      -v "$(command -v uv):/opt/uv:ro" -v "$cache:/uv" -v "$here:/parity:ro" \
       -v "$data:/data/$name:ro" -v "$work:/work" -v "$wheel:/wheel/$(basename "$wheel"):ro" --entrypoint bash "$image" \
       /parity/inside-spark-image.sh "/wheel/$(basename "$wheel")" "$SPARK_MASTER" "$DRIVER_MEMORY" \
       /parity/profile_on_spark.py "/data/$name" /work/spark.yaml "$policy" || {

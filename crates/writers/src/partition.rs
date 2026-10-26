@@ -11,6 +11,8 @@ use arrow_cast::display::ArrayFormatter;
 use arrow_cast::display::FormatOptions;
 use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
+use doppeldata_core::PlacedBlock;
+use doppeldata_core::RowFaults;
 use doppeldata_core::TextCell;
 use doppeldata_core::profile::PartitionStyle;
 
@@ -28,6 +30,7 @@ pub(crate) struct Piece {
     pub batch: RecordBatch,
     /// Text cells per kept column, each placed by its row within `batch`.
     pub cells: Vec<Vec<TextCell>>,
+    pub faults: RowFaults,
 }
 
 pub(crate) struct Partitioner {
@@ -97,14 +100,21 @@ impl Partitioner {
         (!self.keys.is_empty()).then(|| self.keys.iter().map(|(key, _)| key.clone()).zip(values).collect())
     }
 
-    /// `batch` split by partition values, in value order. `cells` holds every column's text cells,
-    /// in the plan's column order.
-    pub(crate) fn split(&self, batch: RecordBatch, cells: Vec<Vec<TextCell>>) -> Result<Vec<Piece>, WriteError> {
+    /// `placed`'s rows split by partition values, in value order. Its text cells are every
+    /// column's, in the plan's column order.
+    pub(crate) fn split(&self, placed: PlacedBlock) -> Result<Vec<Piece>, WriteError> {
+        let PlacedBlock {
+            batch,
+            text_cells: cells,
+            faults,
+            ..
+        } = placed;
         if self.keys.is_empty() {
             return Ok(vec![Piece {
                 values: Vec::new(),
                 batch,
                 cells,
+                faults,
             }]);
         }
         let options = FormatOptions::default()
@@ -144,7 +154,12 @@ impl Partitioner {
                 values,
                 batch: RecordBatch::try_new(self.file_schema.clone(), columns)?,
                 cells: vec![Vec::new(); self.kept.len()],
+                faults: RowFaults::default(),
             });
+        }
+        let faults = faults.placed(pieces.len(), |row| Some(placement[row as usize]));
+        for (piece, faults) in pieces.iter_mut().zip(faults) {
+            piece.faults = faults;
         }
         for (kept_index, &column) in self.kept.iter().enumerate() {
             for cell in &cells[column] {

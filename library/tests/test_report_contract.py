@@ -1,18 +1,12 @@
 import dataclasses as dc
 import json
 
-import pytest
 from doppeldata.profile_comparison.field_changes import ChangeKind
 from doppeldata.profile_comparison.field_changes import FieldChange
 from doppeldata.profile_comparison.metrics import Bound
-from doppeldata.profile_comparison.reports import CHECK_VERSION
 from doppeldata.profile_comparison.reports import DIFF_VERSION
-from doppeldata.profile_comparison.reports import ExpectationResult
 from doppeldata.profile_comparison.reports import MetricResult
-from doppeldata.profile_comparison.reports import ReportedScenario
 from doppeldata.published_schemas import schema_text
-
-VERSIONS = {'check': CHECK_VERSION, 'diff': DIFF_VERSION}
 
 
 def spelled(definition: dict) -> set[str]:
@@ -21,18 +15,12 @@ def spelled(definition: dict) -> set[str]:
     return {value for part in parts for value in part.get('enum', [part['const']] if 'const' in part else [])}
 
 
-@pytest.mark.parametrize('report', ['check', 'diff'])
-def test_a_report_format_change_made_in_rust_or_python_alone_fails_before_a_report_fails_its_schema(report):
-    schema = json.loads(schema_text(report))
+def test_a_diff_report_format_change_made_in_rust_or_python_alone_fails_here():
+    """No test validates a diff report against its schema, as the check tests do a check report."""
+    schema = json.loads(schema_text('diff'))
     definitions = schema['$defs']
-    assert schema['properties'][f'{report}_version']['const'] == VERSIONS[report]
+    assert schema['properties']['diff_version']['const'] == DIFF_VERSION
     assert {kind.value for kind in ChangeKind} == spelled(definitions['ChangeKind'])
     assert {bound.value for bound in Bound} == spelled(definitions['Bound'])
     assert {field.name for field in dc.fields(MetricResult)} == set(definitions['MetricResult']['properties'])
     assert {field.name for field in dc.fields(FieldChange)} == set(definitions['FieldChange']['properties'])
-
-
-def test_a_check_report_scenario_field_added_in_rust_or_python_alone_fails_here():
-    definitions = json.loads(schema_text('check'))['$defs']
-    assert {field.name for field in dc.fields(ExpectationResult)} == set(definitions['ExpectationResult']['properties'])
-    assert {field.name for field in dc.fields(ReportedScenario)} == set(definitions['ReportedScenario']['properties'])

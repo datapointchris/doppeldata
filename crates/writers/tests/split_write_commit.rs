@@ -61,7 +61,7 @@ fn a_commit_missing_a_range_stores_the_partial_manifest_and_fails() {
     let stored = |name: &str| futures::executor::block_on(async { store.get(&Path::from(format!("dataset/{name}"))).await?.bytes().await });
     let partial: Manifest = serde_json::from_slice(&stored("_manifest.partial.json").unwrap()).unwrap();
     assert!(partial.partial);
-    assert_eq!(partial.files, files);
+    assert_eq!(partial.files, files.files);
     assert_eq!(partial.tasks, Some(2));
     assert!(stored("_manifest.json").is_err());
 }

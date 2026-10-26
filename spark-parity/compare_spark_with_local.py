@@ -2,7 +2,8 @@
 
 `check-spark-parity.sh` runs this through spark-submit inside each Spark image. `generate`'s DataFrame is collected as Arrow and
 compared value for value with `doppeldata.stream`, each float by its bits. `write`'s files are compared by SHA-256 with the
-manifest of a `doppeldata data generate` with the same arguments. Each column of the every-column-kind fixture then goes through
+manifest of a `doppeldata data generate` with the same arguments, and its `_faults.jsonl` byte for byte with the one beside
+that manifest. Each column of the every-column-kind fixture then goes through
 `mapInArrow` alone, and whether Spark gave every value back is compared with `spark_holds`. It prints one JSON object per check,
 and exits 1 when any differs.
 
@@ -18,6 +19,7 @@ from typing import Any
 
 import doppeldata as sd
 import pyarrow as pa
+from doppeldata.manifest import FAULTS_FILE_NAME
 from doppeldata.scenario_format import perturbation_facts
 from doppeldata.spark import spark_holds
 from pyspark.sql import SparkSession
@@ -88,6 +90,14 @@ def type_disagreements(spark: SparkSession, fixture: str) -> list[str]:
     ]
 
 
+def same_faults(local_manifest_path: str, written: str) -> bool:
+    """Whether the write's `_faults.jsonl` holds the local run's bytes, or neither run wrote one."""
+    ours, theirs = pathlib.Path(local_manifest_path).with_name(FAULTS_FILE_NAME), pathlib.Path(written) / FAULTS_FILE_NAME
+    if not ours.exists() or not theirs.exists():
+        return ours.exists() == theirs.exists()
+    return ours.read_bytes() == theirs.read_bytes()
+
+
 def report(check: dict[str, Any]) -> bool:
     print(json.dumps(check), flush=True)
     return check['identical']
@@ -137,6 +147,8 @@ def main(local_manifest_path: str, out: str, fixture: str, scenario_path: str = 
         seconds = time.monotonic() - started
         written = {file['path']: file['sha256'] for file in manifest.files}
         differ = sorted(path for path in local.keys() | written.keys() if local.get(path) != written.get(path))
+        if not same_faults(local_manifest_path, f'{out}/direct-{partitions}'):
+            differ.append(FAULTS_FILE_NAME)
         check = {'check': 'write', 'partitions': partitions, 'files': len(written), 'seconds': round(seconds, 1)}
         identical &= report(check | {'identical': not differ, 'differ': differ})
     disagree = type_disagreements(spark, fixture)

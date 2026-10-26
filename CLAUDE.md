@@ -16,6 +16,9 @@ docs/           the design pages
 benchmarks/     PEP 723 scripts timing the engine against numpy, Faker and Mimesis, run by `task bench`
 spark-parity/   the checks that doppeldata.spark matches a local run, and the Spark profiler Polars, inside each
                 Spark image named, run by hand
+malformed-file-readers/
+                what DuckDB and each Spark image named make of every fault kind malformed_rows writes,
+                run by hand
 ```
 
 - **The dependency runs one way: the CLI imports the library, never the reverse.** Typer and rich

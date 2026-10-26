@@ -61,10 +61,10 @@ class MetricResult:
 
 @dc.dataclass(frozen=True)
 class ExpectationResult:
-    """One expectation a scenario declares, and the value the data holds."""
+    """One expectation a scenario declares, and the value the data holds. `column` is None for one of the whole table."""
 
     metric: str
-    column: str
+    column: str | None
     at_least: float | None
     at_most: float | None
     value: float | None
@@ -87,8 +87,9 @@ class ExpectationResult:
         return f'{self.value:g}' if self.value is not None else (self.unmeasured or 'unmeasured')
 
     def named(self) -> str:
-        """`hot_keys.share on customer_id (0.41, expected ≥ 0.55)`."""
-        return f'{self.metric} on {self.column} ({self.measured()}, expected {self.bounds()})'
+        """`hot_keys.share on customer_id (0.41, expected ≥ 0.55)`, or `malformed.rate (0.01, expected ≥ 0.02)`."""
+        where = f' on {self.column}' if self.column is not None else ''
+        return f'{self.metric}{where} ({self.measured()}, expected {self.bounds()})'
 
 
 @dc.dataclass(frozen=True)
@@ -275,7 +276,7 @@ class DiffReport:
 def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: Failures) -> list[str]:
     lines = [f'{len(failures.metrics)} of {failures.of_metrics} metrics failed.', '']
     lines += metric_table([result for result in metrics if result.decides])
-    informational = [result for result in metrics if not result.decides]
+    informational = [result for result in metrics if not result.decides and result.value is not None]
     if informational:
         lines += [
             f'Scores that decide nothing, because no thresholds file sets their threshold: {len(informational)}. '
@@ -283,6 +284,10 @@ def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: 
             '',
             *metric_table(informational, against_reference=True),
         ]
+    for result in metrics:
+        if not result.decides and result.value is None:
+            on = f' on `{result.column}`' if result.column else ''
+            lines += [f'`{result.metric}`{on} decides nothing, unmeasured: {result.unmeasured}.', '']
     if changes:
         lines += ['| Change | Column | Passed | Detail |', '| --- | --- | --- | --- |']
         for change in sorted(changes, key=lambda change: change.passed):
@@ -320,7 +325,7 @@ def expected(expectations: list[ExpectationResult]) -> list[str]:
     lines = [f'{failed} of {len(expectations)} expectations failed.', '']
     lines += ['| Expectation | Column | Value | Bounds | Passed |', '| --- | --- | --- | --- | --- |']
     for result in sorted(expectations, key=lambda result: result.passed):
-        lines.append(f'| {result.metric} | {result.column} | {result.measured()} | {result.bounds()} | {verdict(result.passed)} |')
+        lines.append(f'| {result.metric} | {result.column or ""} | {result.measured()} | {result.bounds()} | {verdict(result.passed)} |')
     return [*lines, '']
 
 

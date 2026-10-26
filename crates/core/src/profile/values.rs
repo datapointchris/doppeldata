@@ -42,7 +42,7 @@ impl JsonSchema for ProfileVersion {
     }
 }
 
-/// A share of rows, from 0 to 1.
+/// A share, from 0 to 1.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Deserialize)]
 #[serde(try_from = "f64")]
 pub struct Rate(pub f64);
@@ -66,7 +66,7 @@ impl JsonSchema for Rate {
 
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
-            "description": "A share of rows, from 0 to 1.",
+            "description": "A share, from 0 to 1.",
             "type": "number",
             "minimum": 0,
             "maximum": 1,
