@@ -21,8 +21,9 @@ MOVED_METRICS = {
     'duplicates': registered('distinct_ratio_delta', 'rows_per_file_delta'),
     'small_files': registered('file_count_delta', 'rows_per_file_delta'),
 }
-# Given `kinds`, malformed_rows replaces the rejected rows the profile records, and adds values to the columns it breaks.
-NAMED_MALFORMED_METRICS = registered('malformed_rate_delta', 'distinct_ratio_delta')
+# Given `kinds`, malformed_rows replaces the rejected rows the profile records, and adds values to the columns it breaks,
+# such as a status cut by an embedded line break, which moves the column's distinct values and its category shares.
+NAMED_MALFORMED_METRICS = registered('malformed_rate_delta', 'distinct_ratio_delta', 'tvd')
 MALFORMED_RATE_DELTA = METRICS_BY_NAME['malformed_rate_delta'].name
 NOT_ASKED = 'no malformed_rows perturbation asked for malformed rows, so the malformed rates were not compared'
 

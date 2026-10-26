@@ -443,7 +443,12 @@ def malformed_shares(document: Document) -> dict[str, float] | None:
 
 
 def malformed_rate_change(source: Document, observed: Document) -> Iterator[Measurement]:
-    """The largest change in one reason's share of the rows a CSV reader rejects, relative to the source's."""
+    """The largest change in the share of rows a CSV reader rejects, or in one reason's share, relative to the source's
+    malformed rate.
+
+    Dividing by the whole rate rather than a reason's own share keeps a reason that rejects a handful of rows from
+    deciding the row on sampling noise.
+    """
     shares = {reason: share for reason, share in (malformed_shares(source) or {}).items() if share}
     if not shares:
         return
@@ -451,7 +456,11 @@ def malformed_rate_change(source: Document, observed: Document) -> Iterator[Meas
     if held is None:
         yield Measurement(None, Unmeasured('the other profile records no malformed rows, because it is not of CSV or TSV'))
         return
-    changes = [Compared(abs(held.get(reason, 0.0) - share) / share, share, held.get(reason, 0.0)) for reason, share in shares.items()]
+    whole, held_whole = sum(shares.values()), sum(held.values())
+    changes = [
+        Compared(abs(held_whole - whole) / whole, whole, held_whole),
+        *(Compared(abs(held.get(reason, 0.0) - share) / whole, share, held.get(reason, 0.0)) for reason, share in shares.items()),
+    ]
     yield Measurement(None, max(changes, key=lambda compared: compared.value))
 
 
@@ -522,7 +531,7 @@ METRICS = (
     ),
     Metric(
         'malformed_rate_delta',
-        "the largest change in one reason's share of the rows a CSV reader rejects, relative to the source's",
+        "the largest change in the share of rows a CSV reader rejects, or in one reason's share, relative to the source's malformed rate",
         Bound.AT_MOST,
         0.20,
         malformed_rate_change,

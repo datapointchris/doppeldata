@@ -276,7 +276,7 @@ class DiffReport:
 def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: Failures) -> list[str]:
     lines = [f'{len(failures.metrics)} of {failures.of_metrics} metrics failed.', '']
     lines += metric_table([result for result in metrics if result.decides])
-    informational = [result for result in metrics if not result.decides]
+    informational = [result for result in metrics if not result.decides and result.value is not None]
     if informational:
         lines += [
             f'Scores that decide nothing, because no thresholds file sets their threshold: {len(informational)}. '
@@ -284,6 +284,10 @@ def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: 
             '',
             *metric_table(informational, against_reference=True),
         ]
+    for result in metrics:
+        if not result.decides and result.value is None:
+            on = f' on `{result.column}`' if result.column else ''
+            lines += [f'`{result.metric}`{on} decides nothing, unmeasured: {result.unmeasured}.', '']
     if changes:
         lines += ['| Change | Column | Passed | Detail |', '| --- | --- | --- | --- |']
         for change in sorted(changes, key=lambda change: change.passed):
