@@ -166,8 +166,8 @@ doppeldata profile export orders --format pandera --out orders_schemas.py
 doppeldata data generate orders --format parquet --embed-profile --out orders/
 ```
 
-`profile export` writes ODCS, Table Schema, a JSON Schema, DQDL, pandera, dataframely or PySpark
-schemas, and `sd.export` returns the same text. `--embed-profile`, or `embed_profile=True` on
+`profile export` writes the contract in each format `--format` takes, and `sd.export` returns the
+same text. `--embed-profile`, or `embed_profile=True` on
 `sd.write`, puts the profile in each Parquet and Arrow file, and every PROFILE argument reads it
 back. Neither happens unless asked.
 [profile-exports-and-embedded-profiles.md](profile-exports-and-embedded-profiles.md) shows each

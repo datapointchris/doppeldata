@@ -1,6 +1,7 @@
 """The record schema: a JSON Schema 2020-12 of one record of a table, each column a property.
 
-It mirrors `seed_profiles.json_schemas`, so each property imports as the column it was exported from. A struct nests
+It mirrors `seed_profiles.json_schemas`, so each property imports as the same logical type, nullability, listed values and
+bounds. JSON Schema has no decimal, so a decimal imports as the importer's default. A struct nests
 `properties` and a list `items`. A column of a JSON source whose raw values parse as several JSON types allows each,
 never only the most common.
 """

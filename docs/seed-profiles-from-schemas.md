@@ -158,10 +158,10 @@ generated:
     shipping.postcode: [pattern]
 ```
 
-- **`declared` names each fact the schema stated, by column path.** The facts are `low`, `high`,
-  `scale`, `min_length`, `max_length`, `min_items`, `max_items`, `format`, `pattern` and
-  `top_values`. A nested field's path is dotted, and a list's element is `<column>.element`. A
-  column that declared none of them is not listed.
+- **`declared` names each fact the schema stated, by column path.** The facts are the
+  `DeclaredFact` values `doppeldata schemas show profile` lists, each named for the profile field
+  it marks. A nested field's path is dotted, and a list's element is `<column>.element`. A column
+  that declared none of them is not listed.
 - **No draw default is declared.** That covers every default in the table above, the name-hinted
   type of a column with no format, a Table Schema `year` field's window, and the partition values a
   Glue catalog lists. A partition key's Athena projection is declared. So a date column the schema
@@ -170,10 +170,10 @@ generated:
   table is `glue:<region>/<database>/<table>@<version>`, with the catalog's version of it, and never
   its ARN, which holds the account id. A seed is a file people commit. A schema class is its module
   and class, such as `pandera:shop.Orders`.
-- **`imported_from` and `declared` are part of the profile digest.** An older release hashes every
-  `generated` field it does not know, so leaving either out would give one seed two profile
-  digests. A copy of the schema elsewhere keeps the profile digest. A renamed file, a Glue table at
-  a new catalog version, or a schema declaring another bound gives a new one.
+- **`imported_from` is part of the profile digest, and `declared` is not.** No draw reads
+  `declared`, so a schema stating a bound the seed would draw by default makes the same dataset. A
+  copy of the schema elsewhere keeps the profile digest. A renamed file, a Glue table at a new
+  catalog version, or a schema declaring another bound gives a new one.
 - **Data generated from a seed passes `data check` against it**, as any profile's does.
 - **`profile check` fails a seed, exiting 3.** A seed was never written under a privacy policy, so
   its declared values are literals no policy audited.

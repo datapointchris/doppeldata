@@ -34,8 +34,8 @@ beside it. `sd.Profile.from_odcs()`, `from_json_schema()`, `from_table_schema()`
 `sd.Profile.from_glue()` reads a Glue Data Catalog table, and needs boto3, with pyarrow too where
 it is given `detected_entities`.
 
-`sd.export(profile, 'odcs')` writes the profile's contract as ODCS, Table Schema, a JSON Schema,
-DQDL, pandera, dataframely or PySpark schemas, with none of those tools installed.
+`sd.export(profile, 'odcs')` writes the profile's contract in each format its docstring lists, with
+none of the tools that read them installed.
 `sd.write(..., embed_profile=True)` puts the profile in each Parquet and Arrow file, and
 `sd.Profile.from_data_file()` reads it back.
 

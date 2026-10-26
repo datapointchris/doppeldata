@@ -5,7 +5,7 @@ another tool validates data with, and `--embed-profile` writes the profile into 
 generated. Both are opt-in: a write carries neither unless asked, and the library imports none of
 the tools that read them.
 
-## `profile export` writes a profile's contract in seven formats
+## `profile export` writes a profile's contract in each format `--format` takes
 
 ```bash
 doppeldata profile export orders --format pandera --out orders_schemas.py
@@ -21,7 +21,7 @@ contract = sd.export('orders', 'odcs')
 | `--format` | Writes | Read by |
 | --- | --- | --- |
 | `odcs` | an Open Data Contract Standard v3.2.0 contract | datacontract-cli, `profile import --from odcs` |
-| `table-schema` | a Frictionless Table Schema v2, and for a bundle a Data Package v2 | frictionless, `profile import --from table-schema` |
+| `table-schema` | a Frictionless Table Schema v2, and for a bundle a Data Package v2 | frictionless, `profile import --from table-schema`, and `--from data-package` for a bundle's |
 | `json-schema` | the record schema: a JSON Schema 2020-12 of one record | any JSON Schema validator, `profile import --from json-schema` |
 | `dqdl` | an AWS Glue Data Quality ruleset of each table | Glue Data Quality, Deequ |
 | `pandera` | a module of a `pandera.polars.DataFrameModel` of each table | pandera, `sd.generate` |
@@ -31,11 +31,16 @@ contract = sd.export('orders', 'odcs')
 PROFILE is a profile file, a bundle, an example's name, or a data file holding an embedded profile.
 Without `--out` the export prints.
 
-- **Each format mirrors its importer**, so an export imports back with the same types,
-  nullability, listed values and bounds.
-- **Data generated from a profile passes its exports.** A test validates the `orders` example's
-  generated data against its Table Schema, record schema, pandera and dataframely exports, and its
-  ODCS export against the ODCS v3.2.0 JSON Schema.
+- **Each format's type names invert its importer's table**, so an export imports back as the same
+  logical type, nullability, listed values and bounds. Table Schema has no integer width, decimal
+  precision or time zone, and the record schema has no decimal. Those import back as the importer's
+  default.
+- **Data generated from a profile passes its exports, except a column holding several types.** The
+  engine draws one type a column, so `events-json`'s `user_id`, an integer in most values and a
+  string in the rest, generates as integers. Its strict exports type it string, so pandera and
+  dataframely refuse the generated column.
+- **Data a profile was made from passes its exports.** A test checks each export with the tool
+  that reads it, against rows generated from a profile and against rows a profile was made from.
 - **The same profile exports the same bytes.** An export names the profile's digest and holds no
   time. ODCS `examples` are generated from the profile with seed 0, never read from data.
 - **A profile made from data is checked first.** One that fails `profile check` is refused, exit 2,
@@ -135,15 +140,24 @@ description or comment, with the share that holds:
 
 - **A profile's extremes are trimmed at `k_min` rows from each end**, so no strict format bounds a
   profiled column. A seed's declared bounds hold for every row, so its exports carry them.
+- **A profile writes a share short of every row below 1.** Its rates keep four significant digits,
+  so two breaking rows in 100,000 are written 0.9999, never 1.
+- **A profile made from data never holds a key or a relationship of every row.** The privacy floor
+  writes fewer than `k_min` rows sharing a key's value as none, and fewer than `k_min` orphans as
+  none. So the strict formats leave each key and foreign key out and name it. DQDL carries
+  `Uniqueness` and `ReferentialIntegrity` with a threshold. A seed's declared keys and
+  relationships hold for every row.
+- **A profile made from a sample holds nothing of every row.** Its shares are measured over the
+  rows it read, so each strict format leaves out what it would carry, naming the sample.
 - **A pattern is stored where its shape holds half the values.** In CMS's DE-SynPUF carrier claims
-  file, `ICD9_DGNS_CD_3` matches `^\d{4}$` in 50.73% of its values. A strict format leaves it out.
+  file, `ICD9_DGNS_CD_3` matches `^\d{4}$` in about half its values. A strict format leaves it out.
   DQDL writes it with a threshold, and ODCS as an `invalidValues` quality check with a percent
   ceiling.
 - **A pattern holds the share of the shape it was generalized from.** The `claims` example's
   `claim_id` is `^CLM\d{9}$`, from a shape of three letters and nine digits holding every value. A
   shape cannot say which letters, so only the dominant shape vouches for a literal.
 - **A text column whose values do not all parse as its type is typed as a string.** In the carrier
-  claims file, 86.06% of `HCPCS_CD_10`'s values parse as integers. A reader typed integer would turn
+  claims file, most of `HCPCS_CD_10`'s values parse as integers. A reader typed integer would turn
   the rest into nulls, so the strict formats type it string and name the integer type as left out.
   DQDL keeps its range over the values that parse.
 - **The record schema of a JSON source allows each JSON type its values hold.** The `events-json`
@@ -196,7 +210,7 @@ those facts as exact, and no draw default. So `ordered_at`, which draws inside `
 because the contract bounds it nowhere, exports unbounded. A seed is exported as it is, without
 `profile check`, which fails every seed.
 
-## A bundle exports as a Data Package with its foreign keys, and as DQDL with `ReferentialIntegrity`
+## A bundle exports as a Data Package and as DQDL with `ReferentialIntegrity`
 
 ```bash
 doppeldata profile create shop/ --tables --out shop.bundle.yaml
@@ -205,19 +219,17 @@ doppeldata profile export shop.bundle.yaml --format dqdl --out shop.dqdl
 doppeldata profile export shop.bundle.yaml --format json-schema --table orders
 ```
 
-```json
-"foreignKeys": [{"fields": ["customer_id"], "reference": {"resource": "customers", "fields": ["customer_id"]}}]
-```
-
 ```text
-# The ruleset of orders, exported from its doppeldata profile sha256:c5cb623b….
-Rules = [
-    ReferentialIntegrity "customer_id" "customers.customer_id" = 1.0,
+ReferentialIntegrity "customer_id" "customers.customer_id" >= 0.99945,
 ```
 
-- **Each table is a resource or a ruleset**, and each relationship a foreign key.
-- **A referential rule is `= 1.0` only where every value finds its parent.** Otherwise it takes a
-  threshold three standard errors below the containment the profile states.
+- **Each table is a resource or a ruleset.**
+- **A seed bundle's relationships are foreign keys.** One imported from a Data Package holding
+  `foreignKeys` exports them again, and DQDL as `ReferentialIntegrity ... = 1.0`.
+- **A profiled bundle's Data Package names each relationship it left out.** The privacy floor
+  writes fewer than `k_min` orphans as none, so no relationship of it holds for every row. DQDL
+  takes a threshold three standard errors below the share the profile states, less the rows the
+  floor may hide.
 - **`ReferentialIntegrity` names the parent by its table name.** A run passes the parent's frame as
   an additional data source under that alias.
 - **The record schema describes one record, so a bundle takes `--table`**, or `table=` in Python.
@@ -241,33 +253,43 @@ profile = sd.Profile.from_data_file('orders/part-00000-fe89a3c3.parquet')
 select decode(value) from parquet_kv_metadata('orders/*.parquet') where decode(key) = 'doppeldata.profile'
 ```
 
-A file read alone then holds the profile that made it, beside the seed and rows its provenance keys
-already name. Every PROFILE argument takes such a file.
+A file read alone then holds the profile and scenario that made it, beside the seed and rows its
+provenance keys already name. Every PROFILE argument takes such a file.
 
-- **The key is `doppeldata.profile`, beside the provenance keys.** It holds the profile's canonical
-  JSON, so its SHA-256 is `doppeldata.profile_digest`. The `orders` example's is 4,842 bytes.
+- **The key is `doppeldata.profile`, beside the provenance keys.** It holds the whole profile as
+  canonical JSON. Its digest, taken without the generated fields a digest leaves out, is
+  `doppeldata.profile_digest`. It runs to kilobytes.
+- **`doppeldata.scenario` holds the scenario's canonical document**, as the manifest's
+  `scenario.document` does. A write under no scenario writes no such key.
+- **A file whose profile or scenario is not the one its digest names is refused**, exit 2, as
+  `SourceError` in Python.
 - **Parquet holds it once, as a plain key-value pair.** The other `doppeldata.*` keys sit in
   `ARROW:schema` as well, and a copy of the profile there would double its bytes. Arrow IPC holds
   it in the schema metadata.
 - **Only Parquet and Arrow IPC hold it.** A write in another format refuses `--embed-profile`
   before writing a byte, exit 2, and Python raises `WriteFailed`.
-- **`data generate FILE` defaults `--seed` and `--rows` to the file's provenance keys.** So the
-  last command above writes the dataset `orders/` holds, by its dataset digest.
-- **It is the profile as given, before a scenario's patch.** A dataset written under a scenario
-  regenerates only with that `--scenario` given again.
-- **A `cdc` write embeds it in the `LOAD` files and the `_expected` parts, never in a change
-  file.** A change file holds a few rows. The `cdc-dms` example's stream at 20,000 rows is 3,398
-  change files of 16.4 MB, and a copy of the profile in each would double it.
+- **`data generate FILE` defaults `--seed`, `--rows` and `--scenario` to what the file's write
+  recorded**, and prints each value it took from the file. So the last command above writes the
+  dataset `orders/` holds. Python's `generate`, `stream`, `plan`, `write` and `spark` verbs take a
+  data file the same way, each value left None.
+- **Given none of the three, a file whose dataset this release would not make again is refused**,
+  exit 2, naming the key that differs, such as `doppeldata.stream_version`. Given any of them, the
+  write generates the dataset they make.
+- **It is the profile as given, before a scenario's patch.** The scenario applies again from
+  `doppeldata.scenario`.
+- **A `cdc` write embeds both in the `LOAD` files and the `_expected` parts, never in a change
+  file.** A stream writes thousands of change files, and a copy of the profile can outweigh the
+  rows in each one.
 - **The manifest's `profile.embedded` is true.** `regenerate()` refuses such a manifest, because a
   plan holds the profile's digest but never its JSON. `data generate FILE --embed-profile` writes
-  the same bytes again.
+  the same dataset digest again, and the same bytes where the write used the profile's own format
+  and layout.
 - **`Profile.from_data_file` reads the footer through the extension**, so it needs no pyarrow. A
   file holding no profile raises `SourceError`, naming `embed_profile=True`.
 
 ## Rejected
 
-- *Rejected:* frictionless, jsonschema, pandera, dataframely or datacontract-cli as a library
-  dependency. Each lands on every consumer's Glue job, and only the test suite runs them.
+- *Rejected:* frictionless, pandera, dataframely or datacontract-cli as a library dependency. Each lands on every consumer's Glue job, and only the test suite runs them.
 - *Rejected:* one module holding a model of each pandera backend, each defined under `try`. A class
   defined conditionally breaks a type checker, so `pyspark-schemas` is its own format.
 - *Rejected:* a strict format bounding a column at its trimmed extremes. It fails real data the

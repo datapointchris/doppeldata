@@ -1,7 +1,8 @@
 """Each export format's name for a column's type, read from the tables the seed importers read it back through.
 
 The importers map a format's type names onto Arrow types, as Hive's `bigint` onto `int64`. Each table here inverts one of
-theirs, the first name for an Arrow type winning, so an exported type imports as the type it was exported from.
+theirs, the first name for an Arrow type winning, so an exported type imports as the same logical type. A format with no
+name for an integer width, a decimal's precision or a time zone imports as its importer's default.
 """
 
 import re

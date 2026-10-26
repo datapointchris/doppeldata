@@ -61,11 +61,15 @@ def export(profile: Profile | Bundle | str | os.PathLike[str], format: str, *, t
     - `dataframely`: a module of a `dataframely.Schema` of each table.
     - `pyspark-schemas`: a module of each table's `StructType` and `pandera.pyspark.DataFrameModel`.
 
-    Every format but DQDL carries a range, listed values, lengths or a pattern only where the profile states it of every
-    value, and names in its own description what it left out. A seed exports only what its schema declared.
+    pandera, dataframely, Table Schema, the record schema and ODCS's `logicalTypeOptions` carry a range, listed values,
+    lengths or a pattern only where the profile states it of every value, and name in their own description what they left
+    out. DQDL, and ODCS's quality checks, carry a share as a floor three standard errors below the profile's. A seed exports
+    only what its schema declared. Data generated from the profile passes each export, except a column whose `type_mix`
+    holds several types: the engine draws it as one, and a strict format types it string.
 
-    Raises CheckFailed, as `doppeldata profile check` exits 3, where a profile made from data fails its schema or privacy
-    policy, because an export never carries a literal the policy did not pass. ValueError names an unknown format or table.
+    Raises CheckFailed where a profile made from data fails its schema or privacy policy, because an export never carries a
+    literal the policy did not pass. SourceError names a data file holding no profile, and ValueError an unknown format or
+    table.
     """
     exporter = EXPORTERS.get(format)
     if exporter is None:

@@ -1,8 +1,9 @@
 """A Frictionless Table Schema v2 of a table, and a Data Package v2 of a bundle, each table a resource.
 
-It mirrors `seed_profiles.table_schemas`, so each field imports as the column it was exported from. Constraints hold for
-every row, and `missingValues` holds the CSV's null and every token the profile read as null. A package's foreign key
-is a relationship the profile states every value holds.
+It mirrors `seed_profiles.table_schemas`, so each field imports as the same logical type, nullability, listed values and
+bounds. Table Schema has no integer width, decimal precision or time zone, so those import as the importer's default.
+Constraints hold for every row, and `missingValues` holds the CSV's null and every token the profile read as null. A
+package's foreign key is a relationship the profile states every value holds.
 """
 
 import json
