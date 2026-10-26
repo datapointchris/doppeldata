@@ -19,6 +19,7 @@ class ProfiledColumns:
     holding a value that does not parse as its column's type. `null_token` is what a delimited source writes most for a
     missing value, and a JSON table's paths and type counts are in `json`. `dependence_sample` is the seeded sample the
     fits and the correlations read, and `parsed_types` reads a delimited table's text as one parse, null tokens included.
+    `whole` is every row at the columns' types where `table` holds a sample, and None where it holds every row.
     """
 
     columns: list[dict[str, Any]]
@@ -31,3 +32,4 @@ class ProfiledColumns:
     json: json_paths.ProfiledTable | None = None
     dependence_sample: Table = None
     parsed_types: dict[str, ParsedType] = dc.field(default_factory=dict)
+    whole: Table = None

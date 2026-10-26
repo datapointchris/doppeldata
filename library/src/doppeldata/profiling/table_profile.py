@@ -102,6 +102,8 @@ FIT_SAMPLE_ROWS = 20_000
 # A strictly monotonic integer column with gaps is a counting sequence where it holds this share of the integers between
 # its trimmed extremes at its least step, so a key some of whose rows were rejected still generates unique.
 SEQUENCE_FILL = 0.5
+# What a counting sequence is decided from.
+SEQUENCE_STATISTICS = ('null_count', 'step_min', 'step_max', 'min', 'max', 'trimmed_low', 'trimmed_high')
 # A column with fewer distinct values is better described by its frequencies than by a family.
 FIT_MIN_DISTINCT = 50
 FITTED_FAMILIES_MODULE = 'doppeldata.profiling.fitted_families'
@@ -257,10 +259,9 @@ def profile_table(
         table, sampled = backend.sampled(table, sample, SAMPLE_SEED), True
     elements = read.json.elements if read.json else {}
     settings = ColumnSettings(source.format, k_min, policy, packs, code_lists, frozen or FrozenLayout(), elements)
-    profiled = profile_columns(backend, table, settings, rows, whole_distinct, read.json.paths if read.json else None)
-    full = profiled.table
-    if sampled:
-        full = backend.parse(read.table, profiled.parsed_types) if profiled.parsed_types else read.table
+    json_root = read.json.paths if read.json else None
+    profiled = profile_columns(backend, table, settings, rows, whole_distinct, json_root, read.table if sampled else None)
+    full = profiled.table if profiled.whole is None else profiled.whole
     dataset: dict[str, Any] = {'row_count': rows}
     cell_floors: dict[tuple[str, str], int] = {}
     if read.json is None and profiled.dependence_sample is not None:
@@ -326,11 +327,18 @@ class ColumnSettings:
 
 
 def profile_columns(
-    backend: Backend, table: Table, settings: ColumnSettings, rows: int, whole_distinct: dict[str, int], json_root: JsonNode | None
+    backend: Backend,
+    table: Table,
+    settings: ColumnSettings,
+    rows: int,
+    whole_distinct: dict[str, int],
+    json_root: JsonNode | None,
+    whole: Table | None = None,
 ) -> ProfiledColumns:
     """Every column of `table`, which holds `rows` rows, or the records or elements `json_root` heads in a JSON source.
 
     A delimited source's null tokens are read as null before its columns are typed, and each column's own are kept.
+    Where `table` is a sample, `whole` is the table it was drawn from, which decides each counting sequence.
     """
     k_min, packs, layout = settings.k_min, settings.packs, settings.frozen
     text: dict[str, TextColumn] = {}
@@ -380,6 +388,10 @@ def profile_columns(
     counting = [Request(name, 'histogram_counts', binning.edges) for name, binning in binnings.items()]
     counting += [Request(name, 'listed_value_counts', frozen_values.values) for name, frozen_values in listed.items()]
     stats |= answered(backend, table, counting)
+    if whole is not None and parsed_types:
+        whole = backend.parse(whole, parsed_types)
+    sequences, whole_steps = counting_sequences(backend, whole if json_root is None else None, specs, stats, described, rows, k_min)
+    stats |= whole_steps
     distinct: dict[str, tuple[int, int]] = {
         spec.name: (whole_distinct[spec.name] if spec.name in whole_distinct else stats[(spec.name, 'distinct_count')], rows)
         for spec in specs
@@ -390,6 +402,7 @@ def profile_columns(
     fitted = [spec for spec in specs if not treatments[spec.name].keeps_no_value and treatments[spec.name] is not Treatment.AGE]
     # The fits and the correlations read one sample, which a record table holds and an array's elements need not.
     dependence = backend.sampled(table, FIT_SAMPLE_ROWS, SAMPLE_SEED) if json_root is None else None
+    fitted = [spec for spec in fitted if spec.name not in sequences]
     fits = column_fits(
         backend, table if dependence is None else dependence, fitted, stats, described, distinct, k_min, fitting, import_error
     )
@@ -404,7 +417,7 @@ def profile_columns(
             text.get(spec.name),
             shapes,
             patterns,
-            ColumnLayout(binnings.get(spec.name), listed.get(spec.name), spec.name in fits, fits.get(spec.name)),
+            ColumnLayout(binnings.get(spec.name), listed.get(spec.name), spec.name in fits, fits.get(spec.name), sequences.get(spec.name)),
             typings.get(spec.name),
             treatments[spec.name],
             k_min,
@@ -412,7 +425,16 @@ def profile_columns(
         for spec in specs
     ]
     profiled = ProfiledColumns(
-        columns, table, specs, stats, described, unparsed_rows, null_token, dependence_sample=dependence, parsed_types=parsed_types
+        columns,
+        table,
+        specs,
+        stats,
+        described,
+        unparsed_rows,
+        null_token,
+        dependence_sample=dependence,
+        parsed_types=parsed_types,
+        whole=whole,
     )
     if json_root is None:
         return profiled
@@ -565,6 +587,7 @@ class ColumnLayout:
     # Whether fitting applies to the column, and the fit, which is None where it applied and no family fitted.
     fit_applies: bool = False
     fit: dict[str, Any] | None = None
+    sequence: dict[str, int] | None = None
 
 
 def pass_one_requests(specs: list[ColumnSpec], k_min: int) -> list[Request]:
@@ -675,6 +698,34 @@ def written_number(value: Any, integral: bool) -> int | float:
     return int(value) if integral and abs(value) <= LARGEST_EXACT_INTEGER else float(value)
 
 
+def counting_sequences(
+    backend: Backend, whole: Table | None, specs: list[ColumnSpec], stats: Answers, described: int, rows: int, k_min: int
+) -> tuple[dict[str, dict[str, int]], Answers]:
+    """Each integer column that counts, by name, with its `start` and `step`, and the statistics it is written with.
+
+    A sample's steps span the rows it skipped, so a sampled table is decided over `whole`. A sequence found there is
+    written with the whole table's steps and trimmed extremes, the ones its start follows from.
+    """
+    integers = [spec.name for spec in specs if spec.kind is ColumnKind.INTEGER]
+    if whole is None:
+        found = {name: sequence_of(column_stat(stats, name), described - stats[(name, 'null_count')], k_min) for name in integers}
+        return {name: sequence for name, sequence in found.items() if sequence}, {}
+    requested = [
+        Request(name, statistic, k_min if statistic in TRIMMED_STATISTICS else None)
+        for name in integers
+        for statistic in SEQUENCE_STATISTICS
+    ]
+    counted = answered(backend, whole, requested)
+    sequences: dict[str, dict[str, int]] = {}
+    written: Answers = {}
+    for name in integers:
+        sequence = sequence_of(column_stat(counted, name), rows - counted[(name, 'null_count')], k_min)
+        if sequence:
+            sequences[name] = sequence
+            written |= {(name, statistic): counted[(name, statistic)] for statistic in SEQUENCE_STATISTICS if statistic != 'null_count'}
+    return sequences, written
+
+
 def sequence_of(stat: Stat, values: int, k_min: int) -> dict[str, int] | None:
     """The `start` and `step` of a counting integer column holding no null, or None.
 
@@ -742,7 +793,7 @@ def numeric_section(
     quantiles = {name: number(at_level[level]) for name, level in QUANTILES.items() if clear_of_the_ends(level, values, k_min)}
     if quantiles:
         section['quantiles'] = quantiles
-    sequence = sequence_of(stat, values, k_min) if integral and stat('step_min') is not None else None
+    sequence = layout.sequence
     counted = numeric_values(backend, table, spec, stat, values, layout.listed, listing, k_min) if listing and not sequence else None
     kept = counted.kept if counted else []
     zero_point = [(0, zeros)] if zeros and not any(value == 0 for value, _ in kept) else []
@@ -1084,15 +1135,13 @@ def column_fits(
 ) -> dict[str, dict[str, Any] | None]:
     """Each fittable numeric column's fit, from one seeded sample, or None for each when `fitting` did not import.
 
-    A column is fittable when it has trimmed extremes, `FIT_MIN_DISTINCT` distinct values, and is no counting sequence.
+    A column is fittable when it has trimmed extremes and `FIT_MIN_DISTINCT` distinct values.
     """
     fittable = []
     for spec in specs:
-        stat = column_stat(stats, spec.name)
         if spec.kind not in NUMERIC or distinct[spec.name][0] < FIT_MIN_DISTINCT:
             continue
-        values = described - stat('null_count')
-        if has_trimmed_extremes(values, k_min) and not (spec.kind is ColumnKind.INTEGER and sequence_of(stat, values, k_min)):
+        if has_trimmed_extremes(described - stats[(spec.name, 'null_count')], k_min):
             fittable.append(spec)
     if not fittable:
         return {}

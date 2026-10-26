@@ -167,8 +167,11 @@ def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_an
         counted = {(row[given], row[child]): row['len'] for row in frame.group_by(given, child).len().iter_rows(named=True)}
         assert all(counted[value, written] >= 11 for value, row in entry['table'].items() for written in row)
     assert not any('fax' in row for row in conditionals['region', 'channel']['table'].values())
-    order_id = next(column for column in profiled['columns'] if column['name'] == 'order_id')
-    assert order_id['numeric']['sequence'] == {'start': frame['order_id'][10] - 10, 'step': 1}
+    # A sample of a quarter of the rows holds a quarter of the ids, and still states the whole table's sequence.
+    for sample in (None, rows // 4):
+        sampled = profiled if sample is None else profile(frame, sample=sample).to_plain()
+        order_id = next(column for column in sampled['columns'] if column['name'] == 'order_id')
+        assert order_id['numeric']['sequence'] == {'start': frame['order_id'][10] - 10, 'step': 1}
 
 
 def test_two_folders_named_with_tables_are_two_tables_and_a_column_naming_the_other_s_key_is_a_foreign_key(tmp_path):
