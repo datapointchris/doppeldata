@@ -703,9 +703,9 @@ def profile_import(
 ) -> None:
     """Import a seed profile from a schema a project already has: doppeldata profile import --from odcs orders.odcs.yaml
 
-    The seed takes each column's type and constraints from the schema, and a fixed default where the schema is silent, which
-    its YAML states. data generate reads it unchanged. glue reads the AWS Glue Data Catalog with the AWS environment's
-    credentials.
+    The seed takes each column's type and constraints from the schema, and a fixed default its YAML states where the schema is silent.
+
+    data generate reads the seed unchanged. glue reads the AWS Glue Data Catalog with the AWS environment's credentials.
     """
     importer = IMPORTERS.get(kind)
     if importer is None:
