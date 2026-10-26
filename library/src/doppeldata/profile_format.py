@@ -287,6 +287,8 @@ def table_ordering_issues(table: dict[str, Any], at: PointerParts) -> Iterator[I
     for index, conditional in enumerate((table.get('dataset') or {}).get('conditionals') or []):
         for given, row in conditional['table'].items():
             yield from rate_sum_issues(row.values(), (*at, 'dataset', 'conditionals', index, 'table', given))
+        if conditional.get('other'):
+            yield from rate_sum_issues(conditional['other'].values(), (*at, 'dataset', 'conditionals', index, 'other'))
     for index, column in enumerate(table.get('columns') or []):
         yield from column_ordering_issues(column, (*at, 'columns', index))
 
@@ -450,9 +452,13 @@ class Bundle:
         self.tables = tables
 
     @classmethod
-    def of(cls, name: str, tables: dict[str, Profile]) -> 'Bundle':
-        """A bundle named `name` of `tables`, with no file of its own, so its `save` needs a path."""
-        return cls({'profile_version': FORMAT_VERSION, 'kind': 'bundle', 'name': name, 'tables': {}}, None, tables)
+    def of(cls, name: str, tables: dict[str, Profile], relationships: list[Any] | None = None) -> 'Bundle':
+        """A bundle named `name` of `tables` and the `relationships` between them, with no file of its own, so its
+        `save` needs a path."""
+        document: dict[str, Any] = {'profile_version': FORMAT_VERSION, 'kind': 'bundle', 'name': name, 'tables': {}}
+        if relationships:
+            document['relationships'] = relationships
+        return cls(document, None, tables)
 
     @classmethod
     def load(cls, path: str | Path) -> 'Bundle':

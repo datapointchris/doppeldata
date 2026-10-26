@@ -87,7 +87,8 @@ def described_columns(table: GroupedTable) -> str:
 def grouped(source: Source) -> list[GroupedTable]:
     """The tables `source` holds: itself where its folders are similar, or one table per cluster of similar folders.
 
-    Only one directory or prefix named is grouped. Several paths named are one table, as a crawler's include path is.
+    Only a source of one directory or prefix is grouped. A source of several paths is one table, as a crawler's include
+    path is, so `profile_tables()` groups each path it is given as a source of its own.
     """
     if len(source.roots) != 1 or len(source.files) < 2 or source.format is None:
         return [GroupedTable(source)]

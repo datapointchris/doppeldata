@@ -60,7 +60,9 @@ with every table inline, so moving between the forms keeps the identity. A table
 match the key the index gives it.
 
 A relationship stores its fan-out as shares and quantiles, never key values. So join skew survives
-into synthetic data while no key leaves the source.
+into synthetic data while no key leaves the source. Its quantiles stay `k_min` parents clear of each
+end, and a top share is stated only where its last parent holds `k_min` child rows. Where fewer than
+`k_min` child rows are orphans, `containment` is written as 1 and `orphan_rate` as 0.
 
 ## Generated files name the profile they came from
 
@@ -108,7 +110,8 @@ The `default` policy:
 7. A pattern is stored only when it holds no alternation of data literals.
 
 `strict` also treats quasi-identifiers as identifiers, and drops every lookup and conditional table
-involving one. `healthcare` adds HIPAA Safe Harbor, as `healthcare-policy.md` describes. `none`
+involving one. `healthcare` adds HIPAA Safe Harbor, as `healthcare-policy.md` describes, and drops a
+quasi-identifier's conditional tables too. `none`
 writes everything, with exact extremes and no `k_min`. It exists for data that is already synthetic
 or public, and `profile check` always reports a `none` profile. `dp` is reserved in the format for
 a differential-privacy policy, which doppeldata does not apply. `profile create --policy dp` is a
@@ -142,12 +145,19 @@ privacy:
     - {column: customer_email, reason: identifier, semantic: email}
   audit:
     - {column: status, field: /string/top_values, values: 5, rule: "count >= k_min", min_count: 7910}
+  dataset_audit:
+    - {field: /dataset/conditionals/0, values: 7, rule: "cell >= k_min", min_count: 16}
 ```
 
-`field` is the field's RFC 6901 pointer within its column, so reordering the columns or adding one
-leaves every other entry true. `values` counts the literals it holds, and `min_count` is the fewest
-rows any of them or any cell of it rests on. A suppression's `reason` is one of the
-`SuppressionReason` values `doppeldata schemas show profile` prints.
+An `audit` entry's `field` is the field's RFC 6901 pointer within its column, so reordering the
+columns or adding one leaves every other entry true. A `dataset_audit` entry's `field` points from
+the profile's root, at a conditional table or a functional dependency. `values` counts the literals
+it holds, and `min_count` is the fewest rows any of them or any cell of it rests on. A
+suppression's `reason` is one of the `SuppressionReason` values `doppeldata schemas show profile`
+prints.
+
+The dataset's entries are a list of their own because an earlier `profile check` reads every
+`audit` field as a pointer into its column. It would report a root pointer there as a stale entry.
 
 Each kind of field is admitted by one rule:
 
@@ -160,8 +170,15 @@ Each kind of field is admitted by one rule:
 | a pattern | `generalized` | no alternation, optional part, or class narrower than whole digit and letter ranges |
 | a fitted family | `fitted within the trimmed extremes` | trimmed extremes beside it |
 | a sequence start | `follows the trimmed extreme` | the trimmed extreme at its end, less `k_min − 1` steps |
+| a conditional table | `cell >= k_min` | nothing: each value is one its column lists, and the entry's `min_count` reaches `k_min` |
+| a functional dependency | `lhs >= k_min` | nothing: the entry's `min_count` reaches `k_min` |
 
 An integer identifier's digit bounds hold no data value, so they are not a literal.
+
+A conditional table's `values` counts its cells, and `min_count` is the fewest rows a cell holds.
+The writer counts every cell over the rows profiled, and floors each one before the table is
+written. A dependency's `values` is 1, and its `min_count` is `k_min`. Its violation rate is
+counted only over the left-hand values at least `k_min` rows hold.
 
 ## profile check reads the file alone
 
@@ -171,9 +188,20 @@ first, then the policy. The rows a rate is taken of are `generated.sample.rows_r
 its `presence`, less its own null rate. An array element's are not stated, because the file gives
 an array's length only by quantile, and an element is counted by element rather than by row. So the
 writer withholds every literal an element holds. Every literal field must have an audit entry
-whose column, pointer, rule and value count match it, and must meet that rule. A column the policy
-withholds from must hold nothing withheld, and an audit entry naming no literal field is reported
-too. A bundle is checked table by table, each table held in its own file read as that file. A
+whose column, pointer, rule and value count match it, and must meet that rule. A dataset-level
+field's entry is in `dataset_audit`, matched by its pointer. A column the policy withholds from
+must hold nothing withheld, and an audit entry naming no literal field is reported too.
+
+A conditional table's cells are the literal the check cannot recompute, so it trusts the entry's
+`min_count` for them. A cell is a share of the rows its row's kept cells hold, and the file states
+that total for no row. The writer makes sure no difference names a dropped cell either. Each row's
+given rows, `other` included, and each listed child value's rows, less the kept cells beside them,
+number 0 or at least `k_min`. The check holds what the file does state: every given and
+child value is one its column lists, neither column's list is withheld, no quasi-identifier takes
+part under `strict` or `healthcare`, and an entry at the table's pointer states a `min_count` of at
+least `k_min`.
+
+A bundle is checked table by table, each table held in its own file read as that file. A
 member file that is a bundle, names itself other than its key, or cannot be read is a violation at
 `/tables/<name>`, and the other tables are still checked.
 

@@ -151,12 +151,20 @@
       ]
     },
     "CorrelationMethod": {
-      "type": "string",
-      "enum": [
-        "pearson",
-        "spearman",
-        "kendall",
-        "cramers_v"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "pearson",
+            "spearman",
+            "kendall"
+          ]
+        },
+        {
+          "description": "Bias-corrected Cramér's V between two categorical columns.",
+          "type": "string",
+          "const": "cramers_v"
+        }
       ]
     },
     "ExpectationResult": {

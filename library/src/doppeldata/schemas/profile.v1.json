@@ -39,7 +39,7 @@
           "type": "string"
         },
         "field": {
-          "description": "The RFC 6901 pointer to the field, such as `/columns/4/string/top_values`.",
+          "description": "The RFC 6901 pointer to the field within `column`, such as `/string/top_values`.",
           "type": [
             "string",
             "null"
@@ -109,6 +109,11 @@
           "description": "The sequence's start follows from the trimmed extreme at its end and its step.",
           "type": "string",
           "const": "follows the trimmed extreme"
+        },
+        {
+          "description": "Each left-hand value a dependency is counted over is held by at least `k_min` rows.",
+          "type": "string",
+          "const": "lhs >= k_min"
         }
       ]
     },
@@ -433,7 +438,7 @@
       ]
     },
     "Conditional": {
-      "description": "The distribution of `column` within each value of `given`. Each row of `table` sums to 1.",
+      "description": "The distribution of `column` within each value of `given`. Each row of `table` sums to 1.\n\nBoth columns are strings, integers or booleans, and each value is a key as its text: a string as\nitself, an integer in decimal, and a boolean as `true` or `false`.",
       "type": "object",
       "properties": {
         "column": {
@@ -441,6 +446,16 @@
         },
         "given": {
           "type": "string"
+        },
+        "other": {
+          "description": "The distribution of `column` over every value of `given` that `table` does not list. It sums to 1.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
         },
         "table": {
           "type": "object",
@@ -483,12 +498,40 @@
       ]
     },
     "CorrelationMethod": {
-      "type": "string",
-      "enum": [
-        "pearson",
-        "spearman",
-        "kendall",
-        "cramers_v"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "pearson",
+            "spearman",
+            "kendall"
+          ]
+        },
+        {
+          "description": "Bias-corrected Cramér's V between two categorical columns.",
+          "type": "string",
+          "const": "cramers_v"
+        }
+      ]
+    },
+    "CorrelationRatio": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "string"
+        },
+        "b": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "a",
+        "b",
+        "value"
       ]
     },
     "CsvSource": {
@@ -658,6 +701,16 @@
             "$ref": "#/$defs/Conditional"
           }
         },
+        "correlation_ratios": {
+          "description": "Each correlation ratio η between a numeric column and a categorical one: the square root of the share of the\nvariance of the numeric column's ranks that the categorical column's values explain, corrected for the share\nthey explain by chance. `a` and `b` follow the columns' order, and the column kinds tell which is the category.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/CorrelationRatio"
+          }
+        },
         "correlations": {
           "type": [
             "array",
@@ -677,6 +730,7 @@
           }
         },
         "duplicate_row_rate": {
+          "description": "The share of rows repeating an earlier row in every column, written as 0 where fewer than `k_min` rows do.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -706,6 +760,41 @@
         }
       }
     },
+    "DatasetAuditEntry": {
+      "description": "One dataset-level field a floor holds, and the rule it met.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "The RFC 6901 pointer to the field from the profile's root, such as `/dataset/conditionals/0`.",
+          "type": "string"
+        },
+        "min_count": {
+          "description": "The fewest rows any cell or counted value of the field rests on.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "rule": {
+          "$ref": "#/$defs/AuditRule"
+        },
+        "values": {
+          "description": "How many cells or counted values the field holds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "field",
+        "rule"
+      ]
+    },
     "Dependency": {
       "type": "object",
       "properties": {
@@ -722,6 +811,7 @@
           "type": "string"
         },
         "violation_rate": {
+          "description": "The share of rows whose `lhs` value holds more than one `rhs` value, of the rows whose `lhs` value at least\n`k_min` rows hold.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -931,6 +1021,7 @@
       "type": "object",
       "properties": {
         "quantiles": {
+          "description": "The child rows each of `to`'s values is held by, counting the values no child row holds.",
           "anyOf": [
             {
               "$ref": "#/$defs/Quantiles"
@@ -951,7 +1042,7 @@
           }
         },
         "zipf_s": {
-          "description": "The exponent of a Zipf fit to children per parent.",
+          "description": "The exponent of a Zipf law fitted by maximum likelihood to the parents' child counts, busiest first.",
           "type": [
             "number",
             "null"
@@ -2073,6 +2164,16 @@
             "$ref": "#/$defs/AuditEntry"
           }
         },
+        "dataset_audit": {
+          "description": "Every dataset-level field a floor holds, such as a conditional table's cells or a dependency's left-hand\nvalues, and the rule it met.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DatasetAuditEntry"
+          }
+        },
         "dp": {
           "anyOf": [
             {
@@ -2247,7 +2348,7 @@
           ]
         },
         "containment": {
-          "description": "An estimate of the share of `from`'s distinct values that `to` holds.",
+          "description": "The share of `from`'s distinct values that `to` holds.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -2273,6 +2374,7 @@
           "pattern": "^[^.]+\\..+$"
         },
         "orphan_rate": {
+          "description": "The share of `from`'s rows holding a value that `to` does not hold, of those holding a value.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"

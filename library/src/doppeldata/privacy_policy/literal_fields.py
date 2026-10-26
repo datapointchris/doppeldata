@@ -45,6 +45,8 @@ class FieldKind(enum.Enum):
     PATTERN = ('pattern', 'generalized', 'pattern')
     FIT = ('fit', 'fitted within the trimmed extremes', 'fitted family')
     SEQUENCE = ('sequence', 'follows the trimmed extreme', 'sequence start')
+    CONDITIONAL = ('conditional', 'cell >= k_min', 'conditional table')
+    DEPENDENCY = ('dependency', 'lhs >= k_min', 'functional dependency')
 
     @property
     def rule(self) -> str:
@@ -114,6 +116,9 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
         'by_dow': FieldKind.CALENDAR_SHARES,
         'by_hour': FieldKind.CALENDAR_SHARES,
     },
+    # A key, a correlation and a dependency name columns, and a repeated row's share is written as 0 under k_min rows.
+    'Dataset': dict.fromkeys(('row_count', 'duplicate_row_rate', 'keys', 'correlations', 'correlation_ratios'))
+    | {'conditionals': FieldKind.CONDITIONAL, 'dependencies': FieldKind.DEPENDENCY},
 }
 
 
@@ -274,6 +279,33 @@ def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None,
             yield LiteralField((*at, 'temporal', name), FieldKind.CALENDAR_SHARES, sum(1 for rate in temporal[name] if rate), cells)
 
 
+def dataset_literals(table: dict[str, Any]) -> Iterator[LiteralField]:
+    """Each conditional table and each dependency as one field, which `privacy.dataset_audit` names by its pointer.
+
+    The file counts neither a cell's rows nor a dependency's left-hand values, so neither is recomputed from it, and
+    `min_count` in the audit is what states them.
+    """
+    dataset = table.get('dataset') or {}
+    for index, conditional in enumerate(dataset.get('conditionals') or []):
+        if isinstance(conditional, dict):
+            rows = [*(conditional.get('table') or {}).values(), conditional.get('other') or {}]
+            cells = sum(len(row) for row in rows if isinstance(row, dict))
+            yield LiteralField(('dataset', 'conditionals', index), FieldKind.CONDITIONAL, cells)
+    for index, _ in enumerate(dataset.get('dependencies') or []):
+        yield LiteralField(('dataset', 'dependencies', index), FieldKind.DEPENDENCY, 1)
+
+
+def listed_values(column: dict[str, Any]) -> list[str] | None:
+    """The values a column lists, written as text as a conditional table's keys are, or None where it lists none."""
+    if (column.get('boolean') or {}).get('true_rate') is not None:
+        return ['true', 'false']
+    for section in ('string', 'numeric'):
+        listed = (column.get(section) or {}).get('top_values')
+        if listed:
+            return [str(item['value']) for item in listed]
+    return None
+
+
 def quantile_field(at: PointerParts, quantiles: dict[str, Any], held: float | None) -> LiteralField:
     """The quantiles, each as the rows between it and the nearer end, counting its own."""
     cells = []
@@ -334,7 +366,7 @@ def faults(field: LiteralField, column: ColumnLiterals, k_min: int) -> list[Faul
     if kind is FieldKind.SEQUENCE:
         sequence, extremes = numeric['sequence'], numeric['extremes']
         end = extremes.get('low') if sequence['step'] > 0 else extremes.get('high')
-        derived = end - (k_min - 1) * sequence['step'] if end is not None else None
+        derived = sequence_start(end, sequence['step'], k_min) if end is not None else None
         if sequence['start'] != derived:
             return [
                 Fault(
@@ -346,9 +378,14 @@ def faults(field: LiteralField, column: ColumnLiterals, k_min: int) -> list[Faul
     return []
 
 
+def sequence_start(end: int, step: int, k_min: int) -> int:
+    """A stored sequence's start: the trimmed extreme at the end it starts from, less k_min - 1 steps."""
+    return end - (k_min - 1) * step
+
+
 def min_count(field: LiteralField, k_min: int) -> int | None:
     """The fewest rows any literal or cell of the field rests on, as `privacy.audit` records it."""
-    if field.kind in (FieldKind.NUMERIC_EXTREMES, FieldKind.TEMPORAL_EXTREMES):
+    if field.kind in (FieldKind.NUMERIC_EXTREMES, FieldKind.TEMPORAL_EXTREMES, FieldKind.DEPENDENCY):
         return k_min
     counts = [round(cell.rows) for cell in field.cells if cell.rows is not None and round(cell.rows) > 0]
     return min(counts) if counts else None

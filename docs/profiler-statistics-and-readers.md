@@ -457,10 +457,202 @@ starts, so Polars and Spark group alike.
   whose prefix leaves nothing takes its first folder's.
 - **More than `MOST_CLUSTERS` clusters make each folder its own table**, as the crawler does. That
   many kinds of table under one prefix says the folders share no structure worth keeping.
-- **Several paths named are one table**, as a crawler's include path is.
+- **Several paths named are one table to `profile()`**, as a crawler's include path is.
+  `profile_tables()` and `--tables` group each path named on its own, so `customers/ orders/` named
+  together are two tables.
 
 *Not established:* how the crawler measures a match. Neither page defines it, so the share of
 column names is this design's reading of "70 percent".
+
+## Every table states its repeated rows, keys and correlated columns, and a bundle its foreign keys
+
+`profile create` and `profile()` write them into the profile's `dataset` section, with no option to
+set. `--tables` and `profile_tables()` also write the foreign keys between the tables, as the
+bundle's `relationships`:
+
+```bash
+doppeldata profile create customers/ orders/ --tables --out shop.bundle.yaml
+```
+
+```python
+import doppeldata as sd
+
+shop = sd.profile_tables(['customers/', 'orders/'])
+shop.save('shop.bundle.yaml')
+```
+
+Both write the bundle `shop`, named for the directory the two paths share. Of 10,000 customers
+and 200,000 orders, with about 5% of the orders naming a customer the table lacks:
+
+```yaml
+relationships:
+- from: orders.customer_id
+  to: customers.customer_id
+  containment: 0.9524
+  orphan_rate: 0.0478
+  cardinality: many_to_one
+  fanout:
+    quantiles: {p01: 10, p05: 12, p25: 16, p50: 19, p75: 22, p95: 27, p99: 30}
+    top_share: {top1: 0.0002048, top10: 0.001875, top100: 0.01687}
+    zipf_s: 0.1776
+```
+
+The `orders` table's own section names its key:
+
+```yaml
+dataset:
+  row_count: 200000
+  duplicate_row_rate: 0.0
+  keys:
+    primary: {columns: [order_id], uniqueness: 1.0}
+```
+
+The NYC yellow taxi trips for February to April 2024 hold pairs such as:
+
+```bash
+doppeldata profile create yellow_tripdata_2024-02.parquet yellow_tripdata_2024-03.parquet \
+  yellow_tripdata_2024-04.parquet --out taxi.profile.yaml
+```
+
+```yaml
+  correlations:
+    - {a: trip_distance, b: fare_amount, method: spearman, value: 0.8533}
+    - {a: fare_amount, b: total_amount, method: spearman, value: 0.9648}
+  correlation_ratios:
+    - {a: payment_type, b: tip_amount, value: 0.672}
+```
+
+Of 200,000 checkouts whose payment method depends on the channel, 6 phone and 5 store PayPal
+payments fall under `k_min`, and so do 9 store cheques. Two kiosks of 8 card payments each are too
+few for `channel` to list:
+
+```yaml
+  conditionals:
+    - given: channel
+      column: payment
+      table:
+        web: {card: 0.6993, paypal: 0.2906, gift: 0.01013}
+        store: {card: 0.4451, cash: 0.5549}
+        phone: {card: 1.0}
+      other: {card: 1.0}
+```
+
+The phone row drops its 878 invoices too. Its card and invoice rows would leave 6 phone rows
+unstated, which `channel`'s listed count less the row would name. The store row's 14 unstated rows
+reach `k_min`, so it keeps both cells.
+
+`profiling/table_keys.py`, `profiling/column_dependence.py` and `profiling/foreign_keys.py` compute
+them through the `Backend` protocol, so Polars and Spark write the same fields. Each threshold below
+is a constant in its module, not an option. `data generate` reads one of them, `keys.primary`, which
+a scenario's `duplicates` op leaves unvaried in a near-duplicate. Repeated rows and keys are
+counted over the whole table, even under `--sample`. Conditional tables and dependencies are
+counted over the rows profiled, which `--sample` makes its sample.
+
+- **`duplicate_row_rate` is the rows less the distinct rows, as a share of the rows.** A null
+  equals a null. Polars counts the distinct rows by a 64-bit hash of each
+  row, and Spark by `xxhash64` over each value and whether it is null. Over 10^8 rows, two distinct
+  rows share a hash with odds under one in a thousand. Fewer than `k_min` repeated rows are written
+  as 0.
+- **A key is a column whose rows holding a value no other row holds reach `KEY_SHARE` of its
+  rows.** A candidate is an integer or string column holding no null, whose distinct
+  values reach `NOMINATED_SHARE` of the rows. That sits three of HyperLogLog++'s standard errors
+  under `KEY_SHARE`, so Spark's estimate misses no key Polars' count finds. Its `uniqueness` is the
+  share of rows holding a value no other row holds. Fewer than `k_min` rows sharing a value are written as a
+  uniqueness of 1. `primary` is the first key at 1, and `candidates` holds the rest.
+- **A pair of columns is tried as a key only where no column is one.** Up to `COMPOSITE_PAIRS`
+  pairs of integer, string, date and timestamp columns are tried, the most distinct first, among
+  those whose distinct counts multiply to the rows or more. A pair is nominated where the fits'
+  seeded sample repeats none of its values, then confirmed over the whole table.
+- **A correlation is measured on the seeded sample of `FIT_SAMPLE_ROWS` rows the fits read.** A
+  correlation names no value, so a sample costs the floor nothing. The measure follows the
+  columns' roles:
+
+  | Columns | Written as | Measure |
+  | --- | --- | --- |
+  | both numeric or temporal | `correlations`, `method: spearman` | Pearson's r over each column's average ranks |
+  | both categorical | `correlations`, `method: cramers_v` | Cramér's V with Bergsma's bias correction |
+  | one numeric, one categorical | `correlation_ratios` | η of the numeric column's average ranks: the root of the share of their variance between the categorical column's values, corrected as Kelley's ε² corrects η² |
+
+  A boolean is categorical, and so is a string or integer column holding at most
+  `CATEGORICAL_VALUES` distinct values. Other numeric and temporal columns are ranked. A constant
+  and a `sequence` take no part. Each column is ranked over its own values, then a pair is
+  correlated over the rows holding both. A pair whose magnitude reaches `CORRELATION_FLOOR` is
+  kept, the strongest `CORRELATIONS_KEPT` of both lists. `a` and `b` follow the columns' order, so
+  a correlation ratio's kinds tell which column is the category.
+
+  η is a list of its own because `method` is a closed enum. A value an earlier reader does not
+  know fails its whole profile, where a field it does not know is skipped.
+- **A pair is measured only where `PAIR_ROWS` sampled rows hold both its values**, or `k_min` rows
+  where that is more. A value at `CORRELATION_FLOOR` then lies three standard errors from none.
+  Cochran's rule for a chi-squared test sets two more floors. Cramér's V needs `ROWS_PER_CELL`
+  sampled rows per cell of its table, and η that many per category. η also needs that many per
+  category among the rows expected off `a`'s most common value, at that value's share of `a`.
+- **Sparse columns are where the floors act.** The CMS DE-SynPUF 2008–2010 carrier claims 1A,
+  profiled by `doppeldata profile create DE1_0_2008_to_2010_Carrier_Claims_Sample_1A.csv`, show
+  it. Their later line columns are mostly null, and their amounts mostly 0.
+  `LINE_BENE_PTB_DDCTBL_AMT_5` is 0 in 99.93% of its values. Without the last floor, its η beside
+  `LINE_PRCSG_IND_CD_10` is 1.0 on the sample, against 0.009 over every row. With the floors, each
+  pair the claims and the taxi trips keep reaches `CORRELATION_FLOOR` over every row too.
+
+  *Rejected:* η of the raw values. A few large amounts hold most of a money column's variance, so
+  whichever category holds them explains it. `trip_distance` beside `RatecodeID` has a raw η of
+  0.6643 on the taxi trips' sample, against 0.033 over every row.
+- **A conditional table is written for each categorical pair whose Cramér's V over every row
+  reaches `CORRELATION_FLOOR`.** A pair is counted over every row where its sampled V reaches
+  `CONDITIONAL_TRIED`. The sample picks which pairs are counted, so two engines' samples can state
+  different tables. The counts decide every cell. The claims' processing indicator codes show why
+  V is not decided on the sample. `LINE_PRCSG_IND_CD_5` and `LINE_PRCSG_IND_CD_10` have a V of 0.57
+  over the 156 sampled rows holding both, against 0.10 over all 19,394.
+
+  A table is given the column holding fewer values, where that holds at most `GIVEN_VALUES`, and
+  only where both columns list their values. Its cells are counted, then floored, and each row
+  states its kept cells as shares of their rows. The given column's listed counts and the child
+  column's both stand beside the table, so the floor holds each difference against them:
+  - a cell under `k_min` rows is dropped;
+  - a given value left with no cell joins `other`, beside the given values the column does not
+    list;
+  - a child value whose rows outside the kept cells number 1 to `k_min − 1` leaves every row;
+  - a row, `other` included, whose given rows outside its kept cells number 1 to `k_min − 1`
+    drops its least kept cell, until none does.
+
+  So no listed count less the cells stated beside it names a dropped cell's rows.
+- **A functional dependency `lhs → rhs` is recorded where at most `DEPENDENCY_VIOLATION` of the
+  rows break it.** A row breaks it where its `lhs` value holds more than one `rhs` value. Only
+  `lhs` values `k_min` rows hold are counted, and they must cover `DEPENDENCY_SUPPORT` of the rows
+  holding both columns. An `lhs` is an integer, string, boolean, date or decimal column holding at
+  least two values and fewer than `KEY_SHARE` of the rows. An `rhs` holds 2 to `DEPENDENT_VALUES`
+  values, fewer than its `lhs`, and is not a timestamp. A ZIP column against a column named for a
+  place in `PLACE_HINTS` is tried first, then the `lhs` holding fewest values, `DEPENDENCY_TESTS`
+  pairs at most. One ZIP code holding two states counts all its rows as breaking it.
+- **A child column is a foreign key where its name refers to another table's single-column key, and
+  the key holds `CONTAINMENT_FLOOR` of the column's distinct values.** The names refer where they
+  are equal ignoring case and separators, other than a bare `id`. They also refer where the column
+  is the parent's singular name followed by the key's name or by `id`, so `customer_id` refers to
+  `customers.id`. Both columns are integers, or both strings.
+- **Two keys that refer to each other are one relationship.** It points toward the table whose
+  primary key it is, where only one is. Otherwise it points toward the table the key is named for,
+  as `user_id` is for `users`, then toward the key holding more of the other's values, then toward
+  the earlier table. So `user_profiles.user_id` refers to `users.user_id` in either order.
+- **`containment` is the share of the child's distinct values the key holds.** `orphan_rate` is
+  the share of child rows whose value it lacks. `cardinality` is `one_to_one` where no parent value
+  has two child rows, else `many_to_one`. Where fewer than `k_min` child rows are orphans,
+  `containment` is written as 1 and `orphan_rate` as 0.
+- **The fan-out is each parent value's child rows, counting a parent with none.** Its quantiles stay
+  `k_min` parents clear of each end. `top_share` is the share of the matched child rows held by
+  each count of busiest parents `TOP_SHARES` names, each stated where its last parent holds `k_min`
+  rows. `zipf_s` is the
+  exponent maximizing the likelihood of the child rows under a Zipf law over the parents ranked
+  busiest first.
+
+*Rejected:* phik for a mixed pair, and Apache DataSketches' theta sketches for containment. Each is a
+dependency every consumer's Glue job would install. η comes from the group counts and moments
+both engines compute, and containment from an exact join.
+
+*Rejected:* an option per threshold. A profile is written with no flag to choose, and a constant
+keeps two runs' profiles comparable.
+
+*Rejected:* counting the distinct rows as structs. Polars hashes each row first, because counting
+the structs of the taxi trips' rows took over three times as long.
 
 ## A JSON source is profiled path by path
 
@@ -534,6 +726,16 @@ and the policy's pass then removes what each column's rule withholds:
 A gapless counting column is written as a `sequence`, whose `start` is its first value: the minimum
 when it counts up, and the maximum when it counts down. The trimmed extreme at that end and the step
 already give that value away, so storing it leaks nothing more.
+
+A strictly rising or falling integer column with gaps, such as an id after rejected rows were
+dropped, is a `sequence` too. It counts at its least step, where the values between its trimmed
+extremes fill at least `SEQUENCE_FILL` of the places that step leaves between them. Its `start`
+is `k_min − 1` steps before the trimmed extreme, the value `profile check` derives. So a
+generated id repeats no value, where its quantiles alone would repeat some.
+
+Under `--sample`, a sample's steps span the rows it skipped, and its values fill a sample's share
+of the range. So an integer column's sequence is decided over every row. A sequence found there is
+written with every row's steps and trimmed extremes, the ones its `start` follows from.
 
 ## A sampled profile counts distinct values in every row
 

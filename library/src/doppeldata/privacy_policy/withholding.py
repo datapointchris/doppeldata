@@ -17,16 +17,23 @@ from doppeldata.privacy_policy.file_check import table_check
 from doppeldata.privacy_policy.literal_fields import EXACT
 from doppeldata.privacy_policy.literal_fields import FieldKind
 from doppeldata.privacy_policy.literal_fields import column_literals
+from doppeldata.privacy_policy.literal_fields import dataset_literals
 from doppeldata.privacy_policy.literal_fields import faults
 from doppeldata.privacy_policy.literal_fields import min_count
 from doppeldata.privacy_policy.treatment_rules import amend
+from doppeldata.privacy_policy.treatment_rules import conditional_faults
 from doppeldata.privacy_policy.treatment_rules import refused
 from doppeldata.profile_format import PointerParts
 
 
-def withheld(document: dict[str, Any], policy: Policy, k_min: int) -> dict[str, Any]:
+def withheld(document: dict[str, Any], policy: Policy, k_min: int, cell_floors: dict[tuple[str, str], int] | None = None) -> dict[str, Any]:
     """The document with what `policy` withholds removed, and its `privacy` section written: the policy, `k_min`,
-    each column withheld from and why, and each literal field kept with the rule that admitted it.
+    each column withheld from and why, each literal field kept with the rule that admitted it, and each dataset-level
+    field a floor holds.
+
+    `cell_floors` holds the fewest rows a cell of each conditional table rests on, by its given and child column,
+    which `dataset_audit` records because the file does not count them. A conditional table naming a column whose values
+    the policy withholds is dropped.
 
     `none` withholds nothing, audits nothing and states no `k_min`, because `profile check` reports a `none` profile
     whatever it holds. It is profiled with a `k_min` of 1, so its numeric extremes are the exact ones.
@@ -61,6 +68,13 @@ def withheld(document: dict[str, Any], policy: Policy, k_min: int) -> dict[str, 
             found = faults(field, column, k_min)
             if found:
                 drop(document, field.path, field.kind, {fault.path for fault in found})
+    dataset = document.get('dataset') or {}
+    conditionals = dataset.get('conditionals') or []
+    kept = [conditional for index, conditional in enumerate(conditionals) if not conditional_faults(document, index, policy)]
+    if kept:
+        dataset['conditionals'] = kept
+    else:
+        dataset.pop('conditionals', None)
     audit = []
     for column in column_literals(document):
         for field in column.fields:
@@ -69,11 +83,22 @@ def withheld(document: dict[str, Any], policy: Policy, k_min: int) -> dict[str, 
             if least is not None:
                 entry['min_count'] = least
             audit.append(entry)
+    floors = cell_floors or {}
+    dataset_audit = []
+    for field in dataset_literals(document):
+        if field.kind is FieldKind.CONDITIONAL:
+            conditional = kept[int(field.path[-1])]
+            fewest = floors[(conditional['given'], conditional['column'])]
+        else:
+            fewest = min_count(field, k_min) or k_min
+        dataset_audit.append({'field': field.pointer, 'values': field.values, 'rule': field.kind.rule, 'min_count': fewest})
     privacy: dict[str, Any] = {'policy': policy.value, 'k_min': k_min}
     if suppressed:
         privacy['suppressed'] = suppressed
     if audit:
         privacy['audit'] = audit
+    if dataset_audit:
+        privacy['dataset_audit'] = dataset_audit
     document['privacy'] = privacy
     broken = table_check(document, ()).violations
     if broken:

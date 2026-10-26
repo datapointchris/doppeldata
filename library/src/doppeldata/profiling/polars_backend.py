@@ -4,6 +4,7 @@ import contextlib
 import dataclasses as dc
 import importlib
 import json
+import math
 import re
 from collections.abc import Callable
 from collections.abc import Iterable
@@ -186,6 +187,8 @@ POLARS_STATISTICS: dict[str, Translation] = {
     'json_raw_type_counts': lambda codes, _: counts_by(codes, range(len(READ_AS))),
     'padded_digits': lambda c, _: c.str.contains(PADDED_DIGITS_TEXT).sum(),
     'unparsed_rows': lambda _, columns: unparsed_rows(columns),
+    'distinct_rows': lambda _, columns: pl.struct(list(columns)).hash().n_unique(),
+    'unique_rows': lambda _, columns: pl.struct(list(columns)).is_unique().sum(),
 }
 
 untranslated = sorted({statistic.name for statistic in ALL_STATISTICS} - POLARS_STATISTICS.keys())
@@ -378,6 +381,94 @@ class PolarsBackend:
 
     def parse(self, table: pl.LazyFrame, types: dict[str, ParsedType]) -> pl.LazyFrame:
         return table.with_columns(parsed(pl.col(name), parsed_type).alias(name) for name, parsed_type in types.items())
+
+    def average_ranks(self, table: pl.LazyFrame, names: list[str]) -> list[pl.Expr]:
+        """Each named column's values as their average ranks over its own values, a null left null, aliased `r0`, `r1`
+        and on."""
+        kinds = {spec.name: spec.kind for spec in self.schema(table)}
+        return [numeric_value(pl.col(name), kinds[name]).rank('average').cast(pl.Float64).alias(f'r{at}') for at, name in enumerate(names)]
+
+    def rank_correlations(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:
+        if not pairs:
+            return []
+        names = list(dict.fromkeys(name for pair in pairs for name in pair))
+        ranked = table.select(self.average_ranks(table, names))
+        measured = []
+        for index, (a, b) in enumerate(pairs):
+            first, second = pl.col(f'r{names.index(a)}'), pl.col(f'r{names.index(b)}')
+            both = first.is_not_null() & second.is_not_null()
+            measured += [pl.corr(first.filter(both), second.filter(both)).alias(f'c{index}'), both.sum().alias(f'n{index}')]
+        row = ranked.select(measured).collect().row(0)
+        return [
+            (float(value) if value is not None and math.isfinite(value) else None, int(held))
+            for value, held in zip(row[::2], row[1::2], strict=True)
+        ]
+
+    def cross_counts(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
+        frames = [
+            table.select(pl.col(a).cast(pl.String).alias('a'), pl.col(b).cast(pl.String).alias('b')).group_by('a', 'b').len()
+            for a, b in pairs
+        ]
+        return [[(a, b, int(rows)) for a, b, rows in frame.iter_rows()] for frame in pl.collect_all(frames, engine='streaming')]
+
+    def rank_moments(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
+        numerics = list(dict.fromkeys(numeric for numeric, _ in pairs))
+        by_category: dict[str, list[int]] = {}
+        for index, (_, categorical) in enumerate(pairs):
+            by_category.setdefault(categorical, []).append(index)
+        categoricals = list(by_category)
+        ranked = table.select(*(pl.col(name).alias(f'c{at}') for at, name in enumerate(categoricals)), *self.average_ranks(table, numerics))
+        frames = []
+        for at, indexes in enumerate(by_category.values()):
+            moments = []
+            for index in indexes:
+                value = pl.col(f'r{numerics.index(pairs[index][0])}')
+                moments += [value.count().alias(f'n{index}'), value.mean().alias(f'm{index}'), value.var(ddof=0).alias(f'v{index}')]
+            frames.append(ranked.filter(pl.col(f'c{at}').is_not_null()).group_by(f'c{at}').agg(moments))
+        answers: list[list[tuple[int, float, float]]] = [[] for _ in pairs]
+        for indexes, frame in zip(by_category.values(), pl.collect_all(frames, engine='streaming'), strict=True):
+            for index in indexes:
+                rows = frame.select(f'n{index}', f'm{index}', f'v{index}').iter_rows()
+                answers[index] = [(int(count), float(mean), float(variance)) for count, mean, variance in rows if count]
+        return answers
+
+    def dependency_counts(self, table: pl.LazyFrame, lhs: str, rhs: list[str], k_min: int) -> list[tuple[int, int, int]]:
+        if not rhs:
+            return []
+        held = [pl.col(name).count().alias(f'n{index}') for index, name in enumerate(rhs)]
+        varied = [(pl.col(name).min() != pl.col(name).max()).alias(f'v{index}') for index, name in enumerate(rhs)]
+        groups = table.filter(pl.col(lhs).is_not_null()).group_by(lhs).agg(*held, *varied)
+        floored = [pl.col(f'n{index}') >= k_min for index in range(len(rhs))]
+        totals = groups.select(
+            *(pl.col(f'n{index}').sum().alias(f'h{index}') for index in range(len(rhs))),
+            *(pl.col(f'n{index}').filter(floor).sum().alias(f's{index}') for index, floor in enumerate(floored)),
+            *(pl.col(f'n{index}').filter(floor & pl.col(f'v{index}')).sum().alias(f'x{index}') for index, floor in enumerate(floored)),
+        )
+        row = [int(value or 0) for value in totals.collect(engine='streaming').row(0)]
+        return [(row[index], row[len(rhs) + index], row[2 * len(rhs) + index]) for index in range(len(rhs))]
+
+    def foreign_key_counts(
+        self, child: pl.LazyFrame, child_column: str, parent: pl.LazyFrame, parent_column: str
+    ) -> list[tuple[bool, int, int]]:
+        children = child.select(join_key(child, child_column).alias('key')).drop_nulls().group_by('key').len('children')
+        parents = parent.select(join_key(parent, parent_column).alias('key')).drop_nulls().unique().with_columns(parent=pl.lit(True))
+        joined = parents.join(children, on='key', how='full', coalesce=True)
+        counted = joined.group_by(pl.col('parent').fill_null(False), pl.col('children').fill_null(0)).len('values')
+        return [(bool(held), int(rows), int(values)) for held, rows, values in counted.collect(engine='streaming').iter_rows()]
+
+
+def numeric_value(c: pl.Expr, kind: ColumnKind) -> pl.Expr:
+    """A column as a rank or a moment reads it: a decimal as a double, and a float's NaN and infinities as null."""
+    if kind is ColumnKind.DECIMAL:
+        return c.cast(pl.Float64)
+    if kind is ColumnKind.FLOAT:
+        return pl.when(c.is_finite()).then(c)
+    return c
+
+
+def join_key(table: pl.LazyFrame, name: str) -> pl.Expr:
+    """A key column as both sides of a join hold it: text as text, and any integer as an int64."""
+    return pl.col(name).cast(pl.Int64, strict=False) if table.collect_schema()[name].is_integer() else pl.col(name)
 
 
 def read_files(source: Source) -> SourceRead:

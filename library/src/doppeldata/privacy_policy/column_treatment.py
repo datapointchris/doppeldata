@@ -87,6 +87,11 @@ class Policy(enum.StrEnum):
         """Whether `profile check` checks a profile under it. A `none` profile withholds nothing, so it fails as such."""
         return self in (Policy.DEFAULT, Policy.STRICT, Policy.HEALTHCARE)
 
+    @property
+    def joins_quasi_identifiers(self) -> bool:
+        """Whether a table stating two columns jointly, such as a conditional table, may name a quasi-identifier."""
+        return self not in (Policy.STRICT, Policy.HEALTHCARE)
+
     def k_min(self, given: int | None) -> int | None:
         """The `k_min` a profile under it states: none under `none`, which holds no floor, and otherwise `given` or 11."""
         return None if self is Policy.NONE else given or DEFAULT_K_MIN

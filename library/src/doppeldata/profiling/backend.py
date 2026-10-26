@@ -246,7 +246,11 @@ class ParsedType:
 
 
 class Backend(Protocol):
-    """A profiling engine. `aggregate` answers every request it is given, in as few queries as the engine compiles."""
+    """A profiling engine. `aggregate` answers every request it is given, in as few queries as the engine compiles.
+
+    A statistic of one column or of the whole table is a `statistic_catalog` entry that `aggregate` answers. One measured
+    over pairs of columns, or across two tables, is a method of its own, because each engine shapes that query its own way.
+    """
 
     name: str
     # The version of the session that reads the files, as a Spark cluster's, or None for an engine running in this process.
@@ -280,4 +284,30 @@ class Backend(Protocol):
 
     def parse(self, table: Table, types: dict[str, ParsedType]) -> Table:
         """The text table with each named column parsed as its type. A value that does not parse becomes null."""
+        ...
+
+    def rank_correlations(self, table: Table, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:
+        """Each pair's Spearman correlation over the rows holding both, and how many rows those are. Each column is
+        ranked once over its own values with ties at their mean rank. The correlation is None where either column is
+        constant over those rows."""
+        ...
+
+    def cross_counts(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
+        """Each pair's rows by its two values written as text, a null as None, over every row."""
+        ...
+
+    def rank_moments(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
+        """For each pair of a numeric column and a categorical one, each categorical value's rows holding a numeric value,
+        and the mean and population variance of those rows' numeric ranks. Each numeric column is ranked once over its
+        own values, ties at their mean rank, as `rank_correlations` ranks it."""
+        ...
+
+    def dependency_counts(self, table: Table, lhs: str, rhs: list[str], k_min: int) -> list[tuple[int, int, int]]:
+        """For each column of `rhs`, the rows holding it and `lhs`, those of them whose `lhs` value at least k_min such
+        rows hold, and those of these whose `lhs` value holds more than one `rhs` value."""
+        ...
+
+    def foreign_key_counts(self, child: Table, child_column: str, parent: Table, parent_column: str) -> list[tuple[bool, int, int]]:
+        """The values of both columns, counted as `(in_parent, child_rows, values)`: how many values the parent holds or
+        not that `child_rows` child rows hold. A parent value no child row holds is counted at 0 child rows."""
         ...

@@ -50,8 +50,9 @@ pub struct Relationship {
     /// `table.column` referred to.
     #[schemars(regex(pattern = r"^[^.]+\..+$"))]
     pub to: String,
-    /// An estimate of the share of `from`'s distinct values that `to` holds.
+    /// The share of `from`'s distinct values that `to` holds.
     pub containment: Option<Rate>,
+    /// The share of `from`'s rows holding a value that `to` does not hold, of those holding a value.
     pub orphan_rate: Option<Rate>,
     pub cardinality: Option<Cardinality>,
     pub fanout: Option<Fanout>,
@@ -69,9 +70,10 @@ pub enum Cardinality {
 /// Children per parent: the join skew a Spark comparison needs.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 pub struct Fanout {
+    /// The child rows each of `to`'s values is held by, counting the values no child row holds.
     pub quantiles: Option<Quantiles>,
     /// The share of child rows the busiest parents hold: `top1`, `top10`, `top100`.
     pub top_share: Option<BTreeMap<String, Rate>>,
-    /// The exponent of a Zipf fit to children per parent.
+    /// The exponent of a Zipf law fitted by maximum likelihood to the parents' child counts, busiest first.
     pub zipf_s: Option<f64>,
 }

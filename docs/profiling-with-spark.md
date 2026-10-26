@@ -166,9 +166,16 @@ profiles it through Spark in each image named, one container at a time, on `loca
 driver. Both profiles must pass `profile check`, and the Spark one is held to the Polars one:
 
 - row and null counts, types, nullability and extremes exactly;
-- each quantile within a rank error of 1%, measured against the file's own values;
-- each distinct count within 3%, three of HyperLogLog++'s 1% standard errors;
-- any other field that differs is printed.
+- each quantile within a rank error of `RANK_ERROR`, measured against the file's own values;
+- each distinct count within `DISTINCT_ERROR`, three of HyperLogLog++'s 1% standard errors;
+- the repeated rows, keys, dependencies and relationships exactly, and each cell of a conditional
+  table both profiles state;
+- any other field that differs is printed. So are the correlations, the correlation ratios and
+  any conditional table one profile states alone, because each engine measures them on its own
+  sample.
+
+A dataset or relationship field the published schema gains stops the check until it compares the
+field, so no field the engines might write differently goes unread.
 
 Build the wheel, then run the check over a file. `KEEP` names a directory to keep each profile in.
 
@@ -177,6 +184,15 @@ cd library && uv run --with ziglang maturin build --release --zig --compatibilit
 POLICY=healthcare spark-parity/check-profiler-parity.sh \
   dist/doppeldata-*-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
   DE1_0_2008_to_2010_Carrier_Claims_Sample_1A.csv
+```
+
+`TABLES=1` profiles a directory holding a folder per table into one bundle, through `--tables` on
+the host and `profile_tables()` in the image. Each table is compared, and so is each relationship:
+
+```bash
+TABLES=1 spark-parity/check-profiler-parity.sh \
+  dist/doppeldata-*-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
+  shop public.ecr.aws/glue/aws-glue-libs:5
 ```
 
 It ran on CMS DE-SynPUF sample 1 under `--policy healthcare`, in `apache/spark:3.5.9-python3`,
@@ -225,13 +241,12 @@ of 4 vCPUs and a 10 GB heap beside the driver.
 Polars ran on the host's 16 cores, timed with `/usr/bin/time -v doppeldata profile create FILE`,
 its elapsed time and maximum resident set. Spark ran in the Glue image on `local[8]` with a 4 GB
 driver, timed by the seconds `check-profiler-parity.sh` prints for the image. Both ran under the
-default policy.
+default policy, on a host other work shared, so each time is an upper bound.
 
 | Data | Rows | Columns | Polars | Spark |
 | --- | --- | --- | --- | --- |
-| taxi trips, three Parquet files | 10,104,443 | 19 | 9.6 s, 3.4 GB peak | 75.6 s |
-| carrier claims, one CSV | 2,370,667 | 142 | 36 s, 12 GB peak | 548 s |
-| beneficiary summary, one CSV | 116,352 | 32 | 5 s | 48 s |
+| taxi trips, three Parquet files | 10,104,443 | 19 | 23 s, 3.1 GB peak | 209 s |
+| carrier claims, one CSV | 2,370,667 | 142 | 71 s, 12 GB peak | 937 s |
 
 Polars computes each pass as one streaming query over the files. Spark runs a query per pass over a
 table persisted to disk, and a CSV adds the passes that type its text. On the claims no query
@@ -257,6 +272,12 @@ one query over every column it covers, except the compiled aggregate, which is o
 | end values | the values at rank `k_min` from each end | `mapInArrow`: each task keeps its `k_min` values nearest each end, merged on the driver |
 | split steps | `step_min` and `step_max` | `mapInArrow` over each file split in read order, stitched in the listing's order |
 | distinct days | `distinct_days` | `collect_set` of the days between the trimmed extremes |
+| tuple counts | `distinct_rows` and `unique_rows`, for repeated rows and keys | one `xxhash64` per tuple over each value and whether it is null, every tuple in one stream grouped by `(tuple, hash)` |
+| rank correlations | Spearman's ρ | each sampled column's average rank from `rank` and `cume_dist` over one window, persisted, then `corr` over up to `PAIRS_PER_QUERY` pairs a query |
+| cross counts | Cramér's V and conditional cells | every pair's values in one stream, grouped by `(pair, value, value)` |
+| rank moments | η | each sampled numeric column's average rank as for Spearman's ρ, persisted beside the categorical columns, whose values form one stream grouped by `(column, value)`, with each rank's count, mean and `var_pop` |
+| dependency counts | functional dependencies | one `groupBy` on each `lhs`, with every `rhs`'s count and whether its least and greatest values differ |
+| foreign key counts | a bundle's relationships | a full join of the parent's distinct keys and the child's rows per key, grouped by `(in parent, child rows)` |
 
 The split follows what Spark compiles:
 

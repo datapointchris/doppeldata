@@ -12,6 +12,7 @@ import dataclasses as dc
 import datetime as dt
 import importlib
 import io
+import math
 import os
 import socket
 import time
@@ -30,6 +31,7 @@ from pyspark import StorageLevel
 from pyspark.sql import Column
 from pyspark.sql import DataFrame
 from pyspark.sql import SparkSession
+from pyspark.sql import Window
 
 from doppeldata._core import VERSION
 from doppeldata.errors import ProfilingWarning
@@ -390,10 +392,14 @@ ESTIMATED = frozenset({'distinct_count'})
 SKETCHED = frozenset({'quantiles', 'length_quantiles'})
 # JSON paths are profiled by the Polars backend alone.
 REFUSED = frozenset({'json_raw_type_counts'})
+# Counted from one grouping of each tuple's hash, a null told apart from every value.
+GROUPED = frozenset({'distinct_rows', 'unique_rows'})
+# The correlations one aggregate over the ranked sample computes, kept under the compiled method's size as the columns are.
+PAIRS_PER_QUERY = 128
 
 untranslated = sorted(
     {statistic.name for statistic in ALL_STATISTICS}
-    - (AGGREGATED.keys() | ORDERED.keys() | STEPPED | BOUNDED | TYPED | ESTIMATED | REFUSED)
+    - (AGGREGATED.keys() | ORDERED.keys() | STEPPED | BOUNDED | TYPED | ESTIMATED | REFUSED | GROUPED)
 )
 if untranslated:
     raise RuntimeError(f'the Spark backend has no translation for {", ".join(untranslated)}')
@@ -851,7 +857,132 @@ class SparkBackend:
         stepped = [request for request in requests if request.statistic in STEPPED]
         answers |= self.steps(table, stepped)
         answers |= self.type_counts(table, [request for request in requests if request.statistic in TYPED])
+        answers |= self.tuple_counts(table, [request for request in requests if request.statistic in GROUPED])
         return answers
+
+    def tuple_counts(self, table: DataFrame, requests: list[Request]) -> dict[Request, Any]:
+        """Each tuple's distinct values and the rows holding a value no other row holds, from one grouping of every tuple's
+        xxhash64. Each column is hashed beside whether it is null, because the hash skips a null."""
+        if not requests:
+            return {}
+        tuples = list(dict.fromkeys(request.argument for request in requests))
+        hashes = [sf.xxhash64(*(part for name in names for part in (column(name), column(name).isNull()))) for names in tuples]
+        keyed = sf.inline(sf.array(*(sf.struct(sf.lit(index).alias('n'), hashed.alias('h')) for index, hashed in enumerate(hashes))))
+        groups = table.select(keyed).groupBy('n', 'h').count()
+        counted = groups.groupBy('n').agg(sf.count(sf.lit(1)).alias('distinct'), count_where(sf.col('count') == 1).alias('unique'))
+        found = {row['n']: (row['distinct'], row['unique']) for row in counted.collect()}
+        return {
+            request: found.get(tuples.index(request.argument), (0, 0))[0 if request.statistic == 'distinct_rows' else 1]
+            for request in requests
+        }
+
+    def average_ranks(self, table: DataFrame, names: list[str]) -> list[Column]:
+        """Each named column's values as their ranks by one window over the table, a tie at the mean of its first and
+        last rank, aliased `r0`, `r1` and on. A null sorts first and is ranked too, which moves every value's rank alike
+        and leaves a correlation or a share of variance as it is. Its own rank is null."""
+        specs = {spec.name: spec for spec in self.schema(table)}
+        rows = self.row_count(table)
+        ranks = []
+        for index, name in enumerate(names):
+            value = Operand(column(name), specs[name], self.major).ordered
+            order = Window.orderBy(value.asc_nulls_first())
+            mean_rank = (sf.rank().over(order) + sf.round(sf.cume_dist().over(order) * rows)) / 2
+            ranks.append(sf.when(value.isNotNull(), mean_rank).cast('double').alias(f'r{index}'))
+        return ranks
+
+    def rank_correlations(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:
+        if not pairs:
+            return []
+        names = list(dict.fromkeys(name for pair in pairs for name in pair))
+        ranked = self.persist(table.select(*self.average_ranks(table, names)))
+        found: list[tuple[float | None, int]] = []
+        for start in range(0, len(pairs), PAIRS_PER_QUERY):
+            chunk = pairs[start : start + PAIRS_PER_QUERY]
+            measured = []
+            for a, b in chunk:
+                first, second = sf.col(f'r{names.index(a)}'), sf.col(f'r{names.index(b)}')
+                measured += [sf.corr(first, second), count_where(first.isNotNull() & second.isNotNull())]
+            row = ranked.agg(*measured).collect()[0]
+            found += [
+                (float(value) if value is not None and math.isfinite(value) else None, int(held or 0))
+                for value, held in zip(row[::2], row[1::2], strict=True)
+            ]
+        return found
+
+    def cross_counts(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
+        """Every pair's values as one stream of (pair, value, value), grouped once."""
+        if not pairs:
+            return []
+        keyed = sf.inline(
+            sf.array(
+                *(
+                    sf.struct(sf.lit(index).alias('n'), column(a).cast('string').alias('a'), column(b).cast('string').alias('b'))
+                    for index, (a, b) in enumerate(pairs)
+                )
+            )
+        )
+        found: list[list[tuple[str | None, str | None, int]]] = [[] for _ in pairs]
+        for row in table.select(keyed).groupBy('n', 'a', 'b').count().collect():
+            found[row['n']].append((row['a'], row['b'], row['count']))
+        return found
+
+    def rank_moments(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
+        """Each numeric column's `average_ranks`, then every categorical column's values as one stream of (column, value),
+        each row carrying the ranks, grouped once."""
+        if not pairs:
+            return []
+        categoricals = list(dict.fromkeys(categorical for _, categorical in pairs))
+        numerics = list(dict.fromkeys(numeric for numeric, _ in pairs))
+        texts = [column(name).cast('string').alias(f'c{index}') for index, name in enumerate(categoricals)]
+        ranked = self.persist(table.select(*texts, *self.average_ranks(table, numerics)))
+        keyed = sf.inline(
+            sf.array(*(sf.struct(sf.lit(index).alias('n'), sf.col(f'c{index}').alias('v')) for index in range(len(categoricals))))
+        )
+        moments = [
+            moment for index in range(len(numerics)) for moment in (sf.count(f'r{index}'), sf.mean(f'r{index}'), sf.var_pop(f'r{index}'))
+        ]
+        held = [sf.col(f'r{index}') for index in range(len(numerics))]
+        by_column: dict[int, list[Any]] = {}
+        for row in ranked.select(keyed, *held).where(sf.col('v').isNotNull()).groupBy('n', 'v').agg(*moments).collect():
+            by_column.setdefault(row[0], []).append(row)
+        found = []
+        for numeric, categorical in pairs:
+            at = 2 + 3 * numerics.index(numeric)
+            groups = by_column.get(categoricals.index(categorical), [])
+            found.append([(int(row[at]), float(row[at + 1]), float(row[at + 2])) for row in groups if row[at]])
+        return found
+
+    def dependency_counts(self, table: DataFrame, lhs: str, rhs: list[str], k_min: int) -> list[tuple[int, int, int]]:
+        if not rhs:
+            return []
+        held = [sf.count(column(name)).alias(f'n{index}') for index, name in enumerate(rhs)]
+        varied = [(sf.min(column(name)) != sf.max(column(name))).alias(f'v{index}') for index, name in enumerate(rhs)]
+        groups = table.where(column(lhs).isNotNull()).groupBy(column(lhs)).agg(*held, *varied)
+        floored = [sf.col(f'n{index}') >= k_min for index in range(len(rhs))]
+        totals = groups.agg(
+            *(sf.sum(f'n{index}') for index in range(len(rhs))),
+            *(sf.sum(sf.when(floor, sf.col(f'n{index}'))) for index, floor in enumerate(floored)),
+            *(sf.sum(sf.when(floor & sf.col(f'v{index}'), sf.col(f'n{index}'))) for index, floor in enumerate(floored)),
+        )
+        row = [int(value or 0) for value in totals.collect()[0]]
+        return [(row[index], row[len(rhs) + index], row[2 * len(rhs) + index]) for index in range(len(rhs))]
+
+    def foreign_key_counts(self, child: DataFrame, child_column: str, parent: DataFrame, parent_column: str) -> list[tuple[bool, int, int]]:
+        def key(table: DataFrame, name: str) -> Column:
+            integral = kind_of(table.schema[name].dataType) is ColumnKind.INTEGER
+            return (column(name).cast('bigint') if integral else column(name)).alias('key')
+
+        children = (
+            child.select(key(child, child_column))
+            .where(sf.col('key').isNotNull())
+            .groupBy('key')
+            .agg(sf.count(sf.lit(1)).alias('children'))
+        )
+        parents = parent.select(key(parent, parent_column)).where(sf.col('key').isNotNull()).distinct().withColumn('parent', sf.lit(True))
+        joined = parents.join(children, on='key', how='full')
+        held = sf.coalesce(sf.col('parent'), sf.lit(False)).alias('parent')
+        counted = joined.groupBy(held, sf.coalesce(sf.col('children'), sf.lit(0)).alias('children')).count().collect()
+        return [(bool(row['parent']), int(row['children']), int(row['count'])) for row in counted]
 
     def distinct_counts(self, table: DataFrame, requests: list[Request], operand: Callable[[Request], Operand]) -> dict[Request, Any]:
         """Each column's distinct non-null values, estimated over each value as text, so one stream holds every type.

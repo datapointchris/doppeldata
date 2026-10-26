@@ -7,6 +7,8 @@ import os
 import warnings
 from collections.abc import Mapping
 from collections.abc import Sequence
+from pathlib import Path
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 from typing import Any
 
@@ -22,6 +24,7 @@ from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
+from doppeldata.profiling import foreign_keys
 from doppeldata.profiling import table_grouping
 from doppeldata.profiling import table_profile
 from doppeldata.profiling.backend import Backend
@@ -175,7 +178,7 @@ def profile(
             return edges_from
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=2)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
-    only = profiled_tables(backend, [source], settings, readers, frozen)[source.name]
+    only = profiled_tables(backend, [(source, readers)], settings, frozen)[0][source.name]
     importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
     issues = only.validate()
     if issues:
@@ -200,22 +203,56 @@ def profile_tables(
     packs: Sequence[str] = (),
     code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
 ) -> Bundle:
-    """Profile every table `data` holds into a valid bundle, taking `profile`'s arguments but `edges_from`.
+    """Profile every table `data` holds into a valid bundle, with the foreign keys between its tables, taking `profile`'s
+    arguments but `edges_from`.
 
-    One directory or prefix named is grouped as an AWS Glue crawler groups one. Folders whose column names are
-    similar are one table, named for the folders' common stem, and any other source is a bundle of one table.
+    Each directory or prefix named is grouped as an AWS Glue crawler groups one. Folders whose column names are
+    similar are one table, named for the folders' common stem, and any other source is one table. A list names
+    several sources, each grouped on its own, so `['customers/', 'orders/']` is two tables, and two tables named
+    alike are refused. The bundle is named for what was named, or for the directory several paths share.
+
+    A column whose name refers to another table's single-column key, as `orders.customer_id` refers to
+    `customers.customer_id` or `customers.id`, is a relationship where that key holds at least `CONTAINMENT_FLOOR` of
+    its distinct values, a constant of `doppeldata.profiling.foreign_keys`.
+    Each records the share the key holds, the child rows whose value it lacks, its cardinality and its fan-out.
     """
     settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
-    listed, reading = listed_source(data, engine)
-    tables = [table.source for table in table_grouping.grouped(listed)]
-    backend = engine_backend(engine, data, spark)
-    profiled = profiled_tables(backend, tables, settings, session_readers(backend, reading), None)
-    importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
-    bundle = Bundle.of(listed.name, profiled)
+    named = list(data) if isinstance(data, list | tuple) else [data]
+    if not named:
+        raise SourceError('no data was named; name a file, a directory or an s3:// prefix')
+    listings = [listed_source(item, engine) for item in named]
+    grouped = [(table.source, reading) for listed, reading in listings for table in table_grouping.grouped(listed)]
+    names = [source.name for source, _ in grouped]
+    alike = sorted({name for name in names if names.count(name) > 1})
+    if alike:
+        raise SourceError(
+            f'{", ".join(map(str, named))} hold more than one table named {", ".join(alike)}. Name each by its own folder, '
+            'or read them as one table, as profile() and profile create without --tables do'
+        )
+    backend = engine_backend(engine, named[0], spark)
+    tables = [(source, session_readers(backend, reading)) for source, reading in grouped]
+    profiled, relationships = profiled_tables(backend, tables, settings, None, related=True)
+    for listed, _ in listings:
+        importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
+    bundle = Bundle.of(bundle_name([listed for listed, _ in listings]), profiled, table_profile.reviewable(relationships))
     issues = bundle.validate()
     if issues:
         raise InvalidProfile(f'the profile of {data!r}', issues)
     return bundle
+
+
+def bundle_name(sources: list[Source]) -> str:
+    """The name of what was named, or the last segment of the directory or prefix several sources share."""
+    if len(sources) == 1:
+        return sources[0].name
+    roots = [
+        root.removeprefix('s3://') if root.startswith('s3://') else str(Path(root).resolve()) for source in sources for root in source.roots
+    ]
+    try:
+        shared = os.path.commonpath(roots)
+    except ValueError:
+        shared = ''
+    return PurePosixPath(shared).name or 'tables'
 
 
 @dc.dataclass(frozen=True)
@@ -262,28 +299,33 @@ def session_readers(backend: Backend, reading: Sequence['EnginePackage']) -> dic
 
 def profiled_tables(
     backend: Backend,
-    tables: Sequence[Source],
+    tables: Sequence[tuple[Source, dict[str, str]]],
     settings: RunSettings,
-    readers: dict[str, str],
     frozen: table_profile.FrozenLayout | None,
-) -> dict[str, Profile]:
-    profiled = {}
+    *,
+    related: bool = False,
+) -> tuple[dict[str, Profile], list[dict[str, Any]]]:
+    """Each table's profile by its name, each source beside the readers that read it, and where `related`, the foreign
+    keys between them, counted in the same session, which holds every table's rows until it ends."""
+    profiled: dict[str, table_profile.ProfiledTable] = {}
+    # `none` holds no floor, so every statistic is computed over every row.
+    k_min = settings.k_min or 1
     with backend.profiling():
-        for table in tables:
-            document = table_profile.profile_table(
+        for table, readers in tables:
+            profiled[table.name] = table_profile.profile_table(
                 backend,
                 table,
                 sample=settings.sample,
-                # `none` holds no floor, so every statistic is computed over every row.
-                k_min=settings.k_min or 1,
+                k_min=k_min,
                 policy=settings.policy,
                 packs=settings.packs,
                 code_lists=settings.code_lists,
                 readers=readers,
                 frozen=frozen,
             )
-            profiled[table.name] = Profile(document)
-    return profiled
+        members = [foreign_keys.BundleMember(name, table.table, table.specs, table.document) for name, table in profiled.items()]
+        relationships = foreign_keys.relationships(backend, members, k_min) if related else []
+    return {name: Profile(table.document) for name, table in profiled.items()}, relationships
 
 
 def available_engine(engine: str) -> Engine:

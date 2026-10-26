@@ -117,7 +117,16 @@ COUNTING_STATISTICS = (
 
 # `unparsed_rows` carries each column's name and `ParsedType`, and answers with the rows holding a
 # non-null value that does not parse as its column's type, which a typed reader rejects as `cast`.
-TABLE_STATISTICS = (Statistic('rows', frozenset()), Statistic('unparsed_rows', frozenset()))
+# `distinct_rows` and `unique_rows` carry a tuple of column names, and answer with the distinct
+# tuples those columns hold and the rows whose tuple no other row holds, a null equal to a null.
+# A backend may count `distinct_rows` by a 64-bit hash of each tuple, which over 10^8 rows merges
+# two distinct tuples with odds under one in a thousand.
+TABLE_STATISTICS = (
+    Statistic('rows', frozenset()),
+    Statistic('unparsed_rows', frozenset()),
+    Statistic('distinct_rows', frozenset()),
+    Statistic('unique_rows', frozenset()),
+)
 
 # The types a text source's raw value may parse as, in the order a value is tried and a tie between
 # two types' shares is broken. A value parsing as none of them is a string.
