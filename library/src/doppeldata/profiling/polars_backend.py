@@ -408,18 +408,27 @@ class PolarsBackend:
         ]
         return [[(a, b, int(rows)) for a, b, rows in frame.iter_rows()] for frame in pl.collect_all(frames, engine='streaming')]
 
-    def group_moments(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
+    def rank_moments(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
         kinds = {spec.name: spec.kind for spec in self.schema(table)}
+        numerics = list(dict.fromkeys(numeric for numeric, _ in pairs))
         by_category: dict[str, list[int]] = {}
         for index, (_, categorical) in enumerate(pairs):
             by_category.setdefault(categorical, []).append(index)
+        categoricals = list(by_category)
+        ranked = table.select(
+            *(pl.col(name).alias(f'c{at}') for at, name in enumerate(categoricals)),
+            *(
+                numeric_value(pl.col(name), kinds[name]).rank('average').cast(pl.Float64).alias(f'r{at}')
+                for at, name in enumerate(numerics)
+            ),
+        )
         frames = []
-        for categorical, indexes in by_category.items():
+        for at, indexes in enumerate(by_category.values()):
             moments = []
             for index in indexes:
-                value = numeric_value(pl.col(pairs[index][0]), kinds[pairs[index][0]]).cast(pl.Float64)
+                value = pl.col(f'r{numerics.index(pairs[index][0])}')
                 moments += [value.count().alias(f'n{index}'), value.mean().alias(f'm{index}'), value.var(ddof=0).alias(f'v{index}')]
-            frames.append(table.filter(pl.col(categorical).is_not_null()).group_by(categorical).agg(moments))
+            frames.append(ranked.filter(pl.col(f'c{at}').is_not_null()).group_by(f'c{at}').agg(moments))
         answers: list[list[tuple[int, float, float]]] = [[] for _ in pairs]
         for indexes, frame in zip(by_category.values(), pl.collect_all(frames, engine='streaming'), strict=True):
             for index in indexes:

@@ -292,9 +292,10 @@ class Backend(Protocol):
         """Each pair's rows by its two values written as text, over the rows holding both."""
         ...
 
-    def group_moments(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
+    def rank_moments(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
         """For each pair of a numeric column and a categorical one, each categorical value's rows holding a numeric value,
-        their mean and their population variance."""
+        and the mean and population variance of those rows' numeric ranks. Each numeric column is ranked once over its
+        own values, ties at their mean rank, as `rank_correlations` ranks it."""
         ...
 
     def dependency_counts(self, table: Table, lhs: str, rhs: list[str], k_min: int) -> list[tuple[int, int, int]]:

@@ -923,26 +923,32 @@ class SparkBackend:
             found[row['n']].append((row['a'], row['b'], row['count']))
         return found
 
-    def group_moments(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
-        """Every categorical column's values as one stream of (column, value), each row carrying the numeric columns, grouped once."""
+    def rank_moments(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:
+        """Each numeric column ranked by one window as `rank_correlations` ranks it, then every categorical column's values
+        as one stream of (column, value), each row carrying the ranks, grouped once."""
         if not pairs:
             return []
         specs = {spec.name: spec for spec in self.schema(table)}
         categoricals = list(dict.fromkeys(categorical for _, categorical in pairs))
         numerics = list(dict.fromkeys(numeric for numeric, _ in pairs))
-        values = [
-            Operand(column(name), specs[name], self.major).value.cast('double').alias(f'x{index}') for index, name in enumerate(numerics)
-        ]
+        rows = self.row_count(table)
+        ranks = []
+        for index, name in enumerate(numerics):
+            value = Operand(column(name), specs[name], self.major).ordered
+            order = Window.orderBy(value.asc_nulls_first())
+            mean_rank = (sf.rank().over(order) + sf.round(sf.cume_dist().over(order) * rows)) / 2
+            ranks.append(sf.when(value.isNotNull(), mean_rank).cast('double').alias(f'x{index}'))
+        texts = [column(name).cast('string').alias(f'c{index}') for index, name in enumerate(categoricals)]
+        ranked = self.persist(table.select(*texts, *ranks))
         keyed = sf.inline(
-            sf.array(
-                *(sf.struct(sf.lit(index).alias('n'), column(name).cast('string').alias('v')) for index, name in enumerate(categoricals))
-            )
+            sf.array(*(sf.struct(sf.lit(index).alias('n'), sf.col(f'c{index}').alias('v')) for index in range(len(categoricals))))
         )
         moments = [
             moment for index in range(len(numerics)) for moment in (sf.count(f'x{index}'), sf.mean(f'x{index}'), sf.var_pop(f'x{index}'))
         ]
+        held = [sf.col(f'x{index}') for index in range(len(numerics))]
         by_column: dict[int, list[Any]] = {}
-        for row in table.select(keyed, *values).where(sf.col('v').isNotNull()).groupBy('n', 'v').agg(*moments).collect():
+        for row in ranked.select(keyed, *held).where(sf.col('v').isNotNull()).groupBy('n', 'v').agg(*moments).collect():
             by_column.setdefault(row[0], []).append(row)
         found = []
         for numeric, categorical in pairs:

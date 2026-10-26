@@ -32,10 +32,16 @@ CORRELATIONS_KEPT = 200
 # A pair is measured only where this many sampled rows hold both its values, or k_min where that is more, so a value at
 # CORRELATION_FLOOR lies three standard errors from none.
 PAIR_ROWS = 100
+# Cochran's rule for a contingency table's chi-squared: Cramér's V is measured where the sample holds this many rows per
+# cell, and η where it holds this many per category.
+ROWS_PER_CELL = 5
 # A string or integer column holding no more distinct values than a string lists is categorical, as a boolean is.
 CATEGORICAL_VALUES = TOP_VALUES_THRESHOLD
 # A conditional table is given the column of a correlated categorical pair holding fewer values, where it holds this many at most.
 GIVEN_VALUES = 50
+# A categorical pair whose sampled Cramér's V reaches this is counted over every row, and gets a conditional table where
+# the V of those counts reaches CORRELATION_FLOOR. So which tables stand follows the counts, not either engine's sample.
+CONDITIONAL_TRIED = 0.2
 # The functional dependencies tried, those a name hints first, then from the left-hand column holding fewest values.
 DEPENDENCY_TESTS = 100
 # A dependency is recorded where the left-hand values k_min rows hold cover at least this share of the rows holding
@@ -81,11 +87,12 @@ def column_dependence(
 ) -> Dependence:
     """The dependence between `columns`, measured on `sample` and counted on `described`, which holds `rows` rows."""
     position = {column.name: index for index, column in enumerate(columns)}
-    correlations = correlated_pairs(backend, sample, columns, position, k_min)
+    measured = measured_pairs(backend, sample, columns, k_min)
+    correlations = kept_correlations(measured, position)
     sections: dict[str, Any] = {}
     if correlations:
         sections['correlations'] = correlations
-    conditionals, floors = conditional_tables(backend, described, columns, correlations, k_min)
+    conditionals, floors = conditional_tables(backend, described, columns, measured, k_min)
     if conditionals:
         sections['conditionals'] = conditionals
     dependencies = functional_dependencies(backend, described, columns, rows, k_min, position)
@@ -106,31 +113,63 @@ def role(column: DependenceColumn) -> str | None:
     return None
 
 
-def correlated_pairs(
-    backend: Backend, sample: Table, columns: list[DependenceColumn], position: dict[str, int], k_min: int
-) -> list[dict[str, Any]]:
-    """Every pair whose correlation reaches the floor, the strongest kept, in the order of the columns. Two ranked
+def measured_pairs(
+    backend: Backend, sample: Table, columns: list[DependenceColumn], k_min: int
+) -> list[tuple[str, str, str, float | None]]:
+    """Every pair's correlation on the sample, as `(a, b, method, value)` in the order of the columns. Two ranked
     columns take Spearman's, two categorical ones the bias-corrected Cramér's V, and a numeric and a categorical one
-    the bias-corrected correlation ratio η, with the numeric column as `a`. A pair fewer than `PAIR_ROWS` or k_min
-    sampled rows hold is not measured."""
+    the bias-corrected correlation ratio η of the numeric column's ranks, with the numeric column as `a`. The value is
+    None where fewer than `PAIR_ROWS` or k_min sampled rows hold the pair, or fewer than `ROWS_PER_CELL` per cell of
+    a contingency table or per category. η is None too where the rows expected off the numeric column's most common
+    value number fewer than `ROWS_PER_CELL` per category, since a value most rows hold ties their ranks."""
     least = max(PAIR_ROWS, k_min)
     ranked = [column for column in columns if role(column) == RANKED]
     categorical = [column for column in columns if role(column) == CATEGORICAL]
     rank_pairs = [(first.name, second.name) for at, first in enumerate(ranked) for second in ranked[at + 1 :]]
     category_pairs = [(first.name, second.name) for at, first in enumerate(categorical) for second in categorical[at + 1 :]]
     ratio_pairs = [(numeric.name, other.name) for numeric in ranked if numeric.spec.kind in NUMERIC for other in categorical]
+    spread = {column.name: off_mode_share(column) for column in ranked}
     found = [
         (a, b, SPEARMAN, value if held >= least else None)
         for (a, b), (value, held) in zip(rank_pairs, backend.rank_correlations(sample, rank_pairs), strict=True)
     ]
     found += [
-        (a, b, CRAMERS_V, cramers_v(cells) if sum(count for _, _, count in cells) >= least else None)
+        (
+            a,
+            b,
+            CRAMERS_V,
+            cramers_v(cells) if sum(count for _, _, count in cells) >= max(least, ROWS_PER_CELL * table_cells(cells)) else None,
+        )
         for (a, b), cells in zip(category_pairs, backend.cross_counts(sample, category_pairs), strict=True)
     ]
     found += [
-        (a, b, CORRELATION_RATIO, correlation_ratio(groups) if sum(count for count, _, _ in groups) >= least else None)
-        for (a, b), groups in zip(ratio_pairs, backend.group_moments(sample, ratio_pairs), strict=True)
+        (a, b, CORRELATION_RATIO, correlation_ratio(groups) if enough_spread(groups, spread[a], least) else None)
+        for (a, b), groups in zip(ratio_pairs, backend.rank_moments(sample, ratio_pairs), strict=True)
     ]
+    return found
+
+
+def table_cells(cells: list[tuple[str, str, int]]) -> int:
+    """The cells of the contingency table `cells` fills: one per pair of values either side holds."""
+    return len({first for first, _, _ in cells}) * len({second for _, second, _ in cells})
+
+
+def off_mode_share(column: DependenceColumn) -> float:
+    """The share of a numeric column's values its most common value leaves, as its zero rate and top values state it."""
+    numeric = column.entry.get('numeric') or {}
+    stated = [numeric.get('zero_rate') or 0.0, *(entry['rate'] for entry in numeric.get('top_values') or [])]
+    return 1 - max(stated)
+
+
+def enough_spread(groups: list[tuple[int, float, float]], off_mode: float, least: int) -> bool:
+    """Whether η's categories hold `least` rows, `ROWS_PER_CELL` per category, and as many expected off the numeric
+    column's most common value, which holds the share `1 - off_mode` of its values."""
+    rows, floor = sum(count for count, _, _ in groups), ROWS_PER_CELL * len(groups)
+    return rows >= max(least, floor) and rows * off_mode >= floor
+
+
+def kept_correlations(found: list[tuple[str, str, str, float | None]], position: dict[str, int]) -> list[dict[str, Any]]:
+    """Every pair whose correlation reaches the floor, the strongest kept, in the order of the columns."""
     strong = [(a, b, method, value) for a, b, method, value in found if value is not None and abs(value) >= CORRELATION_FLOOR]
     kept = sorted(strong, key=lambda pair: -abs(pair[3]))[:CORRELATIONS_KEPT]
     kept.sort(key=lambda pair: (min(position[pair[0]], position[pair[1]]), max(position[pair[0]], position[pair[1]])))
@@ -170,15 +209,16 @@ def correlation_ratio(groups: list[tuple[int, float, float]]) -> float | None:
 
 
 def conditional_tables(
-    backend: Backend, described: Table, columns: list[DependenceColumn], correlations: list[dict[str, Any]], k_min: int
+    backend: Backend, described: Table, columns: list[DependenceColumn], measured: list[tuple[str, str, str, float | None]], k_min: int
 ) -> tuple[list[dict[str, Any]], dict[tuple[str, str], int]]:
-    """A conditional table for each correlated categorical pair whose column of fewer values holds `GIVEN_VALUES` at most."""
+    """A conditional table for each categorical pair whose column of fewer values holds `GIVEN_VALUES` at most, and
+    whose Cramér's V reaches `CONDITIONAL_TRIED` on the sample and `CORRELATION_FLOOR` over every row."""
     by_name = {column.name: column for column in columns}
     pairs: list[tuple[str, str, list[str], list[str]]] = []
-    for correlation in correlations:
-        if correlation['method'] != CRAMERS_V:
+    for a, b, method, value in measured:
+        if method != CRAMERS_V or value is None or value < CONDITIONAL_TRIED:
             continue
-        first, second = by_name[correlation['a']], by_name[correlation['b']]
+        first, second = by_name[a], by_name[b]
         fewer, more = (first, second) if first.distinct <= second.distinct else (second, first)
         fewer_values, more_values = listed_values(fewer.entry), listed_values(more.entry)
         if fewer.distinct <= GIVEN_VALUES and fewer_values and more_values:
@@ -186,6 +226,8 @@ def conditional_tables(
     tables, floors = [], {}
     counted = backend.cross_counts(described, [(given, child) for given, child, _, _ in pairs])
     for (given, child, given_values, child_values), cells in zip(pairs, counted, strict=True):
+        if (cramers_v(cells) or 0.0) < CORRELATION_FLOOR:
+            continue
         written = conditional_table(given, child, cells, given_values, child_values, k_min)
         if written:
             tables.append(written[0])
