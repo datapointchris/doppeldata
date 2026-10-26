@@ -711,6 +711,10 @@
     "ManifestProfile": {
       "type": "object",
       "properties": {
+        "embedded": {
+          "description": "Whether each Parquet and Arrow IPC file holds the profile's canonical JSON, under the\nmetadata key `doppeldata.profile`. Left out when false.",
+          "type": "boolean"
+        },
         "name": {
           "description": "The profile's `name`.",
           "type": "string"

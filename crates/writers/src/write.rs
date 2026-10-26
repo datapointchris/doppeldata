@@ -223,7 +223,7 @@ pub fn commit(
 fn new_manifest(plan: &Plan, options: &WriteOptions, destination: &Destination) -> Manifest {
     let mut manifest = Manifest::new(
         plan.identity(),
-        profile_record(plan, options.profile_path.clone()),
+        profile_record(plan, options),
         options.output.clone(),
         options.layout.clone(),
         destination.url.clone(),
@@ -253,10 +253,15 @@ fn check_encodable(plan: &Plan, layout: &FileLayout, output: &Output) -> Result<
 
 /// Writes every file a whole `manifest` names again, from `plan`, which must have the manifest's
 /// identity, then compares each object's path, rows, bytes and SHA-256 with the record. A partial
-/// manifest is refused.
+/// manifest is refused, and so is one whose files embed the profile, whose JSON a plan never holds.
 pub fn regenerate(plan: &Plan, manifest: &Manifest, run: &RunOptions, destination: &Destination) -> Result<Manifest, WriteFailure> {
     if manifest.partial {
         return Err(WriteError::PartialManifest.into());
+    }
+    if manifest.profile.embedded {
+        let refusal =
+            "the manifest's files embed the profile's JSON, which a plan does not hold; write the dataset again with the profile embedded";
+        return Err(WriteError::Settings(refusal.into()).into());
     }
     let identity = plan.identity().digest();
     if identity != manifest.dataset_digest {
@@ -304,7 +309,7 @@ fn differing_files(recorded: &[ManifestFile], written: &[ManifestFile]) -> Vec<S
         .collect()
 }
 
-fn profile_record(plan: &Plan, path: Option<String>) -> ManifestProfile {
+fn profile_record(plan: &Plan, options: &WriteOptions) -> ManifestProfile {
     let schema = plan.schema();
     let metadata = schema.metadata();
     ManifestProfile {
@@ -313,7 +318,8 @@ fn profile_record(plan: &Plan, path: Option<String>) -> ManifestProfile {
             .get(provenance::PROFILE_VERSION)
             .and_then(|version| version.parse().ok())
             .unwrap_or_default(),
-        path,
+        path: options.profile_path.clone(),
+        embedded: options.output.embedded_profile().is_some(),
     }
 }
 

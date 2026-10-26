@@ -44,6 +44,9 @@ pub mod provenance {
     pub const DATASET_ROWS: &str = "doppeldata.dataset_rows";
     /// The digest of the dataset's identity, a quick equality check beside the five values.
     pub const DATASET_DIGEST: &str = "doppeldata.dataset_digest";
+    /// The profile's canonical JSON, the bytes `PROFILE_DIGEST` is taken over. Only a write that
+    /// embeds the profile writes it, and only into Parquet and Arrow IPC files.
+    pub const PROFILE: &str = "doppeldata.profile";
 }
 
 /// A profile file: one table, or a bundle of tables and their relationships.

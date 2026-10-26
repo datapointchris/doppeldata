@@ -156,6 +156,7 @@ fn run() -> Result<(), String> {
                     .transpose()?,
                 profile_path: Some(format!("{}.profile.yaml", options.example)),
                 scenario: None,
+                embedded_profile: None,
             };
             let write = WriteOptions::chosen(&profile, None, choices).map_err(|error| error.to_string())?;
             doppeldata_writers::write(&plan, &write, &run, &destination)

@@ -1,6 +1,8 @@
 //! What to write, started from what a profile's `source` section records and laid over with a
 //! caller's choices. The CLI, the SDK and the example all build their options here.
 
+use std::sync::Arc;
+
 use doppeldata_core::format_settings::ArrowSettings;
 use doppeldata_core::format_settings::IpcCompression;
 use doppeldata_core::format_settings::JsonSettings;
@@ -45,6 +47,9 @@ pub struct WriteChoices {
     pub profile_path: Option<String>,
     /// The scenario applied, as the manifest records it.
     pub scenario: Option<ManifestScenario>,
+    /// The profile's canonical JSON, for each file's metadata to hold. Only a Parquet or Arrow IPC
+    /// write takes it.
+    pub embedded_profile: Option<String>,
 }
 
 impl WriteOptions {
@@ -71,7 +76,25 @@ impl WriteOptions {
         if let Some(style) = choices.partition_style {
             options.layout.partition_style = style;
         }
+        if let Some(profile) = choices.embedded_profile {
+            options.embed_profile(profile.into())?;
+        }
         Ok(options)
+    }
+
+    /// Embeds `profile` in each file's metadata, which only Parquet and Arrow IPC files hold.
+    fn embed_profile(&mut self, profile: Arc<str>) -> Result<(), WriteError> {
+        match &mut self.output {
+            Output::Parquet(settings) => settings.embedded_profile = Some(profile),
+            Output::Arrow(settings) => settings.embedded_profile = Some(profile),
+            other => {
+                return Err(WriteError::Settings(format!(
+                    "a {} file holds no metadata to embed the profile in; embed it in a parquet or arrow write",
+                    other.format_name()
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// The options `profile`'s `source` records. `format` overrides the recorded format, and with

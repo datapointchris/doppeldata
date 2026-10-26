@@ -1,5 +1,7 @@
 //! Arrow IPC, as the random-access file format or the streaming format.
 
+use std::sync::Arc;
+
 use arrow_array::RecordBatch;
 use arrow_ipc::CompressionType;
 use arrow_ipc::writer::FileWriter;
@@ -11,6 +13,7 @@ use doppeldata_core::TextCell;
 use doppeldata_core::format_settings::ArrowSettings;
 use doppeldata_core::format_settings::IpcCompression;
 use doppeldata_core::format_settings::IpcFormat;
+use doppeldata_core::profile::provenance;
 
 use super::FileEncoder;
 use super::Finished;
@@ -30,9 +33,17 @@ impl IpcEncoder {
             IpcCompression::Zstd => Some(CompressionType::ZSTD),
         };
         let options = IpcWriteOptions::default().try_with_compression(compression)?;
+        let schema = match &settings.embedded_profile {
+            Some(profile) => {
+                let mut metadata = schema.metadata().clone();
+                metadata.insert(provenance::PROFILE.to_string(), profile.to_string());
+                Arc::new(schema.as_ref().clone().with_metadata(metadata))
+            }
+            None => schema.clone(),
+        };
         Ok(match settings.ipc {
-            IpcFormat::File => Self::File(FileWriter::try_new_with_options(sink, schema, options)?),
-            IpcFormat::Stream => Self::Stream(StreamWriter::try_new_with_options(sink, schema, options)?),
+            IpcFormat::File => Self::File(FileWriter::try_new_with_options(sink, &schema, options)?),
+            IpcFormat::Stream => Self::Stream(StreamWriter::try_new_with_options(sink, &schema, options)?),
         })
     }
 }

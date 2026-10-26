@@ -71,6 +71,18 @@ mod _core {
     #[pymodule_export]
     const MANIFEST_FILE_NAME: &str = doppeldata_core::manifest::MANIFEST_FILE_NAME;
 
+    /// The metadata key a file holds the profile's canonical JSON under, where its write embeds it.
+    #[pymodule_export]
+    const PROFILE_KEY: &str = doppeldata_core::profile::provenance::PROFILE;
+
+    /// The metadata key every Parquet and Arrow IPC file holds its dataset's seed under.
+    #[pymodule_export]
+    const SEED_KEY: &str = doppeldata_core::profile::provenance::SEED;
+
+    /// The metadata key every Parquet and Arrow IPC file holds its dataset's generated rows under.
+    #[pymodule_export]
+    const DATASET_ROWS_KEY: &str = doppeldata_core::profile::provenance::DATASET_ROWS;
+
     /// The name of the claim a write holds its destination with, and the record a stopped write leaves.
     #[pymodule_export]
     const PARTIAL_MANIFEST_FILE_NAME: &str = doppeldata_core::manifest::PARTIAL_MANIFEST_FILE_NAME;
@@ -138,6 +150,17 @@ mod _core {
     #[pyfunction]
     fn one_file_faults_name(file_name: &str) -> String {
         doppeldata_core::manifest::one_file_faults_name(file_name)
+    }
+
+    /// The key-value metadata of the local Parquet or Arrow IPC file at ``path``, or None for a
+    /// file of neither format. Raises OSError where the file cannot be opened, and ValueError where
+    /// its footer or schema does not read.
+    #[pyfunction]
+    fn data_file_metadata(path: std::path::PathBuf) -> PyResult<Option<BTreeMap<String, String>>> {
+        doppeldata_writers::file_metadata(&path).map_err(|error| match error {
+            doppeldata_writers::FileMetadataError::Io(error) => error.into(),
+            other => PyValueError::new_err(other.to_string()),
+        })
     }
 
     /// Whether an expectation's metric measures one column, so the expectation names ``column``.

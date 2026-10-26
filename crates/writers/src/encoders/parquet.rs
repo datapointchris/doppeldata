@@ -22,6 +22,7 @@ use doppeldata_core::format_settings::ParquetStatistics;
 use doppeldata_core::format_settings::TimestampUnit;
 use doppeldata_core::manifest::FaultRecord;
 use doppeldata_core::physical_type_name;
+use doppeldata_core::profile::provenance;
 use doppeldata_core::scenario::FaultKind;
 use parquet::arrow::ArrowSchemaConverter;
 use parquet::arrow::ArrowWriter;
@@ -220,9 +221,16 @@ fn retyped(schema: &Schema, retype: impl Fn(&DataType) -> Option<DataType>) -> S
 
 /// parquet's `ArrowWriter` stores the Arrow schema, metadata and all, only inside `ARROW:schema`.
 /// Each metadata key is also written as a plain key-value pair, in key order, as pyarrow writes
-/// them, so a reader that never decodes `ARROW:schema` still finds the provenance.
+/// them, so a reader that never decodes `ARROW:schema` still finds the provenance. An embedded
+/// profile is written only as a key-value pair, so the footer holds it once.
 fn properties(settings: &ParquetSettings, schema: &Schema) -> Result<WriterProperties, WriteError> {
-    let mut metadata: Vec<_> = schema.metadata().iter().collect();
+    let embedded = settings.embedded_profile.as_deref().map(|profile| (provenance::PROFILE, profile));
+    let mut metadata: Vec<(&str, &str)> = schema
+        .metadata()
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .chain(embedded)
+        .collect();
     metadata.sort();
     let mut builder = WriterProperties::builder()
         .set_compression(codec(settings)?)
@@ -236,7 +244,7 @@ fn properties(settings: &ParquetSettings, schema: &Schema) -> Result<WriterPrope
         .set_key_value_metadata(Some(
             metadata
                 .into_iter()
-                .map(|(key, value)| KeyValue::new(key.clone(), value.clone()))
+                .map(|(key, value)| KeyValue::new(key.to_string(), value.to_string()))
                 .collect(),
         ));
     if let Some(columns) = &settings.dictionary_columns {

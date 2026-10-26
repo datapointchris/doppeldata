@@ -195,6 +195,10 @@ pub struct ManifestProfile {
     pub version: u64,
     /// The profile's path as the caller gave it, or null when it came from memory.
     pub path: Option<String>,
+    /// Whether each Parquet and Arrow IPC file holds the profile's canonical JSON, under the
+    /// metadata key `doppeldata.profile`. Left out when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub embedded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

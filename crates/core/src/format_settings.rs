@@ -3,6 +3,7 @@
 //! with, so both take these types.
 
 use std::ops::RangeInclusive;
+use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -81,11 +82,24 @@ impl Output {
             Self::Csv(_) | Self::Tsv(_) | Self::Json(_) | Self::Ndjson(_) => true,
         }
     }
+
+    /// The profile's canonical JSON each file holds, where a Parquet or Arrow IPC write embeds it.
+    pub fn embedded_profile(&self) -> Option<&str> {
+        match self {
+            Self::Parquet(settings) => settings.embedded_profile.as_deref(),
+            Self::Arrow(settings) => settings.embedded_profile.as_deref(),
+            Self::Csv(_) | Self::Tsv(_) | Self::Json(_) | Self::Ndjson(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ParquetSettings {
+    /// The profile's canonical JSON, which each file's metadata holds under `doppeldata.profile`.
+    /// Only a write's caller sets it, so neither a profile nor a manifest holds it.
+    #[serde(skip)]
+    pub embedded_profile: Option<Arc<str>>,
     pub compression: ParquetCompression,
     /// The codec's level, which must fall in the codec's range. Null takes the codec's default.
     pub compression_level: Option<i32>,
@@ -102,6 +116,7 @@ pub struct ParquetSettings {
 impl Default for ParquetSettings {
     fn default() -> Self {
         Self {
+            embedded_profile: None,
             compression: ParquetCompression::Zstd,
             compression_level: None,
             row_group_rows: 1024 * 1024,
@@ -146,6 +161,10 @@ pub enum TimestampUnit {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ArrowSettings {
+    /// The profile's canonical JSON, which each file's schema metadata holds under
+    /// `doppeldata.profile`. Only a write's caller sets it, so neither a profile nor a manifest holds it.
+    #[serde(skip)]
+    pub embedded_profile: Option<Arc<str>>,
     pub ipc: IpcFormat,
     pub compression: IpcCompression,
 }
