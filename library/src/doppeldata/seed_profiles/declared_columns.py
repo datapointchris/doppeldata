@@ -4,9 +4,10 @@ A schema states types and constraints and no statistics. Where it is silent, a c
 
 - a number uniformly between its bounds, a missing end `NUMBER_SPAN` beyond the given one, and 0 to `NUMBER_SPAN` with
   neither, kept inside its type;
+- an integer key counting up from its least value, bounded or not;
 - a date or a timestamp uniformly inside `DATE_WINDOW`, a missing end a window's length beyond the given one;
-- a string from its pattern, else its values, else its format's type, else the fake its name hints, else letters and
-  digits `TEXT_LENGTH` long, kept inside its declared lengths;
+- a string from its values, else its pattern, else its format's type, else the fake its name hints, else letters and
+  digits `TEXT_LENGTH` long. Only the letters and digits are kept inside its declared lengths;
 - nulls at `NULL_RATE` where the schema allows them, and none where it requires a value.
 
 The window is fixed rather than counted back from today, so one seed generates the same rows on any day.
@@ -23,7 +24,9 @@ from typing import Any
 from typing import TypeVar
 
 from doppeldata import _core
+from doppeldata.errors import DoppeldataError
 from doppeldata.errors import ProfilingWarning
+from doppeldata.errors import SourceError
 from doppeldata.inline_columns import InlineColumn
 from doppeldata.inline_columns import as_date
 from doppeldata.inline_columns import choice
@@ -124,7 +127,15 @@ class DeclaredColumn(InlineColumn):
             column['path'] = self.path
         column |= {'physical_type': self.arrow_type(), 'logical_type': self.logical_type, 'nullable': not self.required}
         column['null_rate'] = null_rate
-        drawn = self.drawn(name)
+        try:
+            drawn = self.drawn(name)
+        except DoppeldataError:
+            raise
+        except (TypeError, ValueError) as error:
+            # Every value drawn reads is one the schema declared, such as a bound written as text.
+            raise SourceError(
+                f'{name}: the schema declares what no {self.logical_type} column draws from: {error}', role='schema'
+            ) from error
         column |= {key: value for key, value in drawn.items() if key not in ('name', 'physical_type', 'logical_type')}
         semantic = {**(drawn.get('semantic') or {}), **(self.semantic or {})}
         if self.sensitivity is not None:
@@ -187,20 +198,27 @@ class DeclaredColumn(InlineColumn):
         return {'string': {'length': {'min': low, 'max': high}}}
 
     def text_lengths(self) -> tuple[int, int]:
-        """`TEXT_LENGTH`, each end moved inside the declared lengths."""
+        """`TEXT_LENGTH`, each end moved inside the declared lengths. Where that leaves one length and the declared
+        lengths allow more, it spans `TEXT_LENGTH`'s width from the declared end, and at least one character.
+        """
         least = self.min_length or 0
         most = self.max_length if self.max_length is not None else math.inf
-        low, high = (int(min(max(length, least), most)) for length in TEXT_LENGTH)
-        return low, high
+        low, high = (min(max(length, least), most) for length in TEXT_LENGTH)
+        if low == high and least < most:
+            width = TEXT_LENGTH[1] - TEXT_LENGTH[0]
+            low, high = (least, min(most, least + width)) if low == least else (max(least, most - width, 1), most)
+        return int(low), int(high)
 
     def drawn_integers(self, name: str) -> dict[str, Any]:
         if self.values:
             return choice([int(value) for value in self.values]).column(name)
         floor, ceiling = INTEGER_RANGES.get(self.arrow_type(), INTEGER_RANGES['int64'])
-        low = None if self.low is None else math.floor(number(self.low)) + self.low_exclusive
-        high = None if self.high is None else math.ceil(number(self.high)) - self.high_exclusive
-        if self.key and high is None:
-            # A distinct key counts up from its least value, so no two rows share one.
+        # The least and most integers inside the bounds, which may be fractional.
+        low = None if self.low is None else math.floor(number(self.low)) + 1 if self.low_exclusive else math.ceil(number(self.low))
+        high = None if self.high is None else math.ceil(number(self.high)) - 1 if self.high_exclusive else math.floor(number(self.high))
+        if self.key:
+            # A distinct key counts up from its least value, so no two rows share one. It passes `high` only once the
+            # rows outnumber the values between the bounds, which no distinct draw could avoid.
             return {'numeric': {'integral': True, 'sequence': {'start': max(low if low is not None else 1, floor), 'step': 1}}}
         least, most = spanned(low, high, NUMBER_SPAN, (0, NUMBER_SPAN))
         return integers(min(max(least, floor), ceiling), max(min(most, ceiling), floor)).column(name)

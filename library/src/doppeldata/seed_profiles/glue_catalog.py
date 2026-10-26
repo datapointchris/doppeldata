@@ -1,13 +1,15 @@
 """A seed from a table in the AWS Glue Data Catalog, read through `glue:GetTable` and `glue:GetPartitions` with boto3.
 
-boto3 is imported only here, and declared nowhere. The seed records the table's region, database and name, and never
-its ARN, which holds the account id.
+boto3 is imported inside the call, never at module load, and the library declares it nowhere. The seed records the
+table's region, database and name, and never its ARN, which holds the account id. A Lake Formation resource link is
+followed to the table it shares. A table the catalog lists no partition of, as one using Athena's partition projection,
+draws each key's projected values where the projection lists them or bounds them in the key's type.
 """
 
 import contextlib
 import dataclasses as dc
-import datetime as dt
 import importlib
+from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -17,7 +19,11 @@ from doppeldata.errors import PackagesMissing
 from doppeldata.errors import SourceError
 from doppeldata.errors import uninstalled
 from doppeldata.profile_format import Profile
+from doppeldata.profiling.backend import SourceFormat
+from doppeldata.published_schemas import published_enum
 from doppeldata.seed_profiles.declared_columns import DeclaredColumn
+from doppeldata.seed_profiles.declared_columns import day
+from doppeldata.seed_profiles.declared_columns import instant
 from doppeldata.seed_profiles.declared_columns import warn_left_out
 from doppeldata.seed_profiles.declared_tables import DeclaredTable
 from doppeldata.seed_profiles.declared_tables import PartitionKey
@@ -25,17 +31,28 @@ from doppeldata.seed_profiles.hive_types import hive_column
 
 # A table's `classification`, as a crawler writes it, and the source format it names. ORC and Avro are left out,
 # because doppeldata writes neither.
-CLASSIFICATIONS = {'csv': 'csv', 'tsv': 'tsv', 'parquet': 'parquet', 'json': 'ndjson'}
+CLASSIFICATIONS = {
+    'csv': SourceFormat.CSV,
+    'tsv': SourceFormat.TSV,
+    'parquet': SourceFormat.PARQUET,
+    'json': SourceFormat.NDJSON,
+}
 # A SerDe's class, where the table names no classification, and the format it reads.
-SERDE_FORMATS = {'OpenCSVSerde': 'csv', 'LazySimpleSerDe': 'csv', 'ParquetHiveSerDe': 'parquet', 'JsonSerDe': 'ndjson'}
-COMPRESSIONS = ('none', 'gzip', 'bzip2', 'zstd', 'snappy', 'lz4', 'lzo')
+SERDE_FORMATS = {
+    'OpenCSVSerde': SourceFormat.CSV,
+    'LazySimpleSerDe': SourceFormat.CSV,
+    'ParquetHiveSerDe': SourceFormat.PARQUET,
+    'JsonSerDe': SourceFormat.NDJSON,
+}
+DELIMITED = (SourceFormat.CSV, SourceFormat.TSV)
 # OpenCSVSerde's own dialect, where its parameters name none.
 OPEN_CSV_DEFAULTS = {'separatorChar': ',', 'quoteChar': '"', 'escapeChar': '\\'}
 # LazySimpleSerDe's delimiter where neither `field.delim` nor `serialization.format` names one.
 LAZY_SIMPLE_DELIMITER = '\x01'
 # What Hive writes for a partition whose key is null, which is no value of the key.
 NULL_PARTITION = '__HIVE_DEFAULT_PARTITION__'
-SHIPPED_PACKS = ('general', 'healthcare')
+# How a partition key of each logical type reads a listed value, raising ValueError for one that is no value of it.
+PARTITION_VALUE_READERS: dict[str, Callable[[str], Any]] = {'integer': int, 'number': float, 'date': day, 'timestamp': instant}
 
 
 def glue_profile(
@@ -55,9 +72,17 @@ def glue_profile(
     named = f'glue:{client.meta.region_name}/{database}/{table}'
     with catalog_errors(named, client.meta.endpoint_url):
         described = client.get_table(DatabaseName=database, Name=table)['Table']
+        located: dict[str, str] = {'DatabaseName': database}
+        target = described.get('TargetTable')
+        if target:
+            # A resource link holds no columns. The table it shares may sit in another account or region.
+            if target.get('Region') and target['Region'] != client.meta.region_name:
+                client = glue_client(target['Region'])
+            located = {'DatabaseName': target['DatabaseName'], **({'CatalogId': target['CatalogId']} if target.get('CatalogId') else {})}
+            described = client.get_table(**located, Name=target['Name'])['Table']
         partitions: list[list[str]] = []
         if described.get('PartitionKeys'):
-            pages = client.get_paginator('get_partitions').paginate(DatabaseName=database, TableName=table, ExcludeColumnSchema=True)
+            pages = client.get_paginator('get_partitions').paginate(**located, TableName=described['Name'], ExcludeColumnSchema=True)
             partitions = [partition['Values'] for page in pages for partition in page['Partitions']]
     return catalog_table(described, partitions, named, detected_entities or {}).profile()
 
@@ -71,9 +96,15 @@ def glue_client(region: str | None) -> Any:
     try:
         return boto3.Session().client('glue', region_name=region, config=S3_CLIENT_CONFIG)
     except exceptions.NoRegionError as error:
-        raise SourceError('the Glue Data Catalog is regional; give region=, --region, or set AWS_REGION', role='schema') from error
+        message = "the Glue Data Catalog is regional, and the AWS environment names no region; give the catalog's, or set AWS_REGION"
+        raise SourceError(message, role='region') from error
+    except exceptions.InvalidRegionError as error:
+        raise SourceError(f"{str(error).rstrip('.')}; give the catalog's region, such as eu-west-1", role='region') from error
     except exceptions.ProfileNotFound as error:
-        raise SourceError(f'{error}; set AWS_PROFILE to a profile the AWS config holds', role='schema') from error
+        raise SourceError(f'{error}; set AWS_PROFILE to a profile the AWS config holds', role='environment') from error
+    except ValueError as error:
+        # botocore refuses an endpoint that is no URL with a bare ValueError.
+        raise SourceError(f'{error}, from AWS_ENDPOINT_URL_GLUE, AWS_ENDPOINT_URL or the AWS profile', role='environment') from error
 
 
 @contextlib.contextmanager
@@ -100,12 +131,16 @@ def catalog_errors(named: str, endpoint: str) -> Iterator[None]:
         raise SourceError(f'{named} could not be read: {error}; {CREDENTIAL_ADVICE}', exit_code=1, role='schema') from error
     except UNANSWERED_ERRORS as error:
         raise SourceError(f'no answer from {endpoint}: {error}, {S3_ATTEMPTS} attempts', exit_code=4, role='schema') from error
+    except exceptions.BotoCoreError as error:
+        raise SourceError(f'{named} could not be read through {endpoint}: {error}', exit_code=1, role='schema') from error
 
 
 def catalog_table(
     described: Mapping[str, Any], partitions: list[list[str]], named: str, detected_entities: Mapping[str, Sequence[str]]
 ) -> DeclaredTable:
-    """The table GetTable's `Table` describes, each partition key drawing the values `partitions` list for it."""
+    """The table GetTable's `Table` describes, each partition key drawing the values `partitions` list for it, else the
+    values its partition projection declares.
+    """
     storage = described.get('StorageDescriptor') or {}
     parameters = {**(storage.get('Parameters') or {}), **(described.get('Parameters') or {})}
     serde = storage.get('SerdeInfo') or {}
@@ -117,53 +152,91 @@ def catalog_table(
             unread.append(f'{listed["Name"]} ({listed["Type"]})')
             continue
         columns.append(declared)
-    partition_keys = []
+    partition_keys, defaulted = [], []
     for index, key in enumerate(described.get('PartitionKeys') or []):
         declared = hive_column(key['Name'], key['Type'], required=True)
         if declared is None:
             unread.append(f'{key["Name"]} ({key["Type"]})')
             continue
         values = sorted({values[index] for values in partitions if len(values) > index and values[index] != NULL_PARTITION})
-        declared = listing(declared, values)
+        declared, count = listing(declared, values, named) if values else projected(declared, parameters) or (declared, None)
+        if not declared.values and declared.low is None:
+            defaulted.append(declared.name)
         columns.append(declared)
-        partition_keys.append(PartitionKey(declared.name, declared.arrow_type(), drawn_count(declared, values)))
+        partition_keys.append(PartitionKey(declared.name, declared.arrow_type(), count))
     if unread:
         warn_left_out(f'{named}: columns of types the engine draws nothing of are left out: {", ".join(unread)}')
+    if not columns:
+        listed = ', '.join(unread) or 'it lists none'
+        raise SourceError(f'{named} holds no column of a type the engine draws, so it makes no seed: {listed}', role='schema')
+    if defaulted:
+        warn_left_out(
+            f'{named}: no value of the partition keys {", ".join(defaulted)} is listed or projected, so each draws its '
+            "type's default, which may write a directory for every row; give each its values in the seed"
+        )
     columns = typed(columns, detected_entities, named)
     return DeclaredTable(
         name=described['Name'],
         columns=tuple(columns),
-        imported_from=named,
+        imported_from=f'{named}@{described["VersionId"]}' if described.get('VersionId') else named,
         partition_keys=tuple(partition_keys),
         source=source_of(parameters, serde),
         row_count=recorded_rows(parameters),
     )
 
 
-def drawn_count(key: DeclaredColumn, values: list[str]) -> int | None:
-    """How many values a partition key draws: each listed one, a date key every day from the least to the most, and None
-    for a timestamp key or a table the catalog lists no partition of.
+def listing(key: DeclaredColumn, values: list[str], named: str) -> tuple[DeclaredColumn, int | None]:
+    """A partition key drawing only the values the catalog lists, and how many it draws.
+
+    A date or timestamp key draws every value between the least and the most, because a profile's temporal column holds
+    no list of values. Its count is the days between them, and None for a timestamp's. A listed value that is no value
+    of the key's type is left out, named in a warning.
     """
-    if not values or key.logical_type == 'timestamp':
-        return None
+    reader = PARTITION_VALUE_READERS.get(key.logical_type, str)
+    read, unread = set(), []
+    for value in values:
+        try:
+            read.add(reader(value))
+        except ValueError:
+            unread.append(value)
+    if unread:
+        warn_left_out(f'{named}: partition values of {key.name} that are no {key.logical_type} are left out: {", ".join(unread)}')
+    if not read:
+        return key, None
+    ordered = sorted(read)
     if key.logical_type == 'date':
-        return (dt.date.fromisoformat(values[-1]) - dt.date.fromisoformat(values[0])).days + 1
-    return len(key.values) or len(values)
+        return dc.replace(key, low=ordered[0], high=ordered[-1]), (ordered[-1] - ordered[0]).days + 1
+    if key.logical_type == 'timestamp':
+        return dc.replace(key, low=ordered[0], high=ordered[-1]), None
+    return dc.replace(key, values=tuple(ordered)), len(ordered)
 
 
-def listing(key: DeclaredColumn, values: list[str]) -> DeclaredColumn:
-    """A partition key drawing only the values the catalog lists, but a date or timestamp key every value between the
-    least and the most, because a profile's temporal column holds no list of values.
+def projected(key: DeclaredColumn, parameters: Mapping[str, str]) -> tuple[DeclaredColumn, int] | None:
+    """A partition key drawing what Athena's partition projection declares of it: an `enum`'s values, or an `integer` or
+    `date` range whose ends are values of the key's type. None for any other projection, such as one ending at `NOW`.
     """
-    if not values:
-        return key
-    if key.logical_type in ('date', 'timestamp'):
-        return dc.replace(key, low=values[0], high=values[-1])
-    if key.logical_type == 'integer':
-        return dc.replace(key, values=tuple(sorted({int(value) for value in values if value.lstrip('+-').isdigit()})))
-    if key.logical_type == 'number':
-        return dc.replace(key, values=tuple(sorted({float(value) for value in values})))
-    return dc.replace(key, values=tuple(values))
+    if str(parameters.get('projection.enabled', '')).lower() != 'true':
+        return None
+    setting = f'projection.{key.name}.'
+    kind = parameters.get(f'{setting}type')
+    if kind == 'enum':
+        values = [value.strip() for value in parameters.get(f'{setting}values', '').split(',') if value.strip()]
+        try:
+            read = sorted({PARTITION_VALUE_READERS.get(key.logical_type, str)(value) for value in values})
+        except ValueError:
+            return None
+        return (dc.replace(key, values=tuple(read)), len(read)) if read else None
+    ends = [end.strip() for end in parameters.get(f'{setting}range', '').split(',')]
+    if len(ends) != 2 or (kind, key.logical_type) not in (('integer', 'integer'), ('date', 'date')):
+        return None
+    try:
+        if key.logical_type == 'integer':
+            low, high = int(ends[0]), int(ends[1])
+            return dc.replace(key, low=low, high=high), high - low + 1
+        first, last = day(ends[0]), day(ends[1])
+    except ValueError:
+        return None
+    return dc.replace(key, low=first, high=last), (last - first).days + 1
 
 
 def source_of(parameters: Mapping[str, str], serde: Mapping[str, Any]) -> dict[str, Any]:
@@ -176,15 +249,15 @@ def source_of(parameters: Mapping[str, str], serde: Mapping[str, Any]) -> dict[s
         delimiter = serde_parameters.get('separatorChar', OPEN_CSV_DEFAULTS['separatorChar'])
     elif library == 'LazySimpleSerDe':
         delimiter = serde_parameters.get('field.delim') or serde_parameters.get('serialization.format') or LAZY_SIMPLE_DELIMITER
-    if found == 'csv' and delimiter == '\t':
-        found = 'tsv'
+    if found is SourceFormat.CSV and delimiter == '\t':
+        found = SourceFormat.TSV
     source: dict[str, Any] = {}
     if found is not None:
-        source['format'] = found
+        source['format'] = found.value
     compression = (parameters.get('compressionType') or '').lower()
-    if compression in COMPRESSIONS:
+    if compression in published_enum('Compression'):
         source['compression'] = compression
-    if found in ('csv', 'tsv'):
+    if found in DELIMITED:
         skipped = serde_parameters.get('skip.header.line.count') or parameters.get('skip.header.line.count') or '0'
         dialect: dict[str, Any] = {'delimiter': delimiter or ',', 'header': skipped.isdigit() and int(skipped) > 0}
         if library == 'OpenCSVSerde':
@@ -215,16 +288,23 @@ def typed(columns: list[DeclaredColumn], detected_entities: Mapping[str, Sequenc
     """
     if not detected_entities:
         return columns
+    from doppeldata.profiling.detector_packs import BUILT_IN
     from doppeldata.profiling.detector_packs import load
 
     by_glue_type: dict[str, tuple[str, Any]] = {}
-    for name in SHIPPED_PACKS:
+    for name in BUILT_IN:
         pack = load(name).pack
         for detector in pack.detectors:
             if detector.glue_type is not None:
                 by_glue_type.setdefault(detector.glue_type, (pack.name, detector))
     names = {column.name for column in columns}
-    ignored = [f'{column} (not a column)' for column in detected_entities if column not in names]
+    unmatched = [column for column in detected_entities if column not in names]
+    if unmatched:
+        raise SourceError(
+            f'the detected entities name {", ".join(unmatched)}, which {named} holds no column of; it holds {", ".join(sorted(names))}',
+            role='detected-entities',
+        )
+    ignored: list[str] = []
     found = []
     for column in columns:
         entity_types = (

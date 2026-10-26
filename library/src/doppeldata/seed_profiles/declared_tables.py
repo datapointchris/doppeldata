@@ -52,12 +52,7 @@ class DeclaredTable:
             for column in self.columns
         }
         columns_only = expanded(dict(columns), None, self.name, self.imported_from)
-        generated = {
-            'tool': TOOL,
-            'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
-            'engine': 'import',
-            'imported_from': self.imported_from,
-        }
+        generated = imported_generated(self.imported_from)
         document: dict[str, Any] = {'profile_version': FORMAT_VERSION, 'kind': 'table', 'name': self.name, 'generated': generated}
         source = dict(self.source)
         if self.partition_keys:
@@ -84,3 +79,13 @@ class DeclaredTable:
             document['dataset'] = dataset
         document['columns'] = columns_only['columns']
         return validated(document, self.imported_from)
+
+
+def imported_generated(imported_from: str) -> dict[str, Any]:
+    """A seed's `generated` section: the tool, the time, `engine: import`, and the schema it was read from."""
+    return {
+        'tool': TOOL,
+        'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
+        'engine': 'import',
+        'imported_from': imported_from,
+    }

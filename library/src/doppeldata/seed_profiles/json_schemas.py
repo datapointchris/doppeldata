@@ -55,8 +55,14 @@ def resolved(schema: Any, document: Any) -> Any:
             raise SourceError(f'{reference} refers back to itself, so it describes no column', role='schema')
         seen.add(reference)
         target = document
-        for part in reference.lstrip('#').strip('/').split('/') if reference != '#' else []:
-            target = target[part.replace('~1', '/').replace('~0', '~')]
+        try:
+            for part in reference.lstrip('#').strip('/').split('/') if reference != '#' else []:
+                step = part.replace('~1', '/').replace('~0', '~')
+                target = target[int(step)] if isinstance(target, list) else target[step]
+        except (KeyError, IndexError, TypeError, ValueError) as error:
+            raise SourceError(f'{reference} points at nothing in the file', role='schema') from error
+        if not isinstance(target, Mapping):
+            raise SourceError(f'{reference} points at {target!r}, which is no schema', role='schema')
         schema = {**target, **{key: value for key, value in schema.items() if key != '$ref'}}
     return schema
 

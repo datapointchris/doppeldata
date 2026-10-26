@@ -60,10 +60,12 @@ GENERATED_FIELDS = {
     'source_fingerprint': GeneratedField(hashed=False, derived_from=True),
     'at': GeneratedField(hashed=False, derived_from=False),
     'sample': GeneratedField(hashed=True, derived_from=False),
-    # Left out, so a schema imported again from a copy elsewhere keeps the seed's identity.
-    'imported_from': GeneratedField(hashed=False, derived_from=False),
+    # Hashed, as every release before it hashes a field it does not know. It names no directory, so a copy of the
+    # schema elsewhere keeps the seed's identity.
+    'imported_from': GeneratedField(hashed=True, derived_from=False),
 }
-UNHASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if not field.hashed)
+# The digest keeps only these, so a field a later release adds is left out by this one.
+HASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if field.hashed)
 DERIVED_FROM = tuple(name for name, field in GENERATED_FIELDS.items() if field.derived_from)
 # Stored rates are rounded, so a set meant to sum to 1 is allowed this far off.
 RATE_SUM_TOLERANCE = 0.01
@@ -211,7 +213,7 @@ def without_unhashed_fields(plain: dict[str, Any]) -> dict[str, Any]:
     generated = plain.get('generated')
     if not isinstance(generated, dict):
         return plain
-    kept = {key: value for key, value in generated.items() if key not in UNHASHED_GENERATED_FIELDS}
+    kept = {key: value for key, value in generated.items() if key in HASHED_GENERATED_FIELDS}
     return plain | {'generated': kept}
 
 
@@ -389,6 +391,9 @@ class Profile:
         if not issues and profile.document.get('kind') != 'table':
             tables = ', '.join(profile.document.get('tables') or {})
             message = f"this file is a bundle of the tables {tables}; profile one table's folder for a table profile"
+            imported_from = (profile.document.get('generated') or {}).get('imported_from')
+            if imported_from:
+                message = f'this file is a bundle of the tables {tables} in {imported_from}; import one of them with --table, or table='
             issues = [Issue('not-a-table', '/kind', message)]
         if issues:
             raise InvalidProfile(str(path), issues)
@@ -421,12 +426,13 @@ class Profile:
         cls, database: str, table: str, *, region: str | None = None, detected_entities: Mapping[str, Sequence[str]] | None = None
     ) -> 'Profile':
         """A seed of a Glue Data Catalog table: its columns, format, CSV dialect and header, and partition keys drawing
-        the values the catalog lists.
+        the values the catalog lists, else those its partition projection declares.
 
-        Reads `glue:GetTable` and `glue:GetPartitions` through boto3, which doppeldata-cli installs, in `region` or the
-        AWS environment's. `detected_entities` maps a column to the Glue entity types `classifyColumns` found in it, such
-        as `{'email': ['EMAIL']}`, and gives it the type the shipped detector pack declares for the first. The packs
-        import pyarrow, so `detected_entities` needs it installed.
+        Reads `glue:GetTable` and `glue:GetPartitions` through boto3, in `region` or the AWS environment's. The library
+        does not install boto3. Without it the call raises PackagesMissing, which names how to install it.
+        `detected_entities` maps a column to the Glue entity types `classifyColumns` found in it, such as
+        `{'email': ['EMAIL']}`, and gives it the type the shipped detector pack declares for the first. A key naming no
+        column raises SourceError. The packs import pyarrow, so `detected_entities` needs it installed.
         """
         from doppeldata.seed_profiles.glue_catalog import glue_profile
 

@@ -5,7 +5,6 @@ each single-field foreign key becomes a bundle relationship with no fan-out.
 """
 
 import dataclasses as dc
-import datetime as dt
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -15,11 +14,11 @@ from doppeldata.errors import SourceError
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
-from doppeldata.profiling.table_profile import TOOL
 from doppeldata.seed_profiles.declared_columns import DATE_WINDOW
 from doppeldata.seed_profiles.declared_columns import DeclaredColumn
 from doppeldata.seed_profiles.declared_columns import warn_left_out
 from doppeldata.seed_profiles.declared_tables import DeclaredTable
+from doppeldata.seed_profiles.declared_tables import imported_generated
 from doppeldata.seed_profiles.json_schemas import bounds
 from doppeldata.seed_profiles.schema_files import schema_document
 from doppeldata.seed_profiles.schema_files import table_name
@@ -63,12 +62,7 @@ def data_package_bundle(path: str | os.PathLike[str]) -> Bundle:
     found, package_name, resources = package_resources(path)
     tables = {name: schema_table(schema, name, f'data-package:{found.name}#{name}').profile() for name, schema in resources.items()}
     bundle = Bundle.of(package_name, tables)
-    bundle.document['generated'] = {
-        'tool': TOOL,
-        'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
-        'engine': 'import',
-        'imported_from': f'data-package:{found.name}',
-    }
+    bundle.document['generated'] = imported_generated(f'data-package:{found.name}')
     relationships = foreign_keys(resources, found)
     if relationships:
         bundle.document['relationships'] = relationships
@@ -110,7 +104,7 @@ def schema_table(schema: Any, name: str, named: str) -> DeclaredTable:
     for field in schema['fields']:
         column = schema_column(field)
         if column is None:
-            unread.append(f'{field.get("name")} ({field.get("type")})')
+            unread.append(f'{field.get("name")} ({field.get("type")})' if isinstance(field, Mapping) else repr(field))
         else:
             columns.append(column)
     if unread:

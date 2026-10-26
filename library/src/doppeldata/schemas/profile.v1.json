@@ -1218,7 +1218,7 @@
           ]
         },
         "imported_from": {
-          "description": "The schema an `import` profile was read from, as `glue:<region>/<database>/<table>` or a\nkind of file and the file's name, such as `odcs:orders.odcs.yaml#orders`. A file's directory\nis not recorded.",
+          "description": "The schema an `import` profile was read from, as `<kind>:<name>[#<table>]`. The kind names\nwhat read it, such as `odcs`, `glue` or `pandera`. A file's name is the file's alone, with\nno directory, such as `odcs:orders.odcs.yaml#orders`, and `#<table>` names one table of\nseveral. A Glue table is `<region>/<database>/<table>`, and `@<version>` the catalog's\nversion of it where the catalog gives one. A schema class is its module and class, such as\n`pandera:shop.Orders`, and an object is its own name, else its type, such as\n`spark:StructType`.",
           "type": [
             "string",
             "null"

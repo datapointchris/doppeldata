@@ -49,7 +49,7 @@ status: active
 schema:
   - name: orders
     properties:
-      - {name: order_id, logicalType: integer, primaryKey: true, required: true}
+      - {name: order_id, logicalType: integer, logicalTypeOptions: {minimum: 1, maximum: 99999}, primaryKey: true, required: true}
       - {name: status, logicalType: string, required: true, enum: [{value: placed}, {value: shipped}]}
       - {name: email, logicalType: string, logicalTypeOptions: {format: email}}
       - {name: ordered_on, logicalType: date, required: true}
@@ -91,7 +91,7 @@ def test_a_glue_csv_table_imports_its_dialect_header_and_listed_partitions_and_g
     assert checked.exit_code == 0, checked.output
 
 
-def test_an_odcs_contract_imports_to_a_seed_data_generate_reads_unchanged(tmp_path):
+def test_an_odcs_contract_with_a_bounded_primary_key_imports_to_a_seed_drawing_distinct_keys(tmp_path):
     contract = tmp_path / 'orders.odcs.yaml'
     contract.write_text(CONTRACT)
     seed = tmp_path / 'orders.profile.yaml'

@@ -13,12 +13,14 @@ from doppeldata.profile_format import to_plain
 
 
 def schema_document(path: str | os.PathLike[str]) -> tuple[Path, Any]:
-    """The file at `path`, as plain JSON values: JSON where it ends in `.json`, else YAML, which JSON also parses as."""
+    """The UTF-8 file at `path`, as plain JSON values: JSON where it ends in `.json`, else YAML, which JSON also parses as."""
     path = Path(path)
     try:
-        text = path.read_text()
+        text = path.read_text(encoding='utf-8')
     except OSError as error:
         raise SourceError(f'{os.fspath(path)} cannot be read: {error.strerror or error}', role='schema') from error
+    except UnicodeDecodeError as error:
+        raise SourceError(f'{os.fspath(path)} is not UTF-8 text: {error}; save it as UTF-8', role='schema') from error
     try:
         if path.suffix == '.json':
             return path, json.loads(text)

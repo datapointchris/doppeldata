@@ -17,15 +17,29 @@ from doppeldata.seed_profiles.hive_types import hive_column
 from doppeldata.short_profiles import INLINE_TABLE
 
 LIBRARIES = ('pandera', 'dataframely', 'pyspark')
-# pandas' and Polars' dtype names, as pandera prints them. A datetime is matched in its own case, keeping its zone's.
+# The pandera built-in checks a seed reads, by the name each gives itself.
+READ_CHECKS = (
+    'greater_than_or_equal_to',
+    'greater_than',
+    'less_than_or_equal_to',
+    'less_than',
+    'in_range',
+    'isin',
+    'unique_values_eq',
+    'equal_to',
+    'str_matches',
+    'str_length',
+)
+# pandera's dtype classes, by their names in lower case. A parameter is read off the dtype or the Polars type it wraps.
 INTEGER_DTYPE = re.compile(r'(?P<unsigned>u?)int(?P<bits>8|16|32|64)')
-DECIMAL_DTYPE = re.compile(r'decimal\(precision=(?P<precision>\d+|none), scale=(?P<scale>\d+)\)')
-PANDAS_DATETIME = re.compile(r'datetime64\[(?P<unit>s|ms|us|ns)(?:, (?P<zone>[^\]]+))?\]', re.IGNORECASE)
-POLARS_DATETIME = re.compile(r"datetime\(time_unit='(?P<unit>ms|us|ns)', time_zone=(?:'(?P<zone>[^']+)'|None)\)", re.IGNORECASE)
-TEXT_DTYPES = ('str', 'string', 'utf8', 'object', 'category', 'categorical', 'string[python]', 'string[pyarrow]')
-FLOAT_DTYPES = {'float32': 'float', 'float': 'float', 'float64': 'double', 'double': 'double'}
+TEXT_DTYPES = ('string', 'object')
+# The engine draws no dictionary type, so these are drawn as text.
+DICTIONARY_DTYPES = ('category', 'categorical', 'enum')
+FLOAT_DTYPES = {'float32': 'float', 'float64': 'double'}
 # A decimal with no stated precision takes Arrow's widest.
 DECIMAL_PRECISION = 38
+# Polars holds a time of day in nanoseconds.
+TIME_TYPE = 'time64[ns]'
 # Each dataframely column class read as a scalar, and its Arrow type.
 DATAFRAMELY_SCALARS = {
     **{f'{sign}Int{bits}': f'{sign.lower()}int{bits}' for sign in ('', 'U') for bits in (8, 16, 32, 64)},
@@ -35,7 +49,7 @@ DATAFRAMELY_SCALARS = {
     'Integer': 'int64',
     'Bool': 'bool',
     'Date': 'date32[day]',
-    'Time': 'time64[us]',
+    'Time': TIME_TYPE,
     'String': 'string',
     'Categorical': 'string',
     'Enum': 'string',
@@ -43,7 +57,7 @@ DATAFRAMELY_SCALARS = {
 LOGICAL_OF_ARROW = {
     'bool': 'boolean',
     'date32[day]': 'date',
-    'time64[us]': 'time',
+    TIME_TYPE: 'time',
     'string': 'string',
     'float': 'number',
     'double': 'number',
@@ -87,35 +101,54 @@ def pandera_table(source: Any) -> DeclaredTable:
     model = isinstance(source, type)
     schema = source.to_schema() if model else source
     name = source.__name__ if model else schema.name or INLINE_TABLE
-    named = f'pandera:{qualified(source) if model else name}'
-    columns, unread = [], []
+    named = f'pandera:{qualified(source) if model else schema.name or "DataFrameSchema"}'
+    columns, unread, unchecked = [], [], [f'the table ({check_name(check)})' for check in getattr(schema, 'checks', None) or []]
+    as_text = []
     for column_name, column in schema.columns.items():
-        declared = frame_column(str(column_name), str(column.dtype) if column.dtype is not None else 'string')
+        declared = frame_column(str(column_name), column.dtype)
         if declared is None:
             unread.append(f'{column_name} ({column.dtype})')
             continue
+        if type(column.dtype).__name__.lower() in DICTIONARY_DTYPES:
+            as_text.append(str(column_name))
         declared = dc.replace(declared, required=not column.nullable, key=bool(column.unique))
-        columns.append(dc.replace(declared, **checked(column.checks)))
+        found, skipped = checked(column.checks)
+        columns.append(dc.replace(declared, **found))
+        unchecked += [f'{column_name} ({skipped_name})' for skipped_name in skipped]
     left_out(named, unread)
+    drawn_as_text(named, as_text, 'coerce=True')
+    if unchecked:
+        warn_left_out(f'{named}: checks a seed cannot read are left out: {", ".join(unchecked)}')
     unique = schema.unique if isinstance(schema.unique, list) else [schema.unique] if schema.unique else []
     return DeclaredTable(name=str(name), columns=tuple(columns), imported_from=named, unique_keys=(tuple(unique),) if unique else ())
 
 
-def checked(checks: Any) -> dict[str, Any]:
-    """The bounds, values, pattern and lengths a pandera column's built-in checks state, by each check's name."""
+def check_name(check: Any) -> str:
+    return str(getattr(check, 'name', None) or getattr(check, 'error', None) or type(check).__name__)
+
+
+def checked(checks: Any) -> tuple[dict[str, Any], list[str]]:
+    """The bounds, values, pattern and lengths a pandera column's built-in checks state, by each check's name, and the
+    name of each check it reads nothing from, such as a custom one.
+    """
     found: dict[str, Any] = {}
+    skipped: list[str] = []
     for check in checks or []:
         stats = getattr(check, 'statistics', None) or {}
         name = getattr(check, 'name', None)
-        if name in ('greater_than_or_equal_to', 'greater_than'):
+        if name not in READ_CHECKS:
+            skipped.append(check_name(check))
+        elif name in ('greater_than_or_equal_to', 'greater_than'):
             found |= {'low': stats.get('min_value'), 'low_exclusive': name == 'greater_than'}
         elif name in ('less_than_or_equal_to', 'less_than'):
             found |= {'high': stats.get('max_value'), 'high_exclusive': name == 'less_than'}
         elif name == 'in_range':
             found |= {'low': stats.get('min_value'), 'high': stats.get('max_value')}
             found |= {'low_exclusive': not stats.get('include_min', True), 'high_exclusive': not stats.get('include_max', True)}
-        elif name in ('isin', 'unique_values_eq'):
+        elif name == 'isin':
             found['values'] = tuple(stats.get('allowed_values') or ())
+        elif name == 'unique_values_eq':
+            found['values'] = tuple(sorted(stats.get('values') or (), key=str))
         elif name == 'equal_to':
             found['values'] = (stats.get('value'),)
         elif name == 'str_matches':
@@ -123,35 +156,48 @@ def checked(checks: Any) -> dict[str, Any]:
         elif name == 'str_length':
             exact = stats.get('exact_value')
             found |= {'min_length': exact or stats.get('min_value'), 'max_length': exact or stats.get('max_value')}
-    return found
+    return found, skipped
 
 
-def frame_column(name: str, dtype: str) -> DeclaredColumn | None:
-    """The column a pandas or Polars dtype name declares, such as `int32`, `string[pyarrow]` or `Datetime(time_unit='us', ...)`."""
-    text = dtype.strip().lower()
-    integer = INTEGER_DTYPE.fullmatch(text)
+def frame_column(name: str, dtype: Any) -> DeclaredColumn | None:
+    """The column a pandera dtype declares, by its class, such as `INT32`, `STRING` or `DateTime`, and a text column
+    where it declares none.
+    """
+    if dtype is None:
+        return DeclaredColumn(name=name, logical_type='string')
+    kind = type(dtype).__name__.lower()
+    wrapped = getattr(dtype, 'type', None)
+    integer = INTEGER_DTYPE.fullmatch(kind)
     if integer is not None:
         return DeclaredColumn(name=name, logical_type='integer', physical_type=f'{integer["unsigned"]}int{integer["bits"]}')
-    if text in FLOAT_DTYPES:
-        return DeclaredColumn(name=name, logical_type='number', physical_type=FLOAT_DTYPES[text])
-    decimal = DECIMAL_DTYPE.fullmatch(text)
-    if decimal is not None:
-        precision = DECIMAL_PRECISION if decimal['precision'] == 'none' else int(decimal['precision'])
-        return DeclaredColumn(name=name, logical_type='number', physical_type=f'decimal128({precision}, {decimal["scale"]})')
-    if text in TEXT_DTYPES or text.startswith('enum'):
+    if kind in FLOAT_DTYPES:
+        return DeclaredColumn(name=name, logical_type='number', physical_type=FLOAT_DTYPES[kind])
+    if kind == 'decimal':
+        precision = getattr(dtype, 'precision', None) or DECIMAL_PRECISION
+        physical = f'decimal128({precision}, {getattr(dtype, "scale", None) or 0})'
+        return DeclaredColumn(name=name, logical_type='number', physical_type=physical)
+    if kind in TEXT_DTYPES:
         return DeclaredColumn(name=name, logical_type='string')
-    if text in ('bool', 'boolean'):
+    if kind in DICTIONARY_DTYPES:
+        categories = getattr(dtype, 'categories', None)
+        values = tuple(str(value) for value in categories) if categories is not None else ()
+        return DeclaredColumn(name=name, logical_type='string', values=values)
+    if kind in ('bool', 'boolean'):
         return DeclaredColumn(name=name, logical_type='boolean')
-    if text in ('date', 'date32[day]'):
+    if kind == 'date':
         return DeclaredColumn(name=name, logical_type='date')
-    if text in ('time', 'time64[us]'):
-        return DeclaredColumn(name=name, logical_type='time')
-    stamp = PANDAS_DATETIME.fullmatch(dtype.strip()) or POLARS_DATETIME.fullmatch(dtype.strip())
-    if stamp is not None or text == 'datetime':
-        unit = stamp['unit'].lower() if stamp is not None else 'us'
-        zone = stamp['zone'] if stamp is not None else None
-        return timestamp_column(name, unit, zone)
+    if kind == 'time':
+        return DeclaredColumn(name=name, logical_type='time', physical_type=TIME_TYPE)
+    if kind == 'datetime':
+        unit = getattr(dtype, 'unit', None) or getattr(wrapped, 'time_unit', None) or 'us'
+        zone = getattr(dtype, 'tz', None) or getattr(wrapped, 'time_zone', None)
+        return timestamp_column(name, str(unit), str(zone) if zone is not None else None)
     return None
+
+
+def drawn_as_text(named: str, columns: list[str], validated_with: str) -> None:
+    if columns:
+        warn_left_out(f'{named}: columns of a dictionary type are drawn as text, so validate with {validated_with}: {", ".join(columns)}')
 
 
 def timestamp_column(name: str, unit: str, zone: str | None) -> DeclaredColumn:
@@ -173,6 +219,11 @@ def dataframely_table(source: Any) -> DeclaredTable:
         else:
             columns.append(declared)
     left_out(named, unread)
+    as_text = [str(column_name) for column_name, column in source.columns().items() if type(column).__name__.lower() in DICTIONARY_DTYPES]
+    drawn_as_text(named, as_text, 'cast=True')
+    unchecked = [str(column_name) for column_name, column in source.columns().items() if getattr(column, 'check', None)]
+    if unchecked:
+        warn_left_out(f'{named}: custom checks a seed cannot read are left out: {", ".join(unchecked)}')
     primary = source.primary_key() if callable(getattr(source, 'primary_key', None)) else []
     return DeclaredTable(name=source.__name__, columns=tuple(columns), imported_from=named, primary_key=tuple(primary))
 
@@ -189,7 +240,14 @@ def dataframely_column(name: str, column: Any) -> DeclaredColumn | None:
         element = dataframely_column('element', column.inner)
         if element is None:
             return None
-        return DeclaredColumn(name=name, logical_type='array', required=required, element=dc.replace(element, required=True))
+        return DeclaredColumn(
+            name=name,
+            logical_type='array',
+            required=required,
+            element=dc.replace(element, required=True),
+            min_items=getattr(column, 'min_length', None),
+            max_items=getattr(column, 'max_length', None),
+        )
     if kind == 'Decimal':
         precision = getattr(column, 'precision', None) or DECIMAL_PRECISION
         physical = f'decimal128({precision}, {getattr(column, "scale", 0) or 0})'
