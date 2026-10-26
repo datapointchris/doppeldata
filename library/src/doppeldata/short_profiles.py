@@ -16,6 +16,8 @@ from ruamel.yaml.comments import CommentedMap
 from doppeldata import fakes
 from doppeldata.column_name_words import hint_runs_in
 from doppeldata.column_name_words import name_words
+from doppeldata.embedded_profiles import data_file_metadata
+from doppeldata.embedded_profiles import data_file_profile
 from doppeldata.example_profiles import example_names
 from doppeldata.inline_columns import Fake
 from doppeldata.inline_columns import InlineColumn
@@ -82,7 +84,7 @@ def with_row_count(document: Any, rows: int) -> Any:
 
 
 def file_profile(source: str | os.PathLike[str]) -> Profile:
-    """A short or full YAML file's profile, or the example `source` names."""
+    """A short or full YAML file's profile, the profile a Parquet or Arrow IPC file embeds, or the example `source` names."""
     path = Path(source)
     if not path.is_file():
         if isinstance(source, str) and source in example_names():
@@ -90,6 +92,9 @@ def file_profile(source: str | os.PathLike[str]) -> Profile:
         raise FileNotFoundError(
             f'{os.fspath(source)} is neither a profile file nor an example; name a file, or one of {", ".join(example_names())}'
         )
+    metadata = data_file_metadata(path)
+    if metadata is not None:
+        return data_file_profile(path, metadata)
     document = to_plain(read_document(path))
     if not is_short(document):
         return Profile.load(path)

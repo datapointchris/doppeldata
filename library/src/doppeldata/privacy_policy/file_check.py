@@ -9,6 +9,8 @@ import dataclasses as dc
 from pathlib import Path
 from typing import Any
 
+from doppeldata.embedded_profiles import data_file_metadata
+from doppeldata.embedded_profiles import embedded_document
 from doppeldata.privacy_policy.column_treatment import CHECKED_POLICIES
 from doppeldata.privacy_policy.column_treatment import ColumnFacts
 from doppeldata.privacy_policy.column_treatment import Policy
@@ -86,9 +88,11 @@ def file_checks(path: Path) -> list[TableCheck]:
 
     A bundle's table held in its own file is checked as that file, and its violations point into it. Raises OSError
     where the file named cannot be read. A member that cannot be read is a violation, and the others are still checked.
+    A Parquet or Arrow IPC file's embedded profile is checked, and one holding none raises SourceError.
     """
+    metadata = data_file_metadata(path)
     try:
-        document = to_plain(read_document(path))
+        document = to_plain(read_document(path)) if metadata is None else embedded_document(path, metadata)
     except InvalidProfile as error:
         return [TableCheck(path.name, None, None, 0, schema_violations(error.issues))]
     if not isinstance(document, dict) or document.get('kind') != 'bundle':

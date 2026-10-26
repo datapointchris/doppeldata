@@ -439,6 +439,14 @@ class Profile:
         return expanded_profile(columns, rows)
 
     @classmethod
+    def from_data_file(cls, path: str | Path) -> 'Profile':
+        """The profile a Parquet or Arrow IPC file holds, where `write` with `embed_profile=True` wrote it. A file holding
+        none raises SourceError. Every argument taking a profile file also takes such a data file."""
+        from doppeldata.embedded_profiles import data_file_profile
+
+        return data_file_profile(path)
+
+    @classmethod
     def from_glue(
         cls, database: str, table: str, *, region: str | None = None, detected_entities: Mapping[str, Sequence[str]] | None = None
     ) -> 'Profile':

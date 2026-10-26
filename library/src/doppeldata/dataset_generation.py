@@ -101,7 +101,8 @@ class WritePlan:
 class WriteChoices:
     """What a write lays over the format, settings and layout its profile records. Each None keeps the profile's.
 
-    `partition_by=[]` writes no partitions, where None keeps the profile's keys.
+    `partition_by=[]` writes no partitions, where None keeps the profile's keys. `embed_profile` writes the profile's
+    canonical JSON into each Parquet or Arrow IPC file's metadata.
     """
 
     format: str | None = None
@@ -109,9 +110,12 @@ class WriteChoices:
     partition_by: list[str] | None = None
     partition_style: str | None = None
     writer: dict[str, Any] | None = None
+    embed_profile: bool = False
 
     def engine_json(self, profile: Profile, scenario: Scenario | None = None) -> str:
-        chosen = {key: value for key, value in dc.asdict(self).items() if value is not None}
+        chosen = {key: value for key, value in dc.asdict(self).items() if value is not None and key != 'embed_profile'}
+        if self.embed_profile:
+            chosen['embedded_profile'] = profile.canonical().decode()
         if profile.path:
             chosen['profile_path'] = str(profile.path)
         if scenario is not None:
@@ -431,12 +435,13 @@ def plan(
     partition_style: str | None = None,
     writer: dict[str, Any] | None = None,
     scenario: Scenario | Sequence[Scenario] | None = None,
+    embed_profile: bool = False,
 ) -> WritePlan:
     """What `write` would write with the same arguments: the identity, the format and settings, every range and each column's sampler.
 
     It reads nothing at `out`, and refuses what `write` would refuse from its arguments alone.
     """
-    choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
+    choices = WriteChoices(format, file_rows, partition_by, partition_style, writer, embed_profile)
     prepared = prepared_write(profile, out, rows, seed, choices, scenario)
     engine, options, target = prepared.engine, prepared.options, prepared.one_file
     settings = json.loads(engine.written_settings_json(options))
@@ -477,6 +482,7 @@ def write(
     replace: bool = False,
     scenario: Scenario | Sequence[Scenario] | None = None,
     manifest: bool = False,
+    embed_profile: bool = False,
 ) -> Manifest:
     """Write the dataset to `out` and return its manifest. `profile` is taken as `generate` takes it.
 
@@ -498,8 +504,12 @@ def write(
     `scenario`, a Scenario or a list composed in order, bends the data: its patch applies to the profile, and its perturbations
     to the rows and the files. The manifest records it, and a layout that cannot hold it raises InvalidScenario. `rows` counts
     the rows generated, so a scenario's `duplicates` writes more.
+
+    `embed_profile` writes the profile's canonical JSON into each Parquet or Arrow IPC file's metadata, under
+    `doppeldata.profile`, where `Profile.from_data_file` reads it back. It is the profile given, before any scenario's patch.
+    Any other format raises WriteFailed.
     """
-    choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
+    choices = WriteChoices(format, file_rows, partition_by, partition_style, writer, embed_profile)
     prepared = prepared_write(profile, out, rows, seed, choices, scenario)
     if prepared.one_file is not None:
         return write_one_file(prepared, prepared.one_file, threads=threads, replace=replace, manifest=manifest)
