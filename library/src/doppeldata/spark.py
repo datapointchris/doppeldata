@@ -45,6 +45,7 @@ from doppeldata.profile_sources import ProfileSource
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
+from doppeldata.scenario_format import perturbation_facts
 
 # The engine blocks each Spark task generates in turn. The chunk is a unit of work and never of values, so its size moves no value.
 CHUNK_BLOCKS = 16
@@ -216,18 +217,20 @@ def spark_holds(data_type: Any) -> bool:
 
 
 def one_process_scenario(scenario: Scenario | Sequence[Scenario] | None) -> Scenario | None:
-    """The scenario `scenario=` names, refused where it holds a `cdc`, whose stream Spark's executors cannot write."""
+    """The scenario `scenario=` names, refused where it holds an op ordering the whole table, such as `cdc`, which Spark's
+    executors cannot write."""
     applied = composed(scenario)
     if applied is None:
         return None
+    plain = applied.to_plain()
     issues = [
         Issue(
             'op-needs-one-process',
             pointer(('perturbations', index)),
-            "cdc orders the whole table's changes by commit time, so one process writes the stream; write it with doppeldata.write",
+            f'{entry["op"]} orders the whole table, so one process writes the dataset; write it with doppeldata.write',
         )
-        for index, entry in enumerate(applied.to_plain().get('perturbations') or [])
-        if entry['op'] == 'cdc'
+        for index, (entry, facts) in enumerate(zip(plain.get('perturbations') or [], perturbation_facts(plain), strict=True))
+        if facts.needs_one_process
     ]
     if issues:
         raise InvalidScenario(applied.source, issues)

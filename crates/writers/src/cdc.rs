@@ -5,10 +5,6 @@
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::thread;
 use std::time::Instant;
 
 use arrow_array::RecordBatch;
@@ -46,26 +42,40 @@ use crate::layout::FileRange;
 use crate::layout::LayoutError;
 use crate::layout::file_name;
 use crate::write::RunOptions;
+use crate::write::Stop;
 use crate::write::WriteFailure;
 use crate::write::finish;
 use crate::write::now_rfc3339;
 use crate::write::on_upload_runtime;
+use crate::write::run_jobs;
 use crate::write::worker_threads;
 
-/// The unit a `cdc` write stores Parquet timestamps at: the op's, else DMS's default.
-fn timestamp_unit(cdc: &CdcPlan) -> TimestampUnit {
-    match cdc.timestamp_unit().unwrap_or(CdcTimestampUnit::Us) {
-        CdcTimestampUnit::Us => TimestampUnit::Us,
-        CdcTimestampUnit::Ms => TimestampUnit::Ms,
+/// The unit a `cdc` write stores Parquet timestamps at: the op's, else the writer's, else DMS's
+/// default.
+fn timestamp_unit(cdc: &CdcPlan, writer: Option<TimestampUnit>) -> TimestampUnit {
+    match cdc.timestamp_unit() {
+        Some(CdcTimestampUnit::Us) => TimestampUnit::Us,
+        Some(CdcTimestampUnit::Ms) => TimestampUnit::Ms,
+        None => writer.unwrap_or(TimestampUnit::Us),
+    }
+}
+
+/// A unit as a caller types it.
+fn typed(unit: TimestampUnit) -> &'static str {
+    match unit {
+        TimestampUnit::S => "s",
+        TimestampUnit::Ms => "ms",
+        TimestampUnit::Us => "us",
+        TimestampUnit::Ns => "ns",
     }
 }
 
 /// The output a `cdc` write's files take: the write's, with a Parquet write's timestamps at the
-/// op's unit. The manifest records it, so a regeneration reads it back unchanged.
+/// stream's unit. The manifest records it, so a regeneration reads it back unchanged.
 pub(crate) fn stream_output(output: &Output, cdc: &CdcPlan) -> Output {
     match output {
         Output::Parquet(settings) => Output::Parquet(ParquetSettings {
-            timestamp_unit: Some(timestamp_unit(cdc)),
+            timestamp_unit: Some(timestamp_unit(cdc, settings.timestamp_unit)),
             ..settings.clone()
         }),
         other => other.clone(),
@@ -73,7 +83,7 @@ pub(crate) fn stream_output(output: &Output, cdc: &CdcPlan) -> Output {
 }
 
 /// The output `_expected` takes: a Parquet write's own settings, else Parquet's defaults.
-fn expected_output(output: &Output) -> Output {
+pub(crate) fn expected_output(output: &Output) -> Output {
     match output {
         Output::Parquet(_) => output.clone(),
         _ => Output::Parquet(ParquetSettings::default()),
@@ -94,8 +104,8 @@ pub(crate) fn manifest_section(cdc: &CdcPlan) -> ManifestCdc {
 }
 
 /// Refuses a write `cdc` cannot make: a format DMS does not write, a timestamp unit CSV has no
-/// use for or the writer contradicts, and a partitioned write, since the stream's folders are
-/// DMS's date partitions.
+/// use for, DMS never writes, or the writer and the op set apart, and a partitioned write, since
+/// the stream's folders are DMS's date partitions.
 pub(crate) fn check_layout(cdc: &CdcPlan, partition_by: &[String], output: &Output) -> Result<(), LayoutError> {
     let refuse = |fault: ScenarioFault, field: String, message: String| Err(LayoutError::Scenario { fault, field, message });
     let unit_field = format!("{}/timestamp_unit", cdc.field());
@@ -107,18 +117,31 @@ pub(crate) fn check_layout(cdc: &CdcPlan, partition_by: &[String], output: &Outp
                 "timestamp_unit sets the unit Parquet stores a timestamp at, and the write makes CSV files".into(),
             );
         }
-        Output::Parquet(settings) if settings.timestamp_unit.is_some_and(|unit| unit != timestamp_unit(cdc)) => {
-            return refuse(
-                ScenarioFault::InvalidParameter,
-                unit_field,
-                format!(
-                    "the writer stores timestamps at {:?} and cdc at {:?}, and DMS stores every one at one unit; drop the writer's timestamp_unit",
-                    settings.timestamp_unit.expect("the guard read it"),
-                    timestamp_unit(cdc)
-                ),
-            );
-        }
-        Output::Csv(_) | Output::Parquet(_) => {}
+        Output::Parquet(settings) => match settings.timestamp_unit {
+            Some(writer @ (TimestampUnit::S | TimestampUnit::Ns)) => {
+                return refuse(
+                    ScenarioFault::InvalidParameter,
+                    cdc.field(),
+                    format!(
+                        "the writer's timestamp_unit is {}, and DMS stores Parquet timestamps at us, or at ms under ParquetTimestampInMillisecond; drop it, or set the op's timestamp_unit: ms",
+                        typed(writer)
+                    ),
+                );
+            }
+            Some(writer) if writer != timestamp_unit(cdc, Some(writer)) => {
+                return refuse(
+                    ScenarioFault::InvalidParameter,
+                    unit_field,
+                    format!(
+                        "the writer's timestamp_unit is {} and the op's is {}, and DMS stores every timestamp at one unit; set it in one place",
+                        typed(writer),
+                        typed(timestamp_unit(cdc, None))
+                    ),
+                );
+            }
+            _ => {}
+        },
+        Output::Csv(_) => {}
         other => {
             return refuse(
                 ScenarioFault::OpNotForFormat,
@@ -141,7 +164,7 @@ pub(crate) fn check_layout(cdc: &CdcPlan, partition_by: &[String], output: &Outp
 }
 
 /// A refusal the stream's build returns, as the write's.
-fn refusal(error: PlanError) -> WriteError {
+pub(crate) fn refusal(error: PlanError) -> WriteError {
     match error {
         PlanError::Scenario { code, field, message } => LayoutError::Scenario {
             fault: code,
@@ -189,23 +212,14 @@ pub(crate) fn write(
             expected_output: expected_output(&manifest.output),
             destination,
             runtime,
-            cancel: run.cancel.as_deref(),
-            list: job_list(layout, &stream),
-            next: AtomicUsize::new(0),
-            stop: AtomicBool::new(false),
             load: Mutex::new(Vec::new()),
             changes: Mutex::new(Vec::new()),
             expected: Mutex::new(Vec::new()),
             faults: Mutex::new(Vec::new()),
-            error: Mutex::new(None),
         };
-        let workers = threads.min(jobs.list.len()).max(1);
-        thread::scope(|scope| {
-            for _ in 0..workers {
-                scope.spawn(|| jobs.work());
-            }
-        });
-        let written = jobs.written();
+        let list = job_list(layout, &stream);
+        let error = run_jobs(&list, threads, run.cancel.as_deref(), |job, stop| jobs.run(*job, stop));
+        let written = jobs.written(error);
         manifest.files = written.load;
         manifest.cdc = Some(ManifestCdc {
             changes: stream.changes(),
@@ -257,15 +271,10 @@ struct Jobs<'a> {
     expected_output: Output,
     destination: &'a Destination,
     runtime: &'a Handle,
-    cancel: Option<&'a AtomicBool>,
-    list: Vec<Job>,
-    next: AtomicUsize,
-    stop: AtomicBool,
     load: Mutex<Vec<ManifestFile>>,
     changes: Mutex<Vec<StreamFile>>,
     expected: Mutex<Vec<StreamFile>>,
     faults: Mutex<Vec<FaultRecord>>,
-    error: Mutex<Option<WriteError>>,
 }
 
 /// Every object written, each list in path order, and why the rest stopped.
@@ -283,44 +292,26 @@ fn job_list(layout: &FileLayout, stream: &CdcStream) -> Vec<Job> {
     (ranges.iter().map(|range| Job::Load(*range)))
         .chain((0..stream.file_count()).map(Job::Change))
         .chain(ranges.iter().map(|range| Job::Expected(*range)))
-        .chain(stream.expected_inserts().map(|_| Job::Inserts))
+        .chain(stream.inserts_rows().then_some(Job::Inserts))
         .collect()
 }
 
 impl Jobs<'_> {
-    fn stopped(&self) -> bool {
-        self.stop.load(Ordering::Relaxed) || self.cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed))
-    }
-
-    fn work(&self) {
-        while !self.stopped() {
-            let Some(job) = self.list.get(self.next.fetch_add(1, Ordering::Relaxed)) else {
-                return;
-            };
-            if let Err(error) = self.run(*job) {
-                self.error.lock().expect("no worker panics holding it").get_or_insert(error);
-                self.stop.store(true, Ordering::Relaxed);
-                return;
-            }
-        }
-    }
-
-    fn run(&self, job: Job) -> Result<(), WriteError> {
+    fn run(&self, job: Job, stop: &Stop) -> Result<(), WriteError> {
         let extension = &self.layout.extension;
         match job {
             Job::Load(range) => {
                 let path = format!("{}.{extension}", self.cdc.load_stem(range.index as usize));
                 let schema = self.cdc.full_load_schema(&self.plan.schema());
                 let end = range.first_row + range.rows;
-                let mut batches = Vec::new();
-                for block in range.first_row / BLOCK_ROWS..=(end - 1) / BLOCK_ROWS {
+                let blocks = (range.first_row / BLOCK_ROWS..=(end - 1) / BLOCK_ROWS).map(|block| {
                     let block_first = block * BLOCK_ROWS;
                     let start = range.first_row.max(block_first) - block_first;
                     let stop = end.min(block_first + BLOCK_ROWS) - block_first;
                     let placed = self.plan.placed_block(block, false)?.rows_homed_in(start as u32, stop as u32);
-                    batches.push(self.cdc.full_load(&placed.batch));
-                }
-                let (rows, object) = self.store(&path, self.output, &schema, &batches)?;
+                    Ok(self.cdc.full_load(&placed.batch))
+                });
+                let (rows, object) = self.store(&path, self.output, &schema, blocks, stop)?;
                 self.load.lock().expect("no worker panics holding it").push(ManifestFile {
                     path,
                     range: range.index,
@@ -335,7 +326,8 @@ impl Jobs<'_> {
             Job::Change(file) => {
                 let path = format!("{}.{extension}", self.stream.file_stem(file));
                 let batch = self.stream.file(file);
-                let written = self.store(&path, self.output, &batch.schema(), std::slice::from_ref(&batch))?;
+                let schema = batch.schema();
+                let written = self.store(&path, self.output, &schema, [Ok(batch)], stop)?;
                 let faults = self.stream.file_faults(file).iter().map(|fault| self.fault_record(&path, fault));
                 self.faults.lock().expect("no worker panics holding it").extend(faults);
                 self.changes
@@ -344,28 +336,25 @@ impl Jobs<'_> {
                     .push(stream_file(path, written));
             }
             Job::Expected(range) => {
-                let batch = self.stream.expected_rows(range.first_row..range.first_row + range.rows);
-                self.store_expected(range.index, &batch)?;
+                let rows = range.first_row..range.first_row + range.rows;
+                self.store_expected(range.index, self.stream.expected_rows(self.plan, rows), stop)?;
             }
             Job::Inserts => {
-                let batch = self
-                    .stream
-                    .expected_inserts()
-                    .expect("an inserts job is listed only where rows are inserted");
-                self.store_expected(self.layout.ranges.len() as u32, &batch)?;
+                let part = self.layout.ranges.len() as u32;
+                self.store_expected(part, self.stream.expected_inserts(self.plan), stop)?;
             }
         }
         Ok(())
     }
 
-    fn store_expected(&self, part: u32, batch: &RecordBatch) -> Result<(), WriteError> {
+    fn store_expected(&self, part: u32, batches: impl Iterator<Item = RecordBatch>, stop: &Stop) -> Result<(), WriteError> {
         let path = format!(
             "{}{}",
             self.cdc.expected_prefix(),
             file_name(part, &self.layout.identity8, "parquet")
         );
         let schema = self.stream.expected_schema();
-        let written = self.store(&path, &self.expected_output, &schema, std::slice::from_ref(batch))?;
+        let written = self.store(&path, &self.expected_output, &schema, batches.map(Ok), stop)?;
         self.expected
             .lock()
             .expect("no worker panics holding it")
@@ -373,23 +362,26 @@ impl Jobs<'_> {
         Ok(())
     }
 
-    /// Encodes `batches` as one object at `path`, and returns its rows and record.
+    /// Encodes `batches` as one object at `path`, each as it is made, and returns its rows and
+    /// record. A stop between batches drops the encoder, which aborts the upload.
     fn store(
         &self,
         path: &str,
         output: &Output,
         schema: &SchemaRef,
-        batches: &[RecordBatch],
+        batches: impl IntoIterator<Item = Result<RecordBatch, WriteError>>,
+        stop: &Stop,
     ) -> Result<(u64, crate::byte_sink::WrittenObject), WriteError> {
-        if self.stopped() {
-            return Err(WriteError::Cancelled);
-        }
         let sink = ObjectSink::new(self.destination.store.clone(), self.destination.object(path)?, self.runtime.clone());
         let mut encoder = encoders::open(output, schema, Box::new(sink), None)?;
         let cells: Vec<Vec<TextCell>> = vec![Vec::new(); schema.fields().len()];
         let mut rows = 0;
         for batch in batches {
-            encoder.write(batch, &cells, &RowFaults::default())?;
+            if stop.stopped() {
+                return Err(WriteError::Cancelled);
+            }
+            let batch = batch?;
+            encoder.write(&batch, &cells, &RowFaults::default())?;
             rows += batch.num_rows() as u64;
         }
         Ok((rows, encoder.finish()?.object))
@@ -418,10 +410,7 @@ impl Jobs<'_> {
         }
     }
 
-    fn written(self) -> Written {
-        let error = self.error.into_inner().expect("no worker panics holding it");
-        let unfinished = self.next.load(Ordering::Relaxed) < self.list.len();
-        let cancelled = unfinished && self.cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed));
+    fn written(self, error: Option<WriteError>) -> Written {
         let sorted = |mut files: Vec<StreamFile>| {
             files.sort_by(|a, b| a.path.cmp(&b.path));
             files
@@ -435,7 +424,7 @@ impl Jobs<'_> {
             changes: sorted(self.changes.into_inner().expect("no worker panics holding it")),
             expected: sorted(self.expected.into_inner().expect("no worker panics holding it")),
             faults,
-            error: error.or_else(|| cancelled.then_some(WriteError::Cancelled)),
+            error,
         }
     }
 }

@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "cdc": {
-      "description": "The change stream and the expected table a `cdc` write adds beside its full load, which\n`files` lists. Null for any other write.",
+      "description": "The change stream and the expected table a `cdc` write adds beside its full load, which\n`files` lists. Null for any other write. A release reads a manifest no newer than itself.",
       "anyOf": [
         {
           "$ref": "#/$defs/ManifestCdc"
@@ -43,7 +43,7 @@
       "default": null
     },
     "files": {
-      "description": "Every object written, in path order.",
+      "description": "Every object of the rows written, in path order. Under `cdc` these are the full-load\nfiles, and `cdc` lists the change files and the expected table.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/ManifestFile"

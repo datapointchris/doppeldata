@@ -578,9 +578,9 @@ impl JsonSchema for Duration {
 
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
-            "description": "A length of time as a whole number and a unit: ms, s, m, h, d or w, such as 2d.",
+            "description": "A length of time as a whole number above zero and a unit: ms, s, m, h, d or w, such as 2d.",
             "type": "string",
-            "pattern": "^[0-9]+(ms|s|m|h|d|w)$",
+            "pattern": "^0*[1-9][0-9]*(ms|s|m|h|d|w)$",
         })
     }
 }
@@ -910,6 +910,28 @@ impl Perturbation {
     /// Whether the op acts across several files, so a write to one file cannot apply it.
     pub fn spans_files(&self) -> bool {
         matches!(self, Self::SchemaDrift(_) | Self::SmallFiles(_) | Self::Cdc(_))
+    }
+
+    /// Whether the op orders the whole table, so one process writes the dataset.
+    pub fn needs_one_process(&self) -> bool {
+        match self {
+            Self::Cdc(_) => true,
+            Self::SchemaDrift(_)
+            | Self::SmallFiles(_)
+            | Self::MalformedRows(_)
+            | Self::HotKeys(_)
+            | Self::Duplicates(_)
+            | Self::LateArrival(_)
+            | Self::Missingness(_)
+            | Self::OutOfRange(_)
+            | Self::SwappedValues(_)
+            | Self::CategoricalShift(_)
+            | Self::Noise(_)
+            | Self::Scaling(_)
+            | Self::BrokenCharacters(_)
+            | Self::Outliers(_)
+            | Self::PartitionSkew(_) => false,
+        }
     }
 
     /// Whether the op shapes the files a write makes rather than the rows, so a run writing no

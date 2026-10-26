@@ -35,6 +35,9 @@ use rand_chacha::ChaCha8Rng;
 pub use self::cdc::CdcPlan;
 pub use self::cdc::CdcStream;
 pub use self::cdc::StreamFaultRecord;
+pub use self::cdc::StreamOutline;
+pub use self::cdc::names_stream_file;
+pub(crate) use self::cdc::outline as cdc_outline;
 pub(crate) use self::cdc::plan as plan_cdc;
 pub(crate) use self::cdc::stream as cdc_stream;
 pub use self::malformed_rows::FileFault;
@@ -76,6 +79,8 @@ pub enum ScenarioFault {
     /// A change stream with no one column to key it by: no `key`, and a profile stating no
     /// primary key or one of several columns.
     NoPrimaryKey,
+    /// An op that orders the whole table, such as `cdc`, asked of a write split across processes.
+    OpNeedsOneProcess,
 }
 
 impl ScenarioFault {
@@ -87,6 +92,7 @@ impl ScenarioFault {
             Self::DuplicatePerturbationId => "duplicate-perturbation-id",
             Self::OpNotForFormat => "op-not-for-format",
             Self::NoPrimaryKey => "no-primary-key",
+            Self::OpNeedsOneProcess => "op-needs-one-process",
         }
     }
 }

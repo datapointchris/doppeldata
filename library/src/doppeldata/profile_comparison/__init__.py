@@ -191,9 +191,12 @@ def full_load(written: Manifest, data: str | os.PathLike[str]) -> list[str]:
     """The full-load files of the `cdc` write at `data`, which a check reads in place of the whole write, warned of once."""
     root = os.fspath(data).rstrip('/')
     stream = written.cdc or {}
+    loads = [file['path'] for file in written.files]
+    named = ' to '.join(dict.fromkeys([loads[0], loads[-1]])) if loads else 'no file'
     message = (
-        f'{root} holds a cdc change stream, so the check read its full load, {stream.get("prefix")}LOAD*, and left the change '
-        f"files and {stream.get('expected_prefix')} unmeasured: they are a merge test's input and its answer"
+        f'{root} holds a cdc change stream, so the check read its full load, {named}, and left its '
+        f'{len(stream.get("files") or []):,} change files and {stream.get("expected_prefix")} unmeasured: they are a merge '
+        "test's input and its answer"
     )
     warnings.warn(message, ProfilingWarning, stacklevel=3)
     return [f'{root}/{file["path"]}' for file in written.files]

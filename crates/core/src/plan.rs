@@ -26,6 +26,7 @@ use crate::perturbations::Planning;
 use crate::perturbations::RowFaults;
 use crate::perturbations::ScenarioFault;
 use crate::perturbations::SchemaDriftPlan;
+use crate::perturbations::StreamOutline;
 use crate::perturbations::plan_perturbation;
 use crate::profile::DEFAULT_K_MIN;
 use crate::profile::FORMAT_VERSION;
@@ -187,6 +188,8 @@ pub struct Plan {
     /// Each perturbation copying rows from across the dataset: the pointer to the parameter that
     /// sets it, and the fewest dataset rows between a copy's home and its source.
     across_files: Vec<(String, u64)>,
+    /// The first perturbation ordering the whole table: its pointer and its op.
+    one_process: Option<(String, &'static str)>,
 }
 
 /// One perturbation applied to every block, and the schema its rows carry after it.
@@ -363,6 +366,7 @@ pub fn plan_with_scenario(
         malformed: None,
         cdc: None,
         across_files: Vec::new(),
+        one_process: None,
     };
     if let Some(applied) = scenario {
         plan.apply_scenario(table, applied.scenario)?;
@@ -410,12 +414,24 @@ fn refuse_beside_cdc(scenario: &Scenario, cdc: &CdcPlan) -> Result<(), PlanError
                     "malformed_rows breaks records, and cdc's faults are its duplicate_delivery_rate and out_of_order_rate".into(),
                 ));
             }
-            other => {
+            Perturbation::HotKeys(_)
+            | Perturbation::LateArrival(_)
+            | Perturbation::Missingness(_)
+            | Perturbation::OutOfRange(_)
+            | Perturbation::SwappedValues(_)
+            | Perturbation::CategoricalShift(_)
+            | Perturbation::Noise(_)
+            | Perturbation::Scaling(_)
+            | Perturbation::BrokenCharacters(_)
+            | Perturbation::Outliers(_)
+            | Perturbation::PartitionSkew(_)
+            | Perturbation::SchemaDrift(_)
+            | Perturbation::SmallFiles(_) => {
                 let held = |column: &&str| cdc.holds_fixed(column) || *column == OPERATION_COLUMN || *column == cdc.timestamp_column();
-                if let Some(column) = other.written_columns().into_iter().find(held) {
+                if let Some(column) = perturbation.written_columns().into_iter().find(held) {
                     return Err(refuse(format!(
                         "{} writes {column:?}, a column every change record of cdc holds as it is",
-                        other.op_name()
+                        perturbation.op_name()
                     )));
                 }
             }
@@ -450,6 +466,9 @@ impl Plan {
                 index,
                 id: &ids[index],
             };
+            if perturbation.needs_one_process() && self.one_process.is_none() {
+                self.one_process = Some((format!("/perturbations/{index}"), perturbation.op_name()));
+            }
             let one_only = || {
                 planning.refuse(
                     ScenarioFault::InvalidParameter,
@@ -553,6 +572,21 @@ impl Plan {
         self.cdc.as_ref()
     }
 
+    /// The pointer to the first perturbation ordering the whole table, and its op, where one does.
+    /// One process writes such a dataset.
+    pub fn one_process_op(&self) -> Option<(&str, &str)> {
+        self.one_process.as_ref().map(|(field, op)| (field.as_str(), *op))
+    }
+
+    /// The stream a scenario's `cdc` writes, counted on `threads` threads, or None without one. It
+    /// refuses what [`Plan::cdc_stream`] refuses.
+    pub fn cdc_outline(&self, threads: usize) -> Result<Option<StreamOutline>, PlanError> {
+        self.cdc
+            .as_ref()
+            .map(|cdc| perturbations::cdc_outline(self, cdc, threads))
+            .transpose()
+    }
+
     /// The stream a scenario's `cdc` writes, built on `threads` threads, or None without one. It
     /// is refused where a schema drift's cut falls past every change.
     pub fn cdc_stream(&self, threads: usize) -> Result<Option<CdcStream>, PlanError> {
@@ -647,11 +681,6 @@ impl Plan {
             placed = stage.op.apply(&at, placed);
         }
         placed
-    }
-
-    /// `block`'s rows as `cdc`'s full load holds them, every other op applied.
-    pub(crate) fn full_load_block(&self, block: u64) -> RecordBatch {
-        self.block_through(block, self.stages.len(), false).batch
     }
 
     /// `rows` rows drawn at `position`, which may lie past the plan's blocks, every op applied.

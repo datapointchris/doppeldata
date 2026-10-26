@@ -84,7 +84,10 @@ def report_stopped_write(error: StoppedWrite) -> None:
     typer.echo(f'doppeldata: {error}{hint}', err=True)
     if error.manifest is not None and error.manifest_stored and error.manifest.partial:
         location = beside(error.manifest.document['destination'], PARTIAL_MANIFEST_FILE_NAME)
-        typer.echo(f'doppeldata: {location} lists the {counted(len(error.manifest.files), "file")} the write completed', err=True)
+        completed = len(error.manifest.files)
+        if error.manifest.cdc is not None:
+            completed += len(error.manifest.cdc['files']) + len(error.manifest.cdc['expected'])
+        typer.echo(f'doppeldata: {location} lists the {counted(completed, "file")} the write completed', err=True)
 
 
 class DoppeldataGroup(TyperGroup):
@@ -917,12 +920,21 @@ def data_plan(
         files = f'1 file, {one_file}'
     else:
         files = f'{counted(planned.files_at_most, "file")} to {planned.destination}'
+    streams = []
+    if planned.cdc is not None:
+        stream = planned.cdc
+        streams.append(
+            f'stream     {counted(sum(stream["changes"].values()), "change")} as {stream["style"]} in up to '
+            f'{counted(stream["change_files_at_most"], "file")} under {stream["prefix"]}, beside '
+            f'{counted(stream["expected_parts"], "part")} under {stream["expected_prefix"]}'
+        )
     lines = [
         f'dataset    {planned.dataset_digest}',
         f'identity   {int(identity["dataset_rows"]):,} rows from seed {identity["seed"]}, profile {identity["profile_digest"]}, '
         f'stream version {identity["stream_version"]}',
         f'format     {planned.format} {json.dumps(planned.writer, separators=(",", ":"))}',
         f'files      {files}',
+        *streams,
         f'estimate   {size(planned.estimated_bytes)}, from the first blocks encoded with these settings',
         '',
     ]
@@ -1007,7 +1019,8 @@ def data_generate(
         stream = manifest.cdc
         typer.echo(
             f'and {counted(sum(stream["changes"].values()), "change")} as {stream["style"]} in '
-            f'{counted(len(stream["files"]), "file")} under {stream["prefix"]}, beside {stream["expected_prefix"]}, '
+            f'{counted(len(stream["files"]), "file")}, {size(sum(file["bytes"] for file in stream["files"]))}, under '
+            f'{stream["prefix"]}, beside {stream["expected_prefix"]}, {size(sum(file["bytes"] for file in stream["expected"]))}, '
             'the table a merge in commit order reaches'
         )
     if one_file is not None and not manifest_beside:

@@ -47,14 +47,15 @@ pub const FAULTS_VERSION: u64 = 1;
 /// One fault `malformed_rows` placed, as a line of `_faults.jsonl`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct FaultRecord {
-    /// The object's path under the destination, as the manifest's `files` names it. Beside a
-    /// one-file write, that file's name.
+    /// The object's path under the destination, as the manifest's `files` names it, or its
+    /// `cdc.files` for a fault in a change stream. Beside a one-file write, that file's name.
     pub file: String,
     /// The 1-based line the broken record starts on, a header counted. Null in a JSON array or a
     /// Parquet file, and for a fault of the whole file.
     pub line: Option<u64>,
-    /// The dataset row the record was generated as, or in a change stream the row of its key. Null
-    /// for a copy `duplicates` wrote, and for a fault of the whole file.
+    /// The dataset row the record was generated as, or in a change stream the row of its key, which
+    /// lies past `dataset_rows` for a key the stream inserts. Null for a copy `duplicates` wrote,
+    /// and for a fault of the whole file.
     pub row: Option<u64>,
     /// What broke: a kind `malformed_rows` names in `kinds`, or a fault `cdc` places in a change
     /// stream.
@@ -96,7 +97,8 @@ pub struct Manifest {
     pub layout: LayoutSettings,
     /// Where the files were written, as the caller named it, such as `s3://bucket/orders/`.
     pub destination: String,
-    /// Every object written, in path order.
+    /// Every object of the rows written, in path order. Under `cdc` these are the full-load
+    /// files, and `cdc` lists the change files and the expected table.
     pub files: Vec<ManifestFile>,
     /// The faults the write's fault list holds, counted by kind, or null for a write that lists
     /// none: one with no `malformed_rows`, and no `cdc` with a fault rate. A partial manifest counts
@@ -104,7 +106,7 @@ pub struct Manifest {
     #[serde(default)]
     pub faults: Option<BTreeMap<ListedFault, u64>>,
     /// The change stream and the expected table a `cdc` write adds beside its full load, which
-    /// `files` lists. Null for any other write.
+    /// `files` lists. Null for any other write. A release reads a manifest no newer than itself.
     #[serde(default)]
     pub cdc: Option<ManifestCdc>,
     /// True when the run stopped early, so `files` lists only the objects that completed. Such a

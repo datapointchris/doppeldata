@@ -37,7 +37,8 @@ class Manifest:
 
     @property
     def files(self) -> list[dict[str, Any]]:
-        """Every object written, in path order, each with its rows, bytes and SHA-256."""
+        """Every object of the rows written, in path order, each with its rows, bytes and SHA-256. Under `cdc` these are the
+        full-load files, and `cdc` lists the change files and the expected table."""
         files: list[dict[str, Any]] = self.document['files']
         return files
 

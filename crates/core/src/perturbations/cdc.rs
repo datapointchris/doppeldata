@@ -22,7 +22,6 @@ use arrow_schema::Field;
 use arrow_schema::FieldRef;
 use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
-use arrow_select::concat::concat_batches;
 use arrow_select::interleave::interleave;
 use chrono::DateTime;
 use chrono::Datelike;
@@ -336,19 +335,24 @@ impl CdcPlan {
         1 + libm::floor(libm::log(1.0 - draw) / libm::log(stay)) as u64
     }
 
-    /// The changes of the unit holding full-load block `block`: each row updated, then deleted,
-    /// as its draws fall, at commit times strictly rising for its key.
-    fn full_load_changes(&self, seed: u64, block: u64) -> Vec<Change> {
+    /// The position of the unit holding full-load block `block`, and the rows it holds.
+    fn full_load_position(&self, seed: u64, block: u64) -> (BlockPosition, usize) {
         let first_row = block * BLOCK_ROWS;
-        let rows = (self.full_load_rows - first_row).min(BLOCK_ROWS);
-        let mut draws = rng_for(seed, self.changes_key, block);
-        let mut times = rng_for(seed, self.times_key, block);
+        let position = BlockPosition { seed, block, first_row };
+        (position, (self.full_load_rows - first_row).min(BLOCK_ROWS) as usize)
+    }
+
+    /// The changes to the `rows` rows at `position`: each row inserted where `inserted`, then
+    /// updated, then deleted, as its draws fall, at commit times strictly rising for its key.
+    fn row_changes(&self, position: &BlockPosition, rows: usize, inserted: bool) -> Vec<Change> {
+        let mut draws = rng_for(position.seed, self.changes_key, position.block);
+        let mut times = rng_for(position.seed, self.times_key, position.block);
         let mut changes = Vec::new();
-        for row in first_row..first_row + rows {
+        for row in position.first_row..position.first_row + rows as u64 {
             let (updated, count, deleted) = (unit(&mut draws), unit(&mut draws), unit(&mut draws));
             let updates = if updated < self.updates { self.update_count(count) } else { 0 };
             let deleted = deleted < self.deletes;
-            let total = updates + u64::from(deleted);
+            let total = u64::from(inserted) + updates + u64::from(deleted);
             if total == 0 {
                 continue;
             }
@@ -359,7 +363,9 @@ impl CdcPlan {
             }
             let last = changes.len() + total as usize - 1;
             for (seq, commit) in commits.into_iter().enumerate() {
-                let operation = if deleted && seq + 1 == total as usize {
+                let operation = if inserted && seq == 0 {
+                    Operation::Insert
+                } else if deleted && seq + 1 == total as usize {
                     Operation::Delete
                 } else {
                     Operation::Update
@@ -387,31 +393,24 @@ impl CdcPlan {
         (position, (self.insert_rows - insert * BLOCK_ROWS).min(BLOCK_ROWS) as usize)
     }
 
-    fn insert_changes(&self, seed: u64, insert: u64) -> Vec<Change> {
-        let (position, rows) = self.insert_position(seed, insert);
-        let mut times = rng_for(seed, self.times_key, position.block);
-        (0..rows)
-            .map(|at| Change {
-                operation: Operation::Insert,
-                commit: self.commit_time(&mut times),
-                row: position.first_row + at as u64,
-                seq: 0,
-                last: at,
-                fault: None,
-            })
-            .collect()
+    /// The position of unit `at`, full-load blocks first, then inserted blocks, and the rows it
+    /// holds.
+    fn unit_position(&self, seed: u64, at: u64) -> (BlockPosition, usize) {
+        match at.checked_sub(self.block_count) {
+            None => self.full_load_position(seed, at),
+            Some(insert) => self.insert_position(seed, insert),
+        }
     }
 
-    /// Each full-load row's image after every change, the rows' columns drawn from `base`, and an
-    /// update's new values from the op's own samplers.
-    fn full_load_images(&self, seed: u64, block: u64, base: &RecordBatch, changes: &[Change]) -> RecordBatch {
-        let first_row = block * BLOCK_ROWS;
+    /// Each change's image of its row, the rows' columns drawn from `base`, the unit's rows at
+    /// `position`, and an update's new values from the op's own samplers.
+    fn images(&self, position: &BlockPosition, base: &RecordBatch, changes: &[Change]) -> RecordBatch {
+        let (seed, block, first_row) = (position.seed, position.block, position.first_row);
         let updates = changes.iter().filter(|change| change.operation == Operation::Update).count();
-        let position = BlockPosition { seed, block, first_row };
         let drawn: Vec<ArrayRef> = self
             .updatable
             .iter()
-            .map(|(_, sampler)| sampler.generate(&position, updates))
+            .map(|(_, sampler)| sampler.generate(position, updates))
             .collect();
         let width = base.num_columns();
         let mut updatable_at: Vec<Option<usize>> = vec![None; width];
@@ -488,15 +487,16 @@ struct Change {
     fault: Option<StreamFault>,
 }
 
-/// One unit's changes, each record's image, and the rows it leaves at the period's end.
+/// One unit's changes and each record's image. The rows it leaves at the period's end are
+/// rebuilt from its block when written, so the stream never holds a second copy of the table.
 #[derive(Debug)]
 struct Unit {
+    position: BlockPosition,
+    rows: usize,
     changes: Vec<Change>,
     images: RecordBatch,
     /// The images in the drifted shape, where a drift applies.
     drifted: Option<RecordBatch>,
-    expected: RecordBatch,
-    expected_rows: Vec<u64>,
 }
 
 /// Where one record is written. The fields' order is the files' order and each file's record
@@ -547,6 +547,8 @@ pub struct CdcStream {
     full_load_units: usize,
     files: Vec<ChangeFile>,
     changes: ChangeCounts,
+    /// The drift's commit-time cut, where a drift applies.
+    cut: Option<i64>,
 }
 
 impl CdcStream {
@@ -605,30 +607,124 @@ impl CdcStream {
         self.expected_schema.clone()
     }
 
-    /// The rows a correct merge leaves of full-load rows `rows`, in row order.
-    pub fn expected_rows(&self, rows: Range<u64>) -> RecordBatch {
+    /// The rows a correct merge leaves of full-load rows `rows` of `plan`, the plan the stream was
+    /// built from, in row order, one batch per block. Each block is merged as it is taken.
+    pub fn expected_rows<'a>(&'a self, plan: &'a Plan, rows: Range<u64>) -> impl Iterator<Item = RecordBatch> + 'a {
         let first = (rows.start / BLOCK_ROWS) as usize;
         let last = (rows.end.div_ceil(BLOCK_ROWS) as usize).min(self.full_load_units);
-        let parts: Vec<RecordBatch> = self.units[first..last.max(first)]
-            .iter()
-            .map(|unit| {
-                let from = unit.expected_rows.partition_point(|&row| row < rows.start);
-                let to = unit.expected_rows.partition_point(|&row| row < rows.end);
-                unit.expected.slice(from, to - from)
-            })
-            .collect();
-        concat_batches(&self.expected_schema, &parts).expect("every part carries the expected schema")
+        (first..last.max(first)).map(move |unit| {
+            let (expected, expected_rows) = self.merged(plan, unit);
+            let from = expected_rows.partition_point(|&row| row < rows.start);
+            let to = expected_rows.partition_point(|&row| row < rows.end);
+            expected.slice(from, to - from)
+        })
     }
 
-    /// The rows the stream inserts, in row order, or None where it inserts none.
-    pub fn expected_inserts(&self) -> Option<RecordBatch> {
-        let inserts = &self.units[self.full_load_units..];
-        if inserts.is_empty() {
-            return None;
-        }
-        let parts: Vec<RecordBatch> = inserts.iter().map(|unit| unit.expected.clone()).collect();
-        Some(concat_batches(&self.expected_schema, &parts).expect("every part carries the expected schema"))
+    pub fn inserts_rows(&self) -> bool {
+        self.units.len() > self.full_load_units
     }
+
+    /// The rows the stream inserts that a correct merge leaves, in row order, one batch per block
+    /// of inserts. Empty where the stream inserts none.
+    pub fn expected_inserts<'a>(&'a self, plan: &'a Plan) -> impl Iterator<Item = RecordBatch> + 'a {
+        (self.full_load_units..self.units.len()).map(move |unit| self.merged(plan, unit).0)
+    }
+
+    /// The rows unit `at` leaves at the period's end, in row order, with each one's dataset row,
+    /// its rows of `plan` regenerated.
+    fn merged(&self, plan: &Plan, at: usize) -> (RecordBatch, Vec<u64>) {
+        let unit = &self.units[at];
+        let base = plan.rows_at(&unit.position, unit.rows);
+        let (expected, expected_rows, finals) = survivors(&base, unit.position.first_row, &unit.images, &unit.changes);
+        let (Some(drift), Some(cut), Some(drifted)) = (plan.drift(), self.cut, &unit.drifted) else {
+            return (expected, expected_rows);
+        };
+        let (seed, block) = (unit.position.seed, unit.position.block);
+        let mut columns = drift.apply(seed, block, block_of(expected)).batch.columns().to_vec();
+        for position in drift.added_positions() {
+            let nulls = new_null_array(drifted.column(position).data_type(), 1);
+            let sources: Vec<(usize, usize)> = finals
+                .iter()
+                .map(|last| match last {
+                    Some(last) if unit.changes[*last].commit >= cut => (0, *last),
+                    _ => (1, 0),
+                })
+                .collect();
+            columns[position] =
+                interleave(&[drifted.column(position).as_ref(), nulls.as_ref()], &sources).expect("every source is a row of its array");
+        }
+        let expected = batch(nullable_added(drift.schema(), &drift.added_positions()), columns, finals.len());
+        (expected, expected_rows)
+    }
+}
+
+/// What a `cdc` writes, counted before its stream is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamOutline {
+    /// The changes the stream holds, counted by operation, a second delivery left out.
+    pub changes: ChangeCounts,
+    /// The change files the changes fall in. A file whose every change a fault moves later is
+    /// left unwritten, so the stream may write fewer.
+    pub change_files_at_most: u64,
+}
+
+fn counted(counts: &mut ChangeCounts, operation: Operation) {
+    match operation {
+        Operation::Insert => counts.insert += 1,
+        Operation::Update => counts.update += 1,
+        Operation::Delete => counts.delete += 1,
+    }
+}
+
+/// The units a stream draws: each full-load block, then each block of inserts.
+fn unit_count(cdc: &CdcPlan) -> usize {
+    (cdc.block_count + cdc.insert_rows.div_ceil(BLOCK_ROWS)) as usize
+}
+
+/// Refuses a drift whose cut falls past the last change file, `last`, which no file would
+/// carry the drifted shape of.
+fn refuse_cut_past_changes(plan: &Plan, cut: Option<i64>, last: Option<i64>) -> Result<(), PlanError> {
+    match (plan.drift(), cut) {
+        (Some(drift), Some(cut)) if last.is_none_or(|last| last * STAMP_MICROSECONDS < cut) => Err(PlanError::Scenario {
+            code: ScenarioFault::InvalidParameter,
+            field: drift.cut_field(),
+            message: format!(
+                "no change commits at or past {}, the drift's share of the period, so no change file would carry its shape",
+                commit_text(cut)
+            ),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// Counts `cdc`'s stream over `plan`'s rows on `threads` threads, each unit's changes drawn and
+/// dropped once counted. It refuses what [`stream`] refuses.
+pub(crate) fn outline(plan: &Plan, cdc: &CdcPlan, threads: usize) -> Result<StreamOutline, PlanError> {
+    let seed = plan.identity().seed();
+    let cut = cdc.cut(plan);
+    let per_unit = on_threads(unit_count(cdc), threads, |unit| {
+        let (position, rows) = cdc.unit_position(seed, unit as u64);
+        let mut counts = ChangeCounts::default();
+        let mut pieces = BTreeSet::new();
+        for change in cdc.row_changes(&position, rows, unit as u64 >= cdc.block_count) {
+            counted(&mut counts, change.operation);
+            pieces.insert(cdc.piece(change.commit, cut));
+        }
+        (counts, pieces)
+    });
+    let mut changes = ChangeCounts::default();
+    let mut pieces = BTreeSet::new();
+    for (counts, unit_pieces) in per_unit {
+        changes.insert += counts.insert;
+        changes.update += counts.update;
+        changes.delete += counts.delete;
+        pieces.extend(unit_pieces);
+    }
+    refuse_cut_past_changes(plan, cut, pieces.last().copied())?;
+    Ok(StreamOutline {
+        changes,
+        change_files_at_most: pieces.len() as u64,
+    })
 }
 
 /// Builds `cdc`'s stream over `plan`'s rows on `threads` threads. The bytes are the same on any
@@ -636,14 +732,10 @@ impl CdcStream {
 pub(crate) fn stream(plan: &Plan, cdc: &CdcPlan, threads: usize) -> Result<CdcStream, PlanError> {
     let seed = plan.identity().seed();
     let full_load_units = cdc.block_count as usize;
-    let insert_units = cdc.insert_rows.div_ceil(BLOCK_ROWS) as usize;
-    let count = full_load_units + insert_units;
+    let count = unit_count(cdc);
     let changes = on_threads(count, threads, |unit| {
-        if unit < full_load_units {
-            cdc.full_load_changes(seed, unit as u64)
-        } else {
-            cdc.insert_changes(seed, (unit - full_load_units) as u64)
-        }
+        let (position, rows) = cdc.unit_position(seed, unit as u64);
+        cdc.row_changes(&position, rows, unit >= full_load_units)
     });
     let cut = cdc.cut(plan);
     let pieces: Vec<i64> = changes
@@ -653,18 +745,7 @@ pub(crate) fn stream(plan: &Plan, cdc: &CdcPlan, threads: usize) -> Result<CdcSt
         .collect::<BTreeSet<i64>>()
         .into_iter()
         .collect();
-    if let (Some(drift), Some(cut)) = (plan.drift(), cut)
-        && pieces.last().is_none_or(|&last| last * STAMP_MICROSECONDS < cut)
-    {
-        return Err(PlanError::Scenario {
-            code: ScenarioFault::InvalidParameter,
-            field: drift.cut_field(),
-            message: format!(
-                "no change commits at or past {}, the drift's share of the period, so no change file would carry its shape",
-                commit_text(cut)
-            ),
-        });
-    }
+    refuse_cut_past_changes(plan, cut, pieces.last().copied())?;
     let piece_at = |commit: i64| {
         pieces
             .binary_search(&cdc.piece(commit, cut))
@@ -672,60 +753,28 @@ pub(crate) fn stream(plan: &Plan, cdc: &CdcPlan, threads: usize) -> Result<CdcSt
     };
     let units: Vec<Unit> = on_threads(count, threads, |unit| {
         let mut changes = changes[unit].clone();
-        let (block, base, first_row, images) = if unit < full_load_units {
-            let block = unit as u64;
-            let base = plan.full_load_block(block);
-            let images = cdc.full_load_images(seed, block, &base, &changes);
-            (block, base, block * BLOCK_ROWS, images)
-        } else {
-            let (position, rows) = cdc.insert_position(seed, (unit - full_load_units) as u64);
-            let base = plan.rows_at(&position, rows);
-            (position.block, base.clone(), position.first_row, base)
-        };
-        place_faults(cdc, seed, block, &images, &mut changes, |commit| {
+        let (position, rows) = cdc.unit_position(seed, unit as u64);
+        let images = cdc.images(&position, &plan.rows_at(&position, rows), &changes);
+        place_faults(cdc, seed, position.block, &images, &mut changes, |commit| {
             piece_at(commit) + 1 < pieces.len()
         });
-        let (expected, expected_rows, finals) = survivors(&base, first_row, &images, &changes);
-        let (drifted, expected) = match (plan.drift(), cut) {
-            (Some(drift), Some(cut)) => {
-                let drifted = drift.apply(seed, block, block_of(images.clone())).batch;
-                let mut columns = drift.apply(seed, block, block_of(expected)).batch.columns().to_vec();
-                for position in drift.added_positions() {
-                    let nulls = new_null_array(drifted.column(position).data_type(), 1);
-                    let sources: Vec<(usize, usize)> = finals
-                        .iter()
-                        .map(|last| match last {
-                            Some(last) if changes[*last].commit >= cut => (0, *last),
-                            _ => (1, 0),
-                        })
-                        .collect();
-                    columns[position] = interleave(&[drifted.column(position).as_ref(), nulls.as_ref()], &sources)
-                        .expect("every source is a row of its array");
-                }
-                (
-                    Some(drifted),
-                    batch(nullable_added(drift.schema(), &drift.added_positions()), columns, finals.len()),
-                )
-            }
-            _ => (None, expected),
+        let drifted = match (plan.drift(), cut) {
+            (Some(drift), Some(_)) => Some(drift.apply(seed, position.block, block_of(images.clone())).batch),
+            _ => None,
         };
         Unit {
+            position,
+            rows,
             changes,
             images,
             drifted,
-            expected,
-            expected_rows,
         }
     });
     let mut placed: Vec<Placement> = Vec::new();
     let mut counts = ChangeCounts::default();
     for (unit_at, unit) in units.iter().enumerate() {
         for (record, change) in unit.changes.iter().enumerate() {
-            match change.operation {
-                Operation::Insert => counts.insert += 1,
-                Operation::Update => counts.update += 1,
-                Operation::Delete => counts.delete += 1,
-            }
+            counted(&mut counts, change.operation);
             let own = piece_at(change.commit);
             let later = piece_at(unit.changes[change.last].commit) + 1;
             let at = |piece: usize, copy: bool| Placement {
@@ -792,6 +841,7 @@ pub(crate) fn stream(plan: &Plan, cdc: &CdcPlan, threads: usize) -> Result<CdcSt
         full_load_units,
         files,
         changes: counts,
+        cut,
     })
 }
 
@@ -900,6 +950,25 @@ fn utc(microseconds: i64) -> DateTime<Utc> {
 /// An instant as DMS's `TimestampColumnName` writes it, `yyyy-MM-dd HH:mm:ss.SSSSSS`.
 fn commit_text(microseconds: i64) -> String {
     utc(microseconds).format("%Y-%m-%d %H:%M:%S%.6f").to_string()
+}
+
+/// Whether `name`, a `/`-separated path under a stream's prefix, is a full-load or change file a
+/// stream writes with `extension`.
+pub fn names_stream_file(name: &str, extension: &str) -> bool {
+    let Some(stem) = name.strip_suffix(extension).and_then(|stem| stem.strip_suffix('.')) else {
+        return false;
+    };
+    let (folders, file) = stem.rsplit_once('/').unwrap_or(("", stem));
+    let digits = |text: &str| text.bytes().all(|byte| byte.is_ascii_digit());
+    if let Some(count) = file.strip_prefix("LOAD") {
+        let hex = |byte: u8| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte);
+        return folders.is_empty() && count.len() == 8 && count.bytes().all(hex);
+    }
+    let stamped = file
+        .split_once('-')
+        .is_some_and(|(day, time)| day.len() == 8 && time.len() == 10 && digits(day) && digits(time));
+    let dated = |folder: &str| !folder.is_empty() && folder.bytes().all(|byte| byte.is_ascii_digit() || byte == b'-' || byte == b'_');
+    stamped && (folders.is_empty() || folders.split('/').all(dated))
 }
 
 /// The first instant of the date folder `commit` falls in.

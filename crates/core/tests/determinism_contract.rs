@@ -12,9 +12,9 @@ use doppeldata_core::DatasetIdentity;
 use doppeldata_core::Plan;
 use doppeldata_core::STREAM_VERSION;
 use doppeldata_core::TextCell;
+use doppeldata_core::plan_values_digest;
 use doppeldata_core::profile::Profile;
 use doppeldata_core::scenario::Scenario;
-use doppeldata_core::stream_values_digest;
 use doppeldata_core::values_digest;
 use rayon::prelude::*;
 
@@ -30,15 +30,16 @@ const _: () = assert!(
     "two whole blocks and part of a third"
 );
 
-/// The stream version the fixture's values were generated under, and a SHA-256 over them: without a
-/// scenario, with the scenario fixture, and with the cdc fixture, whose hash also covers every
-/// change file and the expected table. A release freezes all four: once released, a change to any
-/// value raises STREAM_VERSION. `crates/check-stream-version-raised.sh` reads these lines and
-/// refuses a new hash at a released version.
+/// The stream version the fixture's values were generated under, and a SHA-256 over them:
+/// PINNED_VALUES without a scenario, PINNED_SCENARIO_VALUES with the scenario fixture, and
+/// PINNED_CDC_VALUES with the cdc fixture, whose hash also covers every change file and the
+/// expected table. A release freezes the version and every hash beside it: once released, a change
+/// to any value raises STREAM_VERSION. `crates/check-stream-version-raised.sh` reads these lines
+/// and refuses a new hash at a released version.
 const PINNED_STREAM_VERSION: u32 = 9;
 const PINNED_VALUES: &str = "5b1f0e247a6e63037c68c74370b06d3c9ff321427de3eed57ee6b348fdf14f03";
 const PINNED_SCENARIO_VALUES: &str = "b41a2f0cf005eea2961f4c01edd10cce28762df492da6fc619812bef83daf6e7";
-const PINNED_CDC_VALUES: &str = "4d82d7a598e6631e507942e6786f52a4d1641468dea9a5d34e7cc0dc538f4c3c";
+const PINNED_CDC_VALUES: &str = "f9032a90598cad987720a5143c89e0bcf0c21fb7b0d74dd5d5df98fbf37a1a7b";
 
 fn document(path: &Path) -> serde_json::Value {
     let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -91,14 +92,9 @@ fn blocks(plan: &Plan, threads: usize) -> Vec<Block> {
     })
 }
 
-/// The hash a pin holds: over the blocks, and over a `cdc` scenario's stream where it has one.
 fn pinned_hash(document: &serde_json::Value, scenario: Option<&Scenario>, seed: u64, rows: u64, threads: usize) -> String {
     let plan = planned(document, scenario, seed, rows);
-    let blocks = blocks(&plan, threads);
-    match plan.cdc_stream(threads).unwrap() {
-        Some(stream) => stream_values_digest(&blocks, &stream),
-        None => values_digest(&blocks),
-    }
+    plan_values_digest(&plan, &blocks(&plan, threads), threads).unwrap()
 }
 
 #[test]

@@ -4,9 +4,12 @@
 use arrow_array::Array;
 use arrow_array::RecordBatch;
 use arrow_data::ArrayData;
+use arrow_select::concat::concat_batches;
 use sha2::Digest;
 use sha2::Sha256;
 
+use crate::Plan;
+use crate::PlanError;
 use crate::perturbations::CdcStream;
 use crate::samplers::TextCell;
 
@@ -23,11 +26,25 @@ pub fn values_digest(blocks: &[(RecordBatch, Vec<Vec<TextCell>>)]) -> String {
     hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// The hash a determinism pin holds over `plan`'s `blocks`: [`values_digest`], and under a `cdc`
+/// its stream too, built on `threads` threads.
+pub fn plan_values_digest(plan: &Plan, blocks: &[(RecordBatch, Vec<Vec<TextCell>>)], threads: usize) -> Result<String, PlanError> {
+    Ok(match plan.cdc_stream(threads)? {
+        Some(stream) => stream_values_digest(plan, blocks, &stream),
+        None => values_digest(blocks),
+    })
+}
+
 /// As [`values_digest`] over `blocks`, the full load, then every change file of `stream` in path
-/// order and the table a correct merge of it produces.
-pub fn stream_values_digest(blocks: &[(RecordBatch, Vec<Vec<TextCell>>)], stream: &CdcStream) -> String {
+/// order and the table a correct merge of it produces. `plan` is the plan `stream` was built from.
+fn stream_values_digest(plan: &Plan, blocks: &[(RecordBatch, Vec<Vec<TextCell>>)], stream: &CdcStream) -> String {
     let files = (0..stream.file_count()).map(|file| stream.file(file));
-    let expected = std::iter::once(stream.expected_rows(0..u64::MAX)).chain(stream.expected_inserts());
+    let whole =
+        |parts: Vec<RecordBatch>| concat_batches(&stream.expected_schema(), &parts).expect("every part carries the expected schema");
+    let mut expected = vec![whole(stream.expected_rows(plan, 0..u64::MAX).collect())];
+    if stream.inserts_rows() {
+        expected.push(whole(stream.expected_inserts(plan).collect()));
+    }
     let mut all = blocks.to_vec();
     all.extend(files.chain(expected).map(|batch| {
         let width = batch.num_columns();

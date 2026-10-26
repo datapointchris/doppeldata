@@ -152,20 +152,21 @@ def unknown_name(code: str, name: str, known: list[str], at: PointerParts, noun:
 
 @dc.dataclass(frozen=True)
 class Facts:
-    """What the engine says of one perturbation: its id, the columns it writes, whether it shapes files, and whether it acts
-    across several."""
+    """What the engine says of one perturbation: its id, the columns it writes, whether it shapes files, whether it acts
+    across several, and whether it orders the whole table, so one process writes the dataset."""
 
     id: str
     writes: tuple[str, ...]
     shapes_files: bool
     spans_files: bool
+    needs_one_process: bool
 
 
 def perturbation_facts(plain: dict[str, Any]) -> list[Facts]:
     """Each of a valid scenario's perturbations, in list order, as the engine's catalog describes it."""
     return [
-        Facts(id, tuple(writes), shapes_files, spans_files)
-        for id, writes, shapes_files, spans_files in _core.perturbation_facts(json.dumps(plain, allow_nan=False))
+        Facts(id, tuple(writes), shapes_files, spans_files, needs_one_process)
+        for id, writes, shapes_files, spans_files, needs_one_process in _core.perturbation_facts(json.dumps(plain, allow_nan=False))
     ]
 
 

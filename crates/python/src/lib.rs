@@ -95,11 +95,12 @@ mod _core {
             .collect()
     }
 
-    type PerturbationFacts = (String, Vec<String>, bool, bool);
+    type PerturbationFacts = (String, Vec<String>, bool, bool, bool);
 
     /// Each of a valid scenario's perturbations, in list order: its id, the columns it writes, adds,
-    /// drops or renames, whether it shapes the files a write makes rather than the rows, and whether
-    /// it acts across several files, so a one-file write cannot hold it.
+    /// drops or renames, whether it shapes the files a write makes rather than the rows, whether it
+    /// acts across several files, so a one-file write cannot hold it, and whether it orders the whole
+    /// table, so one process writes the dataset.
     #[pyfunction]
     fn perturbation_facts(scenario_json: &str) -> PyResult<Vec<PerturbationFacts>> {
         let scenario = read_scenario(scenario_json)?;
@@ -112,7 +113,13 @@ mod _core {
             .zip(ids)
             .map(|(perturbation, id)| {
                 let written = perturbation.written_columns().into_iter().map(String::from).collect();
-                (id, written, perturbation.shapes_files(), perturbation.spans_files())
+                (
+                    id,
+                    written,
+                    perturbation.shapes_files(),
+                    perturbation.spans_files(),
+                    perturbation.needs_one_process(),
+                )
             })
             .collect())
     }
@@ -233,17 +240,8 @@ mod _core {
             return Err(signal);
         }
         let blocks = blocks.expect("only a signal cancels");
-        match plan.cdc_stream(threads.max(1)) {
-            Ok(Some(stream)) => Ok(doppeldata_core::stream_values_digest(&blocks, &stream)),
-            Ok(None) => Ok(doppeldata_core::values_digest(&blocks)),
-            Err(error) => Err(scenario_refused(
-                py,
-                "the scenario",
-                error.code(),
-                error.field(),
-                &plan_message(&error),
-            )),
-        }
+        doppeldata_core::plan_values_digest(plan, &blocks, threads.max(1))
+            .map_err(|error| scenario_refused(py, "the scenario", error.code(), error.field(), &plan_message(&error)))
     }
 
     /// A table profile resolved for generation: ``rows`` rows from ``seed``. ``source`` names the
@@ -416,6 +414,36 @@ mod _core {
                 })
                 .collect();
             Ok(serde_json::Value::from(ranges).to_string())
+        }
+
+        /// The change stream a ``cdc`` write makes beside its full load, as a JSON object keyed
+        /// ``style``, ``prefix``, ``expected_prefix``, ``changes``, ``change_files_at_most`` and
+        /// ``expected_parts``, or None without a ``cdc``. Every change is drawn to count it.
+        fn stream_json(&self, py: Python<'_>, options: PyRef<'_, WriteOptions>) -> PyResult<Option<String>> {
+            let (plan, options) = (&*self.plan, &options.options);
+            let stream = py
+                .detach(|| doppeldata_writers::planned_stream(plan, options))
+                .map_err(|error| self.refused(py, error))?;
+            Ok(stream.map(|stream| {
+                json!({
+                    "style": stream.style,
+                    "prefix": stream.prefix,
+                    "expected_prefix": stream.expected_prefix,
+                    "changes": stream.changes,
+                    "change_files_at_most": stream.change_files_at_most,
+                    "expected_parts": stream.expected_parts,
+                })
+                .to_string()
+            }))
+        }
+
+        /// The format and every setting the write's manifest records, as ``WriteOptions``'s
+        /// ``settings_json`` spells them, with a ``cdc`` stream's timestamp unit applied.
+        fn written_settings_json(&self, options: PyRef<'_, WriteOptions>) -> String {
+            let output = doppeldata_writers::planned_output(&self.plan, &options.options);
+            let mut settings = serde_json::to_value(&output).expect("an output always serializes");
+            settings["layout"] = serde_json::to_value(&options.options.layout).expect("a layout always serializes");
+            settings.to_string()
         }
 
         /// The bytes the write would store, its manifest left out, from its first blocks encoded

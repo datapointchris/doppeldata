@@ -17,7 +17,7 @@
       "additionalProperties": true
     },
     "file": {
-      "description": "The object's path under the destination, as the manifest's `files` names it. Beside a\none-file write, that file's name.",
+      "description": "The object's path under the destination, as the manifest's `files` names it, or its\n`cdc.files` for a fault in a change stream. Beside a one-file write, that file's name.",
       "type": "string"
     },
     "kind": {
@@ -34,7 +34,7 @@
       "minimum": 0
     },
     "row": {
-      "description": "The dataset row the record was generated as, or in a change stream the row of its key. Null\nfor a copy `duplicates` wrote, and for a fault of the whole file.",
+      "description": "The dataset row the record was generated as, or in a change stream the row of its key, which\nlies past `dataset_rows` for a key the stream inserts. Null for a copy `duplicates` wrote,\nand for a fault of the whole file.",
       "type": [
         "integer",
         "null"

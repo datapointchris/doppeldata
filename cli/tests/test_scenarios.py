@@ -10,6 +10,7 @@ import duckdb
 import jsonschema
 import pyarrow as pa
 import pyarrow.compute as pc
+import pytest
 from doppeldata.manifest import FAULTS_FILE_NAME
 from doppeldata.published_schemas import schema_text
 
@@ -88,6 +89,7 @@ def test_inserting_a_perturbation_leaves_the_rows_every_other_one_writes_unchang
 def test_a_commit_order_merge_of_the_cdc_dms_stream_is_its_expected_table_and_a_file_order_one_misses_the_listed_faults(
     tmp_path: Path,
 ):
+    """Then a merge job's output written beside the stream it read survives a rerun with replace."""
     cdc = sd.Scenario.example(
         'cdc-dms',
         period={'start': '2026-10-01T00:00:00Z', 'duration': '1d'},
@@ -122,3 +124,11 @@ def test_a_commit_order_merge_of_the_cdc_dms_stream_is_its_expected_table_and_a_
         records = connection.execute('select order_id, filename, file_row_number from stream').fetchall()
         faulted = {key for key, file, record in records if (file, record) in listed}
         assert differing("filename not like '%/LOAD%' desc, parse_filename(filename) desc, file_row_number desc") == faulted
+
+    merged = stream / 'merged' / 'part-0.parquet'
+    merged.parent.mkdir()
+    merged.write_bytes(b'a merge job writes its output beside the stream it read')
+    with pytest.raises(sd.WriteFailed) as refused:
+        sd.write(sd.Profile.example('orders'), f'{tmp_path}/', rows=20_000, format='parquet', scenario=cdc, replace=True)
+    assert refused.value.code == 'foreign-object'
+    assert merged.exists()

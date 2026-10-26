@@ -65,9 +65,11 @@ if [ -z "$version" ]; then
 fi
 
 # Each pin, and the fixtures its values are generated from.
+compared=
 compare() {
   name=$1
   shift
+  compared="$compared $name "
   released_values=$(printf '%s\n' "$released" | pinned "$name")
   if [ -z "$released_values" ]; then
     echo "check-stream-version-raised: $tag pins no $name, so it has nothing to compare"
@@ -99,6 +101,16 @@ compare() {
 compare PINNED_VALUES "$profile_fixture"
 compare PINNED_SCENARIO_VALUES "$profile_fixture" "$scenario_fixture"
 compare PINNED_CDC_VALUES "$profile_fixture" "$cdc_fixture"
+
+sed -nE 's/^const (PINNED_[A-Z_]*VALUES): .*/\1/p' <"$test_file" | while read -r name; do
+  case "$compared" in
+    *" $name "*) ;;
+    *)
+      echo "check-stream-version-raised: $test_file pins $name, and this script names no fixture for it" >&2
+      exit 1
+      ;;
+  esac
+done
 
 # The hints the library fills a typed column with, which no fixture the engine reads holds, so a
 # Python test pins them.
