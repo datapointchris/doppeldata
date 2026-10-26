@@ -64,8 +64,8 @@ GENERATED_FIELDS = {
     # Hashed, as every release before it hashes a field it does not know. It names no directory, so a copy of the
     # schema elsewhere keeps the seed's identity.
     'imported_from': GeneratedField(hashed=True, derived_from=False),
-    # Hashed for the same reason. A schema declaring the bounds a seed draws by default exports a different contract.
-    'declared': GeneratedField(hashed=True, derived_from=False),
+    # No draw reads it, so a seed keeps one digest whichever release, knowing it or not, computes it.
+    'declared': GeneratedField(hashed=False, derived_from=False),
 }
 # The digest keeps only these, so a field a later release adds is left out by this one.
 HASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if field.hashed)
