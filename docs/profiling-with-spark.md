@@ -170,8 +170,12 @@ driver. Both profiles must pass `profile check`, and the Spark one is held to th
 - each distinct count within `DISTINCT_ERROR`, three of HyperLogLog++'s 1% standard errors;
 - the repeated rows, keys, dependencies and relationships exactly, and each cell of a conditional
   table both profiles state;
-- any other field that differs is printed. So are the correlations and any conditional table one
-  profile states alone, because each engine measures them on its own sample.
+- any other field that differs is printed. So are the correlations, the correlation ratios and
+  any conditional table one profile states alone, because each engine measures them on its own
+  sample.
+
+A dataset or relationship field the published schema gains stops the check until it compares the
+field, so no field the engines might write differently goes unread.
 
 Build the wheel, then run the check over a file. `KEEP` names a directory to keep each profile in.
 

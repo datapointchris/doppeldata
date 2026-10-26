@@ -10,7 +10,7 @@ from doppeldata.profiling.backend import Table
 from doppeldata.profiling.recorded_counts import rate
 from doppeldata.profiling.statistic_catalog import ColumnKind
 
-# A column or pair is a key where at most 1% of its rows share their value with another row.
+# A column or pair is a key where at least this share of its rows hold a value no other row holds.
 KEY_SHARE = 0.99
 # A single column's rows held once are counted where its distinct values reach this share of the rows: below KEY_SHARE
 # by more than three of HyperLogLog++'s 1% standard errors, so Spark's estimate passes every key Polars' count does.
@@ -84,8 +84,8 @@ def composite_keys(backend: Backend, full: Table, sample: Table, columns: list[K
 
 
 def written_key(columns: tuple[str, ...], unique: int, rows: int, k_min: int) -> dict[str, Any] | None:
-    """A key as the profile writes it, or None where more than 1% of the rows share their value. Fewer than k_min rows
-    sharing a value are not stated, so the key is then written as unique."""
+    """A key as the profile writes it, or None where its uniqueness is under `KEY_SHARE`. Fewer than k_min rows sharing
+    a value are not stated, so the key is then written as unique."""
     shared = rows - unique
     uniqueness = 1.0 if shared < k_min else rate(unique, rows)
     return {'columns': list(columns), 'uniqueness': uniqueness} if uniqueness >= KEY_SHARE else None

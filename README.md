@@ -102,7 +102,8 @@ between them, with the share of child rows it orphans and its fan-out.
 A profile is written under a privacy policy, `default` unless `--policy` names another. No data value
 it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. A
 column typed as an identifier keeps its format and no value, free text keeps its lengths, and
-`privacy.audit` lists every literal the file keeps with the rule that admits it. `strict` treats
+`privacy.audit` lists every literal a column keeps with the rule that admits it.
+`privacy.dataset_audit` does the same for each conditional table and dependency. `strict` treats
 quasi-identifiers as identifiers. `healthcare` adds HIPAA Safe Harbor and the healthcare detector
 pack: ZIP codes keep three-digit prefixes, ages over 89 share one bin, places below a state keep no
 value, and every date keeps only its years. `none` keeps every value, for data that is already synthetic or public. `profile check` reads a

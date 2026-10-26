@@ -40,7 +40,8 @@ CATEGORICAL_VALUES = TOP_VALUES_THRESHOLD
 # A conditional table is given the column of a correlated categorical pair holding fewer values, where it holds this many at most.
 GIVEN_VALUES = 50
 # A categorical pair whose sampled Cramér's V reaches this is counted over every row, and gets a conditional table where
-# the V of those counts reaches CORRELATION_FLOOR. So which tables stand follows the counts, not either engine's sample.
+# the V of those counts reaches CORRELATION_FLOOR. The sample picks which pairs are counted, so two engines' samples can
+# state different tables. The counts decide every cell.
 CONDITIONAL_TRIED = 0.2
 # The functional dependencies tried, those a name hints first, then from the left-hand column holding fewest values.
 DEPENDENCY_TESTS = 100

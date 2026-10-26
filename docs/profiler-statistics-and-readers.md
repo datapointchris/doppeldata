@@ -507,17 +507,24 @@ dataset:
     primary: {columns: [order_id], uniqueness: 1.0}
 ```
 
-The taxi trips' section holds 30 correlated pairs, such as:
+The NYC yellow taxi trips for February to April 2024 hold pairs such as:
+
+```bash
+doppeldata profile create yellow_tripdata_2024-02.parquet yellow_tripdata_2024-03.parquet \
+  yellow_tripdata_2024-04.parquet --out taxi.profile.yaml
+```
 
 ```yaml
   correlations:
     - {a: trip_distance, b: fare_amount, method: spearman, value: 0.8533}
-    - {a: tip_amount, b: payment_type, method: correlation_ratio, value: 0.672}
     - {a: fare_amount, b: total_amount, method: spearman, value: 0.9648}
+  correlation_ratios:
+    - {a: payment_type, b: tip_amount, value: 0.672}
 ```
 
 Of 200,000 checkouts whose payment method depends on the channel, 6 phone and 5 store PayPal
-payments fall under `k_min`. Two kiosks of 8 card payments each are too few for `channel` to list:
+payments fall under `k_min`, and so do 9 store cheques. Two kiosks of 8 card payments each are too
+few for `channel` to list:
 
 ```yaml
   conditionals:
@@ -526,9 +533,13 @@ payments fall under `k_min`. Two kiosks of 8 card payments each are too few for 
       table:
         web: {card: 0.6993, paypal: 0.2906, gift: 0.01013}
         store: {card: 0.4451, cash: 0.5549}
-        phone: {card: 0.9706, invoice: 0.02936}
+        phone: {card: 1.0}
       other: {card: 1.0}
 ```
+
+The phone row drops its 878 invoices too. Its card and invoice rows would leave 6 phone rows
+unstated, which `channel`'s listed count less the row would name. The store row's 14 unstated rows
+reach `k_min`, so it keeps both cells.
 
 `profiling/table_keys.py`, `profiling/column_dependence.py` and `profiling/foreign_keys.py` compute
 them through the `Backend` protocol, so Polars and Spark write the same fields. Each threshold below
@@ -556,46 +567,55 @@ counted over the rows profiled, which `--sample` makes its sample.
   correlation names no value, so a sample costs the floor nothing. The measure follows the
   columns' roles:
 
-  | `a` | `b` | `method` | Measure |
-  | --- | --- | --- | --- |
-  | numeric or temporal | numeric or temporal | `spearman` | Pearson's r over each column's average ranks |
-  | categorical | categorical | `cramers_v` | Cramér's V with Bergsma's bias correction |
-  | numeric | categorical | `correlation_ratio` | η of `a`'s average ranks: the root of the share of their variance between `b`'s values, corrected as Kelley's ε² corrects η² |
+  | Columns | Written as | Measure |
+  | --- | --- | --- |
+  | both numeric or temporal | `correlations`, `method: spearman` | Pearson's r over each column's average ranks |
+  | both categorical | `correlations`, `method: cramers_v` | Cramér's V with Bergsma's bias correction |
+  | one numeric, one categorical | `correlation_ratios` | η of the numeric column's average ranks: the root of the share of their variance between the categorical column's values, corrected as Kelley's ε² corrects η² |
 
   A boolean is categorical, and so is a string or integer column holding at most
   `CATEGORICAL_VALUES` distinct values. Other numeric and temporal columns are ranked. A constant
   and a `sequence` take no part. Each column is ranked over its own values, then a pair is
   correlated over the rows holding both. A pair whose magnitude reaches `CORRELATION_FLOOR` is
-  kept, the strongest `CORRELATIONS_KEPT`, in the columns' order.
+  kept, the strongest `CORRELATIONS_KEPT` of both lists. `a` and `b` follow the columns' order, so
+  a correlation ratio's kinds tell which column is the category.
+
+  η is a list of its own because `method` is a closed enum. A value an earlier reader does not
+  know fails its whole profile, where a field it does not know is skipped.
 - **A pair is measured only where `PAIR_ROWS` sampled rows hold both its values**, or `k_min` rows
   where that is more. A value at `CORRELATION_FLOOR` then lies three standard errors from none.
   Cochran's rule for a chi-squared test sets two more floors. Cramér's V needs `ROWS_PER_CELL`
   sampled rows per cell of its table, and η that many per category. η also needs that many per
   category among the rows expected off `a`'s most common value, at that value's share of `a`.
-- **Sparse columns are where the floors act.** The carrier claims' later line columns are mostly
-  null, and their amounts mostly 0. `LINE_BENE_PTB_DDCTBL_AMT_5` is 0 in 99.93% of its values.
-  Without the last floor, its η beside `LINE_PRCSG_IND_CD_10` is 1.0 on the sample, against 0.009
-  over every row. With the floors, each pair the claims and the taxi trips keep reaches
-  `CORRELATION_FLOOR` over every row too.
+- **Sparse columns are where the floors act.** The CMS DE-SynPUF 2008–2010 carrier claims 1A,
+  profiled by `doppeldata profile create DE1_0_2008_to_2010_Carrier_Claims_Sample_1A.csv`, show
+  it. Their later line columns are mostly null, and their amounts mostly 0.
+  `LINE_BENE_PTB_DDCTBL_AMT_5` is 0 in 99.93% of its values. Without the last floor, its η beside
+  `LINE_PRCSG_IND_CD_10` is 1.0 on the sample, against 0.009 over every row. With the floors, each
+  pair the claims and the taxi trips keep reaches `CORRELATION_FLOOR` over every row too.
 
   *Rejected:* η of the raw values. A few large amounts hold most of a money column's variance, so
   whichever category holds them explains it. `trip_distance` beside `RatecodeID` has a raw η of
   0.6643 on the taxi trips' sample, against 0.033 over every row.
 - **A conditional table is written for each categorical pair whose Cramér's V over every row
   reaches `CORRELATION_FLOOR`.** A pair is counted over every row where its sampled V reaches
-  `CONDITIONAL_TRIED`. So the tables stated follow the counts, not either engine's sample. The
-  claims' processing indicator codes show why. `LINE_PRCSG_IND_CD_5` and `LINE_PRCSG_IND_CD_10`
-  have a V of 0.57 over the 156 sampled rows holding both, against 0.10 over all 19,394. The claims
-  state no conditional table.
+  `CONDITIONAL_TRIED`. The sample picks which pairs are counted, so two engines' samples can state
+  different tables. The counts decide every cell. The claims' processing indicator codes show why
+  V is not decided on the sample. `LINE_PRCSG_IND_CD_5` and `LINE_PRCSG_IND_CD_10` have a V of 0.57
+  over the 156 sampled rows holding both, against 0.10 over all 19,394.
 
   A table is given the column holding fewer values, where that holds at most `GIVEN_VALUES`, and
   only where both columns list their values. Its cells are counted, then floored, and each row
-  states its kept cells as shares of their rows:
+  states its kept cells as shares of their rows. The given column's listed counts and the child
+  column's both stand beside the table, so the floor holds each difference against them:
   - a cell under `k_min` rows is dropped;
   - a given value left with no cell joins `other`, beside the given values the column does not
     list;
-  - a child value whose rows outside the kept cells number 1 to `k_min − 1` leaves every row, so
-    no difference against its listed count names a small cell.
+  - a child value whose rows outside the kept cells number 1 to `k_min − 1` leaves every row;
+  - a row, `other` included, whose given rows outside its kept cells number 1 to `k_min − 1`
+    drops its least kept cell, until none does.
+
+  So no listed count less the cells stated beside it names a dropped cell's rows.
 - **A functional dependency `lhs → rhs` is recorded where at most `DEPENDENCY_VIOLATION` of the
   rows break it.** A row breaks it where its `lhs` value holds more than one `rhs` value. Only
   `lhs` values `k_min` rows hold are counted, and they must cover `DEPENDENCY_SUPPORT` of the rows
@@ -609,13 +629,18 @@ counted over the rows profiled, which `--sample` makes its sample.
   are equal ignoring case and separators, other than a bare `id`. They also refer where the column
   is the parent's singular name followed by the key's name or by `id`, so `customer_id` refers to
   `customers.id`. Both columns are integers, or both strings.
+- **Two keys that refer to each other are one relationship.** It points toward the table whose
+  primary key it is, where only one is. Otherwise it points toward the table the key is named for,
+  as `user_id` is for `users`, then toward the key holding more of the other's values, then toward
+  the earlier table. So `user_profiles.user_id` refers to `users.user_id` in either order.
 - **`containment` is the share of the child's distinct values the key holds.** `orphan_rate` is
   the share of child rows whose value it lacks. `cardinality` is `one_to_one` where no parent value
   has two child rows, else `many_to_one`. Where fewer than `k_min` child rows are orphans,
   `containment` is written as 1 and `orphan_rate` as 0.
 - **The fan-out is each parent value's child rows, counting a parent with none.** Its quantiles stay
-  `k_min` parents clear of each end. `top_share` is the share of the matched child rows the busiest
-  1, 10 and 100 parents hold, each stated where its last parent holds `k_min` rows. `zipf_s` is the
+  `k_min` parents clear of each end. `top_share` is the share of the matched child rows held by
+  each count of busiest parents `TOP_SHARES` names, each stated where its last parent holds `k_min`
+  rows. `zipf_s` is the
   exponent maximizing the likelihood of the child rows under a Zipf law over the parents ranked
   busiest first.
 
@@ -626,12 +651,8 @@ both engines compute, and containment from an exact join.
 *Rejected:* an option per threshold. A profile is written with no flag to choose, and a constant
 keeps two runs' profiles comparable.
 
-The extra passes cost the taxi trips 1.60 times the CPU seconds of a profile without them, and
-1.20 times the wall time. They cost the carrier claims 1.17 times the CPU seconds. Each was timed
-with `/usr/bin/time` over `profile create`, alternating with and without the passes, three rounds
-on the taxi trips. The claims profile grows by 7.9%. Hashing each
-row before counting the distinct ones took 2.97 s on the taxi trips, against 9.85 s counting the
-rows' structs.
+*Rejected:* counting the distinct rows as structs. Polars hashes each row first, because counting
+the structs of the taxi trips' rows took over three times as long.
 
 ## A JSON source is profiled path by path
 
@@ -711,6 +732,10 @@ dropped, is a `sequence` too. It counts at its least step, where the values betw
 extremes fill at least `SEQUENCE_FILL` of the places that step leaves between them. Its `start`
 is `k_min − 1` steps before the trimmed extreme, the value `profile check` derives. So a
 generated id repeats no value, where its quantiles alone would repeat some.
+
+Under `--sample`, a sample's steps span the rows it skipped, and its values fill a sample's share
+of the range. So an integer column's sequence is decided over every row. A sequence found there is
+written with every row's steps and trimmed extremes, the ones its `start` follows from.
 
 ## A sampled profile counts distinct values in every row
 
