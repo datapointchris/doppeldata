@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Any
 from typing import Protocol
 
+import rfc8785
+
 from doppeldata import _core
+from doppeldata.embedded_profiles import WrittenDataFile
+from doppeldata.embedded_profiles import data_file_metadata
+from doppeldata.embedded_profiles import written_data_file
+from doppeldata.errors import SourceError
 from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
 from doppeldata.errors import not_installed
@@ -24,6 +30,7 @@ from doppeldata.manifest import FAULTS_FILE_NAME
 from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import Manifest
 from doppeldata.name_hinted_types import with_type_hints
+from doppeldata.privacy_policy.file_check import refuse_failed_check
 from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import UngenerableProfile
@@ -101,7 +108,8 @@ class WritePlan:
 class WriteChoices:
     """What a write lays over the format, settings and layout its profile records. Each None keeps the profile's.
 
-    `partition_by=[]` writes no partitions, where None keeps the profile's keys.
+    `partition_by=[]` writes no partitions, where None keeps the profile's keys. `embed_profile` writes the whole profile's
+    canonical JSON, and the scenario's document, into each Parquet or Arrow IPC file's metadata.
     """
 
     format: str | None = None
@@ -109,9 +117,14 @@ class WriteChoices:
     partition_by: list[str] | None = None
     partition_style: str | None = None
     writer: dict[str, Any] | None = None
+    embed_profile: bool = False
 
     def engine_json(self, profile: Profile, scenario: Scenario | None = None) -> str:
-        chosen = {key: value for key, value in dc.asdict(self).items() if value is not None}
+        chosen = {key: value for key, value in dc.asdict(self).items() if value is not None and key != 'embed_profile'}
+        if self.embed_profile:
+            chosen['embedded_profile'] = rfc8785.dumps(profile.to_plain()).decode()
+            if scenario is not None:
+                chosen['embedded_scenario'] = scenario.canonical().decode()
         if profile.path:
             chosen['profile_path'] = str(profile.path)
         if scenario is not None:
@@ -269,6 +282,58 @@ def unwritable(target: Path, error: OSError) -> WriteFailed:
 
 
 @dc.dataclass(frozen=True)
+class GenerationSource:
+    """The profile, rows, seed and scenario a call generates from. A Parquet or Arrow IPC file holding a profile gives each of
+    the three its caller left None, as the file's write recorded it.
+
+    `written` is that file. `regenerates` holds where the caller gave none of the three, so the plan must make the very
+    dataset the file names.
+    """
+
+    profile: ProfileSource
+    rows: int | None
+    seed: int
+    scenario: Scenario | Sequence[Scenario] | None
+    written: WrittenDataFile | None = None
+    regenerates: bool = False
+
+    def checked(self, engine: '_core.Plan') -> '_core.Plan':
+        """`engine`, refused as SourceError where it plans a dataset other than the one the file it regenerates names."""
+        if self.written is None or not self.regenerates:
+            return engine
+        recorded = self.written.metadata.get(_core.DATASET_DIGEST_KEY)
+        if engine.dataset_digest == recorded:
+            return engine
+        differing = self.written.identity_differences(json.loads(engine.identity_json)) or [_core.DATASET_DIGEST_KEY]
+        raise SourceError(
+            f'{self.written.path} names dataset {recorded}, but this release plans {engine.dataset_digest} from it, '
+            f'because its {", ".join(differing)} differs; give a seed, rows or a scenario to generate another dataset from it',
+            role='profile',
+        )
+
+
+def generation_source(
+    profile: ProfileSource, rows: int | None, seed: int | None, scenario: Scenario | Sequence[Scenario] | None
+) -> GenerationSource:
+    """The source each call that generates reads `profile` and the three values as, with a data file's write filling in any
+    value left None. A seed left None is 0 for any other source."""
+    written = None
+    if isinstance(profile, str | os.PathLike) and Path(profile).is_file():
+        metadata = data_file_metadata(profile)
+        written = written_data_file(profile, metadata) if metadata is not None else None
+    if written is None:
+        return GenerationSource(profile, rows, 0 if seed is None else seed, scenario)
+    return GenerationSource(
+        written.profile,
+        written.recorded(_core.DATASET_ROWS_KEY) if rows is None else rows,
+        (written.recorded(_core.SEED_KEY) or 0) if seed is None else seed,
+        written.scenario if scenario is None else scenario,
+        written,
+        regenerates=rows is None and seed is None and scenario is None,
+    )
+
+
+@dc.dataclass(frozen=True)
 class EngineArguments:
     """Everything the engine's plan is built from, so a process holding only these, such as a Spark executor, builds the same plan.
 
@@ -324,6 +389,19 @@ def rows_only(scenario: Scenario | Sequence[Scenario] | None, run: str, write_wi
     return applied
 
 
+def rows_plan(
+    profile: ProfileSource,
+    rows: int | None,
+    seed: int | None,
+    scenario: Scenario | Sequence[Scenario] | None,
+    run: str,
+) -> '_core.Plan':
+    """The plan `run`, which returns rows and writes no file, generates from."""
+    generation = generation_source(profile, rows, seed, scenario)
+    applied = rows_only(generation.scenario, run, 'doppeldata.write')
+    return generation.checked(engine_plan(generation.profile, generation.rows, generation.seed, applied))
+
+
 @dc.dataclass(frozen=True)
 class PreparedWrite:
     """A write's destination and the engine's options for it, resolved from the arguments `plan` and `write` take.
@@ -345,21 +423,24 @@ def prepared_write(
     source: ProfileSource,
     out: str | os.PathLike[str],
     rows: int | None,
-    seed: int,
+    seed: int | None,
     choices: WriteChoices,
     scenario: Scenario | Sequence[Scenario] | None = None,
 ) -> PreparedWrite:
     """What a write of `rows` rows of a profile under `scenario` from `seed` to `out` with `choices` runs on, refusing what the
     engine would refuse. A local `out` naming one file is resolved here, so every write and plan reads the one answer."""
+    generation = generation_source(source, rows, seed, scenario)
     one_file = one_file_of(out)
     if one_file is None:
-        applied = composed(scenario)
+        applied = composed(generation.scenario)
     else:
-        out, choices, applied = one_file.parent, one_file_choices(choices, one_file), one_file_scenario(scenario)
+        out, choices, applied = one_file.parent, one_file_choices(choices, one_file), one_file_scenario(generation.scenario)
     destination, scheme, bucket = destination_of(out)
-    profile = profile_from(source)
-    arguments = engine_arguments(profile, rows, seed, applied)
-    engine = arguments.plan()
+    profile = profile_from(generation.profile)
+    if choices.embed_profile:
+        refuse_failed_check(profile)
+    arguments = engine_arguments(profile, generation.rows, generation.seed, applied)
+    engine = generation.checked(arguments.plan())
     choices_json = choices.engine_json(profile, applied)
     options = engine.write_options(choices_json)
     if one_file is not None:
@@ -380,22 +461,24 @@ def generate(
     profile: ProfileSource,
     *,
     rows: int | None = None,
-    seed: int = 0,
+    seed: int | None = None,
     threads: int = 0,
     scenario: Scenario | Sequence[Scenario] | None = None,
 ) -> ArrowStreamExportable:
     """Every row of the dataset, as one Arrow table in memory. `threads` of zero takes one per core.
 
     `profile` is a Profile, or anything `Profile.expand` takes: a list of column names, a dict of columns such as
-    `{'email': sd.fakes.email, 'age': sd.integers(18, 90)}`, a short or full YAML file, or an example's name.
+    `{'email': sd.fakes.email, 'age': sd.integers(18, 90)}`, a short or full YAML file, or an example's name. A Parquet or
+    Arrow IPC file written with `embed_profile=True` gives its profile, and its write's seed, rows and scenario for each of
+    the three left None. Given none of them, a file whose dataset this release would not make again raises SourceError. A
+    seed left None is 0 for any other source.
 
     The values are a pure function of the profile, the scenario, `seed` and `rows`, whatever `threads` is. `scenario` is a
     Scenario or a list composed in order. One that shapes files, as schema_drift, small_files and malformed_rows do, is
     refused as InvalidScenario, because nothing here writes files. `rows` counts the rows generated, so a scenario's
     `duplicates` returns more.
     """
-    applied = rows_only(scenario, 'generate', 'doppeldata.write')
-    table: ArrowStreamExportable = engine_plan(profile, rows, seed, applied).generate(threads=threads)
+    table: ArrowStreamExportable = rows_plan(profile, rows, seed, scenario, 'generate').generate(threads=threads)
     return table
 
 
@@ -403,7 +486,7 @@ def stream(
     profile: ProfileSource,
     *,
     rows: int | None = None,
-    seed: int = 0,
+    seed: int | None = None,
     threads: int = 0,
     scenario: Scenario | Sequence[Scenario] | None = None,
 ) -> ArrowStreamExportable:
@@ -411,11 +494,10 @@ def stream(
     batches per thread.
 
     It reads once. pyarrow 15 or later takes it as `pa.RecordBatchReader.from_stream(reader)`. Its threads check for no signal,
-    so Ctrl-C reaches it only when its consumer returns to Python between batches. `profile` and `scenario` are taken as
-    `generate` takes them.
+    so Ctrl-C reaches it only when its consumer returns to Python between batches. `profile`, `rows`, `seed` and `scenario`
+    are taken as `generate` takes them.
     """
-    applied = rows_only(scenario, 'stream', 'doppeldata.write')
-    reader: ArrowStreamExportable = engine_plan(profile, rows, seed, applied).stream(threads=threads)
+    reader: ArrowStreamExportable = rows_plan(profile, rows, seed, scenario, 'stream').stream(threads=threads)
     return reader
 
 
@@ -424,19 +506,20 @@ def plan(
     out: str | os.PathLike[str],
     *,
     rows: int | None = None,
-    seed: int = 0,
+    seed: int | None = None,
     format: str | None = None,
     file_rows: int | None = None,
     partition_by: list[str] | None = None,
     partition_style: str | None = None,
     writer: dict[str, Any] | None = None,
     scenario: Scenario | Sequence[Scenario] | None = None,
+    embed_profile: bool = False,
 ) -> WritePlan:
     """What `write` would write with the same arguments: the identity, the format and settings, every range and each column's sampler.
 
     It reads nothing at `out`, and refuses what `write` would refuse from its arguments alone.
     """
-    choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
+    choices = WriteChoices(format, file_rows, partition_by, partition_style, writer, embed_profile)
     prepared = prepared_write(profile, out, rows, seed, choices, scenario)
     engine, options, target = prepared.engine, prepared.options, prepared.one_file
     settings = json.loads(engine.written_settings_json(options))
@@ -467,7 +550,7 @@ def write(
     out: str | os.PathLike[str],
     *,
     rows: int | None = None,
-    seed: int = 0,
+    seed: int | None = None,
     format: str | None = None,
     file_rows: int | None = None,
     partition_by: list[str] | None = None,
@@ -477,6 +560,7 @@ def write(
     replace: bool = False,
     scenario: Scenario | Sequence[Scenario] | None = None,
     manifest: bool = False,
+    embed_profile: bool = False,
 ) -> Manifest:
     """Write the dataset to `out` and return its manifest. `profile` is taken as `generate` takes it.
 
@@ -498,8 +582,14 @@ def write(
     `scenario`, a Scenario or a list composed in order, bends the data: its patch applies to the profile, and its perturbations
     to the rows and the files. The manifest records it, and a layout that cannot hold it raises InvalidScenario. `rows` counts
     the rows generated, so a scenario's `duplicates` writes more.
+
+    `embed_profile` writes the whole profile's canonical JSON into each Parquet or Arrow IPC file's metadata, under
+    `doppeldata.profile`, where `Profile.from_data_file` reads it back. It is the profile given, before any scenario's patch.
+    The scenario's document goes under `doppeldata.scenario`, so the file alone regenerates the dataset as `profile`. Any
+    other format raises WriteFailed. A profile made from data that fails `profile check` raises CheckFailed before a byte is
+    written, as `export` refuses it, because the file carries every literal the profile holds.
     """
-    choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
+    choices = WriteChoices(format, file_rows, partition_by, partition_style, writer, embed_profile)
     prepared = prepared_write(profile, out, rows, seed, choices, scenario)
     if prepared.one_file is not None:
         return write_one_file(prepared, prepared.one_file, threads=threads, replace=replace, manifest=manifest)

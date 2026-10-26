@@ -3,11 +3,22 @@ doppeldata's engine, compiled.
 """
 
 from _typeshed import SupportsGetItem
+from os import PathLike
 from typing import Any, Final, SupportsIndex, final
 
 BLOCK_ROWS: Final[int]
 """
 The rows in each batch the engine generates, every one but the last.
+"""
+
+DATASET_DIGEST_KEY: Final[str]
+"""
+The metadata key every Parquet and Arrow IPC file holds its dataset's digest under.
+"""
+
+DATASET_ROWS_KEY: Final[str]
+"""
+The metadata key every Parquet and Arrow IPC file holds its dataset's generated rows under.
 """
 
 DEFAULT_FILE_ROWS: Final[int]
@@ -45,9 +56,39 @@ PARTIAL_MANIFEST_FILE_NAME: Final[str]
 The name of the claim a write holds its destination with, and the record a stopped write leaves.
 """
 
+PROFILE_DIGEST_KEY: Final[str]
+"""
+The metadata key every Parquet and Arrow IPC file holds its profile's digest under.
+"""
+
+PROFILE_KEY: Final[str]
+"""
+The metadata key a file holds the whole profile's canonical JSON under, where its write embeds it.
+"""
+
+SCENARIO_DIGEST_KEY: Final[str]
+"""
+The metadata key a Parquet or Arrow IPC file written under a scenario holds its digest under.
+"""
+
+SCENARIO_KEY: Final[str]
+"""
+The metadata key a file holds its scenario's canonical document under, where its write embeds the profile.
+"""
+
+SEED_KEY: Final[str]
+"""
+The metadata key every Parquet and Arrow IPC file holds its dataset's seed under.
+"""
+
 STREAM_VERSION: Final[int]
 """
 The version of the draws the engine makes, part of every dataset's identity.
+"""
+
+STREAM_VERSION_KEY: Final[str]
+"""
+The metadata key every Parquet and Arrow IPC file holds the engine's stream version under.
 """
 
 VERSION: Final[str]
@@ -179,6 +220,13 @@ def check_digits_hold(kind: str, values: SupportsGetItem[int, str]) -> list[bool
     """
     Whether each value holds the check digit ``kind`` names, such as ``luhn``, where generation
     writes one: its last digit, computed from the digits before it.
+    """
+
+def data_file_metadata(path: str |PathLike[str]) -> dict[str, str] |None:
+    """
+    The key-value metadata of the local Parquet or Arrow IPC file at ``path``, or None for a
+    file of neither format. Raises OSError where the file cannot be opened, and ValueError where
+    its footer or schema does not read.
     """
 
 def destination_scheme(url: str) -> tuple[str, str |None]:

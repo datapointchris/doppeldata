@@ -202,11 +202,13 @@ def listing(key: DeclaredColumn, values: list[str], named: str) -> tuple[Declare
     if not read:
         return key, None
     ordered = sorted(read)
+    # The partitions listed today, not a declaration, so the next one written falls outside them.
+    listed = frozenset({'low', 'high', 'top_values'})
     if key.logical_type == 'date':
-        return dc.replace(key, low=ordered[0], high=ordered[-1]), (ordered[-1] - ordered[0]).days + 1
+        return dc.replace(key, low=ordered[0], high=ordered[-1], undeclared=listed), (ordered[-1] - ordered[0]).days + 1
     if key.logical_type == 'timestamp':
-        return dc.replace(key, low=ordered[0], high=ordered[-1]), None
-    return dc.replace(key, values=tuple(ordered)), len(ordered)
+        return dc.replace(key, low=ordered[0], high=ordered[-1], undeclared=listed), None
+    return dc.replace(key, values=tuple(ordered), undeclared=listed), len(ordered)
 
 
 def projected(key: DeclaredColumn, parameters: Mapping[str, str]) -> tuple[DeclaredColumn, int] | None:

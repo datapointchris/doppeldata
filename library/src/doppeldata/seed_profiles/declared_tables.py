@@ -1,6 +1,7 @@
 """A table as a schema declares it, written as a seed: a profile marked `generated.engine: import`, holding no statistics."""
 
 import dataclasses as dc
+from collections.abc import Iterator
 from collections.abc import Mapping
 from typing import Any
 
@@ -51,7 +52,8 @@ class DeclaredTable:
             for column in self.columns
         }
         columns_only = expanded(dict(columns), None, self.name, self.imported_from)
-        generated = imported_generated(self.imported_from)
+        declared = {path: facts for column in columns.values() for path, facts in declared_facts(column)}
+        generated = imported_generated(self.imported_from, declared)
         document: dict[str, Any] = {'profile_version': FORMAT_VERSION, 'kind': 'table', 'name': self.name, 'generated': generated}
         source = dict(self.source)
         if self.partition_keys:
@@ -80,6 +82,15 @@ class DeclaredTable:
         return validated(document, self.imported_from)
 
 
-def imported_generated(imported_from: str) -> dict[str, Any]:
-    """A seed's `generated` section: `engine: import`, and the schema it was read from."""
-    return generated_section(engine='import', imported_from=imported_from)
+def imported_generated(imported_from: str, declared: Mapping[str, list[str]] | None = None) -> dict[str, Any]:
+    """A seed's `generated` section: `engine: import`, the schema it was read from, and the facts it declared."""
+    return generated_section(engine='import', imported_from=imported_from, declared=dict(declared) if declared else None)
+
+
+def declared_facts(column: DeclaredColumn) -> Iterator[tuple[str, list[str]]]:
+    """Each path in `column`, its fields and its element, with the facts its schema declared, where it declared any."""
+    facts = column.declared_facts()
+    if facts:
+        yield column.path or column.name, facts
+    for inner in (*column.fields, *([column.element] if column.element else [])):
+        yield from declared_facts(inner)

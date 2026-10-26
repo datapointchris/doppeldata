@@ -64,6 +64,8 @@ GENERATED_FIELDS = {
     # Hashed, as every release before it hashes a field it does not know. It names no directory, so a copy of the
     # schema elsewhere keeps the seed's identity.
     'imported_from': GeneratedField(hashed=True, derived_from=False),
+    # No draw reads it, so a seed keeps one digest whichever release, knowing it or not, computes it.
+    'declared': GeneratedField(hashed=False, derived_from=False),
 }
 # The digest keeps only these, so a field a later release adds is left out by this one.
 HASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if field.hashed)
@@ -435,6 +437,14 @@ class Profile:
         from doppeldata.profile_sources import expanded_profile
 
         return expanded_profile(columns, rows)
+
+    @classmethod
+    def from_data_file(cls, path: str | Path) -> 'Profile':
+        """The profile a Parquet or Arrow IPC file holds, where `write` with `embed_profile=True` wrote it. A file holding
+        none raises SourceError. Every argument taking a profile file also takes such a data file."""
+        from doppeldata.embedded_profiles import data_file_profile
+
+        return data_file_profile(path)
 
     @classmethod
     def from_glue(

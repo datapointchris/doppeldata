@@ -44,6 +44,13 @@ pub mod provenance {
     pub const DATASET_ROWS: &str = "doppeldata.dataset_rows";
     /// The digest of the dataset's identity, a quick equality check beside the five values.
     pub const DATASET_DIGEST: &str = "doppeldata.dataset_digest";
+    /// The whole profile as RFC 8785 canonical JSON. `PROFILE_DIGEST` is taken over it without the
+    /// generated fields the digest leaves out. Only a write that embeds the profile writes it, and
+    /// only into Parquet and Arrow IPC files.
+    pub const PROFILE: &str = "doppeldata.profile";
+    /// The scenario's canonical JSON, the bytes `SCENARIO_DIGEST` is taken over, as the manifest's
+    /// `scenario.document` holds it. Only a write that embeds the profile under a scenario writes it.
+    pub const SCENARIO: &str = "doppeldata.scenario";
 }
 
 /// A profile file: one table, or a bundle of tables and their relationships.

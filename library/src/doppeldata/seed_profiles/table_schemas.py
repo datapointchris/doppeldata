@@ -138,7 +138,13 @@ def schema_column(field: Any, name: str | None = None) -> DeclaredColumn | None:
         values=tuple(constraints.get('enum') or categories),
     )
     if field.get('type') == 'year':
-        column = dc.replace(column, physical_type='int16', low=DATE_WINDOW[0].year, high=DATE_WINDOW[1].year)
+        column = dc.replace(
+            column,
+            physical_type='int16',
+            low=DATE_WINDOW[0].year,
+            high=DATE_WINDOW[1].year,
+            undeclared=frozenset(end for end, keyword in (('low', 'minimum'), ('high', 'maximum')) if keyword not in constraints),
+        )
     if logical == 'string':
         return dc.replace(
             column,

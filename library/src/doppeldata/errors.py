@@ -24,8 +24,8 @@ class DoppeldataError(Exception):
 
 class SourceError(DoppeldataError, ValueError):
     """The data named cannot be read as one table. `role` is the input it was named as: `data`, `against` for a check's real
-    data, `schema` for a seed's schema, `region` for the Glue catalog's region, `detected-entities` for the entities given
-    a Glue table's columns, or `environment` for the AWS settings.
+    data, `schema` for a seed's schema, `profile` for a Parquet or Arrow IPC file named as a profile, `region` for the Glue
+    catalog's region, `detected-entities` for the entities given a Glue table's columns, or `environment` for the AWS settings.
     """
 
     def __init__(self, message: str, *, exit_code: int = 2, role: str = 'data') -> None:

@@ -159,6 +159,20 @@ seed from a schema file or a Glue table, and `--help` lists the kinds it reads.
 [seed-profiles-from-schemas.md](seed-profiles-from-schemas.md) says what each source's declarations
 become and what a column the schema is silent on draws.
 
+## A profile exports as the contract other tools validate with, and a write can carry it
+
+```bash
+doppeldata profile export orders --format pandera --out orders_schemas.py
+doppeldata data generate orders --format parquet --embed-profile --out orders/
+```
+
+`profile export` writes the contract in each format `--format` takes, and `sd.export` returns the
+same text. `--embed-profile`, or `embed_profile=True` on
+`sd.write`, puts the profile in each Parquet and Arrow file, and every PROFILE argument reads it
+back. Neither happens unless asked.
+[profile-exports-and-embedded-profiles.md](profile-exports-and-embedded-profiles.md) shows each
+format and what each leaves out.
+
 ## Tables cross into Python through the Arrow PyCapsule interface, so no Arrow library is a dependency
 
 `doppeldata.generate()` returns a table and `doppeldata.stream()` a RecordBatchReader. Both are

@@ -58,6 +58,10 @@ pub struct Generated {
     /// `pandera:shop.Orders`, and an object is its own name, else its type, such as
     /// `spark:StructType`.
     pub imported_from: Option<String>,
+    /// The facts an `import` profile's schema declared, by column path: a column's name, or the
+    /// dotted path of a nested field, such as `shipping.city`. Every other bound, length or format
+    /// the profile states is a draw default, such as its date window, which no export carries.
+    pub declared: Option<BTreeMap<String, Vec<DeclaredFact>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -68,6 +72,32 @@ pub enum Engine {
     Spark,
     /// Read from a catalog or a data contract rather than computed from data.
     Import,
+}
+
+/// A fact a schema declared, named for the profile field it marks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredFact {
+    /// The low end of `numeric.extremes` or `temporal.extremes`.
+    Low,
+    /// The high end of `numeric.extremes` or `temporal.extremes`.
+    High,
+    /// `numeric.scale`.
+    Scale,
+    /// `string.length.min`.
+    MinLength,
+    /// `string.length.max`.
+    MaxLength,
+    /// The least of `list.length`.
+    MinItems,
+    /// The most of `list.length`.
+    MaxItems,
+    /// `semantic.type`, read from a format such as `email`.
+    Format,
+    /// `string.pattern`.
+    Pattern,
+    /// `top_values`.
+    TopValues,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]

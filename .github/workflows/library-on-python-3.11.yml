@@ -28,12 +28,38 @@ jobs:
         run: |
           uv venv --python 3.11 "$RUNNER_TEMP/library"
           uv pip install --python "$RUNNER_TEMP/library" ./library
-          uv pip install --python "$RUNNER_TEMP/library" pytest
 
       # An abi3 feature in library/pyproject.toml naming a later Python still
       # builds here, and fails only on import, with an undefined symbol.
       - name: Import the extension on Python 3.11
         run: '"$RUNNER_TEMP/library/bin/python" -c "import doppeldata._core"'
+
+      # Only the library's own dependencies are installed yet, as on a Glue
+      # job. A module may fail to import only on an engine the library loads
+      # for one feature and declares nowhere.
+      - name: Import every library module with only its dependencies installed
+        run: |
+          "$RUNNER_TEMP/library/bin/python" - <<'EOF'
+          import importlib
+          import pkgutil
+          import sys
+
+          import doppeldata
+
+          ENGINES = {'boto3', 'botocore', 'charset_normalizer', 'duckdb', 'numpy', 'polars', 'pyarrow', 'pyspark'}
+          undeclared = []
+          for module in pkgutil.walk_packages(doppeldata.__path__, 'doppeldata.'):
+              try:
+                  importlib.import_module(module.name)
+              except ImportError as error:
+                  missing = error.name or getattr(error.__cause__, 'name', None) or str(error)
+                  if missing.split('.')[0] not in ENGINES:
+                      undeclared.append(f'{module.name} imports {missing}')
+          sys.exit('\n'.join(undeclared) or None)
+          EOF
+
+      - name: Install pytest
+        run: uv pip install --python "$RUNNER_TEMP/library" pytest
 
       # compileall parses every module with the 3.11 interpreter, so syntax from
       # a later Python fails here even in a module no test imports.

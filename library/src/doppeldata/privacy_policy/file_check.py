@@ -9,6 +9,9 @@ import dataclasses as dc
 from pathlib import Path
 from typing import Any
 
+from doppeldata.embedded_profiles import data_file_metadata
+from doppeldata.embedded_profiles import embedded_document
+from doppeldata.errors import CheckFailed
 from doppeldata.privacy_policy.column_treatment import CHECKED_POLICIES
 from doppeldata.privacy_policy.column_treatment import ColumnFacts
 from doppeldata.privacy_policy.column_treatment import Policy
@@ -22,8 +25,10 @@ from doppeldata.privacy_policy.literal_fields import faults
 from doppeldata.privacy_policy.treatment_rules import conditional_faults
 from doppeldata.privacy_policy.treatment_rules import refused
 from doppeldata.privacy_policy.treatment_rules import treatment_faults
+from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import PointerParts
+from doppeldata.profile_format import Profile
 from doppeldata.profile_format import check
 from doppeldata.profile_format import pointer
 from doppeldata.profile_format import read_document
@@ -86,9 +91,11 @@ def file_checks(path: Path) -> list[TableCheck]:
 
     A bundle's table held in its own file is checked as that file, and its violations point into it. Raises OSError
     where the file named cannot be read. A member that cannot be read is a violation, and the others are still checked.
+    A Parquet or Arrow IPC file's embedded profile is checked, and one holding none raises SourceError.
     """
+    metadata = data_file_metadata(path)
     try:
-        document = to_plain(read_document(path))
+        document = to_plain(read_document(path)) if metadata is None else embedded_document(path, metadata)
     except InvalidProfile as error:
         return [TableCheck(path.name, None, None, 0, schema_violations(error.issues))]
     if not isinstance(document, dict) or document.get('kind') != 'bundle':
@@ -123,6 +130,20 @@ def member_check(member: Path, name: str) -> TableCheck:
     if document.get('name') != name:
         return refusal('table-name-mismatch', f'{member} is named {document.get("name")!r}; expected {name!r}, as the bundle names it')
     return table_check(document, ())
+
+
+def refuse_failed_check(found: Profile | Bundle) -> None:
+    """Raise CheckFailed where a table made from data fails `profile check`, before its literals leave the profile. A seed
+    was written under no policy."""
+    tables = found.tables if isinstance(found, Bundle) else {found.document['name']: found}
+    at = ('tables',) if isinstance(found, Bundle) else ()
+    checks = [
+        table_check(profile.to_plain(), (*at, name) if at else ())
+        for name, profile in tables.items()
+        if (profile.document.get('generated') or {}).get('engine') != 'import'
+    ]
+    if any(result.violations for result in checks):
+        raise CheckFailed(ProfileFileCheck.of(str(found.document['name']), checks))
 
 
 def table_check(table: Any, at: PointerParts) -> TableCheck:

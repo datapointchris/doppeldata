@@ -35,6 +35,7 @@ from doppeldata.inline_columns import decimals
 from doppeldata.inline_columns import integers
 from doppeldata.name_hinted_types import GENERAL
 from doppeldata.profile_format import INTEGER_FORMAT_RANGES
+from doppeldata.published_schemas import published_enum
 from doppeldata.short_profiles import named_column
 
 NULL_RATE = 0.05
@@ -84,6 +85,10 @@ FORMAT_TYPES = {
     'ipv4': 'ipv4_address',
     'ipv6': 'ipv6_address',
 }
+
+# The facts `generated.declared` names, in the profile model's order: each one a schema can declare and an importer
+# otherwise fills with a draw default.
+DECLARED_FACTS = tuple(published_enum('DeclaredFact'))
 
 Bound = int | float | str | dt.date
 Ordered = TypeVar('Ordered', int, float, dt.date, dt.datetime)
@@ -138,6 +143,25 @@ class DeclaredColumn(InlineColumn):
     max_items: int | None = None
     # The dotted path of a field nested in a struct or a list, which the engine names its streams by.
     path: str | None = None
+    # The facts of `DECLARED_FACTS` the importer set from something other than the schema's declaration, such as the
+    # date window Table Schema's `year` draws from, or the partition values a catalog lists.
+    undeclared: frozenset[str] = frozenset()
+
+    def declared_facts(self) -> list[str]:
+        """The facts of `DECLARED_FACTS` the schema declared, which an export of the seed carries."""
+        held = {
+            'low': self.low is not None,
+            'high': self.high is not None,
+            'scale': self.places is not None or bool(DECIMAL_TYPE.match(self.physical_type or '')),
+            'min_length': self.min_length is not None,
+            'max_length': self.max_length is not None,
+            'min_items': self.min_items is not None,
+            'max_items': self.max_items is not None,
+            'format': (self.format or '').lower() in FORMAT_TYPES,
+            'pattern': self.pattern is not None,
+            'top_values': bool(self.values),
+        }
+        return [fact for fact in DECLARED_FACTS if held[fact] and fact not in self.undeclared]
 
     def column(self, name: str) -> dict[str, Any]:
         null_rate = 0.0 if self.required else self.null_rate if self.null_rate is not None else NULL_RATE

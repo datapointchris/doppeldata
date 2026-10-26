@@ -4,10 +4,12 @@ import math
 import re
 from pathlib import Path
 
+import doppeldata as sd
 import pytest
 from doppeldata import Bundle
 from doppeldata import InvalidProfile
 from doppeldata import Profile
+from doppeldata import SourceError
 from doppeldata.example_profiles import example_names
 
 EXAMPLE = Path(__file__).parent / 'fixtures' / 'orders.profile.yaml'
@@ -104,3 +106,15 @@ def test_a_bundle_directory_and_its_single_file_form_share_one_digest(tmp_path):
     assert Bundle.load(directory).digest == Bundle.load(single).digest
     with pytest.raises(ValueError):
         Bundle.load(single).tables['orders'].save()
+
+
+@pytest.mark.parametrize('suffix', ['parquet', 'arrow'])
+def test_a_file_written_with_its_profile_embedded_gives_the_profile_back_and_a_plain_one_names_its_absence(tmp_path, suffix):
+    orders = Profile.example('orders')
+    embedded, plain = tmp_path / f'embedded.{suffix}', tmp_path / f'plain.{suffix}'
+    sd.write(orders, embedded, rows=100, embed_profile=True)
+    sd.write(orders, plain, rows=100)
+
+    assert Profile.from_data_file(embedded).digest == orders.digest
+    with pytest.raises(SourceError):
+        Profile.from_data_file(plain)

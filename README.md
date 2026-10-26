@@ -49,6 +49,7 @@ doppeldata profile list                # the example profiles
 doppeldata profile show orders         # one of them, as YAML to start a profile from
 doppeldata profile expand people.yaml  # the full profile a short YAML of rows and columns stands for
 doppeldata profile import --from odcs orders.odcs.yaml --out orders.profile.yaml  # a seed from a data contract
+doppeldata profile export orders --format pandera --out orders_schemas.py  # the contract, as pandera models
 doppeldata profile diff march.profile.yaml april.profile.yaml  # how far April drifted from March
 doppeldata data check orders.profile.yaml out/orders/        # generated data against its profile
 doppeldata data check orders.profile.yaml out/orders/ --against data/orders/ --html side-by-side.html  # and the real data
@@ -57,6 +58,7 @@ doppeldata schemas show profile        # the JSON Schema every profile validates
 doppeldata data plan orders --rows 1000000 --seed 7 --out orders/       # the files a write makes, and their size
 doppeldata data generate orders --rows 1000000 --seed 7 --out orders/   # write them, and _manifest.json
 doppeldata data generate orders.profile.yaml --rows 100000000 --format csv --out s3://bucket/orders/
+doppeldata data generate orders --format parquet --embed-profile --out orders/  # each file holds its profile
 
 doppeldata scenario list               # the ops a scenario applies, its metrics, and the example scenarios
 doppeldata scenario check hot-key orders                            # a scenario against a profile, generating nothing

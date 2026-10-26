@@ -195,6 +195,12 @@ pub struct ManifestProfile {
     pub version: u64,
     /// The profile's path as the caller gave it, or null when it came from memory.
     pub path: Option<String>,
+    /// Whether each file `files` and `cdc.expected` list holds the whole profile's canonical JSON,
+    /// under the metadata key `doppeldata.profile`, and the scenario's document under
+    /// `doppeldata.scenario` where one applies. A `cdc` change file never holds either. Left out
+    /// when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub embedded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

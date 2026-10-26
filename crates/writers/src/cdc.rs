@@ -82,6 +82,19 @@ pub(crate) fn stream_output(output: &Output, cdc: &CdcPlan) -> Output {
     }
 }
 
+/// The output a change file takes: the stream's, without the embedded documents. A stream holds
+/// many small change files, each of which a copy of the profile can outweigh, and every load file
+/// and `_expected` part already holds them.
+pub(crate) fn change_output(output: &Output) -> Output {
+    match output {
+        Output::Parquet(settings) => Output::Parquet(ParquetSettings {
+            embedded: None,
+            ..settings.clone()
+        }),
+        other => other.clone(),
+    }
+}
+
 /// The output `_expected` takes: a Parquet write's own settings, else Parquet's defaults.
 pub(crate) fn expected_output(output: &Output) -> Output {
     match output {
@@ -209,6 +222,7 @@ pub(crate) fn write(
             stream: &stream,
             layout,
             output: &manifest.output,
+            change_output: change_output(&manifest.output),
             expected_output: expected_output(&manifest.output),
             destination,
             runtime,
@@ -268,6 +282,7 @@ struct Jobs<'a> {
     stream: &'a CdcStream,
     layout: &'a FileLayout,
     output: &'a Output,
+    change_output: Output,
     expected_output: Output,
     destination: &'a Destination,
     runtime: &'a Handle,
@@ -327,7 +342,7 @@ impl Jobs<'_> {
                 let path = format!("{}.{extension}", self.stream.file_stem(file));
                 let batch = self.stream.file(file);
                 let schema = batch.schema();
-                let written = self.store(&path, self.output, &schema, [Ok(batch)], stop)?;
+                let written = self.store(&path, &self.change_output, &schema, [Ok(batch)], stop)?;
                 let faults = self.stream.file_faults(file).iter().map(|fault| self.fault_record(&path, fault));
                 self.faults.lock().expect("no worker panics holding it").extend(faults);
                 self.changes
