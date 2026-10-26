@@ -212,11 +212,14 @@ def profile_tables(
     alike are refused. The bundle is named for what was named, or for the directory several paths share.
 
     A column whose name refers to another table's single-column key, as `orders.customer_id` refers to
-    `customers.customer_id` or `customers.id`, is a relationship where that key holds 95% of its distinct values.
+    `customers.customer_id` or `customers.id`, is a relationship where that key holds at least `CONTAINMENT_FLOOR` of
+    its distinct values, a constant of `doppeldata.profiling.foreign_keys`.
     Each records the share the key holds, the child rows whose value it lacks, its cardinality and its fan-out.
     """
     settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
     named = list(data) if isinstance(data, list | tuple) else [data]
+    if not named:
+        raise SourceError('profile_tables() was given an empty list, which names no table to profile')
     listings = [listed_source(item, engine) for item in named]
     grouped = [(table.source, reading) for listed, reading in listings for table in table_grouping.grouped(listed)]
     names = [source.name for source, _ in grouped]
