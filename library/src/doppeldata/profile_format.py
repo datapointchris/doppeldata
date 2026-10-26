@@ -432,7 +432,7 @@ class Profile:
         dataframely `Schema`, or a Spark `StructType`. `rows` is the row count the profile records, in place of the source's.
         A name that hints no fake raises InvalidProfile naming the closest. `generate`, `write` and the rest take the same.
         """
-        from doppeldata.short_profiles import expanded_profile
+        from doppeldata.profile_sources import expanded_profile
 
         return expanded_profile(columns, rows)
 
