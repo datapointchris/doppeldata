@@ -1,6 +1,6 @@
 //! The row ranges a write would make, each with the path its objects take and how many objects it
-//! can hold, and the change stream a `cdc` write makes beside them, known before anything is
-//! generated.
+//! can hold, the change stream a `cdc` write makes beside them, and the columns each file holds,
+//! known before anything is generated.
 
 use doppeldata_core::Plan;
 use doppeldata_core::format_settings::Output;
@@ -95,4 +95,17 @@ pub fn planned_output(plan: &Plan, options: &WriteOptions) -> Output {
         Some(cdc) => cdc::stream_output(&options.output, cdc),
         None => options.output.clone(),
     }
+}
+
+/// The names of the columns each file of `plan`'s rows holds, in order: the plan's less those
+/// `partition_by` names, or under `cdc` the full load's record.
+pub fn file_columns(plan: &Plan, partition_by: &[String]) -> Vec<String> {
+    let schema = match plan.cdc() {
+        Some(cdc) => cdc.full_load_schema(&plan.schema()),
+        None => plan.schema(),
+    };
+    (schema.fields().iter())
+        .map(|field| field.name().clone())
+        .filter(|name| !partition_by.contains(name))
+        .collect()
 }

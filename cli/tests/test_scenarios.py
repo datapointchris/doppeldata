@@ -132,3 +132,12 @@ def test_a_commit_order_merge_of_the_cdc_dms_stream_is_its_expected_table_and_a_
         sd.write(sd.Profile.example('orders'), f'{tmp_path}/', rows=20_000, format='parquet', scenario=cdc, replace=True)
     assert refused.value.code == 'foreign-object'
     assert merged.exists()
+
+
+def test_a_check_of_the_cdc_dms_stream_written_with_no_header_names_its_columns_from_the_plan(tmp_path: Path):
+    """`data check orders <dir> --scenario cdc-dms` passes on the stream `--writer '{"header": false}'` writes."""
+    orders, cdc = sd.Profile.example('orders'), sd.Scenario.example('cdc-dms')
+    sd.write(orders, f'{tmp_path}/', rows=2_000, format='csv', writer={'header': False}, scenario=cdc)
+    with pytest.warns(sd.ProfilingWarning, match='cdc change stream'):
+        report = sd.check(orders, f'{tmp_path}/', scenario=cdc)
+    assert report.passed

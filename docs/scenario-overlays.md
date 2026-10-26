@@ -464,7 +464,8 @@ The data is measured against the effective profile, so a patched null rate is th
   manifest's `files` lists, and prints one notice naming them, that it left the change files and
   `_expected` unmeasured. They are a
   merge test's input and its answer, and their statistics move by design. The commit column passes
-  as a column `cdc` writes.
+  as a column `cdc` writes. A CSV full load written with no header is read in the dialect the
+  manifest records, its columns named as the plan names them, so it checks as a headed one does.
 - **Each expectation is measured by `Scenario.verify`.** `hot_keys.share` is the share of rows
   holding the column's `keys` most frequent values. `late_arrival.rate` is the share whose column
   is earlier than its `ingest`. `missingness.rate` is the share that is null, the profile's own

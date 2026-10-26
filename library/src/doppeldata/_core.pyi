@@ -95,6 +95,11 @@ class Plan:
         The bytes the write would store, its manifest left out, from its first blocks encoded
         with its settings.
         """
+    def file_columns(self, /, partition_by: SupportsGetItem[int, str]) -> list[str]:
+        """
+        The names of the columns each file of the rows holds, in order: the plan's less those
+        ``partition_by`` names, or under ``cdc`` the full load's record.
+        """
     def generate(self, /, *, threads: SupportsIndex) -> Any:
         """
         Every row, as one table holding a batch per block, generated on ``threads`` threads,

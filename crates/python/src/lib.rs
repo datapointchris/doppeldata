@@ -437,6 +437,12 @@ mod _core {
             }))
         }
 
+        /// The names of the columns each file of the rows holds, in order: the plan's less those
+        /// ``partition_by`` names, or under ``cdc`` the full load's record.
+        fn file_columns(&self, partition_by: Vec<String>) -> Vec<String> {
+            doppeldata_writers::file_columns(&self.plan, &partition_by)
+        }
+
         /// The format and every setting the write's manifest records, as ``WriteOptions``'s
         /// ``settings_json`` spells them, with a ``cdc`` stream's timestamp unit applied.
         fn written_settings_json(&self, options: PyRef<'_, WriteOptions>) -> String {

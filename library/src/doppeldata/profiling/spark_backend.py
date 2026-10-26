@@ -746,7 +746,7 @@ class SparkBackend:
         """CSV or TSV read in the detected dialect with every column as text. A row whose fields do not split into the
         header's is left out and counted, as DuckDB rejects it."""
         found = importlib.import_module(DELIMITED_DIALECT_MODULE).detected(
-            source.files, '\t' if source.format is SourceFormat.TSV else None, DUCKDB_CONFIG
+            source.files, '\t' if source.format is SourceFormat.TSV else None, DUCKDB_CONFIG, source.dialect
         )
         dialect = found.dialect
         schema = st.StructType([st.StructField(name, st.StringType()) for name in dialect.names])

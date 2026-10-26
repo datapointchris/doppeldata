@@ -349,6 +349,11 @@ threads.
 - **`line_terminator_mix` gives each terminator's share of the block's line breaks**, those inside
   quoted fields included. The commoner one is `line_terminator`. `trailing_delimiter` is true where
   every record ends in an empty field.
+- **A dialect the files are known to be written in is read as given, and no sniffer runs.** A check
+  passes one for files a doppeldata manifest records. Its columns are the names it carries, or the
+  header's where it carries none, and `detector` and `detected_encoding` are null. Every other
+  file's first record is still checked against it. `profile()` takes no dialect, so a profile of
+  the same files sniffs as above.
 
 *Rejected:* DuckDB's sniffer alone. It is the reader, so its dialect is right on clean files, but
 on the file above it reads every row as one column and rejects nothing.

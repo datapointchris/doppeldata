@@ -28,6 +28,7 @@ from doppeldata.profiling import foreign_keys
 from doppeldata.profiling import table_grouping
 from doppeldata.profiling import table_profile
 from doppeldata.profiling.backend import Backend
+from doppeldata.profiling.backend import CsvDialect
 from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
@@ -157,9 +158,40 @@ def profile(
     are written as the column's `overflow`. A column only one of the two tables holds, or whose list would move to
     another section, issues `ColumnsNotFrozen`.
     """
+    return profile_in_dialect(
+        data,
+        None,
+        engine=engine,
+        spark=spark,
+        sample=sample,
+        policy=policy,
+        k_min=k_min,
+        edges_from=edges_from,
+        packs=packs,
+        code_lists=code_lists,
+    )
+
+
+def profile_in_dialect(
+    data: Any,
+    dialect: CsvDialect | None,
+    *,
+    engine: str = 'polars',
+    spark: Any = None,
+    sample: int | None = None,
+    policy: str = Policy.DEFAULT,
+    k_min: int | None = None,
+    edges_from: Profile | None = None,
+    packs: Sequence[str] = (),
+    code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
+) -> Profile:
+    """`profile`, reading delimited `data` in `dialect` where one is given rather than in the dialect its files are
+    sniffed in, as a check reads files whose manifest records how they were written."""
     settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
     listed, reading = listed_source(data, engine)
     source = listed if edges_from is not None else table_grouping.only_table(listed)
+    if dialect is not None:
+        source = dc.replace(source, dialect=dialect)
     backend = engine_backend(engine, data, spark)
     readers = session_readers(backend, reading)
     if edges_from is not None:
@@ -176,7 +208,7 @@ def profile(
         )
         if changed is None:
             return edges_from
-        warnings.warn(EarlierProfileNotReused(changed), stacklevel=2)
+        warnings.warn(EarlierProfileNotReused(changed), stacklevel=3)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
     only = profiled_tables(backend, [(source, readers)], settings, frozen)[0][source.name]
     importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
@@ -188,7 +220,7 @@ def profile(
         undescribed, missing = [name for name in now if name not in earlier], [name for name in earlier if name not in now]
         relisted = table_profile.relisted_columns(edges_from.to_plain(), only.to_plain())
         if undescribed or missing or relisted:
-            warnings.warn(ColumnsNotFrozen(undescribed, missing, relisted), stacklevel=2)
+            warnings.warn(ColumnsNotFrozen(undescribed, missing, relisted), stacklevel=3)
     return only
 
 
