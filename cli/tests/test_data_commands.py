@@ -52,3 +52,18 @@ def test_profile_expand_writes_the_profile_a_short_yaml_stands_for_which_generat
 
     checked = runner.invoke(app, ['data', 'check', str(short), str(tmp_path / 'short.csv')])
     assert checked.exit_code == 0, checked.output
+
+
+def test_a_part_file_written_with_its_profile_embedded_regenerates_its_dataset_at_the_seed_and_rows_it_names(tmp_path):
+    runner = CliRunner()
+    flags = ['--format', 'parquet', '--out']
+    first = runner.invoke(
+        app, ['data', 'generate', 'orders', '--seed', '7', '--rows', '1234', '--embed-profile', *flags, str(tmp_path / 'first')]
+    )
+    assert first.exit_code == 0, first.output
+    part = next((tmp_path / 'first').rglob('*.parquet'))
+
+    again = runner.invoke(app, ['data', 'generate', str(part), *flags, str(tmp_path / 'again')])
+    assert again.exit_code == 0, again.output
+    manifests = [json.loads((tmp_path / out / '_manifest.json').read_text()) for out in ('first', 'again')]
+    assert manifests[0]['dataset_digest'] == manifests[1]['dataset_digest']

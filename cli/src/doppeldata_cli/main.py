@@ -39,6 +39,8 @@ from doppeldata import profile_tables
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.dataset_generation import one_file_of
 from doppeldata.dataset_generation import prepared_write
+from doppeldata.embedded_profiles import data_file_metadata
+from doppeldata.embedded_profiles import provenance_defaults
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_resource
 from doppeldata.example_profiles import example_text
@@ -55,6 +57,8 @@ from doppeldata.profile_comparison.real_data_scores import DEFAULT_SAMPLE_ROWS
 from doppeldata.profile_comparison.real_data_scores import SCORES
 from doppeldata.profile_comparison.real_data_scores import scored_columns
 from doppeldata.profile_comparison.side_by_side_html import unwritable
+from doppeldata.profile_exports import EXPORT_FORMATS
+from doppeldata.profile_exports import export
 from doppeldata.profiling import ENGINES
 from doppeldata.profiling import applied_policy
 from doppeldata.published_schemas import enum_values
@@ -117,7 +121,10 @@ schemas_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas of the fi
 app.add_typer(schemas_app, name='schemas')
 
 JsonOption = Annotated[bool, typer.Option('--json', help='Print JSON instead of a table.')]
-PROFILE_HELP = 'A profile file, a short YAML of rows and columns, or an example name as profile list prints it.'
+PROFILE_HELP = (
+    'A profile file, a short YAML of rows and columns, a Parquet or Arrow file written with --embed-profile, '
+    'or an example name as profile list prints it.'
+)
 ProfileArgument = Annotated[str, typer.Argument(metavar='PROFILE', help=PROFILE_HELP)]
 ProfileOrColumnsArgument = Annotated[str | None, typer.Argument(metavar='[PROFILE]', help=f'{PROFILE_HELP} Or give --columns.')]
 ColumnsOption = Annotated[
@@ -141,6 +148,35 @@ SeedOption = Annotated[
     int,
     typer.Option(
         '--seed', metavar='S', min=0, max=2**64 - 1, help='The seed. One profile, seed and row count give the same values anywhere.'
+    ),
+]
+WRITTEN_WITH = 'or to what a Parquet or Arrow PROFILE was written with'
+DataRowsOption = Annotated[
+    int | None,
+    typer.Option(
+        '--rows',
+        metavar='N',
+        min=0,
+        help="Rows to generate, before any copies a scenario's duplicates adds. "
+        f'Defaults to the row count the profile records, {WRITTEN_WITH}.',
+    ),
+]
+DataSeedOption = Annotated[
+    int | None,
+    typer.Option(
+        '--seed',
+        metavar='S',
+        min=0,
+        max=2**64 - 1,
+        help=f'The seed. One profile, seed and row count give the same values anywhere. Defaults to 0, {WRITTEN_WITH}.',
+    ),
+]
+EmbedProfileOption = Annotated[
+    bool,
+    typer.Option(
+        '--embed-profile',
+        help="Write the profile into each Parquet or Arrow file's metadata, where any PROFILE argument reads it back. "
+        'Other formats refuse it.',
     ),
 ]
 FormatOption = Annotated[
@@ -412,10 +448,11 @@ def print_notices(caught: list[warnings.WarningMessage]) -> None:
 
 
 def loaded_profile(name: str, param_hint: str) -> Profile:
-    """A profile file, a short YAML, or an example doppeldata ships, refused with exit 2 when it is none or does not validate."""
+    """A profile file, a short YAML, a data file holding a profile, or an example doppeldata ships, refused with exit 2 when it
+    is none or does not validate."""
     try:
         return file_profile(name)
-    except (OSError, InvalidProfile) as error:
+    except (OSError, InvalidProfile, SourceError) as error:
         raise typer.BadParameter(str(error), param_hint=param_hint) from error
 
 
@@ -756,6 +793,63 @@ def entity_types(path: Path) -> dict[str, list[str]]:
     return found
 
 
+@profile_app.command('export', no_args_is_help=True)
+def profile_export(
+    profile_name: Annotated[
+        str, typer.Argument(metavar='PROFILE', help=f'{PROFILE_HELP} Or a bundle, a file or a directory holding bundle.yaml.')
+    ],
+    export_format: Annotated[
+        str,
+        typer.Option(
+            '--format',
+            metavar='FORMAT',
+            help=(
+                f'One of {", ".join(EXPORT_FORMATS)}. json-schema writes the record schema, a JSON Schema of one record. '
+                "pyspark-schemas writes each table's StructType and a pandera model of it."
+            ),
+        ),
+    ],
+    table: Annotated[
+        str | None,
+        typer.Option(
+            '--table',
+            metavar='NAME',
+            help="Export the one table NAME of a bundle. json-schema takes it, as the record schema describes one table's records.",
+        ),
+    ] = None,
+    out: Annotated[Path | None, typer.Option('--out', metavar='FILE', help='Write the export to FILE rather than print it.')] = None,
+) -> None:
+    """Export a profile's contract for another tool to validate data with: doppeldata profile export orders.profile.yaml --format dqdl
+
+    Each format but dqdl carries a range, listed values, lengths or a pattern only where the profile states it of every
+    value, and names what it left out in its own description. dqdl checks a share three standard errors below the profile's.
+
+    A profile made from data that fails profile check is refused, so no export carries a literal the privacy policy did not pass.
+    """
+    if export_format not in EXPORT_FORMATS:
+        raise typer.BadParameter(
+            f'{export_format!r} is not an export format; choose from {", ".join(EXPORT_FORMATS)}', param_hint='--format'
+        )
+    if out is not None and not out.parent.is_dir():
+        raise typer.BadParameter(f'{out.parent} is not a directory; create it, or name a FILE in one that exists', param_hint='--out')
+    try:
+        text = export(profile_name, export_format, table=table)
+    except (OSError, InvalidProfile) as error:
+        raise typer.BadParameter(str(error), param_hint='PROFILE') from error
+    except CheckFailed as error:
+        message = f'{error}; doppeldata profile check {profile_name} names each violation'
+        raise typer.BadParameter(message, param_hint='PROFILE') from error
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint='--table') from error
+    if out is None:
+        typer.echo(text, nl=False)
+        return
+    try:
+        out.write_text(text, encoding='utf-8')
+    except OSError as error:
+        raise typer.BadParameter(f'{out} could not be written: {error.strerror or error}', param_hint='--out') from error
+
+
 @profile_app.command('show', no_args_is_help=True)
 def profile_show(name: Annotated[str, typer.Argument(metavar='NAME', help='An example name, as profile list prints it.')]) -> None:
     """Print an example profile's YAML, to start a profile from: doppeldata profile show orders > orders.profile.yaml"""
@@ -825,19 +919,20 @@ def data_choices(
     profile_name: str | None,
     columns: str | None,
     rows: int | None,
-    seed: int,
-    file_format: str | None,
+    seed: int | None,
     out: str,
-    file_rows: int | None,
-    partition_by: list[str] | None,
-    no_partitions: bool,
-    partition_style: str | None,
-    writer: str | None,
+    write: WriteChoices,
     scenario: list[str] | None,
 ) -> DataChoices:
-    """The flags both data verbs take, each refused here with exit 2 when it names nothing doppeldata writes."""
-    write = write_choices(file_format, file_rows, partition_by, no_partitions, partition_style, writer)
-    return DataChoices(profile_or_columns(profile_name, columns), rows, seed, out, write, loaded_scenario(scenario))
+    """The flags both data verbs take, each refused here with exit 2 when it names nothing doppeldata writes. A Parquet or
+    Arrow PROFILE's provenance gives the seed and rows where the flags give none."""
+    profile = profile_or_columns(profile_name, columns)
+    metadata = data_file_metadata(profile_name) if profile_name is not None and Path(profile_name).is_file() else None
+    if metadata is not None:
+        written_seed, written_rows = provenance_defaults(metadata)
+        seed = written_seed if seed is None else seed
+        rows = written_rows if rows is None else rows
+    return DataChoices(profile, rows, seed or 0, out, write, loaded_scenario(scenario))
 
 
 def write_choices(
@@ -847,6 +942,7 @@ def write_choices(
     no_partitions: bool,
     partition_style: str | None,
     writer: str | None,
+    embed_profile: bool = False,
 ) -> WriteChoices:
     """What the write flags lay over the profile, each refused with exit 2 when it names nothing doppeldata writes."""
     if file_format is not None and file_format not in output_formats():
@@ -867,7 +963,7 @@ def write_choices(
         if not isinstance(settings, dict):
             raise typer.BadParameter(f'{writer!r} is not a JSON object', param_hint='--writer')
     keys = [] if no_partitions else partition_by or None
-    return WriteChoices(file_format, file_rows, keys, partition_style, settings)
+    return WriteChoices(file_format, file_rows, keys, partition_style, settings, embed_profile)
 
 
 def size(count: int) -> str:
@@ -888,8 +984,8 @@ def data_plan(
     out: OutOption,
     profile_name: ProfileOrColumnsArgument = None,
     columns: ColumnsOption = None,
-    rows: RowsOption = None,
-    seed: SeedOption = 0,
+    rows: DataRowsOption = None,
+    seed: DataSeedOption = None,
     file_format: FormatOption = None,
     file_rows: FileRowsOption = None,
     partition_by: PartitionByOption = None,
@@ -897,15 +993,15 @@ def data_plan(
     partition_style: PartitionStyleOption = None,
     writer: WriterOption = None,
     scenario: ScenarioOption = None,
+    embed_profile: EmbedProfileOption = False,
     as_json: JsonOption = False,
 ) -> None:
     """Print what data generate would write with the same flags: doppeldata data plan orders --rows 1000000000 --out s3://bucket/orders/
 
     It reads nothing at --out, and generates the first blocks to estimate the size. The --json shape may change before 1.0.
     """
-    choices = data_choices(
-        profile_name, columns, rows, seed, file_format, out, file_rows, partition_by, no_partitions, partition_style, writer, scenario
-    )
+    write = write_choices(file_format, file_rows, partition_by, no_partitions, partition_style, writer, embed_profile)
+    choices = data_choices(profile_name, columns, rows, seed, out, write, scenario)
     planned = doppeldata.plan(choices.profile, choices.out, **choices.arguments())
     if as_json:
         typer.echo(json.dumps(planned.to_json(), indent=2))
@@ -961,14 +1057,15 @@ def data_generate(
     out: OutOption,
     profile_name: ProfileOrColumnsArgument = None,
     columns: ColumnsOption = None,
-    rows: RowsOption = None,
-    seed: SeedOption = 0,
+    rows: DataRowsOption = None,
+    seed: DataSeedOption = None,
     file_format: FormatOption = None,
     file_rows: FileRowsOption = None,
     partition_by: PartitionByOption = None,
     no_partitions: NoPartitionsOption = False,
     partition_style: PartitionStyleOption = None,
     writer: WriterOption = None,
+    embed_profile: EmbedProfileOption = False,
     replace: Annotated[
         bool,
         typer.Option(
@@ -993,10 +1090,13 @@ def data_generate(
     failure, Ctrl-C or SIGTERM, leaves _manifest.partial.json listing the files it completed. A one-file write that stops leaves
     nothing, unless it is killed outright, which leaves a staging directory beside the file for --replace to remove. S3 is
     written with the AWS environment's credentials.
+
+    A Parquet or Arrow file written with --embed-profile regenerates its dataset as PROFILE: doppeldata data generate
+    orders/part-00000-fe89a3c3.parquet --out again/. Its seed and rows are the defaults, and a scenario it was written
+    under is given again with --scenario.
     """
-    choices = data_choices(
-        profile_name, columns, rows, seed, file_format, out, file_rows, partition_by, no_partitions, partition_style, writer, scenario
-    )
+    write = write_choices(file_format, file_rows, partition_by, no_partitions, partition_style, writer, embed_profile)
+    choices = data_choices(profile_name, columns, rows, seed, out, write, scenario)
     one_file = one_file_of(choices.out)
     terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
