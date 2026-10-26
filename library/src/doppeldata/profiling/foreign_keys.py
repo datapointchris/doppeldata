@@ -35,6 +35,17 @@ class BundleMember:
     document: dict[str, Any]
 
 
+@dc.dataclass(frozen=True)
+class Reference:
+    """A child column found to refer to a parent's key, and the relationship written for it."""
+
+    child: BundleMember
+    column: str
+    parent: BundleMember
+    key: str
+    written: dict[str, Any]
+
+
 def relationships(backend: Backend, members: list[BundleMember], k_min: int) -> list[dict[str, Any]]:
     """Every foreign key between the members, in the order of the tables and their columns."""
     found = []
@@ -50,8 +61,33 @@ def relationships(backend: Backend, members: list[BundleMember], k_min: int) -> 
                     counts = backend.foreign_key_counts(child.table, spec.name, parent.table, key)
                     written = written_relationship(f'{child.name}.{spec.name}', f'{parent.name}.{key}', counts, k_min)
                     if written:
-                        found.append(written)
-    return found
+                        found.append(Reference(child, spec.name, parent, key, written))
+    return [reference.written for reference in one_way(found, members)]
+
+
+def one_way(found: list[Reference], members: list[BundleMember]) -> list[Reference]:
+    """`found` with two keys that refer to each other kept in one direction: toward the table whose primary key it is
+    where only one is, else toward the key holding more of the other's values, else toward the earlier table."""
+    order = {member.name: index for index, member in enumerate(members)}
+    by_ends = {(reference.child.name, reference.column, reference.parent.name, reference.key): reference for reference in found}
+
+    def standing(reference: Reference) -> tuple[bool, float, int]:
+        toward_primary = (
+            primary_key(reference.parent.document) == reference.key and primary_key(reference.child.document) != reference.column
+        )
+        return toward_primary, reference.written['containment'], -order[reference.parent.name]
+
+    def kept(reference: Reference) -> bool:
+        mirror = by_ends.get((reference.parent.name, reference.key, reference.child.name, reference.column))
+        return mirror is None or standing(reference) > standing(mirror)
+
+    return [reference for reference in found if kept(reference)]
+
+
+def primary_key(document: dict[str, Any]) -> str | None:
+    """The column a table profile names as its primary key, where that is one column."""
+    primary = ((document.get('dataset') or {}).get('keys') or {}).get('primary')
+    return primary['columns'][0] if primary and len(primary['columns']) == 1 else None
 
 
 def single_keys(document: dict[str, Any]) -> list[str]:
