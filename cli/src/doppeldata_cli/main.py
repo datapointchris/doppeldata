@@ -240,7 +240,8 @@ def profile_create(
     data: Annotated[
         list[str],
         typer.Argument(
-            metavar='DATA...', help='Files, directories or s3:// prefixes all of one format, holding one table unless --tables is given.'
+            metavar='DATA...',
+            help='Files, directories or s3:// prefixes holding one table, all of one format. With --tables, each names its own tables.',
         ),
     ],
     out: Annotated[

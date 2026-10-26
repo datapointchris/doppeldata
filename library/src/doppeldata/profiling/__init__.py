@@ -219,14 +219,17 @@ def profile_tables(
     settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
     named = list(data) if isinstance(data, list | tuple) else [data]
     if not named:
-        raise SourceError('profile_tables() was given an empty list, which names no table to profile')
+        raise SourceError('no data was named; name a file, a directory or an s3:// prefix')
     listings = [listed_source(item, engine) for item in named]
     grouped = [(table.source, reading) for listed, reading in listings for table in table_grouping.grouped(listed)]
     names = [source.name for source, _ in grouped]
     alike = sorted({name for name in names if names.count(name) > 1})
     if alike:
-        raise SourceError(f'{", ".join(map(str, named))} hold more than one table named {", ".join(alike)}; name each by its own folder')
-    backend = engine_backend(engine, named[0] if named else data, spark)
+        raise SourceError(
+            f'{", ".join(map(str, named))} hold more than one table named {", ".join(alike)}. Name each by its own folder, '
+            'or read them as one table, as profile() and profile create without --tables do'
+        )
+    backend = engine_backend(engine, named[0], spark)
     tables = [(source, session_readers(backend, reading)) for source, reading in grouped]
     profiled, relationships = profiled_tables(backend, tables, settings, None, related=True)
     for listed, _ in listings:
