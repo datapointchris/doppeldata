@@ -344,8 +344,9 @@ threads.
 - **`quoting` is read from the block's fields.** It is `always` where every field is quoted, and
   `non_numeric` where exactly the fields that are not numbers are. Otherwise it is `necessary`,
   including where no field is quoted, because a writer that never quotes writes that block alike.
-- **`line_terminator_mix` gives each terminator's share of the block's line breaks.** The commoner
-  one is `line_terminator`. `trailing_delimiter` is true where every record ends in an empty field.
+- **`line_terminator_mix` gives each terminator's share of the block's line breaks**, those inside
+  quoted fields included. The commoner one is `line_terminator`. `trailing_delimiter` is true where
+  every record ends in an empty field.
 
 *Rejected:* DuckDB's sniffer alone. It is the reader, so its dialect is right on clean files, but
 on the file above it reads every row as one column and rejects nothing.
