@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "doppeldata fault record v1",
+  "description": "One fault `malformed_rows` placed, as a line of `_faults.jsonl`.",
+  "type": "object",
+  "properties": {
+    "column": {
+      "description": "The column the fault is in, or null where it breaks the record or the file.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "detail": {
+      "description": "What the fault wrote, under keys its `kind` sets, such as `text` for a `type_invalid`. Empty\nfor a kind that writes nothing more than its name says, such as `bom`.",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "file": {
+      "description": "The object's path under the destination, as the manifest's `files` names it. Beside a\none-file write, that file's name.",
+      "type": "string"
+    },
+    "kind": {
+      "description": "What broke, as `malformed_rows` names it in `kinds`.",
+      "$ref": "#/$defs/FaultKind"
+    },
+    "line": {
+      "description": "The 1-based line the broken record starts on, a header counted. Null in a JSON array, and\nfor a fault of the whole file.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "row": {
+      "description": "The dataset row the record was generated as. Null for a copy, and for a fault of the whole\nfile.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "file",
+    "kind",
+    "detail"
+  ],
+  "$defs": {
+    "FaultKind": {
+      "description": "One way a file is broken. A row kind breaks one record, and a file kind a whole file.",
+      "oneOf": [
+        {
+          "description": "A record ending before its last 1 to n − 1 fields.",
+          "type": "string",
+          "const": "ragged_short"
+        },
+        {
+          "description": "A record carrying 1 or 2 fields past the last.",
+          "type": "string",
+          "const": "ragged_long"
+        },
+        {
+          "description": "A lone quote inside a quoted field.",
+          "type": "string",
+          "const": "unescaped_quote"
+        },
+        {
+          "description": "A line break inside a quoted string field, which is legal CSV.",
+          "type": "string",
+          "const": "embedded_newline"
+        },
+        {
+          "description": "`N/A`, `-`, `?` or a unit suffix in place of a typed value, or text of another type.",
+          "type": "string",
+          "const": "type_invalid"
+        },
+        {
+          "description": "A lone continuation byte or the bytes C3 28 inside a field.",
+          "type": "string",
+          "const": "invalid_utf8"
+        },
+        {
+          "description": "A record past DuckDB's default `max_line_size`.",
+          "type": "string",
+          "const": "line_too_long"
+        },
+        {
+          "description": "The file's last record cut mid-field, with no line break, as a cut-off upload leaves it.",
+          "type": "string",
+          "const": "truncated_line"
+        },
+        {
+          "description": "A file starting with the UTF-8 byte order mark.",
+          "type": "string",
+          "const": "bom"
+        },
+        {
+          "description": "A file whose records end in LF, CRLF and CR mixed.",
+          "type": "string",
+          "const": "mixed_line_endings"
+        },
+        {
+          "description": "A file written with another delimiter than the rest.",
+          "type": "string",
+          "const": "wrong_delimiter"
+        },
+        {
+          "description": "A file whose header renames a column or swaps two, its values swapped with it.",
+          "type": "string",
+          "const": "header_drift"
+        },
+        {
+          "description": "A file encoded windows-1252 among UTF-8 ones.",
+          "type": "string",
+          "const": "latin1_file"
+        },
+        {
+          "description": "A JSON array among NDJSON files, or an NDJSON file among JSON arrays.",
+          "type": "string",
+          "const": "json_layout_mix"
+        },
+        {
+          "description": "A record missing its closing brace.",
+          "type": "string",
+          "const": "json_unbalanced"
+        },
+        {
+          "description": "A number or boolean written as a string.",
+          "type": "string",
+          "const": "json_type_flip"
+        },
+        {
+          "description": "A file whose timestamp columns are stored at another unit than the rest.",
+          "type": "string",
+          "const": "parquet_timestamp_unit_drift"
+        },
+        {
+          "description": "A file whose timestamp columns are stored as INT96, as Hive and Impala wrote them.",
+          "type": "string",
+          "const": "parquet_int96"
+        },
+        {
+          "description": "A file whose decimal columns are stored one digit of scale wider than the rest.",
+          "type": "string",
+          "const": "parquet_decimal_scale_drift"
+        }
+      ]
+    }
+  }
+}

@@ -9,6 +9,7 @@ from typing import Any
 
 import polars as pl
 
+from doppeldata import _core
 from doppeldata.errors import ProfilingWarning
 from doppeldata.privacy_policy import Policy
 from doppeldata.profile_comparison import significant
@@ -17,7 +18,6 @@ from doppeldata.profiling import profile
 from doppeldata.profiling import sources
 from doppeldata.profiling.backend import HIDDEN_COLUMN_PREFIX
 from doppeldata.profiling.polars_backend import PolarsBackend
-from doppeldata.scenario_format import MALFORMED_RATE
 from doppeldata.scenario_format import expected_metrics
 from doppeldata.scenario_format import expected_perturbation
 
@@ -72,10 +72,15 @@ MEASURES: dict[str, Callable[[pl.LazyFrame, str, dict[str, Any]], int]] = {
     'missingness.rate': missingness_rate,
 }
 # Each statistic of the whole table, as its share, or None where the data cannot hold it.
-TABLE_MEASURES: dict[str, Callable[[Any], float | None]] = {MALFORMED_RATE: malformed_rate}
-# A metric the schema names and nothing here measures would fail inside `verified`, so it fails on import instead.
-if unmatched := sorted(set(expected_metrics()) ^ (set(MEASURES) | set(TABLE_MEASURES))):
-    raise ImportError(f'the scenario schema and MEASURES disagree on {", ".join(unmatched)}; measure each metric the schema names')
+TABLE_MEASURES: dict[str, Callable[[Any], float | None]] = {'malformed.rate': malformed_rate}
+# A metric the schema names that nothing here measures, or measures over the column where the engine says the table, would
+# fail inside `verified`, so it fails on import instead.
+BY_COLUMN = {metric for metric in expected_metrics() if _core.expected_metric_takes_column(metric)}
+if unmatched := sorted((BY_COLUMN ^ set(MEASURES)) | ((set(expected_metrics()) - BY_COLUMN) ^ set(TABLE_MEASURES))):
+    raise ImportError(
+        f'the scenario schema and MEASURES disagree on {", ".join(unmatched)}; '
+        'measure each metric the schema names, over its column or the whole table as the engine says'
+    )
 
 
 def verified(document: dict[str, Any], data: Any) -> list[ExpectationResult]:

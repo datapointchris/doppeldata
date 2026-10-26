@@ -43,7 +43,7 @@ The write is split three ways. The driver claims the destination with `_manifest
 exactly as a local write does. Each task writes whole planned ranges through the engine's
 `Plan.write_ranges`, which runs the range writer a local write runs, and yields one record per
 object it stored, with the faults `malformed_rows` placed in it. The driver then stores
-`_faults.ndjson` under that op, then `_manifest.json` from every record, and removes the claim. So
+`_faults.jsonl` under that op, then `_manifest.json` from every record, and removes the claim. So
 object *i* holds the bytes a local `doppeldata data generate` writes for range *i*, and the fault
 list is the local one.
 
@@ -52,7 +52,7 @@ driver   claim ─── _manifest.partial.json
            │
 tasks    write_ranges(0) write_ranges(1) ... write_ranges(n)   records and faults
            │
-driver   commit ─── _faults.ndjson, _manifest.json, claim removed
+driver   commit ─── _faults.jsonl, _manifest.json, claim removed
 ```
 
 - **`partitions` is at most one per planned range, and one per range unless given.** A partition
@@ -112,7 +112,7 @@ integer.
 the `eight-columns` example through `generate` with 7 and with 40 partitions, collects them as
 Arrow, and compares every value with `sd.stream`, each float by its bits. It then writes them through
 `write` with each partition count, and compares every file's SHA-256 with a `doppeldata data
-generate` of the same arguments run on the host. Under `malformed_rows` it compares `_faults.ndjson`
+generate` of the same arguments run on the host. Under `malformed_rows` it compares `_faults.jsonl`
 byte for byte too. Last, it checks `spark_holds` against how the image
 carries each fixture column. Build the wheel, then run it over the images it names by default:
 

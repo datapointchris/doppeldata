@@ -105,7 +105,7 @@ impl Destination {
     /// `_manifest.partial.json`, which fails when another run claimed it first.
     ///
     /// A destination holding anything is refused unless `replace` is set. With it, every object
-    /// must be a doppeldata manifest or `_faults.ndjson` at the prefix, or a part named for the
+    /// must be a doppeldata manifest or `_faults.jsonl` at the prefix, or a part named for the
     /// dataset one of those manifests records, and all of them are deleted. Anything else is
     /// refused untouched.
     pub(crate) async fn prepare(&self, replace: bool, claim: &Manifest) -> Result<(), WriteError> {

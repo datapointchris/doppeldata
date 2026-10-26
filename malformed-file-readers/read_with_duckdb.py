@@ -31,7 +31,7 @@ def first_line(error: Exception) -> str:
 
 
 def data_files(dataset: Path, extension: str) -> list[Path]:
-    """The dataset's files, leaving out `_faults.ndjson` and anything else named as a sidecar is."""
+    """The dataset's files, leaving out `_manifest.json` and anything else named as a sidecar is."""
     return sorted(path for path in dataset.glob(f'*.{extension}') if not path.name.startswith(('_', '.')))
 
 
@@ -49,7 +49,7 @@ def rejected_lines(path: Path, columns: dict[str, str]) -> dict[int, str]:
             {'path': str(path), 'columns': columns},
         )
         rows = connection.execute('select min(line_byte_position), min(error_type) from reject_errors group by line').fetchall()
-    # DuckDB's `line` counts records, where `_faults.ndjson` counts physical lines, so each reject is placed by its byte.
+    # DuckDB's `line` counts records, where the fault list counts physical lines, so each reject is placed by its byte.
     breaks = [match.start() for match in re.finditer(b'\n', path.read_bytes())]
     return {bisect.bisect_left(breaks, int(at)) + 1: str(error).lower().replace(' ', '_') for at, error in rows}
 

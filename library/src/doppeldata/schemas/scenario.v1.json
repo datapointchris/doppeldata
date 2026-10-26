@@ -795,7 +795,7 @@
           ]
         },
         {
-          "description": "Bytes a reader rejects or misreads, written into the files and listed in `_faults.ndjson` beside\nthem. With no `rate`, `kinds` or `files_share`, it reproduces the malformed rows, line endings and\ntype mix the profile records of its CSV source. Otherwise `rate` of rows each take one of the row\nkinds named, and `files_share` of files each take one of the file kinds named.",
+          "description": "Bytes a reader rejects or misreads, written into the files and listed in `_faults.jsonl` beside\nthem. With no `rate`, `kinds` or `files_share`, it reproduces the malformed rows and type mix the\nprofile records of its CSV source. Otherwise `rate` of rows each take one of the row\nkinds named, and `files_share` of files each take one of the file kinds named.",
           "type": "object",
           "properties": {
             "files_share": {

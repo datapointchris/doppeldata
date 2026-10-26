@@ -10,6 +10,7 @@ import duckdb
 import jsonschema
 import pyarrow as pa
 import pyarrow.compute as pc
+from doppeldata.manifest import FAULTS_FILE_NAME
 from doppeldata.published_schemas import schema_text
 
 # Three engine blocks, so each perturbation draws across block boundaries.
@@ -31,7 +32,7 @@ def test_the_hot_key_example_gives_five_customers_its_share_and_a_check_verifies
 def test_a_strict_reader_rejects_exactly_the_lines_the_bad_csv_example_lists_and_a_check_verifies_its_rate(tmp_path: Path):
     orders, bad_csv = sd.Profile.example('orders'), sd.Scenario.example('bad-csv')
     sd.write(orders, f'{tmp_path}/', rows=ROWS, file_rows=ROWS // 3, scenario=bad_csv)
-    faults = [json.loads(line) for line in (tmp_path / '_faults.ndjson').read_text().splitlines()]
+    faults = [json.loads(line) for line in (tmp_path / FAULTS_FILE_NAME).read_text().splitlines()]
     # CSV allows a newline inside quotes, so a strict reader takes an embedded_newline row whole.
     listed = {(fault['file'], fault['line']) for fault in faults if fault['line'] is not None and fault['kind'] != 'embedded_newline'}
     columns = {

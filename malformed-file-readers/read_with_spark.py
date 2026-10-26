@@ -20,6 +20,8 @@ from pyspark.sql import functions as sf
 
 SPARK_TYPES = {'int64': 'BIGINT', 'int32': 'INT', 'string': 'STRING', 'timestamp[us, tz=UTC]': 'TIMESTAMP'}
 CORRUPT = '_corrupt_record'
+# doppeldata.manifest.FAULTS_FILE_NAME, spelled here because the Spark images hold no doppeldata to import it from.
+FAULTS_FILE_NAME = '_faults.jsonl'
 # The option a dataset is read again with, beside the defaults: the one Spark offers against its fault.
 AGAIN_WITH: dict[str, dict[str, Any]] = {
     'embedded_newline': {'multiLine': True},
@@ -46,7 +48,7 @@ def data_files(dataset: Path, extension: str) -> list[Path]:
 
 
 def faults_of(dataset: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in (dataset / '_faults.ndjson').read_text().splitlines()]
+    return [json.loads(line) for line in (dataset / FAULTS_FILE_NAME).read_text().splitlines()]
 
 
 def physical_lines(path: Path) -> list[str]:

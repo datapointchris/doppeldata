@@ -30,13 +30,25 @@ pub const MANIFEST_FILE_NAME: &str = "_manifest.json";
 pub const PARTIAL_MANIFEST_FILE_NAME: &str = "_manifest.partial.json";
 
 /// The file a write under `malformed_rows` lists every fault it placed in, one JSON object a line,
-/// beside the manifest. Its name starts with `_`, so a reader of the data skips it.
-pub const FAULTS_FILE_NAME: &str = "_faults.ndjson";
+/// beside the manifest. Its name starts with `_`, so Spark, Hive and Glue skip it. It ends in
+/// `.jsonl`, which no format doppeldata writes ends in, so a DuckDB or Polars glob over `*.ndjson`
+/// or `*.json` data leaves it out.
+pub const FAULTS_FILE_NAME: &str = "_faults.jsonl";
 
-/// One fault `malformed_rows` placed, as a line of `_faults.ndjson`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// The fault list a write to the one file `file_name` keeps beside it, such as
+/// `_orders.csv.faults.jsonl`. It names the file, so several one-file writes share a directory.
+pub fn one_file_faults_name(file_name: &str) -> String {
+    format!("_{file_name}.faults.jsonl")
+}
+
+/// The version of a fault list's record, which `faults.v1.json` describes.
+pub const FAULTS_VERSION: u64 = 1;
+
+/// One fault `malformed_rows` placed, as a line of `_faults.jsonl`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct FaultRecord {
-    /// The object's path under the destination, as `files` names it.
+    /// The object's path under the destination, as the manifest's `files` names it. Beside a
+    /// one-file write, that file's name.
     pub file: String,
     /// The 1-based line the broken record starts on, a header counted. Null in a JSON array, and
     /// for a fault of the whole file.
@@ -44,10 +56,22 @@ pub struct FaultRecord {
     /// The dataset row the record was generated as. Null for a copy, and for a fault of the whole
     /// file.
     pub row: Option<u64>,
+    /// What broke, as `malformed_rows` names it in `kinds`.
     pub kind: FaultKind,
     /// The column the fault is in, or null where it breaks the record or the file.
     pub column: Option<String>,
+    /// What the fault wrote, under keys its `kind` sets, such as `text` for a `type_invalid`. Empty
+    /// for a kind that writes nothing more than its name says, such as `bom`.
     pub detail: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The JSON Schema (Draft 2020-12) of one line of a fault list, as the library ships it.
+pub fn faults_json_schema() -> String {
+    let mut schema = schemars::schema_for!(FaultRecord);
+    schema.insert("title".into(), format!("doppeldata fault record v{FAULTS_VERSION}").into());
+    let mut text = serde_json::to_string_pretty(&schema).expect("a derived schema always serializes");
+    text.push('\n');
+    text
 }
 
 /// The rows a file holds when neither the call nor the profile sets a size.
@@ -73,8 +97,8 @@ pub struct Manifest {
     pub destination: String,
     /// Every object written, in path order.
     pub files: Vec<ManifestFile>,
-    /// The faults `_faults.ndjson` lists, counted by kind, or null for a write with no
-    /// `malformed_rows`.
+    /// The faults the write's fault list holds, counted by kind, or null for a write with no
+    /// `malformed_rows`. A partial manifest counts the faults of the objects it lists.
     #[serde(default)]
     pub faults: Option<BTreeMap<FaultKind, u64>>,
     /// True when the run stopped early, so `files` lists only the objects that completed. Such a

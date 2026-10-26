@@ -83,7 +83,7 @@ The guarantees, strongest first:
 1. Arrow values are identical for one stream version, under any split, thread count or format.
 2. File bytes, and the split drawn from `rows_per_file`, are identical for one tool version and one
    set of writer settings.
-3. The faults `malformed_rows` breaks those bytes with, and the `_faults.ndjson` naming them, hold
+3. The faults `malformed_rows` breaks those bytes with, and the `_faults.jsonl` naming them, hold
    as the bytes do, under any thread count or split across processes. The op moves no value.
 
 Any change to a sampler's draw order raises the stream version. So does the engine starting to read

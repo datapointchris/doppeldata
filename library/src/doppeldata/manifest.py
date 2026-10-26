@@ -42,13 +42,18 @@ class Manifest:
         return files
 
     @property
+    def format(self) -> str:
+        """The format every file was written in, as `doppeldata schemas show manifest` names it, such as `csv`."""
+        return str(self.document['format'])
+
+    @property
     def partial(self) -> bool:
         """True when the run stopped early, so `files` lists only the objects that completed."""
         return bool(self.document['partial'])
 
     @property
     def faults(self) -> dict[str, int] | None:
-        """The faults `_faults.ndjson` lists, counted by kind, or None for a write with no `malformed_rows`."""
+        """The faults the write's fault list holds, counted by kind, or None for a write with no `malformed_rows`."""
         faults: dict[str, int] | None = self.document.get('faults')
         return faults
 

@@ -47,8 +47,6 @@ if TYPE_CHECKING:
     from doppeldata.profile_comparison.reports import ExpectationResult
 
 SCENARIO_EXPECTATIONS_MODULE = 'doppeldata.scenario_expectations'
-# The one expected metric of the whole table, which names no column.
-MALFORMED_RATE = 'malformed.rate'
 
 
 class InvalidScenario(DoppeldataError, ValueError):
@@ -191,11 +189,12 @@ def expectation_issues(plain: dict[str, Any]) -> Iterator[Issue]:
         metric, column = expectation['metric'], expectation.get('column')
         if expectation.get('at_least') is None and expectation.get('at_most') is None:
             yield Issue('invalid-parameter', at, f'{metric} gives no bound; an expectation takes at_least, at_most or both')
-        if metric == MALFORMED_RATE and column is not None:
+        takes_column = _core.expected_metric_takes_column(metric)
+        if not takes_column and column is not None:
             yield Issue(
                 'invalid-parameter', pointer(('expect', index, 'column')), f'{metric} measures the whole table, so it takes no column'
             )
-        if metric != MALFORMED_RATE and column is None:
+        if takes_column and column is None:
             yield Issue('invalid-parameter', at, f'{metric} measures one column, so it takes column')
             continue
         measured = expected_perturbation(metric, column, perturbations)

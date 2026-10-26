@@ -91,9 +91,9 @@ pub enum Perturbation {
     MalformedRows(MalformedRows),
 }
 
-/// Bytes a reader rejects or misreads, written into the files and listed in `_faults.ndjson` beside
-/// them. With no `rate`, `kinds` or `files_share`, it reproduces the malformed rows, line endings and
-/// type mix the profile records of its CSV source. Otherwise `rate` of rows each take one of the row
+/// Bytes a reader rejects or misreads, written into the files and listed in `_faults.jsonl` beside
+/// them. With no `rate`, `kinds` or `files_share`, it reproduces the malformed rows and type mix the
+/// profile records of its CSV source. Otherwise `rate` of rows each take one of the row
 /// kinds named, and `files_share` of files each take one of the file kinds named.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -182,9 +182,10 @@ impl FaultFormats {
 }
 
 impl FaultKind {
-    /// The kind's name as `kinds` spells it, what it breaks, and the formats that hold it. Every
-    /// fact about a kind is decided here, so a kind added fails to compile until it is described.
-    const fn facts(self) -> (&'static str, Breaks, FaultFormats) {
+    /// The kind's name as `kinds` spells it, what it breaks, the formats that hold it, and the
+    /// formats whose files `data check` reads back as one table while they hold it. Every fact
+    /// about a kind is decided here, so a kind added fails to compile until it is described.
+    const fn facts(self) -> (&'static str, Breaks, FaultFormats, Option<FaultFormats>) {
         use Breaks::File;
         use Breaks::Row;
         use FaultFormats::Delimited;
@@ -192,25 +193,28 @@ impl FaultKind {
         use FaultFormats::Parquet;
         use FaultFormats::Text;
         match self {
-            Self::RaggedShort => ("ragged_short", Row, Delimited),
-            Self::RaggedLong => ("ragged_long", Row, Delimited),
-            Self::UnescapedQuote => ("unescaped_quote", Row, Delimited),
-            Self::EmbeddedNewline => ("embedded_newline", Row, Delimited),
-            Self::TypeInvalid => ("type_invalid", Row, Text),
-            Self::InvalidUtf8 => ("invalid_utf8", Row, Delimited),
-            Self::LineTooLong => ("line_too_long", Row, Delimited),
-            Self::TruncatedLine => ("truncated_line", File, Text),
-            Self::Bom => ("bom", File, Delimited),
-            Self::MixedLineEndings => ("mixed_line_endings", File, Delimited),
-            Self::WrongDelimiter => ("wrong_delimiter", File, Delimited),
-            Self::HeaderDrift => ("header_drift", File, Delimited),
-            Self::Latin1File => ("latin1_file", File, Delimited),
-            Self::JsonLayoutMix => ("json_layout_mix", File, Json),
-            Self::JsonUnbalanced => ("json_unbalanced", Row, Json),
-            Self::JsonTypeFlip => ("json_type_flip", Row, Json),
-            Self::ParquetTimestampUnitDrift => ("parquet_timestamp_unit_drift", File, Parquet),
-            Self::ParquetInt96 => ("parquet_int96", File, Parquet),
-            Self::ParquetDecimalScaleDrift => ("parquet_decimal_scale_drift", File, Parquet),
+            Self::RaggedShort => ("ragged_short", Row, Delimited, Some(Delimited)),
+            Self::RaggedLong => ("ragged_long", Row, Delimited, Some(Delimited)),
+            Self::UnescapedQuote => ("unescaped_quote", Row, Delimited, Some(Delimited)),
+            Self::EmbeddedNewline => ("embedded_newline", Row, Delimited, Some(Delimited)),
+            Self::TypeInvalid => ("type_invalid", Row, Text, Some(Text)),
+            Self::InvalidUtf8 => ("invalid_utf8", Row, Delimited, Some(Delimited)),
+            Self::LineTooLong => ("line_too_long", Row, Delimited, Some(Delimited)),
+            // DuckDB rejects a cut CSV record and reads the rest, and refuses a cut JSON file.
+            Self::TruncatedLine => ("truncated_line", File, Text, Some(Delimited)),
+            Self::Bom => ("bom", File, Delimited, Some(Delimited)),
+            // The profiler reads every file in the first one's dialect and header.
+            Self::MixedLineEndings => ("mixed_line_endings", File, Delimited, None),
+            Self::WrongDelimiter => ("wrong_delimiter", File, Delimited, None),
+            Self::HeaderDrift => ("header_drift", File, Delimited, None),
+            Self::Latin1File => ("latin1_file", File, Delimited, Some(Delimited)),
+            Self::JsonLayoutMix => ("json_layout_mix", File, Json, None),
+            Self::JsonUnbalanced => ("json_unbalanced", Row, Json, None),
+            Self::JsonTypeFlip => ("json_type_flip", Row, Json, Some(Json)),
+            // The profiler reads every file under one Arrow schema.
+            Self::ParquetTimestampUnitDrift => ("parquet_timestamp_unit_drift", File, Parquet, None),
+            Self::ParquetInt96 => ("parquet_int96", File, Parquet, None),
+            Self::ParquetDecimalScaleDrift => ("parquet_decimal_scale_drift", File, Parquet, None),
         }
     }
 
@@ -227,6 +231,11 @@ impl FaultKind {
     /// The formats whose files can hold the kind.
     pub fn formats(self) -> FaultFormats {
         self.facts().2
+    }
+
+    /// Whether `data check` reads files `output` writes back as one table while they hold the kind.
+    pub fn check_reads_back(self, output: &Output) -> bool {
+        self.facts().3.is_some_and(|formats| formats.hold(output))
     }
 }
 
@@ -569,6 +578,15 @@ impl ExpectedMetric {
             Self::LateArrivalRate => "late_arrival",
             Self::MissingnessRate => "missingness",
             Self::MalformedRate => "malformed_rows",
+        }
+    }
+
+    /// Whether the metric measures one column, so an expectation of it names `column`, rather than
+    /// the whole table.
+    pub fn takes_column(self) -> bool {
+        match self {
+            Self::HotKeysShare | Self::DuplicatesRate | Self::LateArrivalRate | Self::MissingnessRate => true,
+            Self::MalformedRate => false,
         }
     }
 }

@@ -192,28 +192,28 @@ def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, rep
     alone describes the rows this write replaces, so it goes before the file moves, whether or not `manifest` writes
     another. One recording other files makes that directory their dataset, so it refuses the write. The manifest returned
     names `target`'s directory as its destination, and `target` as its one file. No rows write no file, as they write none
-    in a directory. Under `malformed_rows` the write lists its faults in `_faults.ndjson` beside `target` every time, and
-    one already there is held as the manifest is.
+    in a directory. Under `malformed_rows` the write lists its faults beside `target` every time, in the list
+    `_core.one_file_faults_name` names for it, such as `_orders.csv.faults.jsonl`. One already there describes the bytes
+    this write replaces, so it is held as the file is.
     """
     if target.is_dir():
         message = f'{target} is a directory; end the path with / to write the dataset into it'
         raise WriteFailed('destination-is-a-directory', message, kind='refused')
     recorded = target.parent / MANIFEST_FILE_NAME
     listed = [file['path'] for file in Manifest.from_json(recorded.read_text()).files] if recorded.is_file() else None
-    faults_recorded = target.parent / FAULTS_FILE_NAME
-    faulted = fault_files(faults_recorded) if faults_recorded.is_file() else None
-    for sidecar, names in ((recorded, listed), (faults_recorded, faulted)):
-        others = sorted(set(names or ()) - {target.name})
-        if others:
-            message = (
-                f'{sidecar} records {", ".join(others)} as its dataset, so {target.name} cannot join it; write it to another directory'
-            )
-            raise WriteFailed('manifest-records-another-file', message, kind='refused')
+    others = sorted(set(listed or ()) - {target.name})
+    if others:
+        message = f'{recorded} records {", ".join(others)} as its dataset, so {target.name} cannot join it; write it to another directory'
+        raise WriteFailed('manifest-records-another-file', message, kind='refused')
     staging = target.parent / f'.{target.name}{STAGING_SUFFIX}'
+    # Each record the engine leaves beside the data, as it is staged and where it lands beside `target`.
+    sidecars = [
+        (staging / MANIFEST_FILE_NAME, recorded),
+        (staging / FAULTS_FILE_NAME, target.parent / _core.one_file_faults_name(target.name)),
+    ]
     held = [
         (f'{target} already exists', target.exists()),
-        (f'{recorded} already exists', listed is not None),
-        (f'{faults_recorded} already exists', faulted is not None),
+        *((f'{beside} already exists', beside.is_file()) for _, beside in sidecars),
         (f'{staging} holds a write to {target.name} that was killed or is still running', staging.exists()),
     ]
     refusals = [message for message, holds in held if holds]
@@ -231,23 +231,23 @@ def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, rep
         moved = Manifest({**written.document, 'destination': str(target.parent), 'files': files})
         if manifest:
             (staging / MANIFEST_FILE_NAME).write_text(json.dumps(moved.document, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+        else:
+            (staging / MANIFEST_FILE_NAME).unlink(missing_ok=True)
         staged_faults = staging / FAULTS_FILE_NAME
         if staged_faults.is_file():
             renamed = [{**json.loads(line), 'file': target.name} for line in staged_faults.read_text(encoding='utf-8').splitlines()]
             lines = ''.join(json.dumps(fault, ensure_ascii=False, separators=(',', ':')) + '\n' for fault in renamed)
             staged_faults.write_text(lines, encoding='utf-8')
-        if listed is not None:
-            recorded.unlink()
-        if faulted is not None:
-            faults_recorded.unlink()
+        # An old record beside `target` describes the bytes this write replaces, so it goes before they do.
+        for _, beside in sidecars:
+            beside.unlink(missing_ok=True)
         for file in written.files:
             os.replace(staging / file['path'], target)
         if not files:
             target.unlink(missing_ok=True)
-        if manifest:
-            os.replace(staging / MANIFEST_FILE_NAME, recorded)
-        if staged_faults.is_file():
-            os.replace(staged_faults, faults_recorded)
+        for staged, beside in sidecars:
+            if staged.is_file():
+                os.replace(staged, beside)
     except StoppedWrite as error:
         # The partial manifest was in the staging directory, which goes with everything else the write made.
         error.manifest_stored = False
@@ -257,11 +257,6 @@ def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, rep
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return moved
-
-
-def fault_files(path: Path) -> list[str]:
-    """Each file a `_faults.ndjson` names."""
-    return sorted({json.loads(line)['file'] for line in path.read_text(encoding='utf-8').splitlines() if line})
 
 
 def unwritable(target: Path, error: OSError) -> WriteFailed:

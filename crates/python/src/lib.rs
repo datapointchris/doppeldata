@@ -126,6 +126,33 @@ mod _core {
             .map_err(|_| PyValueError::new_err(format!("{metric:?} is not a metric an expectation can name")))
     }
 
+    /// The fault list a write to the one file ``file_name`` keeps beside it, such as
+    /// ``_orders.csv.faults.jsonl``.
+    #[pyfunction]
+    fn one_file_faults_name(file_name: &str) -> String {
+        doppeldata_core::manifest::one_file_faults_name(file_name)
+    }
+
+    /// Whether an expectation's metric measures one column, so the expectation names ``column``.
+    #[pyfunction]
+    fn expected_metric_takes_column(metric: &str) -> PyResult<bool> {
+        serde_json::from_value::<doppeldata_core::scenario::ExpectedMetric>(metric.into())
+            .map(|metric| metric.takes_column())
+            .map_err(|_| PyValueError::new_err(format!("{metric:?} is not a metric an expectation can name")))
+    }
+
+    /// Of the fault kind ``kind`` and files written as ``format``: whether the kind breaks whole
+    /// files, whether the files can hold it, and whether ``data check`` reads them back as one table
+    /// while they hold it.
+    #[pyfunction]
+    fn fault_kind_facts(kind: &str, format: &str) -> PyResult<(bool, bool, bool)> {
+        let fault = serde_json::from_value::<doppeldata_core::scenario::FaultKind>(kind.into())
+            .map_err(|_| PyValueError::new_err(format!("{kind:?} is not a fault kind malformed_rows writes")))?;
+        let output = serde_json::from_value::<doppeldata_core::format_settings::Output>(json!({"format": format, "writer": {}}))
+            .map_err(|_| PyValueError::new_err(format!("{format:?} is not a format doppeldata writes")))?;
+        Ok((fault.is_file_kind(), fault.formats().hold(&output), fault.check_reads_back(&output)))
+    }
+
     /// ``profile_json`` with the scenario's patch applied as the engine applies it, and each column
     /// the patch names that the profile does not hold.
     #[pyfunction]
@@ -449,25 +476,29 @@ mod _core {
             Ok(serde_json::to_string(&written).expect("a manifest record always serializes"))
         }
 
-        /// Stores the manifest of a write ``claim`` claimed, and ``_faults.ndjson`` under
-        /// ``malformed_rows``, from everything ``write_ranges`` returned, given as one JSON object
-        /// of ``files`` and ``faults``, and returns the manifest as JSON. ``tasks`` is how many the
-        /// ranges were divided among, and ``elapsed_ms`` the time from the claim. A range with no
-        /// record leaves the partial manifest under the claim's name, and raises.
-        #[pyo3(signature = (options, destination, written_json, *, tasks, elapsed_ms, s3_store=None))]
+        /// Stores the manifest of a write ``claim`` claimed, and the fault list under
+        /// ``malformed_rows``, from what each ``write_ranges`` call returned, each string as it
+        /// returned it, and returns the manifest as JSON. ``tasks`` is how many the ranges were
+        /// divided among, and ``elapsed_ms`` the time from the claim. A range with no record leaves
+        /// the partial manifest under the claim's name, and raises.
+        #[pyo3(signature = (options, destination, written, *, tasks, elapsed_ms, s3_store=None))]
         fn commit(
             &self,
             options: PyRef<'_, WriteOptions>,
             destination: &str,
-            written_json: &str,
+            written: Vec<String>,
             tasks: u32,
             elapsed_ms: u64,
             s3_store: Option<Bound<'_, PyDict>>,
         ) -> PyResult<String> {
             let py = options.py();
-            let files: RangesWritten = serde_json::from_str(written_json).map_err(|error| {
-                PyValueError::new_err(format!("written_json is not the files and faults write_ranges returns: {error}"))
-            })?;
+            let mut files = RangesWritten::default();
+            for part in &written {
+                let part: RangesWritten = serde_json::from_str(part)
+                    .map_err(|error| PyValueError::new_err(format!("written holds a string write_ranges did not return: {error}")))?;
+                files.files.extend(part.files);
+                files.faults.extend(part.faults);
+            }
             let destination = destination_at(py, destination, s3_store)?;
             let (run, cancel) = run_options(1, false);
             let (plan, options) = (&*self.plan, &options.options);

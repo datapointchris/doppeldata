@@ -108,8 +108,8 @@ class ChunkBatches:
 
 @dc.dataclass(frozen=True)
 class RangeWrites:
-    """What each Spark task runs for `write`: the objects of every range whose number its partition holds, yielding one row for each
-    object's record and one for each fault `malformed_rows` placed, each in the order written."""
+    """What each Spark task runs for `write`: the objects of every range whose number its partition holds, yielding one row that
+    holds what `write_ranges` returned, untouched, for `commit` to read."""
 
     executor_plan: ExecutorPlan
     choices_json: str
@@ -126,12 +126,7 @@ class RangeWrites:
             written = engine.write_ranges(options, self.destination, ranges, s3_store=s3_store_of(self.destination, self.bucket))
         except StoppedWrite as stopped:
             raise RuntimeError(f'{TASK_STOPPED} {json.dumps({"code": stopped.code, "kind": stopped.kind})} {stopped}') from stopped
-        parsed = json.loads(written)
-        files = [json.dumps(record) for record in parsed['files']]
-        faults = [json.dumps(record) for record in parsed['faults']]
-        none = [None] * len(files), [None] * len(faults)
-        columns = [pa.array(files + none[1], pa.string()), pa.array(none[0] + faults, pa.string())]
-        yield pa.record_batch(columns, names=['file', 'fault'])
+        yield pa.record_batch([pa.array([written], pa.string())], names=['written'])
 
 
 def executor_plan(profile: ProfileSource, rows: int | None, seed: int, scenario: Scenario | None) -> tuple[ExecutorPlan, '_core.Plan']:
@@ -155,12 +150,12 @@ def executors_destination(spark: SparkSession, prepared: PreparedWrite) -> str:
     return os.path.abspath(prepared.destination)
 
 
-def job_failure(error: Exception, destination: str, commit: Callable[[str], Manifest]) -> WriteFailed:
+def job_failure(error: Exception, destination: str, commit: Callable[[list[str]], Manifest]) -> WriteFailed:
     """What a failed Spark job raises once the partial manifest is stored: the code and kind of the task's StoppedWrite that ended
     it, or `spark-job-failed`. A failure to store the partial manifest is raised in its place."""
     recorded: WriteFailed | None = None
     try:
-        commit('{"files": [], "faults": []}')
+        commit([])
     except WriteFailed as stored:
         if stored.code != 'ranges-unrecorded':
             return stored
@@ -291,14 +286,12 @@ def write(
     planned = ExecutorPlan(prepared.arguments, _core.VERSION, _core.STREAM_VERSION)
     writes = RangeWrites(planned, prepared.choices_json, destination, prepared.bucket)
 
-    def commit(written_json: str) -> Manifest:
+    def commit(written: list[str]) -> Manifest:
         elapsed_ms = round((time.monotonic() - started) * 1000)
-        return Manifest.from_json(engine.commit(options, destination, written_json, tasks=tasks, elapsed_ms=elapsed_ms, s3_store=store))
+        return Manifest.from_json(engine.commit(options, destination, written, tasks=tasks, elapsed_ms=elapsed_ms, s3_store=store))
 
     try:
-        collected = spark.range(ranges, numPartitions=tasks).mapInArrow(writes, 'file string, fault string').collect()
+        collected = spark.range(ranges, numPartitions=tasks).mapInArrow(writes, 'written string').collect()
     except Exception as error:
         raise job_failure(error, destination, commit) from error
-    files = ','.join(row.file for row in collected if row.file is not None)
-    faults = ','.join(row.fault for row in collected if row.fault is not None)
-    return commit(f'{{"files": [{files}], "faults": [{faults}]}}')
+    return commit([row.written for row in collected])

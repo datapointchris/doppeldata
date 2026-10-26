@@ -77,13 +77,13 @@ class Plan:
         Each top-level column's name, type as a profile's ``physical_type`` spells it, what draws
         its values, and the share of rows drawn null, in schema order.
         """
-    def commit(self, /, options: WriteOptions, destination: str, written_json: str, *, tasks: SupportsIndex, elapsed_ms: SupportsIndex, s3_store: dict |None = None) -> str:
+    def commit(self, /, options: WriteOptions, destination: str, written: SupportsGetItem[int, str], *, tasks: SupportsIndex, elapsed_ms: SupportsIndex, s3_store: dict |None = None) -> str:
         """
-        Stores the manifest of a write ``claim`` claimed, and ``_faults.ndjson`` under
-        ``malformed_rows``, from everything ``write_ranges`` returned, given as one JSON object
-        of ``files`` and ``faults``, and returns the manifest as JSON. ``tasks`` is how many the
-        ranges were divided among, and ``elapsed_ms`` the time from the claim. A range with no
-        record leaves the partial manifest under the claim's name, and raises.
+        Stores the manifest of a write ``claim`` claimed, and the fault list under
+        ``malformed_rows``, from what each ``write_ranges`` call returned, each string as it
+        returned it, and returns the manifest as JSON. ``tasks`` is how many the ranges were
+        divided among, and ``elapsed_ms`` the time from the claim. A range with no record leaves
+        the partial manifest under the claim's name, and raises.
         """
     @property
     def dataset_digest(self, /) -> str:
@@ -185,6 +185,18 @@ def expected_metric_op(metric: str) -> str:
     ``hot_keys.share``.
     """
 
+def expected_metric_takes_column(metric: str) -> bool:
+    """
+    Whether an expectation's metric measures one column, so the expectation names ``column``.
+    """
+
+def fault_kind_facts(kind: str, format: str) -> tuple[bool, bool, bool]:
+    """
+    Of the fault kind ``kind`` and files written as ``format``: whether the kind breaks whole
+    files, whether the files can hold it, and whether ``data check`` reads them back as one table
+    while they hold it.
+    """
+
 def fitted_families() -> dict[str, bool]:
     """
     Whether each scipy.stats family a profile's ``fit`` can name is discrete, by its name. Any
@@ -195,6 +207,12 @@ def generalize_pattern(values: SupportsGetItem[int, str]) -> str |None:
     """
     The anchored regular expression grex generalizes the values to, with each digit as a digit
     class, or None when it would hold a literal or a character class only some values have.
+    """
+
+def one_file_faults_name(file_name: str) -> str:
+    """
+    The fault list a write to the one file ``file_name`` keeps beside it, such as
+    ``_orders.csv.faults.jsonl``.
     """
 
 def patched_profile(profile_json: str, scenario_json: str) -> tuple[str, list[str]]:

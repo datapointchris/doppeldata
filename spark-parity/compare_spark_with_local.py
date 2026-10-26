@@ -2,7 +2,7 @@
 
 `check-spark-parity.sh` runs this through spark-submit inside each Spark image. `generate`'s DataFrame is collected as Arrow and
 compared value for value with `doppeldata.stream`, each float by its bits. `write`'s files are compared by SHA-256 with the
-manifest of a `doppeldata data generate` with the same arguments, and its `_faults.ndjson` byte for byte with the one beside
+manifest of a `doppeldata data generate` with the same arguments, and its `_faults.jsonl` byte for byte with the one beside
 that manifest. Each column of the every-column-kind fixture then goes through
 `mapInArrow` alone, and whether Spark gave every value back is compared with `spark_holds`. It prints one JSON object per check,
 and exits 1 when any differs.
@@ -91,7 +91,7 @@ def type_disagreements(spark: SparkSession, fixture: str) -> list[str]:
 
 
 def same_faults(local_manifest_path: str, written: str) -> bool:
-    """Whether the write's `_faults.ndjson` holds the local run's bytes, or neither run wrote one."""
+    """Whether the write's `_faults.jsonl` holds the local run's bytes, or neither run wrote one."""
     ours, theirs = pathlib.Path(local_manifest_path).with_name(FAULTS_FILE_NAME), pathlib.Path(written) / FAULTS_FILE_NAME
     if not ours.exists() or not theirs.exists():
         return ours.exists() == theirs.exists()
