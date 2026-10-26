@@ -39,8 +39,12 @@ from doppeldata.dataset_generation import s3_store_of
 from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
 from doppeldata.manifest import Manifest
+from doppeldata.profile_format import Issue
+from doppeldata.profile_format import pointer
 from doppeldata.profile_sources import ProfileSource
+from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
+from doppeldata.scenario_format import composed
 
 # The engine blocks each Spark task generates in turn. The chunk is a unit of work and never of values, so its size moves no value.
 CHUNK_BLOCKS = 16
@@ -211,13 +215,33 @@ def spark_holds(data_type: Any) -> bool:
     return any(holds(data_type) for holds in SPARK_HOLDS)
 
 
+def one_process_scenario(scenario: Scenario | Sequence[Scenario] | None) -> Scenario | None:
+    """The scenario `scenario=` names, refused where it holds a `cdc`, whose stream Spark's executors cannot write."""
+    applied = composed(scenario)
+    if applied is None:
+        return None
+    issues = [
+        Issue(
+            'op-needs-one-process',
+            pointer(('perturbations', index)),
+            "cdc orders the whole table's changes by commit time, so one process writes the stream; write it with doppeldata.write",
+        )
+        for index, entry in enumerate(applied.to_plain().get('perturbations') or [])
+        if entry['op'] == 'cdc'
+    ]
+    if issues:
+        raise InvalidScenario(applied.source, issues)
+    return applied
+
+
 def struct_type(profile: ProfileSource, *, scenario: Scenario | Sequence[Scenario] | None = None) -> 'st.StructType':
     """The Spark schema of the DataFrame `generate` returns for `profile` under `scenario`.
 
     A timestamp with no time zone is a TimestampNTZType, and one with a zone a TimestampType. A column of a type `spark_holds`
     refuses, which Spark cannot carry with every value kept, raises ValueError naming it.
     """
-    _, engine = executor_plan(profile, 0, 0, rows_only(scenario, 'spark.generate', 'doppeldata.spark.write'))
+    applied = one_process_scenario(scenario)
+    _, engine = executor_plan(profile, 0, 0, rows_only(applied, 'spark.generate', 'doppeldata.spark.write'))
     return arrow_struct_type(engine)
 
 
@@ -236,7 +260,8 @@ def generate(
     None, changes which task makes a row and never its value. Write it with any Spark writer, partitioned as the run needs.
     Every executor must have the driver's doppeldata release installed. `scenario` is taken as `doppeldata.generate` takes it.
     """
-    planned, engine = executor_plan(profile, rows, seed, rows_only(scenario, 'spark.generate', 'doppeldata.spark.write'))
+    applied = one_process_scenario(scenario)
+    planned, engine = executor_plan(profile, rows, seed, rows_only(applied, 'spark.generate', 'doppeldata.spark.write'))
     schema = arrow_struct_type(engine)
     chunks = -(-engine.block_count // CHUNK_BLOCKS)
     numbers = spark.range(chunks, numPartitions=checked_partitions(partitions, chunks))
@@ -273,7 +298,7 @@ def write(
     """
     started = time.monotonic()
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
-    prepared = prepared_write(profile, out, rows, seed, choices, scenario)
+    prepared = prepared_write(profile, out, rows, seed, choices, one_process_scenario(scenario))
     if prepared.one_file is not None:
         message = f'{os.fspath(out)} names one file, which doppeldata.write writes; the executors write a directory, so end the path with /'
         raise WriteFailed('one-file-from-executors', message, kind='refused')

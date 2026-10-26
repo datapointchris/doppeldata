@@ -1003,6 +1003,13 @@ def data_generate(
         f'wrote {counted(rows_written, "row")}{copies} as {document["format"]} in {counted(len(manifest.files), "file")}, {stored}, '
         f'in {seconds:.2f} s on {counted(document["threads"], "thread")}: {rows_written / seconds / 1e6:.2f}M rows/s'
     )
+    if manifest.cdc is not None:
+        stream = manifest.cdc
+        typer.echo(
+            f'and {counted(sum(stream["changes"].values()), "change")} as {stream["style"]} in '
+            f'{counted(len(stream["files"]), "file")} under {stream["prefix"]}, beside {stream["expected_prefix"]}, '
+            'the table a merge in commit order reaches'
+        )
     if one_file is not None and not manifest_beside:
         typer.echo(f'{one_file} holds dataset {manifest.dataset_digest}')
     else:

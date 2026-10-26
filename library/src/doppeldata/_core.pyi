@@ -175,8 +175,8 @@ def determinism_values_digest(profile_json: str, profile_digest: str, seed: Supp
     """
     The determinism contract's SHA-256 over every value and text cell generated from a profile,
     with the scenario ``scenario`` gives as its JSON and its digest, made on ``threads`` threads
-    the way ``Plan.generate`` makes its blocks. A wheel's build compares it with the hash the
-    contract pins.
+    the way ``Plan.generate`` makes its blocks. Under ``cdc`` it also covers every change file
+    and the expected table. A wheel's build compares it with the hash the contract pins.
     """
 
 def expected_metric_op(metric: str) -> str:

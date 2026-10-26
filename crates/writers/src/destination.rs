@@ -105,9 +105,9 @@ impl Destination {
     /// `_manifest.partial.json`, which fails when another run claimed it first.
     ///
     /// A destination holding anything is refused unless `replace` is set. With it, every object
-    /// must be a doppeldata manifest or `_faults.jsonl` at the prefix, or a part named for the
-    /// dataset one of those manifests records, and all of them are deleted. Anything else is
-    /// refused untouched.
+    /// must be a doppeldata manifest or `_faults.jsonl` at the prefix, a part named for the
+    /// dataset one of those manifests records, or an object under the stream prefixes a `cdc`
+    /// manifest records, and all of them are deleted. Anything else is refused untouched.
     pub(crate) async fn prepare(&self, replace: bool, claim: &Manifest) -> Result<(), WriteError> {
         let objects: Vec<ObjectMeta> = self.store.list(Some(&self.prefix)).try_collect().await?;
         if let Some(first) = objects.first() {
@@ -118,14 +118,17 @@ impl Destination {
                     example: first.location.to_string(),
                 });
             }
-            let parts = self.recorded_parts(&objects).await?;
+            let (parts, stream_prefixes) = self.recorded_parts(&objects).await?;
             let records = [
                 self.object(MANIFEST_FILE_NAME)?,
                 self.object(PARTIAL_MANIFEST_FILE_NAME)?,
                 self.object(FAULTS_FILE_NAME)?,
             ];
-            let ours =
-                |path: &Path| records.contains(path) || path.filename().and_then(part_suffix).is_some_and(|suffix| parts.contains(suffix));
+            let ours = |path: &Path| {
+                records.contains(path)
+                    || path.filename().and_then(part_suffix).is_some_and(|suffix| parts.contains(suffix))
+                    || stream_prefixes.iter().any(|prefix| path.prefix_matches(prefix))
+            };
             if let Some(foreign) = objects.iter().find(|meta| !ours(&meta.location)) {
                 return Err(WriteError::ForeignObject {
                     url: self.url.clone(),
@@ -146,9 +149,11 @@ impl Destination {
     }
 
     /// The `{identity8}.{extension}` every part of a dataset recorded by a manifest at the prefix
-    /// ends with. A manifest there that does not parse is refused as foreign.
-    async fn recorded_parts(&self, objects: &[ObjectMeta]) -> Result<BTreeSet<String>, WriteError> {
+    /// ends with, and each stream prefix a `cdc` manifest there records. A manifest there that
+    /// does not parse is refused as foreign.
+    async fn recorded_parts(&self, objects: &[ObjectMeta]) -> Result<(BTreeSet<String>, Vec<Path>), WriteError> {
         let mut parts = BTreeSet::new();
+        let mut stream_prefixes = Vec::new();
         for name in [MANIFEST_FILE_NAME, PARTIAL_MANIFEST_FILE_NAME] {
             let path = self.object(name)?;
             if !objects.iter().any(|meta| meta.location == path) {
@@ -160,8 +165,11 @@ impl Destination {
                 object: path.to_string(),
             })?;
             parts.insert(format!("{}.{}", identity8(&manifest.dataset_digest), manifest.output.extension()));
+            for prefix in manifest.cdc.iter().flat_map(|cdc| [&cdc.prefix, &cdc.expected_prefix]) {
+                stream_prefixes.push(self.object(prefix.trim_end_matches('/'))?);
+            }
         }
-        Ok(parts)
+        Ok((parts, stream_prefixes))
     }
 
     pub(crate) async fn put_manifest(&self, name: &str, manifest: &Manifest, mode: PutMode) -> Result<(), WriteError> {

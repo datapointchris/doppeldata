@@ -284,6 +284,17 @@ pub(crate) struct ColumnPlan {
 }
 
 impl ColumnPlan {
+    /// Whether no two rows the column draws hold one value: a sequence with a step, or a uuid
+    /// drawn for each row, with no nulls.
+    pub(crate) fn draws_unique_values(&self) -> bool {
+        let unique = match &self.values {
+            ValueSampler::Sequence(sequence) => sequence.step != 0,
+            ValueSampler::Text(text) => text.index.is_none() && matches!(text.source, TextSource::Provider(Provider::Uuid)),
+            _ => false,
+        };
+        unique && self.nulls.is_none() && self.text_only.is_none()
+    }
+
     pub(crate) fn generate(&self, at: &BlockPosition, rows: usize) -> ArrayRef {
         let nulls = self
             .drawn_nulls(at, rows)

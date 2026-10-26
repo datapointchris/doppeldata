@@ -15,6 +15,7 @@ cd "$(dirname "$0")/.."
 test_file=crates/core/tests/determinism_contract.rs
 profile_fixture=crates/core/tests/every-column-kind.profile.yaml
 scenario_fixture=crates/core/tests/every-column-kind.scenario.yaml
+cdc_fixture=crates/core/tests/every-column-kind.cdc.scenario.yaml
 
 pinned() {
   sed -nE "s/^const $1: [^=]+ = \"?([0-9a-f]+)\"?;$/\1/p"
@@ -97,6 +98,7 @@ compare() {
 
 compare PINNED_VALUES "$profile_fixture"
 compare PINNED_SCENARIO_VALUES "$profile_fixture" "$scenario_fixture"
+compare PINNED_CDC_VALUES "$profile_fixture" "$cdc_fixture"
 
 # The hints the library fills a typed column with, which no fixture the engine reads holds, so a
 # Python test pins them.

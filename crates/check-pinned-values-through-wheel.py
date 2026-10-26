@@ -29,9 +29,11 @@ def main() -> int:
         return 1
     profile_json = json.dumps(Profile.load(TESTS / 'every-column-kind.profile.yaml').to_plain(), allow_nan=False)
     scenario_json = json.dumps(YAML(typ='safe').load(TESTS / 'every-column-kind.scenario.yaml'), allow_nan=False)
+    cdc_json = json.dumps(YAML(typ='safe').load(TESTS / 'every-column-kind.cdc.scenario.yaml'), allow_nan=False)
     runs = {
         'PINNED_VALUES': None,
         'PINNED_SCENARIO_VALUES': (scenario_json, constants['SCENARIO_DIGEST']),
+        'PINNED_CDC_VALUES': (cdc_json, constants['SCENARIO_DIGEST']),
     }
     for pin, scenario in runs.items():
         values = _core.determinism_values_digest(

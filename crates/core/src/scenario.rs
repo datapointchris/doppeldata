@@ -89,6 +89,230 @@ pub enum Perturbation {
     SmallFiles(SmallFiles),
     PartitionSkew(PartitionSkew),
     MalformedRows(MalformedRows),
+    Cdc(Cdc),
+}
+
+/// A change stream in the layout a change-data-capture tool writes, beside `_expected`, the table a
+/// correct merge of it produces. The full load is the table the profile generates. The changes are
+/// drawn across `period`, each commit time after its start, so the same seed writes the same
+/// bytes on any day.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Cdc {
+    pub id: Option<String>,
+    pub style: CdcStyle,
+    /// The schema in the `<schema>/<table>/` prefix every file is written under.
+    pub schema: String,
+    /// The key column, which every change of a row holds as it is. Without it, the profile's
+    /// `dataset.keys.primary`, which must name one column.
+    pub key: Option<String>,
+    /// New rows, as a share of the full load's.
+    pub inserts: Option<Rate>,
+    /// The share of the full load's rows updated at least once.
+    pub updates: Option<Rate>,
+    /// The share of the full load's rows deleted, each after its updates.
+    pub deletes: Option<Rate>,
+    /// How many times an updated row is updated. Without it, once.
+    pub updates_per_row: Option<CountSpread>,
+    pub period: Period,
+    /// One change file per interval with any changes. Without it, `1m`, as DMS's `CdcMaxBatchInterval`.
+    pub file_interval: Option<Duration>,
+    /// Write `I` as the first field of every full-load record, as DMS's `IncludeOpForFullLoad` does.
+    #[serde(default)]
+    pub include_op_for_full_load: bool,
+    /// The column holding each record's commit time, as DMS's `TimestampColumnName` names it.
+    /// Without it, `dms_commit_ts`.
+    pub timestamp_column: Option<String>,
+    /// Without it, every change file lies directly under the prefix.
+    pub date_partition: Option<DatePartition>,
+    /// The unit every timestamp column of a Parquet write is stored at. Without it, `us`.
+    pub timestamp_unit: Option<CdcTimestampUnit>,
+    /// The chance an eligible change is written a second time, in the first change file after the
+    /// one holding its key's last change. A change is eligible when its key's last change comes
+    /// after it, and deletes the row or leaves it different from this change's.
+    pub duplicate_delivery_rate: Option<Rate>,
+    /// The chance an eligible change is written late instead, in the first change file after the
+    /// one holding its key's last change. Eligible as for `duplicate_delivery_rate`.
+    pub out_of_order_rate: Option<Rate>,
+}
+
+impl Cdc {
+    /// The column every record's commit time is written in.
+    pub fn timestamp_column(&self) -> &str {
+        self.timestamp_column.as_deref().unwrap_or(DEFAULT_TIMESTAMP_COLUMN)
+    }
+}
+
+/// The commit-time column a `cdc` with no `timestamp_column` writes.
+pub const DEFAULT_TIMESTAMP_COLUMN: &str = "dms_commit_ts";
+
+/// The column a change record's operation is written in: `I`, `U` or `D`.
+pub const OPERATION_COLUMN: &str = "Op";
+
+/// Which tool's layout a change stream takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CdcStyle {
+    /// AWS DMS writing to Amazon S3: `LOAD` files, then timestamp-named change files.
+    Dms,
+}
+
+/// A count of one or more, drawn from a family by its mean.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CountSpread {
+    pub family: CountFamily,
+    #[schemars(range(min = 1))]
+    pub mean: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CountFamily {
+    /// 1, 2, 3 and on, each `1 − 1/mean` as likely as the one before.
+    Geometric,
+}
+
+/// The span the changes are committed across.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Period {
+    /// The full load's time, which every commit falls after.
+    pub start: UtcInstant,
+    pub duration: Duration,
+}
+
+/// An instant in RFC 3339, such as `2026-10-01T00:00:00Z`, held as microseconds since the epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct UtcInstant {
+    pub microseconds: i64,
+}
+
+impl TryFrom<String> for UtcInstant {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, String> {
+        chrono::DateTime::parse_from_rfc3339(&text)
+            .map(|instant| Self {
+                microseconds: instant.timestamp_micros(),
+            })
+            .map_err(|error| format!("{text:?} is not an RFC 3339 instant such as 2026-10-01T00:00:00Z: {error}"))
+    }
+}
+
+impl JsonSchema for UtcInstant {
+    fn schema_name() -> Cow<'static, str> {
+        "UtcInstant".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "An instant in RFC 3339, such as 2026-10-01T00:00:00Z.",
+            "type": "string",
+            "format": "date-time",
+        })
+    }
+}
+
+/// Change files filed under folders named for their commit date, as DMS's `DatePartitionEnabled`
+/// files them. Full-load files are never partitioned.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DatePartition {
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub sequence: DateSequence,
+    #[serde(default)]
+    pub delimiter: DateDelimiter,
+}
+
+fn enabled_by_default() -> bool {
+    true
+}
+
+/// The date parts a folder is named for, in order, as DMS's `DatePartitionSequence` names them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+pub enum DateSequence {
+    #[default]
+    #[serde(rename = "YYYYMMDD")]
+    YearMonthDay,
+    #[serde(rename = "YYYYMMDDHH")]
+    YearMonthDayHour,
+    #[serde(rename = "YYYYMM")]
+    YearMonth,
+    #[serde(rename = "MMYYYYDD")]
+    MonthYearDay,
+    #[serde(rename = "DDMMYYYY")]
+    DayMonthYear,
+}
+
+/// What separates a folder name's date parts, as DMS's `DatePartitionDelimiter` names it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DateDelimiter {
+    /// One folder per part, as `2026/10/01/`.
+    #[default]
+    Slash,
+    Dash,
+    Underscore,
+    None,
+}
+
+/// The unit DMS stores Parquet timestamps at: `ms` with `ParquetTimestampInMillisecond`, else `us`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CdcTimestampUnit {
+    Us,
+    Ms,
+}
+
+/// A fault `cdc` places in a change stream, listed in `_faults.jsonl` beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamFault {
+    /// A change written a second time, after its key's last change.
+    DuplicateDelivery,
+    /// A change written after its key's last change, in a later file than its commit time.
+    OutOfOrder,
+}
+
+impl StreamFault {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::DuplicateDelivery => "duplicate_delivery",
+            Self::OutOfOrder => "out_of_order",
+        }
+    }
+}
+
+/// A fault a fault list names: one `malformed_rows` writes, or one `cdc` places.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ListedFault {
+    Malformed(FaultKind),
+    Stream(StreamFault),
+}
+
+impl ListedFault {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Malformed(kind) => kind.name(),
+            Self::Stream(kind) => kind.name(),
+        }
+    }
+
+    /// Whether the fault breaks a whole file.
+    pub fn is_file_kind(self) -> bool {
+        matches!(self, Self::Malformed(kind) if kind.is_file_kind())
+    }
+}
+
+impl From<FaultKind> for ListedFault {
+    fn from(kind: FaultKind) -> Self {
+        Self::Malformed(kind)
+    }
 }
 
 /// Bytes a reader rejects or misreads, written into the files and listed in `_faults.jsonl` beside
@@ -610,6 +834,7 @@ impl Perturbation {
             Self::SmallFiles(_) => "small_files",
             Self::PartitionSkew(_) => "partition_skew",
             Self::MalformedRows(_) => "malformed_rows",
+            Self::Cdc(_) => "cdc",
         }
     }
 
@@ -631,6 +856,7 @@ impl Perturbation {
             Self::SmallFiles(op) => op.id.as_deref(),
             Self::PartitionSkew(op) => op.id.as_deref(),
             Self::MalformedRows(op) => op.id.as_deref(),
+            Self::Cdc(op) => op.id.as_deref(),
         }
     }
 
@@ -648,7 +874,7 @@ impl Perturbation {
             | Self::Outliers(Outliers { column, .. })
             | Self::PartitionSkew(PartitionSkew { column, .. }) => column.clone(),
             Self::SwappedValues(SwappedValues { columns, .. }) => columns.join(","),
-            Self::Duplicates(_) | Self::SchemaDrift(_) | Self::SmallFiles(_) | Self::MalformedRows(_) => "table".into(),
+            Self::Duplicates(_) | Self::SchemaDrift(_) | Self::SmallFiles(_) | Self::MalformedRows(_) | Self::Cdc(_) => "table".into(),
         }
     }
 
@@ -676,20 +902,21 @@ impl Perturbation {
                 .chain(drift.add.iter().map(|added| &added.name))
                 .map(String::as_str)
                 .collect(),
+            Self::Cdc(cdc) => vec![OPERATION_COLUMN, cdc.timestamp_column()],
             Self::Duplicates(_) | Self::SmallFiles(_) | Self::MalformedRows(_) => Vec::new(),
         }
     }
 
     /// Whether the op acts across several files, so a write to one file cannot apply it.
     pub fn spans_files(&self) -> bool {
-        matches!(self, Self::SchemaDrift(_) | Self::SmallFiles(_))
+        matches!(self, Self::SchemaDrift(_) | Self::SmallFiles(_) | Self::Cdc(_))
     }
 
     /// Whether the op shapes the files a write makes rather than the rows, so a run writing no
     /// files cannot apply it.
     pub fn shapes_files(&self) -> bool {
         match self {
-            Self::SchemaDrift(_) | Self::SmallFiles(_) | Self::MalformedRows(_) => true,
+            Self::SchemaDrift(_) | Self::SmallFiles(_) | Self::MalformedRows(_) | Self::Cdc(_) => true,
             Self::HotKeys(_)
             | Self::Duplicates(_)
             | Self::LateArrival(_)

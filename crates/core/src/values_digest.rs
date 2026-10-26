@@ -7,6 +7,7 @@ use arrow_data::ArrayData;
 use sha2::Digest;
 use sha2::Sha256;
 
+use crate::perturbations::CdcStream;
 use crate::samplers::TextCell;
 
 /// The hex SHA-256 over `blocks` in order: each block's batch with the text cells
@@ -20,6 +21,19 @@ pub fn values_digest(blocks: &[(RecordBatch, Vec<Vec<TextCell>>)]) -> String {
         }
     }
     hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// As [`values_digest`] over `blocks`, the full load, then every change file of `stream` in path
+/// order and the table a correct merge of it produces.
+pub fn stream_values_digest(blocks: &[(RecordBatch, Vec<Vec<TextCell>>)], stream: &CdcStream) -> String {
+    let files = (0..stream.file_count()).map(|file| stream.file(file));
+    let expected = std::iter::once(stream.expected_rows(0..u64::MAX)).chain(stream.expected_inserts());
+    let mut all = blocks.to_vec();
+    all.extend(files.chain(expected).map(|batch| {
+        let width = batch.num_columns();
+        (batch, vec![Vec::new(); width])
+    }));
+    values_digest(&all)
 }
 
 fn hash_data(hash: &mut Sha256, data: &ArrayData) {

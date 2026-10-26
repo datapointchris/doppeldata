@@ -53,9 +53,17 @@ class Manifest:
 
     @property
     def faults(self) -> dict[str, int] | None:
-        """The faults the write's fault list holds, counted by kind, or None for a write with no `malformed_rows`."""
+        """The faults the write's fault list holds, counted by kind, or None for a write that lists none: one with no
+        `malformed_rows`, and no `cdc` with a fault rate."""
         faults: dict[str, int] | None = self.document.get('faults')
         return faults
+
+    @property
+    def cdc(self) -> dict[str, Any] | None:
+        """What a `cdc` write stores beside its full load: the stream's prefixes, change counts, change files and expected
+        parts. None for any other write."""
+        cdc: dict[str, Any] | None = self.document.get('cdc')
+        return cdc
 
 
 def written_manifest(data: Any) -> Manifest | None:

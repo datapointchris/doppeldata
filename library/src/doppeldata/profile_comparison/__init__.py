@@ -18,6 +18,7 @@ from doppeldata import _core
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import PoorFits
+from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
 from doppeldata.manifest import Manifest
 from doppeldata.manifest import written_manifest
@@ -85,7 +86,9 @@ def check(
     Where `data` names a directory or prefix a doppeldata write left `_manifest.json` in, or one file a manifest beside it
     records alone, InvalidScenario refuses a `scenario` other than the one it records, and no `scenario` where it records one.
     InvalidScenario also refuses data holding a fault a check cannot read back in its format, before any row is read.
-    `malformed_rate_delta` decides nothing on data that no malformed_rows asked for malformed rows in.
+    `malformed_rate_delta` decides nothing on data that no malformed_rows asked for malformed rows in. Where the manifest
+    records a `cdc` write, the check reads its full load alone, and a ProfilingWarning says the change files and the
+    expected table went unmeasured.
 
     `against` is the real data, read as `data` is. Each of `SCORES` then scores a seeded sample of `against_sample` rows
     from each side, `DEFAULT_SAMPLE_ROWS` unless given, as SDMetrics defines it. A score decides only where `thresholds`
@@ -112,6 +115,8 @@ def check(
     thresholds.check_scores(scoring=against is not None, refusing='no real data is named to score it against')
     columns = real_data_scores.scored_columns(source)
     named = data_named(data)
+    if written is not None and written.cdc is not None:
+        data = full_load(written, data)
     sample_rows = against_sample or DEFAULT_SAMPLE_ROWS
     real = None
     if against is not None:
@@ -167,6 +172,9 @@ def unreadable_refusal(scenario: Scenario | None, written: Manifest | None, data
     in the data's format, of the kinds the manifest counts where there is one, else of those the scenario's malformed_rows
     names. A local path that does not exist is left to the profiler, which says so."""
     cannot = 'which a check cannot read back as one table; check data written without them'
+    if written is not None and written.cdc is not None:
+        # A change stream's faults lie in its change files, which a check does not read.
+        return None
     if written is not None:
         held = unreadable(written.faults or {}, written.format)
         return f'holds {" and ".join(held)} faults, {cannot}' if held else None
@@ -177,6 +185,18 @@ def unreadable_refusal(scenario: Scenario | None, written: Manifest | None, data
     data_format = format_of_data(data) if named_kinds else None
     named = unreadable(named_kinds, data_format) if data_format is not None else []
     return f'is checked under a scenario writing {" and ".join(named)} faults, {cannot}' if named else None
+
+
+def full_load(written: Manifest, data: str | os.PathLike[str]) -> list[str]:
+    """The full-load files of the `cdc` write at `data`, which a check reads in place of the whole write, warned of once."""
+    root = os.fspath(data).rstrip('/')
+    stream = written.cdc or {}
+    message = (
+        f'{root} holds a cdc change stream, so the check read its full load, {stream.get("prefix")}LOAD*, and left the change '
+        f"files and {stream.get('expected_prefix')} unmeasured: they are a merge test's input and its answer"
+    )
+    warnings.warn(message, ProfilingWarning, stacklevel=3)
+    return [f'{root}/{file["path"]}' for file in written.files]
 
 
 def unreadable(kinds: Iterable[str], data_format: str) -> list[str]:

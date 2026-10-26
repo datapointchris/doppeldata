@@ -61,6 +61,98 @@
         "type"
       ]
     },
+    "CdcStyle": {
+      "description": "Which tool's layout a change stream takes.",
+      "oneOf": [
+        {
+          "description": "AWS DMS writing to Amazon S3: `LOAD` files, then timestamp-named change files.",
+          "type": "string",
+          "const": "dms"
+        }
+      ]
+    },
+    "CdcTimestampUnit": {
+      "description": "The unit DMS stores Parquet timestamps at: `ms` with `ParquetTimestampInMillisecond`, else `us`.",
+      "type": "string",
+      "enum": [
+        "us",
+        "ms"
+      ]
+    },
+    "CountFamily": {
+      "oneOf": [
+        {
+          "description": "1, 2, 3 and on, each `1 − 1/mean` as likely as the one before.",
+          "type": "string",
+          "const": "geometric"
+        }
+      ]
+    },
+    "CountSpread": {
+      "description": "A count of one or more, drawn from a family by its mean.",
+      "type": "object",
+      "properties": {
+        "family": {
+          "$ref": "#/$defs/CountFamily"
+        },
+        "mean": {
+          "type": "number",
+          "format": "double",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "mean"
+      ]
+    },
+    "DateDelimiter": {
+      "description": "What separates a folder name's date parts, as DMS's `DatePartitionDelimiter` names it.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "DASH",
+            "UNDERSCORE",
+            "NONE"
+          ]
+        },
+        {
+          "description": "One folder per part, as `2026/10/01/`.",
+          "type": "string",
+          "const": "SLASH"
+        }
+      ]
+    },
+    "DatePartition": {
+      "description": "Change files filed under folders named for their commit date, as DMS's `DatePartitionEnabled`\nfiles them. Full-load files are never partitioned.",
+      "type": "object",
+      "properties": {
+        "delimiter": {
+          "$ref": "#/$defs/DateDelimiter"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "sequence": {
+          "$ref": "#/$defs/DateSequence"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DateSequence": {
+      "description": "The date parts a folder is named for, in order, as DMS's `DatePartitionSequence` names them.",
+      "type": "string",
+      "enum": [
+        "YYYYMMDD",
+        "YYYYMMDDHH",
+        "YYYYMM",
+        "MMYYYYDD",
+        "DDMMYYYY"
+      ]
+    },
     "DuplicateScope": {
       "oneOf": [
         {
@@ -289,6 +381,24 @@
           "type": "string",
           "const": "MNAR"
         }
+      ]
+    },
+    "Period": {
+      "description": "The span the changes are committed across.",
+      "type": "object",
+      "properties": {
+        "duration": {
+          "$ref": "#/$defs/Duration"
+        },
+        "start": {
+          "description": "The full load's time, which every commit falls after.",
+          "$ref": "#/$defs/UtcInstant"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "duration"
       ]
     },
     "Perturbation": {
@@ -844,6 +954,157 @@
           "required": [
             "op"
           ]
+        },
+        {
+          "description": "A change stream in the layout a change-data-capture tool writes, beside `_expected`, the table a\ncorrect merge of it produces. The full load is the table the profile generates. The changes are\ndrawn across `period`, each commit time after its start, so the same seed writes the same\nbytes on any day.",
+          "type": "object",
+          "properties": {
+            "date_partition": {
+              "description": "Without it, every change file lies directly under the prefix.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DatePartition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "deletes": {
+              "description": "The share of the full load's rows deleted, each after its updates.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "duplicate_delivery_rate": {
+              "description": "The chance an eligible change is written a second time, in the first change file after the\none holding its key's last change. A change is eligible when its key's last change comes\nafter it, and deletes the row or leaves it different from this change's.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "file_interval": {
+              "description": "One change file per interval with any changes. Without it, `1m`, as DMS's `CdcMaxBatchInterval`.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Duration"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "include_op_for_full_load": {
+              "description": "Write `I` as the first field of every full-load record, as DMS's `IncludeOpForFullLoad` does.",
+              "type": "boolean",
+              "default": false
+            },
+            "inserts": {
+              "description": "New rows, as a share of the full load's.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "key": {
+              "description": "The key column, which every change of a row holds as it is. Without it, the profile's\n`dataset.keys.primary`, which must name one column.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "const": "cdc"
+            },
+            "out_of_order_rate": {
+              "description": "The chance an eligible change is written late instead, in the first change file after the\none holding its key's last change. Eligible as for `duplicate_delivery_rate`.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "period": {
+              "$ref": "#/$defs/Period"
+            },
+            "schema": {
+              "description": "The schema in the `<schema>/<table>/` prefix every file is written under.",
+              "type": "string"
+            },
+            "style": {
+              "$ref": "#/$defs/CdcStyle"
+            },
+            "timestamp_column": {
+              "description": "The column holding each record's commit time, as DMS's `TimestampColumnName` names it.\nWithout it, `dms_commit_ts`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timestamp_unit": {
+              "description": "The unit every timestamp column of a Parquet write is stored at. Without it, `us`.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CdcTimestampUnit"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "updates": {
+              "description": "The share of the full load's rows updated at least once.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "updates_per_row": {
+              "description": "How many times an updated row is updated. Without it, once.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CountSpread"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "style",
+            "schema",
+            "period"
+          ]
         }
       ]
     },
@@ -907,6 +1168,11 @@
       "enum": [
         "lognormal"
       ]
+    },
+    "UtcInstant": {
+      "description": "An instant in RFC 3339, such as 2026-10-01T00:00:00Z.",
+      "type": "string",
+      "format": "date-time"
     }
   }
 }

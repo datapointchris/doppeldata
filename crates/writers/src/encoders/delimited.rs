@@ -22,6 +22,7 @@ use doppeldata_core::format_settings::Quoting;
 use doppeldata_core::format_settings::TextEncoding;
 use doppeldata_core::manifest::FaultRecord;
 use doppeldata_core::scenario::FaultKind;
+use doppeldata_core::scenario::ListedFault;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
@@ -766,7 +767,7 @@ impl FileEncoder for DelimitedEncoder {
         let object = self.out.finish(cut)?;
         let mut records = faults.records;
         if ascii_only {
-            records.retain(|record| record.kind != FaultKind::Latin1File);
+            records.retain(|record| record.kind != ListedFault::Malformed(FaultKind::Latin1File));
         }
         let at = records.iter().take_while(|record| record.line.is_none()).count();
         records.splice(at..at, first);

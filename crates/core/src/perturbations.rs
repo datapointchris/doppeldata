@@ -5,6 +5,7 @@
 mod array_edits;
 mod broken_characters;
 mod categorical_shift;
+mod cdc;
 mod duplicates;
 mod hot_keys;
 mod late_arrival;
@@ -31,6 +32,11 @@ use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
 use rand_chacha::ChaCha8Rng;
 
+pub use self::cdc::CdcPlan;
+pub use self::cdc::CdcStream;
+pub use self::cdc::StreamFaultRecord;
+pub(crate) use self::cdc::plan as plan_cdc;
+pub(crate) use self::cdc::stream as cdc_stream;
 pub use self::malformed_rows::FileFault;
 pub use self::malformed_rows::LineEnd;
 pub use self::malformed_rows::MalformedPlan;
@@ -67,6 +73,9 @@ pub enum ScenarioFault {
     /// An op the output format cannot hold, such as a schema drift in CSV files, which read as one
     /// table only under one header.
     OpNotForFormat,
+    /// A change stream with no one column to key it by: no `key`, and a profile stating no
+    /// primary key or one of several columns.
+    NoPrimaryKey,
 }
 
 impl ScenarioFault {
@@ -77,6 +86,7 @@ impl ScenarioFault {
             Self::InvalidParameter => "invalid-parameter",
             Self::DuplicatePerturbationId => "duplicate-perturbation-id",
             Self::OpNotForFormat => "op-not-for-format",
+            Self::NoPrimaryKey => "no-primary-key",
         }
     }
 }
@@ -330,5 +340,6 @@ pub(crate) fn plan_perturbation(perturbation: &Perturbation, planning: &Planning
         Perturbation::SmallFiles(op) => small_files::plan(op, planning),
         Perturbation::PartitionSkew(op) => partition_skew::plan(op, planning),
         Perturbation::MalformedRows(op) => malformed_rows::plan(op, planning),
+        Perturbation::Cdc(_) => unreachable!("cdc is planned after the loop, against every other op's rows"),
     }
 }

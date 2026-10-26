@@ -15,7 +15,7 @@ use crate::format_settings::Output;
 use crate::identity::DatasetIdentity;
 use crate::profile::PartitionStyle;
 use crate::profile::Quantiles;
-use crate::scenario::FaultKind;
+use crate::scenario::ListedFault;
 
 /// The manifest format version this engine writes and reads.
 pub const MANIFEST_VERSION: u64 = 1;
@@ -50,14 +50,15 @@ pub struct FaultRecord {
     /// The object's path under the destination, as the manifest's `files` names it. Beside a
     /// one-file write, that file's name.
     pub file: String,
-    /// The 1-based line the broken record starts on, a header counted. Null in a JSON array, and
-    /// for a fault of the whole file.
+    /// The 1-based line the broken record starts on, a header counted. Null in a JSON array or a
+    /// Parquet file, and for a fault of the whole file.
     pub line: Option<u64>,
-    /// The dataset row the record was generated as. Null for a copy, and for a fault of the whole
-    /// file.
+    /// The dataset row the record was generated as, or in a change stream the row of its key. Null
+    /// for a copy `duplicates` wrote, and for a fault of the whole file.
     pub row: Option<u64>,
-    /// What broke, as `malformed_rows` names it in `kinds`.
-    pub kind: FaultKind,
+    /// What broke: a kind `malformed_rows` names in `kinds`, or a fault `cdc` places in a change
+    /// stream.
+    pub kind: ListedFault,
     /// The column the fault is in, or null where it breaks the record or the file.
     pub column: Option<String>,
     /// What the fault wrote, under keys its `kind` sets, such as `text` for a `type_invalid`. Empty
@@ -97,10 +98,15 @@ pub struct Manifest {
     pub destination: String,
     /// Every object written, in path order.
     pub files: Vec<ManifestFile>,
-    /// The faults the write's fault list holds, counted by kind, or null for a write with no
-    /// `malformed_rows`. A partial manifest counts the faults of the objects it lists.
+    /// The faults the write's fault list holds, counted by kind, or null for a write that lists
+    /// none: one with no `malformed_rows`, and no `cdc` with a fault rate. A partial manifest counts
+    /// the faults of the objects it lists.
     #[serde(default)]
-    pub faults: Option<BTreeMap<FaultKind, u64>>,
+    pub faults: Option<BTreeMap<ListedFault, u64>>,
+    /// The change stream and the expected table a `cdc` write adds beside its full load, which
+    /// `files` lists. Null for any other write.
+    #[serde(default)]
+    pub cdc: Option<ManifestCdc>,
     /// True when the run stopped early, so `files` lists only the objects that completed. Such a
     /// manifest is stored as `_manifest.partial.json`, and regenerates nothing.
     pub partial: bool,
@@ -169,6 +175,7 @@ impl Manifest {
             destination,
             files: Vec::new(),
             faults: None,
+            cdc: None,
             partial: false,
             threads: 0,
             tasks: None,
@@ -234,6 +241,41 @@ pub struct ManifestFile {
     /// dataset is not partitioned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partition: Option<BTreeMap<String, Option<String>>>,
+}
+
+/// What a `cdc` write adds beside its full load.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ManifestCdc {
+    /// The layout the stream takes, as the op's `style` names it.
+    pub style: String,
+    /// Where the full load and the change files lie under the destination, `<schema>/<table>/`.
+    pub prefix: String,
+    /// Where the expected table lies under the destination, `_expected/<schema>/<table>/`.
+    pub expected_prefix: String,
+    /// The changes the stream holds, counted by operation, a fault's second delivery left out.
+    pub changes: ChangeCounts,
+    /// Every change file, in path order.
+    pub files: Vec<StreamFile>,
+    /// Every part of the table a correct merge of the stream produces, in path order.
+    pub expected: Vec<StreamFile>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChangeCounts {
+    pub insert: u64,
+    pub update: u64,
+    pub delete: u64,
+}
+
+/// One object a `cdc` write stores beside its full load.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StreamFile {
+    /// The object's path under the destination, `/`-separated.
+    pub path: String,
+    pub rows: u64,
+    pub bytes: u64,
+    /// `sha256:` and the hex SHA-256 of the object's bytes.
+    pub sha256: String,
 }
 
 /// How rows are split into files and directories.

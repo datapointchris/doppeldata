@@ -1,6 +1,7 @@
 //! Files whose first row lies at or past `after_fraction` of the rows carry a new shape: columns
 //! dropped, widened, renamed, added and moved to the front, in that order. The writers apply it to
-//! each block a drifted file takes rows from, after every op that writes rows.
+//! each block a drifted file takes rows from, after every op that writes rows. Beside `cdc`, the
+//! change files committed at or past `after_fraction` of the period carry it instead.
 
 use std::sync::Arc;
 
@@ -44,6 +45,7 @@ enum DriftedColumn {
 #[derive(Debug)]
 pub struct SchemaDriftPlan {
     index: usize,
+    after_fraction: f64,
     first_row: u64,
     columns: Vec<DriftedColumn>,
     added: Vec<ColumnPlan>,
@@ -61,6 +63,20 @@ impl SchemaDriftPlan {
     /// The first dataset row a file must start at or past to carry the drifted schema.
     pub fn first_row(&self) -> u64 {
         self.first_row
+    }
+
+    /// The share of the rows, or of a change stream's period, before the drifted shape begins.
+    pub fn after_fraction(&self) -> f64 {
+        self.after_fraction
+    }
+
+    /// Where each column the drift adds sits in the drifted schema.
+    pub(crate) fn added_positions(&self) -> Vec<usize> {
+        let added = self.columns.iter().enumerate();
+        added
+            .filter(|(_, column)| matches!(column, DriftedColumn::Added(_)))
+            .map(|(position, _)| position)
+            .collect()
     }
 
     /// The pointer to the drift's entry in the scenario.
@@ -215,6 +231,7 @@ pub(super) fn plan(op: &SchemaDrift, planning: &Planning<'_>) -> Result<Planned,
     let schema = Arc::new(Schema::new_with_metadata(fields, planning.schema.metadata().clone()));
     Ok(Planned::SchemaDrift(SchemaDriftPlan {
         index: planning.index,
+        after_fraction: op.after_fraction.0,
         first_row: (op.after_fraction.0 * planning.rows as f64).ceil() as u64,
         columns,
         added,

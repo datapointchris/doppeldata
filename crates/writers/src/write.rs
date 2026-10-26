@@ -34,6 +34,7 @@ use tokio::runtime::RuntimeFlavor;
 use crate::WriteError;
 use crate::byte_sink::ByteSink;
 use crate::byte_sink::ObjectSink;
+use crate::cdc;
 use crate::destination::Destination;
 use crate::encoders;
 use crate::encoders::Faulting;
@@ -99,13 +100,29 @@ const UPLOAD_THREADS: usize = 2;
 /// Writes `plan`'s dataset to `destination`, and the manifest beside it, which is also returned.
 pub fn write(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination: &Destination) -> Result<Manifest, WriteFailure> {
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
-    execute(plan, &layout, new_manifest(plan, options, destination), run, destination)
+    match plan.cdc() {
+        Some(cdc) => cdc::write(plan, cdc, &layout, new_manifest(plan, options, destination), run, destination),
+        None => execute(plan, &layout, new_manifest(plan, options, destination), run, destination),
+    }
+}
+
+/// Refuses a write split across processes under `cdc`, whose stream orders every change in the
+/// table by commit time, so one process writes it.
+fn refuse_split_cdc(plan: &Plan) -> Result<(), WriteError> {
+    match plan.cdc() {
+        Some(cdc) => Err(WriteError::Settings(format!(
+            "{} orders the whole table's changes by commit time, so one write makes the stream; call write",
+            cdc.field()
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Claims `destination` for the dataset [`write`] would write there, as `write` does before its
 /// first object. Any process holding the same plan and options then writes ranges with
 /// [`write_ranges`], and one calls [`commit`] with every range's records.
 pub fn claim(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination: &Destination) -> Result<(), WriteFailure> {
+    refuse_split_cdc(plan)?;
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
     let manifest = claimed(plan, &layout, new_manifest(plan, options, destination))?;
     on_upload_runtime(run, |runtime| Ok(runtime.block_on(destination.prepare(run.replace, &manifest))?))
@@ -139,6 +156,7 @@ pub fn write_ranges(
     run: &RunOptions,
     destination: &Destination,
 ) -> Result<RangesWritten, WriteFailure> {
+    refuse_split_cdc(plan)?;
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
     let selected = ranges
         .iter()
@@ -185,6 +203,7 @@ pub fn commit(
     run: &RunOptions,
     destination: &Destination,
 ) -> Result<Manifest, WriteFailure> {
+    refuse_split_cdc(plan)?;
     let layout = layout(plan, &options.layout, &options.output).map_err(WriteError::from)?;
     let files: BTreeMap<String, ManifestFile> = written.files.into_iter().map(|file| (file.path.clone(), file)).collect();
     let mut manifest = new_manifest(plan, options, destination);
@@ -252,8 +271,12 @@ pub fn regenerate(plan: &Plan, manifest: &Manifest, run: &RunOptions, destinatio
         manifest.layout.clone(),
         destination.url.clone(),
     );
-    let written = execute(plan, &layout, fresh, run, destination)?;
-    let differ = differing_files(&manifest.files, &written.files);
+    let written = match plan.cdc() {
+        Some(cdc) => cdc::write(plan, cdc, &layout, fresh, run, destination)?,
+        None => execute(plan, &layout, fresh, run, destination)?,
+    };
+    let mut differ = differing_files(&manifest.files, &written.files);
+    differ.extend(cdc::differing_stream_files(manifest.cdc.as_ref(), written.cdc.as_ref()));
     if differ.is_empty() {
         Ok(written)
     } else {
@@ -423,11 +446,11 @@ fn store_faults(runtime: &Handle, destination: &Destination, faults: &[FaultReco
     Ok(())
 }
 
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn worker_threads(threads: usize) -> usize {
+pub(crate) fn worker_threads(threads: usize) -> usize {
     match threads {
         0 => thread::available_parallelism().map_or(1, |count| count.get()),
         threads => threads,
@@ -436,7 +459,10 @@ fn worker_threads(threads: usize) -> usize {
 
 /// Runs `work` on a thread this module spawns, with `run`'s upload runtime or one built for the
 /// call, so no caller's thread is ever blocked on from within a runtime.
-fn on_upload_runtime<T: Send>(run: &RunOptions, work: impl FnOnce(&Handle) -> Result<T, WriteFailure> + Send) -> Result<T, WriteFailure> {
+pub(crate) fn on_upload_runtime<T: Send>(
+    run: &RunOptions,
+    work: impl FnOnce(&Handle) -> Result<T, WriteFailure> + Send,
+) -> Result<T, WriteFailure> {
     if run
         .runtime
         .as_ref()
@@ -546,7 +572,7 @@ fn execute(
 /// Stores the record of a run that wrote `manifest.files`, and `faults` before it where the run
 /// wrote under `malformed_rows`. It is partial, and the run fails, when `error` stopped the run or
 /// a range of `layout` has no object recorded.
-fn finish(
+pub(crate) fn finish(
     runtime: &Handle,
     destination: &Destination,
     layout: &FileLayout,

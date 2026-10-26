@@ -6,6 +6,7 @@
 //! [`write_ranges`] and [`commit`] split one write across processes, such as Spark executors.
 
 mod byte_sink;
+mod cdc;
 mod destination;
 mod encoders;
 mod layout;

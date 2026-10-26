@@ -206,8 +206,8 @@ mod _core {
 
     /// The determinism contract's SHA-256 over every value and text cell generated from a profile,
     /// with the scenario ``scenario`` gives as its JSON and its digest, made on ``threads`` threads
-    /// the way ``Plan.generate`` makes its blocks. A wheel's build compares it with the hash the
-    /// contract pins.
+    /// the way ``Plan.generate`` makes its blocks. Under ``cdc`` it also covers every change file
+    /// and the expected table. A wheel's build compares it with the hash the contract pins.
     #[pyfunction]
     #[pyo3(signature = (profile_json, profile_digest, seed, rows, *, threads, scenario=None))]
     fn determinism_values_digest(
@@ -232,7 +232,18 @@ mod _core {
         if let Some(signal) = signal {
             return Err(signal);
         }
-        Ok(doppeldata_core::values_digest(&blocks.expect("only a signal cancels")))
+        let blocks = blocks.expect("only a signal cancels");
+        match plan.cdc_stream(threads.max(1)) {
+            Ok(Some(stream)) => Ok(doppeldata_core::stream_values_digest(&blocks, &stream)),
+            Ok(None) => Ok(doppeldata_core::values_digest(&blocks)),
+            Err(error) => Err(scenario_refused(
+                py,
+                "the scenario",
+                error.code(),
+                error.field(),
+                &plan_message(&error),
+            )),
+        }
     }
 
     /// A table profile resolved for generation: ``rows`` rows from ``seed``. ``source`` names the

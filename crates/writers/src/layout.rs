@@ -181,8 +181,12 @@ fn check_partition_keys(schema: &SchemaRef, keys: &[String]) -> Result<(), Layou
 
 /// Refuses a layout the plan's scenario cannot hold: a schema drift written in a format that reads
 /// as one table only under one schema, a partition key the drift drops or renames, a drift no file
-/// starts past, or an `across_files` copy whose source could share its file.
+/// starts past, or an `across_files` copy whose source could share its file. Under `cdc` a drift
+/// cuts the change files by commit time, so the stream's own refusals stand in for the drift's.
 fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange], output: &Output) -> Result<(), LayoutError> {
+    if let Some(cdc) = plan.cdc() {
+        return crate::cdc::check_layout(cdc, partition_by, output);
+    }
     let one_schema = match output {
         Output::Csv(_) => Some("CSV files, which read as one table only under one header"),
         Output::Tsv(_) => Some("TSV files, which read as one table only under one header"),
