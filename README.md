@@ -95,7 +95,9 @@ engine='spark')` profiles a DataFrame in its own session, and `spark=` names a s
 A directory whose folders hold unlike column names is refused, and the refusal names each table it
 holds. `--tables` profiles it as a bundle of one table per kind of folder, as an AWS Glue crawler
 splits a prefix. Folders sharing most of their column names are one table, and `key=value` folders
-are always Hive partitions of one.
+are always Hive partitions of one. Each path named beside `--tables` is grouped on its own, so
+`profile create customers/ orders/ --tables` is two tables. The bundle records each foreign key
+between them, with the share of child rows it orphans and its fan-out.
 
 A profile is written under a privacy policy, `default` unless `--policy` names another. No data value
 it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. A

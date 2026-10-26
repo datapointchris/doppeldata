@@ -60,7 +60,9 @@ with every table inline, so moving between the forms keeps the identity. A table
 match the key the index gives it.
 
 A relationship stores its fan-out as shares and quantiles, never key values. So join skew survives
-into synthetic data while no key leaves the source.
+into synthetic data while no key leaves the source. Its quantiles stay `k_min` parents clear of each
+end, and a top share is stated only where its last parent holds `k_min` child rows. Where fewer than
+`k_min` child rows are orphans, `containment` is written as 1 and `orphan_rate` as 0.
 
 ## Generated files name the profile they came from
 
@@ -108,7 +110,8 @@ The `default` policy:
 7. A pattern is stored only when it holds no alternation of data literals.
 
 `strict` also treats quasi-identifiers as identifiers, and drops every lookup and conditional table
-involving one. `healthcare` adds HIPAA Safe Harbor, as `healthcare-policy.md` describes. `none`
+involving one. `healthcare` adds HIPAA Safe Harbor, as `healthcare-policy.md` describes, and drops a
+quasi-identifier's conditional tables too. `none`
 writes everything, with exact extremes and no `k_min`. It exists for data that is already synthetic
 or public, and `profile check` always reports a `none` profile. `dp` is reserved in the format for
 a differential-privacy policy, which doppeldata does not apply. `profile create --policy dp` is a
@@ -160,8 +163,14 @@ Each kind of field is admitted by one rule:
 | a pattern | `generalized` | no alternation, optional part, or class narrower than whole digit and letter ranges |
 | a fitted family | `fitted within the trimmed extremes` | trimmed extremes beside it |
 | a sequence start | `follows the trimmed extreme` | the trimmed extreme at its end, less `k_min − 1` steps |
+| a conditional table | `cell >= k_min` | nothing: each value is one its column lists, and the audit's `min_count` reaches `k_min` |
 
 An integer identifier's digit bounds hold no data value, so they are not a literal.
+
+A conditional table's audit entry sits at `/dataset/conditionals/<i>`, a pointer from the profile's
+root, and names the distributed column as its `column`. Its `values` counts the cells, and
+`min_count` is the fewest rows a cell holds. The writer counts every cell over the rows profiled, and
+folds each one under the floor before the table is written.
 
 ## profile check reads the file alone
 
@@ -173,7 +182,17 @@ an array's length only by quantile, and an element is counted by element rather 
 writer withholds every literal an element holds. Every literal field must have an audit entry
 whose column, pointer, rule and value count match it, and must meet that rule. A column the policy
 withholds from must hold nothing withheld, and an audit entry naming no literal field is reported
-too. A bundle is checked table by table, each table held in its own file read as that file. A
+too.
+
+A conditional table's cells are the one literal the check cannot recompute, so it trusts the audit's
+`min_count` for them. A cell is a share of the rows its row's kept cells hold. The file states that
+total for no row, because a dropped cell, a null and an unlisted child value each leave it. So no
+rate in the file multiplies back to a cell's rows. The check holds what the
+file does state: every given and child value is one its column lists, neither column's list is
+withheld, no quasi-identifier takes part under `strict` or `healthcare`, and an audit entry at the
+table's pointer states a `min_count` of at least `k_min`.
+
+A bundle is checked table by table, each table held in its own file read as that file. A
 member file that is a bundle, names itself other than its key, or cannot be read is a violation at
 `/tables/<name>`, and the other tables are still checked.
 

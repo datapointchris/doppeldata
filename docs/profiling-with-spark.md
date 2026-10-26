@@ -168,7 +168,10 @@ driver. Both profiles must pass `profile check`, and the Spark one is held to th
 - row and null counts, types, nullability and extremes exactly;
 - each quantile within a rank error of 1%, measured against the file's own values;
 - each distinct count within 3%, three of HyperLogLog++'s 1% standard errors;
-- any other field that differs is printed.
+- the repeated rows, keys, dependencies and relationships exactly, and each cell of a conditional
+  table both profiles state;
+- any other field that differs is printed. So are the correlations and any conditional table one
+  profile states alone, because each engine measures them on its own sample.
 
 Build the wheel, then run the check over a file. `KEEP` names a directory to keep each profile in.
 
@@ -177,6 +180,15 @@ cd library && uv run --with ziglang maturin build --release --zig --compatibilit
 POLICY=healthcare spark-parity/check-profiler-parity.sh \
   dist/doppeldata-*-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
   DE1_0_2008_to_2010_Carrier_Claims_Sample_1A.csv
+```
+
+`TABLES=1` profiles a directory holding a folder per table into one bundle, through `--tables` on
+the host and `profile_tables()` in the image. Each table is compared, and so is each relationship:
+
+```bash
+TABLES=1 spark-parity/check-profiler-parity.sh \
+  dist/doppeldata-*-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
+  shop public.ecr.aws/glue/aws-glue-libs:5
 ```
 
 It ran on CMS DE-SynPUF sample 1 under `--policy healthcare`, in `apache/spark:3.5.9-python3`,
@@ -257,6 +269,12 @@ one query over every column it covers, except the compiled aggregate, which is o
 | end values | the values at rank `k_min` from each end | `mapInArrow`: each task keeps its `k_min` values nearest each end, merged on the driver |
 | split steps | `step_min` and `step_max` | `mapInArrow` over each file split in read order, stitched in the listing's order |
 | distinct days | `distinct_days` | `collect_set` of the days between the trimmed extremes |
+| tuple counts | `distinct_rows` and `unique_rows`, for repeated rows and keys | one `xxhash64` per tuple over each value and whether it is null, every tuple in one stream grouped by `(tuple, hash)` |
+| rank correlations | Spearman's ρ | each sampled column's average rank from `rank` and `cume_dist` over one window, persisted, then `corr` over up to `PAIRS_PER_QUERY` pairs a query |
+| cross counts | Cramér's V and conditional cells | every pair's values in one stream, grouped by `(pair, value, value)` |
+| rank moments | η | each sampled numeric column's average rank as for Spearman's ρ, persisted beside the categorical columns, whose values form one stream grouped by `(column, value)`, with each rank's count, mean and `var_pop` |
+| dependency counts | functional dependencies | one `groupBy` on each `lhs`, with every `rhs`'s count and whether its least and greatest values differ |
+| foreign key counts | a bundle's relationships | a full join of the parent's distinct keys and the child's rows per key, grouped by `(in parent, child rows)` |
 
 The split follows what Spark compiles:
 
