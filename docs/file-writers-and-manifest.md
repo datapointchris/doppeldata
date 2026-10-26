@@ -117,7 +117,7 @@ thread only waits for them.
   call must change and nothing was written, and `Failed` otherwise. A caller maps the kind to its
   own exit status.
 - **A destination holding anything is refused unless `replace` is set.** With `replace`, every
-  object must be a manifest or `_faults.ndjson` at the prefix, or a part whose name ends with the
+  object must be a manifest or `_faults.jsonl` at the prefix, or a part whose name ends with the
   `identity8` and extension one of those manifests records. Anything else, such as Spark's `_SUCCESS` or pyarrow's
   `part-0.parquet`, refuses the write with nothing deleted.
 - **`replace` deletes before it writes.** An interrupted replace leaves the old dataset gone and at
@@ -193,7 +193,14 @@ and writes one object per value under `key=value/` for the `hive` style, or `val
 ## The manifest is the regeneration record
 
 `_manifest.json` sits beside the data. Spark, Hive and Glue skip a file whose name starts with `_`,
-so it never reads as data. Its schema is `doppeldata schemas show manifest`.
+so they never read it as data. Its schema is `doppeldata schemas show manifest`.
+
+- **A DuckDB glob over `--format json` output reads the manifest as a row.** `*.json` matches it,
+  so 2,000 rows written read back as 2,001. Glob the parts, which every format names `part-*`:
+
+```sql
+select count(*) from read_json_auto('out/part-*.json')
+```
 
 - **`identity` holds the dataset identity's five values, keyed as its canonical JSON.**
   `dataset_digest` is their SHA-256. The seed and the row count are decimal strings, because JSON
@@ -214,13 +221,16 @@ so it never reads as data. Its schema is `doppeldata schemas show manifest`.
 - **`regenerate()` compares every file it writes with the record.** A file whose rows, bytes or
   SHA-256 differ fails the call with `RegeneratedFilesDiffer`, which names it. One tool version and
   one set of writer settings write the same bytes.
-- **`faults` counts the faults `_faults.ndjson` lists, by kind.** It is null for a write with no
+- **`faults` counts the faults `_faults.jsonl` lists, by kind.** It is null for a write with no
   `malformed_rows`. A partial manifest counts the faults in the objects it lists.
 
-## `_faults.ndjson` lists each fault `malformed_rows` placed, one JSON object a line
+## `_faults.jsonl` lists each fault `malformed_rows` placed, one JSON object a line
 
 A write under `malformed_rows` stores it beside `_manifest.json`, and a write without the op stores
-none. Its name starts with `_`, so Spark, Hive and Glue skip it as they skip the manifest.
+none. Its name starts with `_`, so Spark, Hive and Glue skip it as they skip the manifest. Its
+`.jsonl` suffix keeps a `*.json` glob over JSON output from reading it. A line's schema is
+`doppeldata schemas show faults`, and `detail` is an open object whose keys the second table
+lists.
 
 | Field | Holds |
 | --- | --- |
@@ -254,12 +264,16 @@ Every other kind's `detail` is empty.
   `truncated_line`, then its row faults in the order written.
 - **A `truncated_line` names the cut line with no `row`.** Its record replaces any the cut row
   held.
-- **A whole run stores it before `_manifest.json`.** So a reader that waits for the manifest finds
-  it whole. A failed or cancelled run stores none.
+- **A run stores it before its manifest.** So a reader that waits for `_manifest.json` finds it
+  whole. A stopped run lists the faults of the objects its partial manifest lists.
+- **A run that cannot store it stores a partial manifest with null `faults`.** Its objects are
+  whole, but nothing names their faults.
 - **A split write's `commit` stores it** from the faults each `write_ranges` returned. So
   `doppeldata.spark.write` lists the faults a local write of the same plan does.
 - **A run holds every record in memory until it stores the list.** A local write holds them in
   its process, and `doppeldata.spark.write` collects them to the driver. So the process storing the
   list bounds how many faults one write can place.
-- **A write to one file keeps it beside the file**, every time, with each record's `file` naming
-  that file. One already there is held as the manifest is.
+- **A write to one file keeps its list beside the file, named for it.** `--out landing/orders.csv`
+  writes `landing/_orders.csv.faults.jsonl`, with each record's `file` naming `orders.csv`. So
+  several one-file writes share a directory. `replace` replaces a file's list with the file, and
+  removes it before the new file lands.

@@ -44,6 +44,7 @@ use crate::layout::layout;
 use crate::layout::layout_from_manifest;
 use crate::partition::PartitionValues;
 use crate::partition::Partitioner;
+use crate::size_estimate::check_invalid_utf8_reach;
 use crate::write_options::WriteOptions;
 
 /// How to run a write. None of it changes a byte written.
@@ -111,9 +112,10 @@ pub fn claim(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination:
 }
 
 /// The record a claim stores as `_manifest.partial.json`, once the output's format can encode the
-/// files `layout` makes.
+/// files `layout` makes, and they can hold every fault the scenario names.
 fn claimed(plan: &Plan, layout: &FileLayout, mut manifest: Manifest) -> Result<Manifest, WriteError> {
     check_encodable(plan, layout, &manifest.output)?;
+    check_invalid_utf8_reach(plan, layout, &manifest.output)?;
     manifest.partial = true;
     manifest.written_at = now_rfc3339();
     Ok(manifest)
@@ -172,7 +174,7 @@ pub struct SplitRun {
 }
 
 /// Records a write [`claim`] claimed and [`write_ranges`] filled: `_manifest.json` when `written`
-/// holds an object of every range in the layout, replacing the claim, and `_faults.ndjson` before
+/// holds an object of every range in the layout, replacing the claim, and `_faults.jsonl` before
 /// it under `malformed_rows`. Otherwise it stores the partial manifest under the claim's name and
 /// fails with [`WriteError::RangesUnrecorded`].
 pub fn commit(
@@ -406,7 +408,7 @@ impl Run<'_> {
     }
 }
 
-/// Writes `faults` as `_faults.ndjson`, one JSON object a line, through the sink a data object
+/// Writes `faults` as `_faults.jsonl`, one JSON object a line, through the sink a data object
 /// takes, so a long list uploads in parts.
 fn store_faults(runtime: &Handle, destination: &Destination, faults: &[FaultRecord]) -> Result<(), WriteError> {
     let mut sink = ObjectSink::new(destination.store.clone(), destination.object(FAULTS_FILE_NAME)?, runtime.clone());
@@ -579,12 +581,13 @@ fn finish(
 }
 
 /// Stores the finished run's manifest: as `_manifest.json` once every object is whole, replacing the
-/// claim, and as `_manifest.partial.json`, over the claim, when `error` stopped the run. A whole
-/// run's `faults` are stored first, as `_faults.ndjson`.
+/// claim, and as `_manifest.partial.json`, over the claim, when `error` stopped the run. The run's
+/// `faults` are stored first, as `_faults.jsonl`, so a stopped run lists the faults of the objects
+/// it completed. A whole run whose list cannot be stored leaves a partial manifest of every object.
 fn record(
     runtime: &Handle,
     destination: &Destination,
-    manifest: Manifest,
+    mut manifest: Manifest,
     faults: Option<Vec<FaultRecord>>,
     error: Option<WriteError>,
 ) -> Result<Manifest, WriteFailure> {
@@ -594,14 +597,18 @@ fn record(
         manifest_stored,
         manifest_error,
     };
+    let error = match faults.as_ref().map(|faults| store_faults(runtime, destination, faults)) {
+        Some(Err(unlisted)) => {
+            // The counts would describe a list that is not there.
+            manifest.faults = None;
+            manifest.partial = true;
+            Some(error.unwrap_or(unlisted))
+        }
+        _ => error,
+    };
     if let Some(error) = error {
         let stored = runtime.block_on(destination.put_manifest(PARTIAL_MANIFEST_FILE_NAME, &manifest, PutMode::Overwrite));
         return Err(failure(error, manifest, stored.is_ok(), stored.err().map(Box::new)));
-    }
-    if let Some(faults) = &faults
-        && let Err(error) = store_faults(runtime, destination, faults)
-    {
-        return Err(failure(error, manifest, false, None));
     }
     if let Err(error) = runtime.block_on(destination.put_manifest(MANIFEST_FILE_NAME, &manifest, PutMode::Overwrite)) {
         return Err(failure(error, manifest, false, None));

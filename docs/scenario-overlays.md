@@ -26,11 +26,13 @@ So a dataset regenerates with no scenario file, and an edited member shows which
 misspelled column would then generate a new column from a fragment. It is refused as
 `unknown-column`.
 
-## `malformed_rows` writes broken files, and `_faults.ndjson` names every fault in them
+## `malformed_rows` writes broken files, and `_faults.jsonl` names every fault in them
 
 A pipeline's bad-row handling is tested against files broken on purpose. The `bad-csv` example
-writes any profile as CSV. It breaks the share of rows its `rate` sets, and gives the share of
-files its `files_share` sets a byte order mark or a cut last line:
+writes a profile like `orders` as CSV. It breaks the share of rows its `rate` sets with ragged,
+quoting, encoding and type faults. It gives the share of files its `files_share` sets a byte order
+mark or a cut last line. A profile with no string column, or none of another type, is refused as
+`op-not-for-column`:
 
 ```bash
 doppeldata data generate orders --scenario bad-csv --out orders-bad/
@@ -51,19 +53,19 @@ perturbations:
 doppeldata data generate orders --scenario ragged-rows.scenario.yaml --format csv --out orders-ragged/
 ```
 
-`_faults.ndjson` beside the data lists each fault, one JSON object a line, and the manifest's
-`faults` counts them by kind.
-[file-writers-and-manifest.md](file-writers-and-manifest.md) gives each field.
+`_faults.jsonl` beside the data lists each fault, one JSON object a line, and the manifest's
+`faults` counts them by kind. `doppeldata schemas show faults` is a line's schema, and
+[file-writers-and-manifest.md](file-writers-and-manifest.md) gives each kind's `detail`.
 
 ```bash
-jq -r .kind orders-bad/_faults.ndjson | sort | uniq -c
+jq -r .kind orders-bad/_faults.jsonl | sort | uniq -c
 ```
 
 ```json
 {"file":"part-00000-1cf678fb.csv","line":25,"row":23,"kind":"unescaped_quote","column":"customer_email","detail":{}}
 ```
 
-A pipeline test then asserts that its quarantine holds exactly the lines `_faults.ndjson` names.
+A pipeline test then asserts that its quarantine holds exactly the lines `_faults.jsonl` names.
 DuckDB's `reject_errors.line` counts records, where `line` counts physical lines, so an
 `embedded_newline` earlier in the file shifts every record after it. A reject is placed by its
 `line_byte_position` instead:
@@ -77,7 +79,7 @@ import duckdb
 data = Path('orders-bad')
 columns = {'order_id': 'BIGINT', 'customer_id': 'BIGINT', 'amount': 'DECIMAL(12,2)', 'quantity': 'INTEGER',
            'status': 'VARCHAR', 'ordered_at': 'TIMESTAMPTZ', 'customer_email': 'VARCHAR', 'ship_zip': 'VARCHAR'}
-faults = [json.loads(line) for line in (data / '_faults.ndjson').read_text().splitlines()]
+faults = [json.loads(line) for line in (data / '_faults.jsonl').read_text().splitlines()]
 # CSV allows a newline inside quotes, so a strict reader takes an embedded_newline row whole.
 expected = {(f['file'], f['line']) for f in faults if f['line'] is not None and f['kind'] != 'embedded_newline'}
 
@@ -116,7 +118,7 @@ perturbations:
 
 `malformed-file-readers/read-every-fault-kind.sh [IMAGE...]` writes `orders` under `bad-csv`, and
 once for each kind alone in a format that holds it, at the shares `write_every_fault_kind.py`
-sets. It then prints, per kind, what each reader caught of what `_faults.ndjson` names.
+sets. It then prints, per kind, what each reader caught of what `_faults.jsonl` names.
 
 - DuckDB reads on the host with the columns declared. Its CSV read sets `strict_mode` and
   `store_rejects`.
@@ -155,7 +157,7 @@ sets. It then prints, per kind, what each reader caught of what `_faults.ndjson`
 - **The op breaks the encoded bytes, never the rows.** Each block generates the rows a clean write
   does. So no other perturbation moves, and the determinism fixtures hold no fault.
 - **A row's fault is drawn from the op's stream, keyed by the block.** A file's fault is drawn from
-  a stream keyed by its range and its partition directory. So the files and `_faults.ndjson` are
+  a stream keyed by its range and its partition directory. So the files and `_faults.jsonl` are
   byte for byte the same at any thread count and any Spark partition count.
 - **A row takes at most one fault, and a file at most one file fault.** A copy `duplicates` adds is
   broken as any row is, and its record has no `row`.
@@ -166,12 +168,15 @@ sets. It then prints, per kind, what each reader caught of what `_faults.ndjson`
   string column, is refused as `op-not-for-column`.
 - **An `invalid_utf8` fault never starts in a file's first block.** doppeldata's profiler guesses
   the encoding from that block, as many readers do. One invalid byte there reads the file as
-  Latin-1, where nothing is rejected. A fault drawn there is written clean and not listed.
+  Latin-1, where nothing is rejected. A fault drawn there is written clean and not listed. So a
+  file of a few hundred rows holds none, and a write whose largest file ends inside the first
+  block is refused as `invalid-parameter`, naming the rows a file needs.
 - **`truncated_line` cuts the file's last record mid-field**, as a cut-off upload leaves it.
 - **A `latin1_file` holding only ASCII is not listed.** windows-1252 writes ASCII as UTF-8 does,
   so the file is unchanged.
-- **The op applies only where files are written.** A one-file write keeps `_faults.ndjson` beside
-  the file, held by the rules `_manifest.json` is.
+- **The op applies only where files are written.** A one-file write keeps its list beside the file,
+  named for it: `--out landing/orders.csv` writes `landing/_orders.csv.faults.jsonl`. So several
+  one-file writes share a directory, and `replace` replaces a file's list with the file.
 
 ## With no rate, `malformed_rows` reproduces the profile's rejected rows by type
 
@@ -186,8 +191,9 @@ Each reason in `source.csv.malformed.by_type` becomes the kind DuckDB rejects fo
 | `invalid_encoding` | `invalid_utf8` |
 | `cast` | each typed column's `type_mix` values of other types, at their shares, or `type_invalid` where no column records one |
 
-- **A `line_terminator_mix` of two breaks makes every file `mixed_line_endings`.** The rows take
-  each break at its recorded share.
+- **The profile's `line_terminator_mix` is not reproduced.** The profiler refuses a file whose
+  records mix line breaks, so a mix it records comes from breaks inside quoted fields, in a file
+  every reader opens. `kinds: [mixed_line_endings]` writes the fault where a test asks for it.
 - **`invalid_state` is not reproduced.** No bytes were found that DuckDB stores as an
   `invalid_state` reject rather than refusing the whole read.
 - **A profile recording none of these is refused** as `invalid-parameter`, because the op would
