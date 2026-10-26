@@ -362,7 +362,7 @@ def faults(field: LiteralField, column: ColumnLiterals, k_min: int) -> list[Faul
     if kind is FieldKind.SEQUENCE:
         sequence, extremes = numeric['sequence'], numeric['extremes']
         end = extremes.get('low') if sequence['step'] > 0 else extremes.get('high')
-        derived = end - (k_min - 1) * sequence['step'] if end is not None else None
+        derived = sequence_start(end, sequence['step'], k_min) if end is not None else None
         if sequence['start'] != derived:
             return [
                 Fault(
@@ -372,6 +372,11 @@ def faults(field: LiteralField, column: ColumnLiterals, k_min: int) -> list[Faul
                 )
             ]
     return []
+
+
+def sequence_start(end: int, step: int, k_min: int) -> int:
+    """A stored sequence's start: the trimmed extreme at the end it starts from, less k_min - 1 steps."""
+    return end - (k_min - 1) * step
 
 
 def min_count(field: LiteralField, k_min: int) -> int | None:

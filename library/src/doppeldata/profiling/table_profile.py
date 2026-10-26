@@ -27,6 +27,7 @@ from doppeldata.privacy_policy import withheld
 from doppeldata.privacy_policy.column_treatment import OLDEST_AGE
 from doppeldata.privacy_policy.column_treatment import ValueFamily
 from doppeldata.privacy_policy.literal_fields import FieldKind
+from doppeldata.privacy_policy.literal_fields import sequence_start
 from doppeldata.privacy_policy.treatment_rules import REFUSED
 from doppeldata.privacy_policy.treatment_rules import ZIP_PREFIX
 from doppeldata.profile_format import DERIVED_FROM
@@ -695,7 +696,7 @@ def sequence_of(stat: Stat, values: int, k_min: int) -> dict[str, int] | None:
     low, high = int(stat('trimmed_low')), int(stat('trimmed_high'))
     if values - 2 * (k_min - 1) < SEQUENCE_FILL * ((high - low) // abs(step) + 1):
         return None
-    start = (low if step > 0 else high) - (k_min - 1) * step
+    start = sequence_start(low if step > 0 else high, step, k_min)
     return {'start': start, 'step': step} if max(abs(start), abs(step)) <= LARGEST_EXACT_INTEGER else None
 
 
