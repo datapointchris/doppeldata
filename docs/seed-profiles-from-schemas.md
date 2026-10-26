@@ -145,22 +145,35 @@ Without `--out` the seed prints as YAML. A file names its table up to its first 
 - **A key bounded above passes its bound once the rows outnumber the values between its bounds.**
   It counts up so that no two rows share a value.
 
-## A seed records where it came from, and passes `data check` but not `profile check`
+## A seed records where it came from and what it declared, and passes `data check` but not `profile check`
 
 ```yaml
 generated:
   engine: import
   imported_from: odcs:orders.odcs.yaml#orders
+  declared:
+    order_id: [low]
+    amount: [low, high, scale]
+    status: [top_values]
+    shipping.postcode: [pattern]
 ```
 
+- **`declared` names each fact the schema stated, by column path.** The facts are `low`, `high`,
+  `scale`, `min_length`, `max_length`, `min_items`, `max_items`, `format`, `pattern` and
+  `top_values`. A nested field's path is dotted, and a list's element is `<column>.element`. A
+  column that declared none of them is not listed.
+- **No draw default is declared.** That covers every default in the table above, the name-hinted
+  type of a column with no format, a Table Schema `year` field's window, and the partition values a
+  Glue catalog lists. A partition key's Athena projection is declared. So a date column the schema
+  leaves unbounded draws inside `DATE_WINDOW`, and an export of the seed bounds it nowhere.
 - **`imported_from` is `<kind>:<name>[#<table>]`, naming a file but never its directory.** A Glue
   table is `glue:<region>/<database>/<table>@<version>`, with the catalog's version of it, and never
   its ARN, which holds the account id. A seed is a file people commit. A schema class is its module
   and class, such as `pandera:shop.Orders`.
-- **`imported_from` is part of the profile digest.** An older release hashes every `generated` field
-  it does not know, so leaving it out would give one seed two profile digests. A copy of the schema
-  elsewhere keeps the profile digest. A renamed file, or a Glue table at a new catalog version,
-  gives a new one.
+- **`imported_from` and `declared` are part of the profile digest.** An older release hashes every
+  `generated` field it does not know, so leaving either out would give one seed two profile
+  digests. A copy of the schema elsewhere keeps the profile digest. A renamed file, a Glue table at
+  a new catalog version, or a schema declaring another bound gives a new one.
 - **Data generated from a seed passes `data check` against it**, as any profile's does.
 - **`profile check` fails a seed, exiting 3.** A seed was never written under a privacy policy, so
   its declared values are literals no policy audited.

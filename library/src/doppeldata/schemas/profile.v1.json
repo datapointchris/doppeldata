@@ -795,6 +795,61 @@
         "rule"
       ]
     },
+    "DeclaredFact": {
+      "description": "A fact a schema declared, named for the profile field it marks.",
+      "oneOf": [
+        {
+          "description": "The low end of `numeric.extremes` or `temporal.extremes`.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "The high end of `numeric.extremes` or `temporal.extremes`.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "`numeric.scale`.",
+          "type": "string",
+          "const": "scale"
+        },
+        {
+          "description": "`string.length.min`.",
+          "type": "string",
+          "const": "min_length"
+        },
+        {
+          "description": "`string.length.max`.",
+          "type": "string",
+          "const": "max_length"
+        },
+        {
+          "description": "The least of `list.length`.",
+          "type": "string",
+          "const": "min_items"
+        },
+        {
+          "description": "The most of `list.length`.",
+          "type": "string",
+          "const": "max_items"
+        },
+        {
+          "description": "`semantic.type`, read from a format such as `email`.",
+          "type": "string",
+          "const": "format"
+        },
+        {
+          "description": "`string.pattern`.",
+          "type": "string",
+          "const": "pattern"
+        },
+        {
+          "description": "`top_values`.",
+          "type": "string",
+          "const": "top_values"
+        }
+      ]
+    },
     "Dependency": {
       "type": "object",
       "properties": {
@@ -1188,6 +1243,19 @@
           ],
           "additionalProperties": {
             "type": "string"
+          }
+        },
+        "declared": {
+          "description": "The facts an `import` profile's schema declared, by column path: a column's name, or the\ndotted path of a nested field, such as `shipping.city`. Every other bound, length or format\nthe profile states is a draw default, such as its date window, which no export carries.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/DeclaredFact"
+            }
           }
         },
         "detector_packs": {
