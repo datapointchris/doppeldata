@@ -1,13 +1,12 @@
 """A table as a schema declares it, written as a seed: a profile marked `generated.engine: import`, holding no statistics."""
 
 import dataclasses as dc
-import datetime as dt
 from collections.abc import Mapping
 from typing import Any
 
 from doppeldata.profile_format import FORMAT_VERSION
 from doppeldata.profile_format import Profile
-from doppeldata.profiling.table_profile import TOOL
+from doppeldata.profile_format import generated_section
 from doppeldata.seed_profiles.declared_columns import DeclaredColumn
 from doppeldata.seed_profiles.declared_columns import nested
 from doppeldata.short_profiles import expanded
@@ -82,10 +81,5 @@ class DeclaredTable:
 
 
 def imported_generated(imported_from: str) -> dict[str, Any]:
-    """A seed's `generated` section: the tool, the time, `engine: import`, and the schema it was read from."""
-    return {
-        'tool': TOOL,
-        'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
-        'engine': 'import',
-        'imported_from': imported_from,
-    }
+    """A seed's `generated` section: `engine: import`, and the schema it was read from."""
+    return generated_section(engine='import', imported_from=imported_from)

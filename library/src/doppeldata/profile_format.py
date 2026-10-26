@@ -7,6 +7,7 @@ which the library alone computes and hands to the generator.
 
 import copy
 import dataclasses as dc
+import datetime as dt
 import hashlib
 import importlib.resources
 import io
@@ -67,6 +68,7 @@ GENERATED_FIELDS = {
 # The digest keeps only these, so a field a later release adds is left out by this one.
 HASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if field.hashed)
 DERIVED_FROM = tuple(name for name, field in GENERATED_FIELDS.items() if field.derived_from)
+TOOL = f'doppeldata {_core.VERSION}'
 # Stored rates are rounded, so a set meant to sum to 1 is allowed this far off.
 RATE_SUM_TOLERANCE = 0.01
 # RFC 8785 writes numbers as IEEE 754 doubles, which hold every integer only up to this magnitude.
@@ -207,6 +209,19 @@ def to_plain(value: Any) -> Any:
         if isinstance(value, plain_type):
             return plain_type(value)
     return value
+
+
+def generated_section(**fields: Any) -> dict[str, Any]:
+    """A `generated` section made now: the tool and the time, then each of `fields` that is not None, in
+    `GENERATED_FIELDS`' order.
+
+    A field `GENERATED_FIELDS` does not declare raises ValueError, because the digest would not know whether it is hashed.
+    """
+    undeclared = sorted(set(fields) - set(GENERATED_FIELDS))
+    if undeclared:
+        raise ValueError(f'generated declares no field {", ".join(undeclared)}; add it to GENERATED_FIELDS')
+    section: dict[str, Any] = {'tool': TOOL, 'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z')}
+    return section | {name: fields[name] for name in GENERATED_FIELDS if name not in section and fields.get(name) is not None}
 
 
 def without_unhashed_fields(plain: dict[str, Any]) -> dict[str, Any]:
