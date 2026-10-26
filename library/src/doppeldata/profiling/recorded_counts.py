@@ -22,7 +22,12 @@ def kept_values(counted: list[tuple[Any, int]], values: int, k_min: int) -> tupl
 
 
 def rate(count: int, total: int) -> float:
-    return significant(count / total, RATE_DIGITS) if total else 0.0
+    """`count` of `total` to `RATE_DIGITS` significant digits, where 1 means every row, so a share short of every row is
+    written below it."""
+    if not total:
+        return 0.0
+    written = significant(count / total, RATE_DIGITS)
+    return 1 - 10.0**-RATE_DIGITS if written >= 1 and count < total else written
 
 
 def significant(value: float, digits: int) -> float:

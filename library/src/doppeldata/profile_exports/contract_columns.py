@@ -56,15 +56,17 @@ def ceiled(value: float) -> float:
 @dc.dataclass(frozen=True)
 class Share:
     """A share of rows that a fact holds for, measured over `rows`, or declared where `rows` is None. `rounding` is how
-    far the profile's written figures may be off, which widens the tolerance."""
+    far the profile's written figures may be off, which widens the tolerance. `short_of` says which rows the share does
+    not count, where a share of 1 still leaves some unstated: a sample's, or those the privacy floor writes as none."""
 
     value: float
     rows: int | None
     rounding: float = 0.0
+    short_of: str | None = None
 
     @property
     def whole(self) -> bool:
-        return self.value >= 1.0
+        return self.value >= 1.0 and self.short_of is None
 
     def tolerance(self) -> float:
         """Three standard errors of a proportion at `rows`, at least one row's worth, and nothing for a declared share."""
@@ -83,7 +85,11 @@ class Share:
 
     def of(self, other: 'Share') -> 'Share':
         """The share holding both this and `other`, `other` measured over the rows this one holds for."""
-        return Share(self.value * other.value, self.rows, self.rounding + other.rounding)
+        return Share(self.value * other.value, self.rows, self.rounding + other.rounding, self.short_of or other.short_of)
+
+    def caveat(self) -> str:
+        """`short_of` as the end of a note naming this share, or nothing."""
+        return f', {self.short_of}' if self.short_of else ''
 
 
 @dc.dataclass(frozen=True)
@@ -100,7 +106,8 @@ class Moment:
 @dc.dataclass(frozen=True)
 class ContractColumn:
     """One column's contract facts. `low` and `high` are the extremes the profile states, and `exact` says they and the
-    lengths hold for every row, as only a seed's do. `values` are the listed values, `values_share` the share of rows
+    lengths hold for every row, as a seed's and an exact measurement of every row do. `inexact` says why they do not.
+    `values` are the listed values, `values_share` the share of rows
     holding one of them. `pattern_share` and `format_share` are the shares of rows matching the pattern and the format.
     Each share is of every row, a null counting against it, so `completeness` is the share holding a value.
 
@@ -115,6 +122,7 @@ class ContractColumn:
     nullable: bool
     completeness: Share
     exact: bool
+    inexact: str = 'trimmed at k_min rows from each end'
     identifier: bool = False
     sensitivity: str | None = None
     semantic_type: str | None = None
@@ -199,29 +207,31 @@ class ContractColumn:
     def left_out(self) -> Iterator['LeftOut']:
         """What a strict format leaves out of this column and every field nested in it, and why."""
         if self.parsed_type and self.raw_type_share is not None:
-            parsed = within_values(self.raw_type_share, self.completeness).value
+            parsed = within_values(self.raw_type_share, self.completeness)
             # The record schema allows each JSON type a column's values hold, so it leaves out no 'json_types' fact.
             fact = 'json_types' if len(self.type_mix) > 1 else 'type'
-            yield LeftOut(fact, f'{self.label}: the {self.parsed_type} type, which {percent(parsed)} of values parse as')
+            parse = f'{percent(parsed.value)} of values parse as{parsed.caveat()}'
+            yield LeftOut(fact, f'{self.label}: the {self.parsed_type} type, which {parse}')
         if not self.identifier and (self.low is not None or self.high is not None) and not self.exact:
-            yield LeftOut('range', f'{self.label}: the range {self.low} to {self.high}, trimmed at k_min rows from each end')
+            yield LeftOut('range', f'{self.label}: the range {self.low} to {self.high}, {self.inexact}')
         if (self.min_length or self.max_length) and not self.exact:
-            yield LeftOut(
-                'lengths', f'{self.label}: the lengths {self.min_length} to {self.max_length}, trimmed at k_min rows from each end'
-            )
+            yield LeftOut('lengths', f'{self.label}: the lengths {self.min_length} to {self.max_length}, {self.inexact}')
         if self.values and not self.held_values():
-            outside = 1 - self.listed_share().value
-            yield LeftOut('values', f'{self.label}: the {len(self.values)} listed values, which {percent(outside)} of values fall outside')
+            listed = self.listed_share()
+            outside = f'{percent(1 - listed.value)} of values fall outside{listed.caveat()}'
+            yield LeftOut('values', f'{self.label}: the {len(self.values)} listed values, which {outside}')
         if self.pattern and not self.held_pattern():
-            matched = within_values(self.pattern_share, self.completeness).value if self.pattern_share else 0.0
-            yield LeftOut('pattern', f'{self.label}: the pattern {self.pattern}, which {percent(matched)} of values match')
-        if self.format and not self.held_format():
-            failed = (
-                f'{percent(1 - within_values(self.format_share, self.completeness).value)} of'
-                if self.format_share
-                else 'an unstated share of'
+            matched = within_values(self.pattern_share, self.completeness) if self.pattern_share else Share(0.0, None)
+            yield LeftOut(
+                'pattern', f'{self.label}: the pattern {self.pattern}, which {percent(matched.value)} of values match{matched.caveat()}'
             )
-            yield LeftOut('format', f'{self.label}: the {self.format} format, which {failed} values fail')
+        if self.format and not self.held_format():
+            if self.format_share:
+                formatted = within_values(self.format_share, self.completeness)
+                failed = f'{percent(1 - formatted.value)} of values fail{formatted.caveat()}'
+            else:
+                failed = 'an unstated share of values fail'
+            yield LeftOut('format', f'{self.label}: the {self.format} format, which {failed}')
         for inner in self.nested():
             yield from inner.left_out()
 
@@ -238,8 +248,8 @@ def within_values(share: Share, completeness: Share) -> Share:
     """A share of every row, as a share of the rows holding a value, measured over those rows."""
     held_rows = None if share.rows is None else round(share.rows * completeness.value)
     if completeness.value <= 0:
-        return Share(0.0, held_rows)
-    return Share(min(1.0, share.value / completeness.value), held_rows, share.rounding)
+        return Share(0.0, held_rows, short_of=share.short_of)
+    return Share(min(1.0, share.value / completeness.value), held_rows, share.rounding, share.short_of)
 
 
 def percent(share: float) -> str:
@@ -282,6 +292,8 @@ class ContractTable:
     partition_keys: tuple[str, ...] = ()
     foreign_keys: tuple[ForeignKey, ...] = ()
     profile: Profile | None = None
+    sample: str | None = None
+    floor: int | None = None
 
     @property
     def text_source(self) -> bool:
@@ -303,12 +315,12 @@ class ContractTable:
         notes = [note for column in self.columns for note in column.left_out()]
         for key in self.stated_keys():
             if not key.uniqueness.whole:
-                notes.append(
-                    LeftOut('key', f'{", ".join(key.columns)}: the key, which {percent(key.uniqueness.value)} of rows hold uniquely')
-                )
+                unique = f'{percent(key.uniqueness.value)} of rows hold uniquely{key.uniqueness.caveat()}'
+                notes.append(LeftOut('key', f'{", ".join(key.columns)}: the key, which {unique}'))
         for reference in self.foreign_keys:
             if reference.share is None or not reference.share.whole:
-                held = f'{percent(reference.share.value)} of values hold' if reference.share else 'an unstated share of values hold'
+                share = reference.share
+                held = f'{percent(share.value)} of values hold{share.caveat()}' if share else 'an unstated share of values hold'
                 notes.append(
                     LeftOut(
                         'foreign_key', f'{reference.column}: the foreign key to {reference.to_table}.{reference.to_column}, which {held}'
@@ -353,6 +365,7 @@ def contract_table(profile: Profile) -> ContractTable:
     source = document.get('source') or {}
     k_min = privacy.get('k_min') or DEFAULT_K_MIN
     declared = generated.get('declared')
+    sampled = not seed and (generated.get('sample') or {}).get('strategy', 'full') != 'full'
     facts = TableFacts(
         seed=seed,
         rows=rows,
@@ -361,6 +374,8 @@ def contract_table(profile: Profile) -> ContractTable:
         json_source=source.get('format') in JSON_SOURCES,
         text_source=source.get('format') in TEXT_SOURCES,
         declared=None if declared is None else {path: frozenset(listed) for path, listed in declared.items()},
+        sample=f'measured over a sample of {rows:,} rows' if sampled and rows else None,
+        floor=k_min if not seed and generated.get('engine') else None,
     )
     keys = (document.get('dataset') or {}).get('keys') or {}
     partitioning = (source.get('layout') or {}).get('partitioning') or {}
@@ -374,10 +389,12 @@ def contract_table(profile: Profile) -> ContractTable:
         csv_null=(source.get('csv') or {}).get('null'),
         digest=profile.digest.removeprefix('sha256:'),
         profile_version=int(document['profile_version']),
-        primary_key=table_key(keys['primary'], rows) if keys.get('primary') else None,
-        unique_keys=tuple(table_key(key, rows) for key in keys.get('candidates') or []),
+        primary_key=table_key(keys['primary'], facts) if keys.get('primary') else None,
+        unique_keys=tuple(table_key(key, facts) for key in keys.get('candidates') or []),
         partition_keys=tuple(key['name'] for key in partitioning.get('keys') or []),
         profile=profile,
+        sample=facts.sample,
+        floor=facts.floor,
     )
 
 
@@ -385,7 +402,8 @@ def contract_table(profile: Profile) -> ContractTable:
 class TableFacts:
     """What a column's facts are read against: whether the table is a seed, the rows its shares are of, the columns the
     policy treats as identifiers, whether its source is JSON, whose raw types a record schema follows, whether it is
-    text, whose raw values may not parse as a column's type, and a seed's `generated.declared`."""
+    text, whose raw values may not parse as a column's type, a seed's `generated.declared`, where the profile read a
+    sample, the caveat each share of it carries, and, where the profiler wrote it, the k_min its privacy floor applied."""
 
     seed: bool
     rows: int | None
@@ -394,6 +412,8 @@ class TableFacts:
     json_source: bool
     text_source: bool = False
     declared: Mapping[str, frozenset[str]] | None = None
+    sample: str | None = None
+    floor: int | None = None
 
     def stated(self, path: str, fact: str) -> bool:
         """Whether the profile states `fact` of the column at `path`, rather than drawing a default for it. A profile
@@ -406,10 +426,21 @@ class TableFacts:
         return fact in self.declared.get(path, frozenset())
 
 
-def table_key(key: Mapping[str, Any], rows: int | None) -> Key:
+def floored_share(value: float, rows: int | None, rounding: float, floor: int | None, sample: str | None, breaking: str) -> Share:
+    """A share the profiler writes as 1 where fewer than `floor`, its k_min, rows are `breaking` it, so a 1 it measured
+    states none of those rows. A share no profiler wrote, with no `floor`, and a declared one, with no rows, are themselves."""
+    if value < 1 or not rows or floor is None:
+        return Share(value, rows, rounding, sample)
+    unstated = f'short of the fewer than {floor} rows {breaking}, which the privacy floor writes as none'
+    return Share(value, rows, rounding + (floor - 1) / rows, sample or unstated)
+
+
+def table_key(key: Mapping[str, Any], facts: 'TableFacts') -> Key:
     uniqueness = key.get('uniqueness')
-    share = Share(1.0, None) if uniqueness is None else Share(uniqueness, rows, half_unit(1 - uniqueness, RATE_DIGITS))
-    return Key(tuple(key['columns']), share)
+    if uniqueness is None:
+        return Key(tuple(key['columns']), Share(1.0, None))
+    rounding = half_unit(1 - uniqueness, RATE_DIGITS)
+    return Key(tuple(key['columns']), floored_share(uniqueness, facts.rows, rounding, facts.floor, facts.sample, 'sharing a value'))
 
 
 def foreign_key(relationship: Mapping[str, Any], child: ContractTable) -> ForeignKey:
@@ -422,7 +453,8 @@ def foreign_key(relationship: Mapping[str, Any], child: ContractTable) -> Foreig
     orphans = relationship.get('orphan_rate')
     if orphans is not None:
         held_rows = None if child.rows is None or found is None else round(child.rows * found.completeness.value)
-        share: Share | None = Share(1 - orphans, held_rows, half_unit(orphans, RATE_DIGITS))
+        rounding = half_unit(orphans, RATE_DIGITS)
+        share: Share | None = floored_share(1 - orphans, held_rows, rounding, child.floor, child.sample, 'orphaned')
     else:
         share = Share(1.0, None) if child.seed else None
     return ForeignKey(column, to_table, to_column, share)
@@ -433,14 +465,16 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, presence: floa
     name = str(column['name'])
     null_rate = column.get('null_rate') or 0.0
     rows = facts.rows
-    completeness = Share(1 - null_rate, rows, half_unit(null_rate, RATE_DIGITS))
+    completeness = Share(1 - null_rate, rows, half_unit(null_rate, RATE_DIGITS), facts.sample)
     semantic = column.get('semantic') or {}
     numeric = column.get('numeric') or {}
     temporal = column.get('temporal') or {}
     string = column.get('string') or {}
     extremes = numeric.get('extremes') or temporal.get('extremes') or {}
     identifier = name in facts.identifiers or semantic.get('sensitivity') == 'identifier' or extremes.get('method') == 'digit_bounds'
-    exact = facts.seed or extremes.get('method') == 'exact'
+    measured_exactly = extremes.get('method') == 'exact'
+    exact = facts.seed or (measured_exactly and facts.sample is None)
+    inexact = facts.sample if measured_exactly and facts.sample else 'trimmed at k_min rows from each end'
     held_rows = None if rows is None else round(rows * (1 - null_rate))
     path = str(column.get('path') or name)
     physical = str(column['physical_type'])
@@ -486,9 +520,9 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, presence: floa
         found['type_mix'] = json_type_mix(type_mix)
     if type_mix and logical in RAW_TYPE_KEYS and RAW_TYPE_KEYS[logical] in type_mix:
         raw = type_mix[RAW_TYPE_KEYS[logical]]
-        parsed = Share(raw, held_rows, half_unit(1 - raw, RATE_DIGITS))
+        parsed = Share(raw, held_rows, half_unit(1 - raw, RATE_DIGITS), facts.sample)
         found['raw_type_share'] = completeness.of(parsed)
-        if facts.text_source and raw < 1:
+        if facts.text_source and not parsed.whole:
             found['parsed_type'] = logical
             logical = physical = 'string'
             # The extremes were trimmed over the values that parse.
@@ -511,6 +545,7 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, presence: floa
         nullable=null_rate > 0 or (facts.seed and bool(column.get('nullable'))),
         completeness=completeness,
         exact=exact,
+        inexact=inexact,
         identifier=identifier,
         sensitivity=semantic.get('sensitivity'),
         semantic_type=semantic.get('type'),
