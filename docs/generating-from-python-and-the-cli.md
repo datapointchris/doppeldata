@@ -144,6 +144,21 @@ profiles real data into the same format.
 - *Rejected:* `sd.expand`. A name on `Profile` says what it returns.
 - *Rejected:* `sd.profile` taking a dict. It profiles real data, where a dict reads as rows.
 
+## A schema a project already has generates rows, as a seed profile
+
+```python
+sd.generate(OrdersSchema, rows=1000)
+```
+
+```bash
+doppeldata profile import --from odcs orders.odcs.yaml --out orders.profile.yaml
+```
+
+A pandera, dataframely or Spark schema goes wherever a profile is taken. `profile import` writes a
+seed from a schema file or a Glue table, and `--help` lists the kinds it reads.
+[seed-profiles-from-schemas.md](seed-profiles-from-schemas.md) says what each source's declarations
+become and what a column the schema is silent on draws.
+
 ## Tables cross into Python through the Arrow PyCapsule interface, so no Arrow library is a dependency
 
 `doppeldata.generate()` returns a table and `doppeldata.stream()` a RecordBatchReader. Both are
@@ -221,8 +236,9 @@ the uploads alike.
   asks once per interval rather than on every request.
 - **Credentials boto3 cannot refresh are handed over once**, such as keys in the environment. The
   store uses them for the whole write.
-- **The uploads retry as boto3 does.** They make `S3_ATTEMPTS` attempts, and give up connecting
-  after `S3_CONNECT_TIMEOUT`.
+- **The uploads retry as boto3 does.** They make `ATTEMPTS` attempts, and give up connecting
+  after `CONNECT_TIMEOUT`. `aws_access.py` holds both, beside the client config every boto3 client
+  of doppeldata's takes.
 - **A write through boto3's chain stores the same bytes as a local write with the same flags.**
 - **boto3 is imported only for an S3 destination**, and declared nowhere. Without it, `plan` and
   `write` both refuse with `boto3-missing`, exit 2.

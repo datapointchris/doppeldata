@@ -7,6 +7,7 @@ import math
 import signal
 import traceback
 import warnings
+from collections.abc import Callable
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
@@ -618,6 +619,138 @@ def profile_expand(
         expanded.save(out)
     except OSError as error:
         raise typer.BadParameter(f'{out} could not be written: {error.strerror or error}', param_hint='--out') from error
+
+
+@dc.dataclass(frozen=True)
+class ImportRequest:
+    """What profile import was given, for the importer --from names."""
+
+    source: str
+    table: str | None
+    region: str | None
+    detected_entities: Path | None
+
+
+@dc.dataclass(frozen=True)
+class SchemaImporter:
+    """How profile import reads SOURCE as one kind: whether --table picks one of several tables, and whether it reads AWS."""
+
+    reads: Callable[[ImportRequest], Profile | Bundle]
+    several_tables: bool = False
+    aws: bool = False
+
+
+def glue_seed(given: ImportRequest) -> Profile:
+    """The seed of the Glue table SOURCE names as DATABASE.TABLE."""
+    database, dot, name = given.source.partition('.')
+    if not dot or not database or not name:
+        raise typer.BadParameter(f'{given.source!r} is not DATABASE.TABLE', param_hint='SOURCE')
+    entities = entity_types(given.detected_entities) if given.detected_entities is not None else None
+    return Profile.from_glue(database, name, region=given.region, detected_entities=entities)
+
+
+def data_package_seed(given: ImportRequest) -> Profile | Bundle:
+    """The seed of the resource --table names, else a bundle of every resource."""
+    if given.table is None:
+        return Bundle.from_data_package(given.source)
+    return Profile.from_data_package(given.source, table=given.table)
+
+
+# The input a refused import names, by the SourceError's role.
+IMPORT_ROLE_OPTIONS = {'schema': 'SOURCE', 'region': '--region', 'detected-entities': '--detected-entities'}
+IMPORTERS = {
+    'glue': SchemaImporter(glue_seed, aws=True),
+    'odcs': SchemaImporter(lambda given: Profile.from_odcs(given.source, table=given.table), several_tables=True),
+    'json-schema': SchemaImporter(lambda given: Profile.from_json_schema(given.source)),
+    'table-schema': SchemaImporter(lambda given: Profile.from_table_schema(given.source)),
+    'data-package': SchemaImporter(data_package_seed, several_tables=True),
+}
+
+
+@profile_app.command('import', no_args_is_help=True)
+def profile_import(
+    source: Annotated[
+        str, typer.Argument(metavar='SOURCE', help='The schema file, or with --from glue the catalog table as DATABASE.TABLE.')
+    ],
+    kind: Annotated[str, typer.Option('--from', metavar='KIND', help=f'What SOURCE is: {", ".join(IMPORTERS)}.')],
+    table: Annotated[
+        str | None,
+        typer.Option(
+            '--table',
+            metavar='NAME',
+            help=(
+                "Import the one table NAME from a source holding several: an ODCS contract's schema object, or a Data Package's "
+                'resource. Without it a Data Package imports as a bundle of every resource and its foreign keys, as '
+                'profile create --tables profiles every table. data generate reads one table, so it reads no bundle.'
+            ),
+        ),
+    ] = None,
+    region: Annotated[
+        str | None, typer.Option('--region', metavar='REGION', help="With --from glue, the catalog's region, else the AWS environment's.")
+    ] = None,
+    detected_entities: Annotated[
+        Path | None,
+        typer.Option(
+            '--detected-entities',
+            metavar='FILE',
+            help=(
+                "With --from glue, a JSON object of each column's Glue entity types, as classifyColumns returns them: "
+                '{"email": ["EMAIL"]}. Each column takes the type a shipped detector pack declares for the first.'
+            ),
+        ),
+    ] = None,
+    out: Annotated[Path | None, typer.Option('--out', metavar='FILE', help='Write the seed to FILE rather than print its YAML.')] = None,
+) -> None:
+    """Import a seed profile from a schema a project already has: doppeldata profile import --from odcs orders.odcs.yaml
+
+    The seed takes each column's type and constraints from the schema, and a fixed default its YAML states where the schema is silent.
+
+    data generate reads the seed unchanged. glue reads the AWS Glue Data Catalog with the AWS environment's credentials.
+    """
+    importer = IMPORTERS.get(kind)
+    if importer is None:
+        raise typer.BadParameter(f'{kind!r} is not a source to import; choose from {", ".join(IMPORTERS)}', param_hint='--from')
+    if table is not None and not importer.several_tables:
+        raise typer.BadParameter(f'a {kind} source holds one table, so --table picks nothing', param_hint='--table')
+    for given, flag in ((region, '--region'), (detected_entities, '--detected-entities')):
+        if given is not None and not importer.aws:
+            raise typer.BadParameter(f'{flag} is read only with --from glue', param_hint=flag)
+    if out is not None and not out.parent.is_dir():
+        raise typer.BadParameter(f'{out.parent} is not a directory; create it, or name a FILE in one that exists', param_hint='--out')
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always', ProfilingWarning)
+            seed = importer.reads(ImportRequest(source, table, region, detected_entities))
+    except InvalidProfile as error:
+        raise typer.BadParameter(f'the seed it describes fails the profile schema: {error}', param_hint='SOURCE') from error
+    except SourceError as error:
+        if error.exit_code != 2 or error.role not in IMPORT_ROLE_OPTIONS:
+            raise
+        raise typer.BadParameter(str(error), param_hint=IMPORT_ROLE_OPTIONS[error.role]) from error
+    print_notices(caught)
+    if out is None:
+        typer.echo(seed.to_yaml(), nl=False)
+        return
+    try:
+        seed.save(out)
+    except OSError as error:
+        raise typer.BadParameter(f'{out} could not be written: {error.strerror or error}', param_hint='--out') from error
+
+
+def entity_types(path: Path) -> dict[str, list[str]]:
+    """The --detected-entities file's map of each column to its Glue entity types, refused with exit 2 in any other shape."""
+    try:
+        found = json.loads(path.read_text())
+    except OSError as error:
+        raise typer.BadParameter(f'{path} could not be read: {error.strerror or error}', param_hint='--detected-entities') from error
+    except json.JSONDecodeError as error:
+        raise typer.BadParameter(f'{path} is not JSON: {error}', param_hint='--detected-entities') from error
+    if not isinstance(found, dict) or not all(
+        isinstance(types, list) and all(isinstance(each, str) for each in types) for types in found.values()
+    ):
+        message = f'{path} is not a JSON object of each column to a list of entity types, such as {{"email": ["EMAIL"]}}'
+        raise typer.BadParameter(message, param_hint='--detected-entities')
+    return found
 
 
 @profile_app.command('show', no_args_is_help=True)

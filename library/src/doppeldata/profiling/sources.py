@@ -10,6 +10,12 @@ from urllib.parse import urlparse
 
 import botocore.exceptions
 
+from doppeldata.aws_access import AWS_ERRORS
+from doppeldata.aws_access import CREDENTIAL_ADVICE
+from doppeldata.aws_access import CREDENTIAL_ERRORS
+from doppeldata.aws_access import answered
+from doppeldata.aws_access import no_answer
+from doppeldata.aws_access import unanswered
 from doppeldata.errors import SourceError
 from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import PARTIAL_MANIFEST_FILE_NAME
@@ -19,10 +25,6 @@ from doppeldata.profiling.backend import TEXT_CODEC_SUFFIXES
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFile
 from doppeldata.profiling.backend import SourceFormat
-from doppeldata.s3_access import CREDENTIAL_ADVICE
-from doppeldata.s3_access import CREDENTIAL_ERRORS
-from doppeldata.s3_access import S3_ATTEMPTS
-from doppeldata.s3_access import UNANSWERED_ERRORS
 from doppeldata.s3_access import endpoint_named
 from doppeldata.s3_access import s3_session
 
@@ -126,19 +128,13 @@ def s3_errors(url: str, endpoint: str, *, doing: str = 'listed') -> Iterator[Non
     """
     try:
         yield
-    except botocore.exceptions.ClientError as error:
-        reported = error.response.get('Error', {})
-        status = error.response.get('ResponseMetadata', {}).get('HTTPStatusCode', 0)
-        answer = f'{reported.get("Code")}, {reported.get("Message")}'
-        if status == 429 or status >= 500:
-            raise SourceError(f'no answer from {endpoint}: S3 answered {answer} on every attempt', exit_code=4) from error
-        raise SourceError(f'{url} could not be {doing}: {endpoint} answered {answer}', exit_code=1) from error
     except CREDENTIAL_ERRORS as error:
-        message = f'{url} could not be {doing}: {error}; {CREDENTIAL_ADVICE}'
-        raise SourceError(message, exit_code=1) from error
-    except UNANSWERED_ERRORS as error:
-        raise SourceError(f'no answer from {endpoint}: {error}, {S3_ATTEMPTS} attempts', exit_code=4) from error
-    except botocore.exceptions.BotoCoreError as error:
+        raise SourceError(f'{url} could not be {doing}: {error}; {CREDENTIAL_ADVICE}', exit_code=1) from error
+    except AWS_ERRORS as error:
+        if unanswered(error):
+            raise SourceError(no_answer(endpoint, 'S3', error), exit_code=4) from error
+        if isinstance(error, botocore.exceptions.ClientError):
+            raise SourceError(f'{url} could not be {doing}: {endpoint} answered {answered(error)}', exit_code=1) from error
         raise SourceError(f'{url} could not be {doing} through {endpoint}: {error}', exit_code=1) from error
 
 

@@ -15,7 +15,6 @@ import duckdb
 import polars as pl
 import polars.selectors as cs
 import pyarrow as pa
-from polars.datatypes import DataTypeClass
 
 from doppeldata.errors import SourceError
 from doppeldata.profiling import json_paths
@@ -47,6 +46,7 @@ from doppeldata.profiling.statistic_catalog import SHAPE_TO
 from doppeldata.profiling.statistic_catalog import TIME_UNITS
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
+from doppeldata.spark_polars_arrow_types import polars_arrow_type
 
 # Each translation takes the column, or its value from `ROW_STAGES` where one is named, and the request's argument.
 Translation = Callable[[pl.Expr, Any], pl.Expr]
@@ -196,42 +196,6 @@ untranslated += sorted(f'the raw type {raw}' for raw in set(RAW_TYPES) - (TEXT_M
 if untranslated:
     raise RuntimeError(f'the Polars backend has no translation for {", ".join(untranslated)}')
 
-SIMPLE_ARROW_TYPES: dict[Any, str] = {
-    pl.Int8: 'int8',
-    pl.Int16: 'int16',
-    pl.Int32: 'int32',
-    pl.Int64: 'int64',
-    pl.UInt8: 'uint8',
-    pl.UInt16: 'uint16',
-    pl.UInt32: 'uint32',
-    pl.UInt64: 'uint64',
-    pl.Float32: 'float',
-    pl.Float64: 'double',
-    pl.String: 'string',
-    pl.Boolean: 'bool',
-    pl.Date: 'date32[day]',
-    pl.Time: 'time64[ns]',
-    pl.Binary: 'binary',
-    pl.Null: 'null',
-}
-
-
-def arrow_type(dtype: pl.DataType | DataTypeClass) -> str:
-    """The column's Arrow type as pyarrow spells it, such as `decimal128(12, 2)` or `timestamp[us, tz=UTC]`."""
-    if isinstance(dtype, pl.Decimal):
-        return f'decimal128({dtype.precision or 38}, {dtype.scale})'
-    if isinstance(dtype, pl.Datetime):
-        return f'timestamp[{dtype.time_unit}, tz={dtype.time_zone}]' if dtype.time_zone else f'timestamp[{dtype.time_unit}]'
-    if isinstance(dtype, pl.Duration):
-        return f'duration[{dtype.time_unit}]'
-    if isinstance(dtype, pl.List):
-        return f'list<item: {arrow_type(dtype.inner)}>'
-    if isinstance(dtype, pl.Array):
-        return f'fixed_size_list<item: {arrow_type(dtype.inner)}>[{dtype.size}]'
-    if isinstance(dtype, pl.Struct):
-        return 'struct<' + ', '.join(f'{field.name}: {arrow_type(field.dtype)}' for field in dtype.fields) + '>'
-    return SIMPLE_ARROW_TYPES.get(dtype.base_type(), str(dtype).lower())
-
 
 def kind_of(dtype: pl.DataType) -> ColumnKind:
     if dtype.is_integer():
@@ -302,7 +266,7 @@ class PolarsBackend:
     def schema(self, table: pl.LazyFrame) -> list[ColumnSpec]:
         specs = []
         for name, dtype in table.collect_schema().items():
-            spec = ColumnSpec(name, kind_of(dtype), arrow_type(dtype))
+            spec = ColumnSpec(name, kind_of(dtype), polars_arrow_type(dtype))
             if isinstance(dtype, pl.Decimal):
                 spec = ColumnSpec(name, spec.kind, spec.physical_type, precision=dtype.precision, scale=dtype.scale)
             if isinstance(dtype, pl.Datetime) and dtype.time_zone:

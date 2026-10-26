@@ -32,7 +32,9 @@ from doppeldata.privacy_policy.treatment_rules import REFUSED
 from doppeldata.privacy_policy.treatment_rules import ZIP_PREFIX
 from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
+from doppeldata.profile_format import TOOL
 from doppeldata.profile_format import described_rows
+from doppeldata.profile_format import generated_section
 from doppeldata.profile_format import listed_section
 from doppeldata.profiling import file_traits
 from doppeldata.profiling import json_paths
@@ -109,7 +111,6 @@ FIT_MIN_DISTINCT = 50
 FITTED_FAMILIES_MODULE = 'doppeldata.profiling.fitted_families'
 # Imported by name, because it imports pyarrow, which a library-only install lacks.
 SEMANTIC_TYPES_MODULE = 'doppeldata.profiling.semantic_types'
-TOOL = f'doppeldata {_core.VERSION}'
 LOGICAL_TYPES = {
     ColumnKind.INTEGER: 'integer',
     ColumnKind.FLOAT: 'number',
@@ -268,11 +269,9 @@ def profile_table(
         found, cell_floors = dataset_sections(backend, full, profiled, rows, whole_distinct, k_min)
         dataset |= found
     fitting, _ = fitting_module()
-    generated: dict[str, Any] = {
-        'tool': TOOL,
-        'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z'),
-    } | derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None, packs, code_lists, readers)
-    generated['sample'] = {'strategy': 'reservoir', 'rows_read': profiled.described} if profiled.described < rows else {'strategy': 'full'}
+    sampling = {'strategy': 'reservoir', 'rows_read': profiled.described} if profiled.described < rows else {'strategy': 'full'}
+    derived = derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None, packs, code_lists, readers)
+    generated = generated_section(**derived, sample=sampling)
     document: dict[str, Any] = {
         'profile_version': _core.FORMAT_VERSION,
         'kind': 'table',

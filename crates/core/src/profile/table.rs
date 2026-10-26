@@ -50,6 +50,14 @@ pub struct Generated {
     /// disk, or its S3 ETag. It tells two listings apart, and never hashes the content.
     pub source_fingerprint: Option<String>,
     pub sample: Option<Sample>,
+    /// The schema an `import` profile was read from, as `<kind>:<name>[#<table>]`. The kind names
+    /// what read it, such as `odcs`, `glue` or `pandera`. A file's name is the file's alone, with
+    /// no directory, such as `odcs:orders.odcs.yaml#orders`, and `#<table>` names one table of
+    /// several. A Glue table is `<region>/<database>/<table>`, and `@<version>` the catalog's
+    /// version of it where the catalog gives one. A schema class is its module and class, such as
+    /// `pandera:shop.Orders`, and an object is its own name, else its type, such as
+    /// `spark:StructType`.
+    pub imported_from: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]

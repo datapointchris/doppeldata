@@ -7,6 +7,7 @@ which the library alone computes and hands to the generator.
 
 import copy
 import dataclasses as dc
+import datetime as dt
 import hashlib
 import importlib.resources
 import io
@@ -14,6 +15,7 @@ import json
 import math
 from collections.abc import Iterator
 from collections.abc import Mapping
+from collections.abc import Sequence
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -59,9 +61,14 @@ GENERATED_FIELDS = {
     'source_fingerprint': GeneratedField(hashed=False, derived_from=True),
     'at': GeneratedField(hashed=False, derived_from=False),
     'sample': GeneratedField(hashed=True, derived_from=False),
+    # Hashed, as every release before it hashes a field it does not know. It names no directory, so a copy of the
+    # schema elsewhere keeps the seed's identity.
+    'imported_from': GeneratedField(hashed=True, derived_from=False),
 }
-UNHASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if not field.hashed)
+# The digest keeps only these, so a field a later release adds is left out by this one.
+HASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if field.hashed)
 DERIVED_FROM = tuple(name for name, field in GENERATED_FIELDS.items() if field.derived_from)
+TOOL = f'doppeldata {_core.VERSION}'
 # Stored rates are rounded, so a set meant to sum to 1 is allowed this far off.
 RATE_SUM_TOLERANCE = 0.01
 # RFC 8785 writes numbers as IEEE 754 doubles, which hold every integer only up to this magnitude.
@@ -204,11 +211,24 @@ def to_plain(value: Any) -> Any:
     return value
 
 
+def generated_section(**fields: Any) -> dict[str, Any]:
+    """A `generated` section made now: the tool and the time, then each of `fields` that is not None, in
+    `GENERATED_FIELDS`' order.
+
+    A field `GENERATED_FIELDS` does not declare raises ValueError, because the digest would not know whether it is hashed.
+    """
+    undeclared = sorted(set(fields) - set(GENERATED_FIELDS))
+    if undeclared:
+        raise ValueError(f'generated declares no field {", ".join(undeclared)}; add it to GENERATED_FIELDS')
+    section: dict[str, Any] = {'tool': TOOL, 'at': dt.datetime.now(dt.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z')}
+    return section | {name: fields[name] for name in GENERATED_FIELDS if name not in section and fields.get(name) is not None}
+
+
 def without_unhashed_fields(plain: dict[str, Any]) -> dict[str, Any]:
     generated = plain.get('generated')
     if not isinstance(generated, dict):
         return plain
-    kept = {key: value for key, value in generated.items() if key not in UNHASHED_GENERATED_FIELDS}
+    kept = {key: value for key, value in generated.items() if key in HASHED_GENERATED_FIELDS}
     return plain | {'generated': kept}
 
 
@@ -386,6 +406,9 @@ class Profile:
         if not issues and profile.document.get('kind') != 'table':
             tables = ', '.join(profile.document.get('tables') or {})
             message = f"this file is a bundle of the tables {tables}; profile one table's folder for a table profile"
+            imported_from = (profile.document.get('generated') or {}).get('imported_from')
+            if imported_from:
+                message = f'this file is a bundle of the tables {tables} in {imported_from}; import one of them with --table, or table='
             issues = [Issue('not-a-table', '/kind', message)]
         if issues:
             raise InvalidProfile(str(path), issues)
@@ -405,12 +428,63 @@ class Profile:
 
         `columns` is a list of column names, each taking the fake its name hints, or a dict of each name to a column such as
         `sd.fakes.email`, `sd.integers(18, 90)` or None. It may also be a short YAML file of `rows` and a `columns` map, a
-        profile file, an example's name, or a Profile. `rows` is the row count the profile records, in place of the source's.
+        profile file, an example's name, a Profile, or a schema: a pandera `DataFrameModel` or `DataFrameSchema`, a
+        dataframely `Schema`, or a Spark `StructType`. `rows` is the row count the profile records, in place of the source's.
         A name that hints no fake raises InvalidProfile naming the closest. `generate`, `write` and the rest take the same.
         """
-        from doppeldata.short_profiles import expanded_profile
+        from doppeldata.profile_sources import expanded_profile
 
         return expanded_profile(columns, rows)
+
+    @classmethod
+    def from_glue(
+        cls, database: str, table: str, *, region: str | None = None, detected_entities: Mapping[str, Sequence[str]] | None = None
+    ) -> 'Profile':
+        """A seed of a Glue Data Catalog table: its columns, format, CSV dialect and header, and partition keys drawing
+        the values the catalog lists, else those its partition projection declares.
+
+        Reads `glue:GetTable` and `glue:GetPartitions` through boto3, in `region` or the AWS environment's. The library
+        does not install boto3. Without it the call raises PackagesMissing, which names how to install it.
+        `detected_entities` maps a column to the Glue entity types `classifyColumns` found in it, such as
+        `{'email': ['EMAIL']}`, and gives it the type the shipped detector pack declares for the first. A key naming no
+        column raises SourceError. The packs import pyarrow, so `detected_entities` needs it installed.
+        """
+        from doppeldata.seed_profiles.glue_catalog import glue_profile
+
+        return glue_profile(database, table, region=region, detected_entities=detected_entities)
+
+    @classmethod
+    def from_odcs(cls, path: str | Path, *, table: str | None = None) -> 'Profile':
+        """A seed of one schema object in an Open Data Contract Standard v3 contract, named by `table` where it holds
+        several. A property's types, `logicalTypeOptions`, `enum`, `required`, keys and quality checks shape its column.
+        """
+        from doppeldata.seed_profiles.odcs_contracts import odcs_profile
+
+        return odcs_profile(path, table=table)
+
+    @classmethod
+    def from_json_schema(cls, path: str | Path) -> 'Profile':
+        """A seed of the record a JSON Schema describes, each property a column and a nested object a struct."""
+        from doppeldata.seed_profiles.json_schemas import json_schema_profile
+
+        return json_schema_profile(path)
+
+    @classmethod
+    def from_table_schema(cls, path: str | Path) -> 'Profile':
+        """A seed of the table a Frictionless Table Schema describes, its first missing value written as a CSV's null."""
+        from doppeldata.seed_profiles.table_schemas import table_schema_profile
+
+        return table_schema_profile(path)
+
+    @classmethod
+    def from_data_package(cls, path: str | Path, *, table: str | None = None) -> 'Profile':
+        """A seed of one resource of a Frictionless Data Package, named by `table` where it holds several.
+
+        `Bundle.from_data_package` reads every resource, and their foreign keys.
+        """
+        from doppeldata.seed_profiles.table_schemas import data_package_profile
+
+        return data_package_profile(path, table=table)
 
     def validate(self) -> list[Issue]:
         """Every reason the profile is invalid. Empty when it is valid."""
@@ -488,6 +562,15 @@ class Bundle:
                 raise InvalidProfile(str(index), [Issue('table-name-mismatch', pointer(('tables', name)), message)])
             tables[name] = table
         return cls(document, index, tables)
+
+    @classmethod
+    def from_data_package(cls, path: str | Path) -> 'Bundle':
+        """A bundle of a seed for each resource of a Frictionless Data Package, and a relationship for each foreign key
+        of one field. It has no file of its own, so its `save` needs a path.
+        """
+        from doppeldata.seed_profiles.table_schemas import data_package_bundle
+
+        return data_package_bundle(path)
 
     def to_plain(self) -> dict[str, Any]:
         """The bundle with every table inline, as a single-file bundle would hold it."""

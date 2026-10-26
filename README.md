@@ -30,6 +30,11 @@ and decimal places need the dict. `doppeldata profile expand` writes the full pr
 stands for. [Generating from Python and the command line](docs/generating-from-python-and-the-cli.md)
 climbs from there to a profile of real data.
 
+A project's existing schema generates rows too. `sd.generate(OrdersSchema, rows=1000)` takes a pandera,
+dataframely or Spark schema, and `doppeldata profile import` writes a seed profile from a schema file
+or a Glue table.
+[Seed profiles imported from a schema](docs/seed-profiles-from-schemas.md) says what each becomes.
+
 doppeldata is experimental. So far it profiles a table's columns and its files, generates a table from a profile
 under any scenarios, and ships the profile and scenario formats with hand-written examples of each:
 
@@ -43,6 +48,7 @@ doppeldata profile check orders.profile.yaml   # the file against its schema and
 doppeldata profile list                # the example profiles
 doppeldata profile show orders         # one of them, as YAML to start a profile from
 doppeldata profile expand people.yaml  # the full profile a short YAML of rows and columns stands for
+doppeldata profile import --from odcs orders.odcs.yaml --out orders.profile.yaml  # a seed from a data contract
 doppeldata profile diff march.profile.yaml april.profile.yaml  # how far April drifted from March
 doppeldata data check orders.profile.yaml out/orders/        # generated data against its profile
 doppeldata data check orders.profile.yaml out/orders/ --against data/orders/ --html side-by-side.html  # and the real data

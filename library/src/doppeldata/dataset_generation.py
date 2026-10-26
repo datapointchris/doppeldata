@@ -27,13 +27,13 @@ from doppeldata.name_hinted_types import with_type_hints
 from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import UngenerableProfile
+from doppeldata.profile_sources import ProfileSource
+from doppeldata.profile_sources import profile_from
 from doppeldata.published_schemas import output_formats
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
 from doppeldata.scenario_format import manifest_record
 from doppeldata.scenario_format import refuse_file_shaping
-from doppeldata.short_profiles import ProfileSource
-from doppeldata.short_profiles import profile_from
 
 LARGEST_SEED = 2**64 - 1
 

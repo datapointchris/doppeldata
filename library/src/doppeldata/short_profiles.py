@@ -1,16 +1,13 @@
 """The short forms of a profile, each expanded to the ordinary profile that generates its data.
 
-Every call that generates takes a list of column names, a dict of inline columns, a short YAML file of `rows` and a
-`columns` map, a profile file, an example's name, or a Profile. A column given no spec takes the fake its name hints: a
-type the general pack hints by that name first, then a provider by its own name or one of `PROVIDER_HINTS`.
+A short form is a list of column names, a dict of inline columns, or a short YAML file of `rows` and a `columns` map.
+A column given no spec takes the fake its name hints: a type the general pack hints by that name first, then a provider
+by its own name or one of `PROVIDER_HINTS`.
 """
 
-import copy
 import difflib
 import os
 import re
-from collections.abc import Mapping
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -35,8 +32,6 @@ from doppeldata.profile_format import Profile
 from doppeldata.profile_format import pointer
 from doppeldata.profile_format import read_document
 from doppeldata.profile_format import to_plain
-
-ProfileSource = Profile | str | os.PathLike[str] | Sequence[str] | Mapping[str, InlineColumn | None]
 
 # The table a profile expanded from columns given in Python or on the command line is named.
 INLINE_TABLE = 'table'
@@ -73,16 +68,6 @@ def providers() -> list[str]:
     return [value.provider for value in vars(fakes).values() if isinstance(value, Fake)]
 
 
-def expanded_profile(source: ProfileSource, rows: int | None = None) -> Profile:
-    """The profile `source` stands for, recording `rows` as its row count where given. `Profile.expand` documents `source`."""
-    profile = profile_from(source)
-    if rows is None:
-        return profile
-    if isinstance(rows, bool) or not isinstance(rows, int) or rows < 0:
-        raise ValueError(f'rows must be zero or more, not {rows!r}')
-    return Profile(with_row_count(copy.deepcopy(profile.document), rows))
-
-
 def with_row_count(document: Any, rows: int) -> Any:
     """`document` recording `rows` as its row count, in a `dataset` section placed before the columns where it has none."""
     if 'dataset' in document:
@@ -94,27 +79,6 @@ def with_row_count(document: Any, rows: int) -> Any:
         return document
     items = list(document.items())
     return dict([*items[:at], ('dataset', {'row_count': rows}), *items[at:]])
-
-
-def profile_from(source: ProfileSource) -> Profile:
-    """The profile `source` stands for, as every call that generates reads it. A Profile is itself."""
-    if isinstance(source, Profile):
-        return source
-    if isinstance(source, str | os.PathLike):
-        return file_profile(source)
-    if isinstance(source, Mapping):
-        if not all(isinstance(name, str) for name in source):
-            raise TypeError(f'the columns given are keyed by their names, as strs, not {list(source)}')
-        return validated(expanded(dict(source), None, INLINE_TABLE, DICT_SOURCE), DICT_SOURCE)
-    if isinstance(source, Sequence) and all(isinstance(name, str) for name in source):
-        repeated = sorted({name for name in source if list(source).count(name) > 1})
-        if repeated:
-            raise ValueError(f'the column list names {", ".join(repeated)} more than once')
-        return validated(expanded(dict.fromkeys(source), None, INLINE_TABLE, LIST_SOURCE), LIST_SOURCE)
-    raise TypeError(
-        'generation takes a Profile, a profile or short YAML file, an example name, a list of column names, or a dict of '
-        f'columns such as {{"email": sd.fakes.email}}, not {type(source).__name__}'
-    )
 
 
 def file_profile(source: str | os.PathLike[str]) -> Profile:

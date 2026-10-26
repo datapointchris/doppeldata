@@ -39,8 +39,8 @@ from doppeldata.dataset_generation import s3_store_of
 from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
 from doppeldata.manifest import Manifest
+from doppeldata.profile_sources import ProfileSource
 from doppeldata.scenario_format import Scenario
-from doppeldata.short_profiles import ProfileSource
 
 # The engine blocks each Spark task generates in turn. The chunk is a unit of work and never of values, so its size moves no value.
 CHUNK_BLOCKS = 16

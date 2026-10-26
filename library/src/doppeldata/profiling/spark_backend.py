@@ -61,6 +61,7 @@ from doppeldata.profiling.statistic_catalog import TIME_UNITS
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
 from doppeldata.spark import PYTHON_ERROR_LINE
+from doppeldata.spark_polars_arrow_types import spark_arrow_type
 
 # HyperLogLog++'s relative standard deviation. At 0.01 each column's sketch holds 2^14 registers. A count of a few hundred
 # falls in linear counting and lands within a few values of exact.
@@ -423,46 +424,15 @@ def kind_of(data_type: st.DataType) -> ColumnKind:
     return ColumnKind.OTHER
 
 
-SIMPLE_ARROW_TYPES: dict[type, str] = {
-    st.ByteType: 'int8',
-    st.ShortType: 'int16',
-    st.IntegerType: 'int32',
-    st.LongType: 'int64',
-    st.FloatType: 'float',
-    st.DoubleType: 'double',
-    st.StringType: 'string',
-    st.BooleanType: 'bool',
-    st.DateType: 'date32[day]',
-    st.BinaryType: 'binary',
-    st.NullType: 'null',
-    # Spark holds a timestamp as an instant in microseconds, read in the session's UTC.
-    st.TimestampType: 'timestamp[us, tz=UTC]',
-    st.TimestampNTZType: 'timestamp[us]',
-    st.DayTimeIntervalType: 'duration[us]',
-}
-
-
-def arrow_type(data_type: st.DataType) -> str:
-    """The column's Arrow type as pyarrow spells it, as Spark's own Arrow conversion gives it."""
-    if isinstance(data_type, st.DecimalType):
-        return f'decimal128({data_type.precision}, {data_type.scale})'
-    if isinstance(data_type, st.ArrayType):
-        return f'list<item: {arrow_type(data_type.elementType)}>'
-    if isinstance(data_type, st.StructType):
-        return 'struct<' + ', '.join(f'{field.name}: {arrow_type(field.dataType)}' for field in data_type.fields) + '>'
-    if isinstance(data_type, st.MapType):
-        return f'map<{arrow_type(data_type.keyType)}, {arrow_type(data_type.valueType)}>'
-    return SIMPLE_ARROW_TYPES.get(type(data_type), data_type.simpleString())
-
-
 def spec_of(field: st.StructField) -> ColumnSpec:
     data_type = field.dataType
     kind = kind_of(data_type)
+    arrow_type = spark_arrow_type(data_type)
     if isinstance(data_type, st.DecimalType):
-        return ColumnSpec(field.name, kind, arrow_type(data_type), precision=data_type.precision, scale=data_type.scale)
+        return ColumnSpec(field.name, kind, arrow_type, precision=data_type.precision, scale=data_type.scale)
     if isinstance(data_type, st.TimestampType):
-        return ColumnSpec(field.name, kind, arrow_type(data_type), timezone='UTC')
-    return ColumnSpec(field.name, kind, arrow_type(data_type))
+        return ColumnSpec(field.name, kind, arrow_type, timezone='UTC')
+    return ColumnSpec(field.name, kind, arrow_type)
 
 
 @dc.dataclass(frozen=True)
