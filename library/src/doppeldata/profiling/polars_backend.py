@@ -404,9 +404,9 @@ class PolarsBackend:
             for value, held in zip(row[::2], row[1::2], strict=True)
         ]
 
-    def cross_counts(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str, str, int]]]:
+    def cross_counts(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
         frames = [
-            table.select(pl.col(a).cast(pl.String).alias('a'), pl.col(b).cast(pl.String).alias('b')).drop_nulls().group_by('a', 'b').len()
+            table.select(pl.col(a).cast(pl.String).alias('a'), pl.col(b).cast(pl.String).alias('b')).group_by('a', 'b').len()
             for a, b in pairs
         ]
         return [[(a, b, int(rows)) for a, b, rows in frame.iter_rows()] for frame in pl.collect_all(frames, engine='streaming')]

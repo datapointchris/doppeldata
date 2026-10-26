@@ -138,7 +138,8 @@ def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_an
         {'north': 'web', 'south': 'store', 'east': 'phone'}[region] if draw.random() < 0.8 else draw.choice(['web', 'store', 'phone'])
         for region in regions
     ]
-    # Six north rows and twenty south rows on fax: the north cell is under k_min, and fax's rows outside the kept cells name it.
+    # Six north rows and twenty south rows on fax. The north cell is under k_min, so neither fax's rows outside the kept
+    # cells nor the north row's rows outside its kept cells may come to six.
     fax = {*range(0, 18, 3), *range(1, 61, 3)}
     channels = ['fax' if index in fax else channel for index, channel in enumerate(channels)]
     frame = pl.DataFrame(
@@ -165,7 +166,11 @@ def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_an
     assert {('tier', 'plan'), ('region', 'channel')} <= conditionals.keys()
     for (given, child), entry in conditionals.items():
         counted = {(row[given], row[child]): row['len'] for row in frame.group_by(given, child).len().iter_rows(named=True)}
+        given_rows = dict(frame.group_by(given).len().iter_rows())
         assert all(counted[value, written] >= 11 for value, row in entry['table'].items() for written in row)
+        assert all(
+            not 0 < given_rows[value] - sum(counted[value, written] for written in row) < 11 for value, row in entry['table'].items()
+        )
     assert not any('fax' in row for row in conditionals['region', 'channel']['table'].values())
     # A sample of a quarter of the rows holds a quarter of the ids, and still states the whole table's sequence.
     for sample in (None, rows // 4):

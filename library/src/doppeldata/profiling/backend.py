@@ -292,8 +292,8 @@ class Backend(Protocol):
         constant over those rows."""
         ...
 
-    def cross_counts(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[str, str, int]]]:
-        """Each pair's rows by its two values written as text, over the rows holding both."""
+    def cross_counts(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
+        """Each pair's rows by its two values written as text, a null as None, over every row."""
         ...
 
     def rank_moments(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[int, float, float]]]:

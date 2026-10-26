@@ -909,7 +909,7 @@ class SparkBackend:
             ]
         return found
 
-    def cross_counts(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str, str, int]]]:
+    def cross_counts(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
         """Every pair's values as one stream of (pair, value, value), grouped once."""
         if not pairs:
             return []
@@ -921,9 +921,8 @@ class SparkBackend:
                 )
             )
         )
-        held = table.select(keyed).where(sf.col('a').isNotNull() & sf.col('b').isNotNull())
-        found: list[list[tuple[str, str, int]]] = [[] for _ in pairs]
-        for row in held.groupBy('n', 'a', 'b').count().collect():
+        found: list[list[tuple[str | None, str | None, int]]] = [[] for _ in pairs]
+        for row in table.select(keyed).groupBy('n', 'a', 'b').count().collect():
             found[row['n']].append((row['a'], row['b'], row['count']))
         return found
 

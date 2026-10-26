@@ -133,6 +133,7 @@ def measured_pairs(
         (a, b, SPEARMAN, value if held >= least else None)
         for (a, b), (value, held) in zip(rank_pairs, backend.rank_correlations(sample, rank_pairs), strict=True)
     ]
+    held_cells = [both_held(cells) for cells in backend.cross_counts(sample, category_pairs)]
     found += [
         (
             a,
@@ -140,13 +141,18 @@ def measured_pairs(
             CRAMERS_V,
             cramers_v(cells) if sum(count for _, _, count in cells) >= max(least, ROWS_PER_CELL * table_cells(cells)) else None,
         )
-        for (a, b), cells in zip(category_pairs, backend.cross_counts(sample, category_pairs), strict=True)
+        for (a, b), cells in zip(category_pairs, held_cells, strict=True)
     ]
     found += [
         (a, b, CORRELATION_RATIO, correlation_ratio(groups) if enough_spread(groups, spread[a], least) else None)
         for (a, b), groups in zip(ratio_pairs, backend.rank_moments(sample, ratio_pairs), strict=True)
     ]
     return found
+
+
+def both_held(cells: list[tuple[str | None, str | None, int]]) -> list[tuple[str, str, int]]:
+    """The cells of the rows holding both values."""
+    return [(first, second, count) for first, second, count in cells if first is not None and second is not None]
 
 
 def table_cells(cells: list[tuple[str, str, int]]) -> int:
@@ -226,7 +232,7 @@ def conditional_tables(
     tables, floors = [], {}
     counted = backend.cross_counts(described, [(given, child) for given, child, _, _ in pairs])
     for (given, child, given_values, child_values), cells in zip(pairs, counted, strict=True):
-        if (cramers_v(cells) or 0.0) < CORRELATION_FLOOR:
+        if (cramers_v(both_held(cells)) or 0.0) < CORRELATION_FLOOR:
             continue
         written = conditional_table(given, child, cells, given_values, child_values, k_min)
         if written:
@@ -236,42 +242,62 @@ def conditional_tables(
 
 
 def conditional_table(
-    given: str, child: str, cells: list[tuple[str, str, int]], given_values: list[str], child_values: list[str], k_min: int
+    given: str,
+    child: str,
+    cells: list[tuple[str | None, str | None, int]],
+    given_values: list[str],
+    child_values: list[str],
+    k_min: int,
 ) -> tuple[dict[str, Any], int] | None:
     """The distribution of `child` within each listed value of `given`, and the fewest rows a kept cell holds.
 
     Only the child's listed values are distributed. A cell under k_min rows is left out, and a given value left with
-    no cell joins the values `other` describes. A child value whose rows outside the kept cells number 1 to k_min - 1
-    is left out of every row, so no difference against its listed count names a small cell.
+    no cell joins the values `other` describes. Then no difference a reader can take against a listed count names 1 to
+    k_min - 1 rows. A child value whose rows outside the kept cells number that many is left out of every row. A row
+    whose given values' rows outside its kept cells number that many loses its least kept cell. `cells` counts every
+    row, a null as None, so those rows outside include a null and an unlisted value on the other side.
     """
     listed_given, listed_child = set(given_values), set(child_values)
-    by_row: dict[str | None, collections.Counter[str]] = collections.defaultdict(collections.Counter)
+    by_given: dict[str, collections.Counter[str]] = collections.defaultdict(collections.Counter)
+    given_rows, child_rows = collections.Counter[str](), collections.Counter[str]()
     for given_value, child_value, count in cells:
-        if child_value in listed_child:
-            by_row[given_value if given_value in listed_given else None][child_value] += count
-    totals = collections.Counter[str]()
-    for counts in by_row.values():
-        totals.update(counts)
-    domain, folded = set(child_values), set[str]()
+        if given_value is not None:
+            given_rows[given_value] += count
+            if child_value in listed_child:
+                by_given[given_value][child_value] += count
+        if child_value is not None:
+            child_rows[child_value] += count
+    order = {value: index for index, value in enumerate(child_values)}
+    domain, folded, dropped = set(child_values), set[str](), set[tuple[str | None, str]]()
     while True:
-        rows: dict[str | None, collections.Counter[str]] = {value: by_row[value] for value in given_values if value not in folded}
-        rows[None] = sum((by_row[value] for value in [None, *folded]), collections.Counter())
-        kept = {
-            row: {value: count for value, count in counts.items() if value in domain and count >= k_min} for row, counts in rows.items()
-        }
+        members: dict[str | None, list[str]] = {value: [value] for value in given_values if value not in folded}
+        members[None] = [value for value in given_rows if value not in listed_given or value in folded]
+        kept: dict[str | None, dict[str, int]] = {}
+        for row, values in members.items():
+            counts = sum((by_given[value] for value in values), collections.Counter[str]())
+            kept[row] = {
+                value: count for value, count in counts.items() if value in domain and count >= k_min and (row, value) not in dropped
+            }
         empty = {row for row, counts in kept.items() if row is not None and not counts}
         if empty:
             folded |= {row for row in empty if row is not None}
             continue
-        outside = {value: totals[value] - sum(counts.get(value, 0) for counts in kept.values()) for value in domain}
+        outside = {value: child_rows[value] - sum(counts.get(value, 0) for counts in kept.values()) for value in domain}
         small = {value for value, rows_outside in outside.items() if 0 < rows_outside < k_min}
-        if not small:
+        if small:
+            domain -= small
+            continue
+        thin = [
+            (row, counts)
+            for row, counts in kept.items()
+            if counts and 0 < sum(given_rows[value] for value in members[row]) - sum(counts.values()) < k_min
+        ]
+        if not thin:
             break
-        domain -= small
+        dropped |= {(row, min(counts, key=lambda value: (counts[value], order[value]))) for row, counts in thin}
     listed_rows = {row: counts for row, counts in kept.items() if row is not None}
     if not listed_rows:
         return None
-    order = {value: index for index, value in enumerate(child_values)}
 
     def shares(counts: dict[str, int]) -> dict[str, float]:
         held = sum(counts.values())
