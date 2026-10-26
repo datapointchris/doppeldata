@@ -1,0 +1,10 @@
+# Every arrow-rs 59 crate requires zstd ^0.13, and pyo3-arrow 0.20 holds the workspace on arrow 59.
+# These three are fixed only in zstd 0.14 and zstd-safe 8, which arrow 60 takes. The writers
+# compress through one-shot zstd::bulk contexts and a fresh stream encoder per file, and no crate
+# here decompresses or uses the seekable format. Delete this file when the crates reach arrow 60.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0391", # zstd: an abandoned stream's data leaks into the next on a reused context
+    "RUSTSEC-2026-0398", # zstd-safe: Seekable::decompress past the end
+    "RUSTSEC-2026-0403", # zstd-safe: a failed legacy-frame decompression exposes uninitialized memory
+]
