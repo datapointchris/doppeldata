@@ -29,6 +29,9 @@ from doppeldata.profiling.table_keys import KEY_SHARE
 # A pair is recorded where its correlation's magnitude reaches this, and the strongest this many are kept.
 CORRELATION_FLOOR = 0.3
 CORRELATIONS_KEPT = 200
+# A pair is measured only where this many sampled rows hold both its values, or k_min where that is more, so a value at
+# CORRELATION_FLOOR lies three standard errors from none.
+PAIR_ROWS = 100
 # A string or integer column holding no more distinct values than a string lists is categorical, as a boolean is.
 CATEGORICAL_VALUES = TOP_VALUES_THRESHOLD
 # A conditional table is given the column of a correlated categorical pair holding fewer values, where it holds this many at most.
@@ -78,7 +81,7 @@ def column_dependence(
 ) -> Dependence:
     """The dependence between `columns`, measured on `sample` and counted on `described`, which holds `rows` rows."""
     position = {column.name: index for index, column in enumerate(columns)}
-    correlations = correlated_pairs(backend, sample, columns, position)
+    correlations = correlated_pairs(backend, sample, columns, position, k_min)
     sections: dict[str, Any] = {}
     if correlations:
         sections['correlations'] = correlations
@@ -103,22 +106,29 @@ def role(column: DependenceColumn) -> str | None:
     return None
 
 
-def correlated_pairs(backend: Backend, sample: Table, columns: list[DependenceColumn], position: dict[str, int]) -> list[dict[str, Any]]:
+def correlated_pairs(
+    backend: Backend, sample: Table, columns: list[DependenceColumn], position: dict[str, int], k_min: int
+) -> list[dict[str, Any]]:
     """Every pair whose correlation reaches the floor, the strongest kept, in the order of the columns. Two ranked
     columns take Spearman's, two categorical ones the bias-corrected Cramér's V, and a numeric and a categorical one
-    the correlation ratio η, with the numeric column as `a`."""
+    the bias-corrected correlation ratio η, with the numeric column as `a`. A pair fewer than `PAIR_ROWS` or k_min
+    sampled rows hold is not measured."""
+    least = max(PAIR_ROWS, k_min)
     ranked = [column for column in columns if role(column) == RANKED]
     categorical = [column for column in columns if role(column) == CATEGORICAL]
     rank_pairs = [(first.name, second.name) for at, first in enumerate(ranked) for second in ranked[at + 1 :]]
     category_pairs = [(first.name, second.name) for at, first in enumerate(categorical) for second in categorical[at + 1 :]]
     ratio_pairs = [(numeric.name, other.name) for numeric in ranked if numeric.spec.kind in NUMERIC for other in categorical]
-    found = [(a, b, SPEARMAN, value) for (a, b), value in zip(rank_pairs, backend.rank_correlations(sample, rank_pairs), strict=True)]
+    found = [
+        (a, b, SPEARMAN, value if held >= least else None)
+        for (a, b), (value, held) in zip(rank_pairs, backend.rank_correlations(sample, rank_pairs), strict=True)
+    ]
     found += [
-        (a, b, CRAMERS_V, cramers_v(cells))
+        (a, b, CRAMERS_V, cramers_v(cells) if sum(count for _, _, count in cells) >= least else None)
         for (a, b), cells in zip(category_pairs, backend.cross_counts(sample, category_pairs), strict=True)
     ]
     found += [
-        (a, b, CORRELATION_RATIO, correlation_ratio(groups))
+        (a, b, CORRELATION_RATIO, correlation_ratio(groups) if sum(count for count, _, _ in groups) >= least else None)
         for (a, b), groups in zip(ratio_pairs, backend.group_moments(sample, ratio_pairs), strict=True)
     ]
     strong = [(a, b, method, value) for a, b, method, value in found if value is not None and abs(value) >= CORRELATION_FLOOR]
@@ -144,14 +154,19 @@ def cramers_v(cells: list[tuple[str, str, int]]) -> float | None:
 
 
 def correlation_ratio(groups: list[tuple[int, float, float]]) -> float | None:
-    """η, from each category's rows, mean and population variance, or None where one category or no variance is held."""
-    rows = sum(count for count, _, _ in groups)
-    if rows < 2 or len(groups) < 2:
+    """η from each category's rows, mean and population variance, its square corrected as Kelley's ε² corrects η² for
+    the share of variance categories explain by chance. None where one category or no variance is held, or the
+    categories are as many as the rows."""
+    rows, held = sum(count for count, _, _ in groups), len(groups)
+    if held < 2 or rows <= held:
         return None
     mean = sum(count * group_mean for count, group_mean, _ in groups) / rows
     between = sum(count * (group_mean - mean) ** 2 for count, group_mean, _ in groups)
-    total = between + sum(count * variance for count, _, variance in groups)
-    return math.sqrt(between / total) if total > 0 else None
+    within = sum(count * variance for count, _, variance in groups)
+    total = between + within
+    if total <= 0:
+        return None
+    return math.sqrt(max(0.0, 1 - within / total * (rows - 1) / (rows - held)))
 
 
 def conditional_tables(

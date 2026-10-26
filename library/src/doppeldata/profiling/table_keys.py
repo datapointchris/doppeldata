@@ -10,9 +10,11 @@ from doppeldata.profiling.backend import Table
 from doppeldata.profiling.recorded_counts import rate
 from doppeldata.profiling.statistic_catalog import ColumnKind
 
-# A column or pair is a key where at most 1% of its rows share their value with another row. A single column is
-# counted only where its distinct values come within that share of the rows.
+# A column or pair is a key where at most 1% of its rows share their value with another row.
 KEY_SHARE = 0.99
+# A single column's rows held once are counted where its distinct values reach this share of the rows: below KEY_SHARE
+# by more than three of HyperLogLog++'s 1% standard errors, so Spark's estimate passes every key Polars' count does.
+NOMINATED_SHARE = 0.95
 # The pairs of columns tried as a composite key on the dependence sample, where no single column is a key.
 COMPOSITE_PAIRS = 20
 KEY_KINDS = frozenset({ColumnKind.INTEGER, ColumnKind.STRING})
@@ -36,7 +38,7 @@ def table_keys(backend: Backend, full: Table, sample: Table, columns: list[KeyCo
     singles = [
         column
         for column in columns
-        if column.spec.kind in KEY_KINDS and not column.has_nulls and column.distinct >= KEY_SHARE * rows and rows >= k_min
+        if column.spec.kind in KEY_KINDS and not column.has_nulls and column.distinct >= NOMINATED_SHARE * rows and rows >= k_min
     ]
     requests = [Request(None, 'distinct_rows', names)] + [Request(None, 'unique_rows', (column.spec.name,)) for column in singles]
     counted = backend.aggregate(full, requests) if names else {}

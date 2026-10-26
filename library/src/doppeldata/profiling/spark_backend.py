@@ -876,7 +876,7 @@ class SparkBackend:
             for request in requests
         }
 
-    def rank_correlations(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[float | None]:
+    def rank_correlations(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:
         """Each column ranked by one window over the table, a tie at the mean of its first and last rank. A null sorts
         first and is ranked too, which moves every value's rank alike and leaves the correlation as it is."""
         if not pairs:
@@ -891,11 +891,18 @@ class SparkBackend:
             mean_rank = (sf.rank().over(order) + sf.round(sf.cume_dist().over(order) * rows)) / 2
             ranks.append(sf.when(value.isNotNull(), mean_rank).alias(f'r{index}'))
         ranked = self.persist(table.select(*ranks))
-        found: list[float | None] = []
+        found: list[tuple[float | None, int]] = []
         for start in range(0, len(pairs), PAIRS_PER_QUERY):
             chunk = pairs[start : start + PAIRS_PER_QUERY]
-            row = ranked.agg(*(sf.corr(f'r{names.index(a)}', f'r{names.index(b)}') for a, b in chunk)).collect()[0]
-            found += [float(value) if value is not None and math.isfinite(value) else None for value in row]
+            measured = []
+            for a, b in chunk:
+                first, second = sf.col(f'r{names.index(a)}'), sf.col(f'r{names.index(b)}')
+                measured += [sf.corr(first, second), count_where(first.isNotNull() & second.isNotNull())]
+            row = ranked.agg(*measured).collect()[0]
+            found += [
+                (float(value) if value is not None and math.isfinite(value) else None, int(held or 0))
+                for value, held in zip(row[::2], row[1::2], strict=True)
+            ]
         return found
 
     def cross_counts(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str, str, int]]]:

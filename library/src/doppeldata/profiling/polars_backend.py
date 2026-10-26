@@ -382,7 +382,7 @@ class PolarsBackend:
     def parse(self, table: pl.LazyFrame, types: dict[str, ParsedType]) -> pl.LazyFrame:
         return table.with_columns(parsed(pl.col(name), parsed_type).alias(name) for name, parsed_type in types.items())
 
-    def rank_correlations(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[float | None]:
+    def rank_correlations(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:
         if not pairs:
             return []
         kinds = {spec.name: spec.kind for spec in self.schema(table)}
@@ -390,14 +390,16 @@ class PolarsBackend:
         ranked = table.select(
             numeric_value(pl.col(name), kinds[name]).rank('average').alias(f'r{index}') for index, name in enumerate(names)
         )
-
-        def correlation(a: str, b: str) -> pl.Expr:
+        measured = []
+        for index, (a, b) in enumerate(pairs):
             first, second = pl.col(f'r{names.index(a)}'), pl.col(f'r{names.index(b)}')
             both = first.is_not_null() & second.is_not_null()
-            return pl.corr(first.filter(both), second.filter(both))
-
-        row = ranked.select(correlation(a, b).alias(f'c{index}') for index, (a, b) in enumerate(pairs)).collect().row(0)
-        return [float(value) if value is not None and math.isfinite(value) else None for value in row]
+            measured += [pl.corr(first.filter(both), second.filter(both)).alias(f'c{index}'), both.sum().alias(f'n{index}')]
+        row = ranked.select(measured).collect().row(0)
+        return [
+            (float(value) if value is not None and math.isfinite(value) else None, int(held))
+            for value, held in zip(row[::2], row[1::2], strict=True)
+        ]
 
     def cross_counts(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str, str, int]]]:
         frames = [

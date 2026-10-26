@@ -437,7 +437,8 @@ pub enum CorrelationMethod {
     Kendall,
     /// Bias-corrected Cramér's V between two categorical columns.
     CramersV,
-    /// η, the square root of the share of a numeric column's variance that a categorical column's values explain.
+    /// η, the square root of the share of a numeric column's variance that a categorical column's values explain,
+    /// corrected for the share they explain by chance.
     CorrelationRatio,
 }
 

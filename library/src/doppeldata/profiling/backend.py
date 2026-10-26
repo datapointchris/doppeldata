@@ -282,9 +282,10 @@ class Backend(Protocol):
         """The text table with each named column parsed as its type. A value that does not parse becomes null."""
         ...
 
-    def rank_correlations(self, table: Table, pairs: list[tuple[str, str]]) -> list[float | None]:
-        """Each pair's Spearman correlation over the rows holding both, each column ranked once over its own values with
-        ties at their mean rank. None where either is constant over those rows."""
+    def rank_correlations(self, table: Table, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:
+        """Each pair's Spearman correlation over the rows holding both, and how many rows those are. Each column is
+        ranked once over its own values with ties at their mean rank. The correlation is None where either column is
+        constant over those rows."""
         ...
 
     def cross_counts(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[str, str, int]]]:
