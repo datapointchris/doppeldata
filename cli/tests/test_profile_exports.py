@@ -17,7 +17,7 @@ from ruamel.yaml import YAML
 # The ODCS v3.2.0 JSON Schema, from bitol-io/open-data-contract-standard, under Apache-2.0.
 ODCS_SCHEMA = Path(__file__).parent / 'fixtures' / 'odcs-json-schema-v3.2.0.json'
 ROWS = 500
-# Past 20,000 rows a profile writes two breaking rows' share as 1 to four significant digits.
+# Past 20,000 rows, two breaking rows' share rounds to 1 at four significant digits.
 SOURCE_ROWS = 50_000
 
 

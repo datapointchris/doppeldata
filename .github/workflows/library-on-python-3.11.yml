@@ -58,8 +58,8 @@ jobs:
           sys.exit('\n'.join(undeclared) or None)
           EOF
 
-      - name: Install the export checks' tools and pytest
-        run: uv pip install --python "$RUNNER_TEMP/library" --group pyproject.toml:dev pytest
+      - name: Install pytest
+        run: uv pip install --python "$RUNNER_TEMP/library" pytest
 
       # compileall parses every module with the 3.11 interpreter, so syntax from
       # a later Python fails here even in a module no test imports.
