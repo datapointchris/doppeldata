@@ -54,14 +54,15 @@ def source_section(backend: Backend, source: Source, read: SourceRead, profiled:
         section['layout'] = layout
     text_codec = {'compression': codec} if codec in WRITTEN_TEXT_CODECS else {}
     if read.dialect is not None:
-        section['csv'] = csv_section(read.dialect, read.rejected, profiled, rows, k_min) | text_codec
+        csv = csv_section(read.dialect, read.rejected, profiled, rows, k_min)
+        section['csv'] = csv | {'writer': csv['writer'] | text_codec}
     if read.footers:
         section['parquet'] = parquet_section(read.footers)
     if read.json is not None and profiled.json is not None:
         section['json'] = {
-            'explicit_nulls': any(counts.null for counts in all_counts(profiled.json)),
+            'writer': {'explicit_nulls': any(counts.null for counts in all_counts(profiled.json))} | text_codec,
             'max_depth': json_paths.depth(read.json.paths),
-        } | text_codec
+        }
     return section
 
 
@@ -120,7 +121,7 @@ def csv_section(found: DialectFound, rejected: dict[str, int], profiled: Profile
     """The writer's dialect, what the first block's bytes hold, how the two sniffers read it, and the malformed rows."""
     dialect = found.dialect
     breaks = sum(found.line_terminators.values())
-    section = {
+    writer = {
         'delimiter': dialect.delimiter,
         'quote': dialect.quote,
         'escape': dialect.escape if dialect.escape and dialect.escape != dialect.quote else None,
@@ -129,15 +130,17 @@ def csv_section(found: DialectFound, rejected: dict[str, int], profiled: Profile
         'null': profiled.null_token,
         'line_terminator': 'crlf' if found.line_terminators['crlf'] > found.line_terminators['lf'] else 'lf',
         'bom': found.bom,
+    }
+    if dialect.encoding in WRITTEN_ENCODINGS:
+        writer['encoding'] = WRITTEN_ENCODINGS[dialect.encoding]
+    return {
+        'writer': writer,
         'detected_encoding': found.detected_encoding,
         'line_terminator_mix': {name: rate(count, breaks) for name, count in found.line_terminators.items() if count},
         'trailing_delimiter': found.trailing_delimiter,
         'detector': detector_section(found),
         'malformed': malformed_rows(rejected, profiled.unparsed_rows, rows, profiled.described, k_min),
     }
-    if dialect.encoding in WRITTEN_ENCODINGS:
-        section['encoding'] = WRITTEN_ENCODINGS[dialect.encoding]
-    return section
 
 
 def detector_section(found: DialectFound) -> dict[str, Any] | None:
@@ -200,13 +203,16 @@ def parquet_section(footers: tuple[ParquetFooter, ...]) -> dict[str, Any]:
     for footer in footers:
         for column, scale in footer.decimal_scales.items():
             scales[column].add(scale)
-    section: dict[str, Any] = {
+    writer: dict[str, Any] = {
         'compression': codec if codec in WRITTEN_PARQUET_CODECS else None,
         'row_group_rows': max(groups) if groups else None,
         'statistics': statistics,
         'dictionary_columns': None if set(dictionary) == every_column else dictionary,
         'timestamp_unit': reproducible.pop() if len(reproducible) == 1 and 'int96' not in units.values() else None,
-        'writer': most_common(footer.created_by for footer in footers),
+    }
+    section: dict[str, Any] = {
+        'writer': {name: value for name, value in writer.items() if value is not None or name in ('dictionary_columns', 'timestamp_unit')},
+        'created_by': most_common(footer.created_by for footer in footers),
         'spark_version': most_common(footer.spark_version for footer in footers),
         'format_version': most_common(footer.format_version for footer in footers),
         'row_groups': {
@@ -219,7 +225,7 @@ def parquet_section(footers: tuple[ParquetFooter, ...]) -> dict[str, Any]:
     }
     if units:
         section['timestamp_units'] = dict(sorted(units.items()))
-    return {name: value for name, value in section.items() if value is not None or name in ('dictionary_columns', 'timestamp_unit')}
+    return {name: value for name, value in section.items() if value is not None}
 
 
 def quantiles_of(ordered: list[int]) -> dict[str, int]:

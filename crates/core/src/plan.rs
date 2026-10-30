@@ -29,7 +29,6 @@ use crate::perturbations::SchemaDriftPlan;
 use crate::perturbations::StreamOutline;
 use crate::perturbations::plan_perturbation;
 use crate::profile::DEFAULT_K_MIN;
-use crate::profile::FORMAT_VERSION;
 use crate::profile::Profile;
 use crate::profile::Quantiles;
 use crate::profile::TableProfile;
@@ -355,7 +354,6 @@ pub fn plan_with_scenario(
     }
     let mut metadata = HashMap::from([
         (provenance::PROFILE_NAME.to_string(), table.name.clone()),
-        (provenance::PROFILE_VERSION.to_string(), FORMAT_VERSION.to_string()),
         (provenance::PROFILE_DIGEST.to_string(), profile_digest.to_string()),
         (provenance::SEED.to_string(), seed.to_string()),
         (provenance::STREAM_VERSION.to_string(), identity.stream_version().to_string()),

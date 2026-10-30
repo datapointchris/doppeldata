@@ -41,11 +41,6 @@ FIRST_BLOCK_BYTES: Final[int]
 The head of a text file the profiler reads its dialect, JSON layout and encoding from.
 """
 
-FORMAT_VERSION: Final[int]
-"""
-The profile format version the engine reads.
-"""
-
 MANIFEST_FILE_NAME: Final[str]
 """
 The name of the record a whole write leaves beside its files.

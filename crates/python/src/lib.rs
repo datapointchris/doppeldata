@@ -47,10 +47,6 @@ mod _core {
     #[pymodule_export]
     const VERSION: &str = doppeldata_core::VERSION;
 
-    /// The profile format version the engine reads.
-    #[pymodule_export]
-    const FORMAT_VERSION: u64 = doppeldata_core::profile::FORMAT_VERSION;
-
     /// The fewest rows a stored literal or cell rests on, where a profile states no `privacy.k_min`.
     #[pymodule_export]
     const DEFAULT_K_MIN: u64 = doppeldata_core::profile::DEFAULT_K_MIN;
@@ -120,7 +116,7 @@ mod _core {
 
     /// The file name under ``doppeldata/schemas/`` of each JSON Schema the library ships, by name.
     #[pyfunction]
-    fn schema_file_names() -> BTreeMap<&'static str, String> {
+    fn schema_file_names() -> BTreeMap<&'static str, &'static str> {
         doppeldata_core::published_schemas::all()
             .into_iter()
             .map(|schema| (schema.name, schema.file_name))

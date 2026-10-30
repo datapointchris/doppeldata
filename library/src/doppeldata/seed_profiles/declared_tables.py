@@ -5,7 +5,6 @@ from collections.abc import Iterator
 from collections.abc import Mapping
 from typing import Any
 
-from doppeldata.profile_format import FORMAT_VERSION
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import generated_section
 from doppeldata.seed_profiles.declared_columns import DeclaredColumn
@@ -54,7 +53,7 @@ class DeclaredTable:
         columns_only = expanded(dict(columns), None, self.name, self.imported_from)
         declared = {path: facts for column in columns.values() for path, facts in declared_facts(column)}
         generated = imported_generated(self.imported_from, declared)
-        document: dict[str, Any] = {'profile_version': FORMAT_VERSION, 'kind': 'table', 'name': self.name, 'generated': generated}
+        document: dict[str, Any] = {'kind': 'table', 'name': self.name, 'generated': generated}
         source = dict(self.source)
         if self.partition_keys:
             keys = [

@@ -1,13 +1,14 @@
-"""Profile format v1: read, validate, save and identify a profile file.
+"""The profile format: read, validate, save and identify a profile file.
 
 A profile is committed as YAML and accepted as JSON. Both validate against the JSON Schema derived
-from the engine's Rust model. A profile's identity is the SHA-256 of its RFC 8785 canonical JSON,
-which the library alone computes and hands to the generator.
+from the engine's Rust model, which refuses a key no section declares. A profile's identity is the
+SHA-256 of its RFC 8785 canonical JSON, which the library alone computes and hands to the generator.
 """
 
 import copy
 import dataclasses as dc
 import datetime as dt
+import difflib
 import hashlib
 import importlib.resources
 import io
@@ -34,7 +35,6 @@ from doppeldata.errors import DoppeldataError
 from doppeldata.example_profiles import example_resource
 from doppeldata.published_schemas import schema_text
 
-FORMAT_VERSION = _core.FORMAT_VERSION
 BUNDLE_INDEX = 'bundle.yaml'
 
 
@@ -61,13 +61,11 @@ GENERATED_FIELDS = {
     'source_fingerprint': GeneratedField(hashed=False, derived_from=True),
     'at': GeneratedField(hashed=False, derived_from=False),
     'sample': GeneratedField(hashed=True, derived_from=False),
-    # Hashed, as every release before it hashes a field it does not know. It names no directory, so a copy of the
-    # schema elsewhere keeps the seed's identity.
+    # It names no directory, so a copy of the schema elsewhere keeps the seed's identity.
     'imported_from': GeneratedField(hashed=True, derived_from=False),
-    # No draw reads it, so a seed keeps one digest whichever release, knowing it or not, computes it.
+    # No draw reads it, so the digest leaves it out.
     'declared': GeneratedField(hashed=False, derived_from=False),
 }
-# The digest keeps only these, so a field a later release adds is left out by this one.
 HASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if field.hashed)
 DERIVED_FROM = tuple(name for name, field in GENERATED_FIELDS.items() if field.derived_from)
 TOOL = f'doppeldata {_core.VERSION}'
@@ -173,7 +171,8 @@ def validators() -> dict[str | None, jsonschema.Draft202012Validator]:
     root = {key: value for key, value in schema.items() if key != 'oneOf'}
     by_kind: dict[str | None, jsonschema.Draft202012Validator] = {None: jsonschema.Draft202012Validator(schema, format_checker=checker)}
     for branch in schema['oneOf']:
-        by_kind[branch['properties']['kind']['const']] = jsonschema.Draft202012Validator(root | branch, format_checker=checker)
+        (kind,) = schema['$defs'][branch['$ref'].rsplit('/', 1)[1]]['properties']['kind']['enum']
+        by_kind[kind] = jsonschema.Draft202012Validator(root | branch, format_checker=checker)
     return by_kind
 
 
@@ -221,7 +220,7 @@ def yaml() -> YAML:
 
 
 def read_document(path: Path) -> Any:
-    """A profile file as written: comments, key order and unknown fields kept."""
+    """A profile file as written: comments and key order kept."""
     try:
         if path.suffix == '.json':
             return json.loads(path.read_text())
@@ -300,18 +299,13 @@ def check(plain: Any) -> list[Issue]:
     """Every reason the document is not a valid profile: numbers RFC 8785 cannot write, the schema's, then the orderings it cannot state."""
     if not isinstance(plain, dict):
         return [Issue('not-a-mapping', '', 'a profile is a mapping of sections')]
-    version = plain.get('profile_version')
-    if isinstance(version, int) and not isinstance(version, bool) and version > FORMAT_VERSION:
-        message = f'profile_version {version} is newer than {FORMAT_VERSION}, the version this doppeldata reads; upgrade doppeldata'
-        return [Issue('newer-profile-version', '/profile_version', message)]
     issues = list(unrepresentable_numbers(plain, ()))
     if issues:
         return issues
     kind = plain.get('kind')
     validator = validators().get(kind if isinstance(kind, str) else None, validators()[None])
     for error in validator.iter_errors(plain):
-        cause = cause_of(error)
-        issues.append(Issue(f'schema-{cause.validator}', pointer(tuple(cause.absolute_path)), cause.message))
+        issues += schema_error_issues(error, ())
     if issues:
         return issues
     if kind == 'bundle':
@@ -319,15 +313,49 @@ def check(plain: Any) -> list[Issue]:
     return list(table_ordering_issues(plain, ()))
 
 
-def cause_of(error: jsonschema.exceptions.ValidationError) -> jsonschema.exceptions.ValidationError:
-    """The error inside an `anyOf` or `oneOf` that names the fault, past the `null` branch every optional field has."""
-    while error.context:
-        branches = [inner for inner in error.context if not (inner.validator == 'type' and inner.validator_value == 'null')]
-        best = jsonschema.exceptions.best_match(branches or error.context)
-        if best is None:
-            break
-        error = best
-    return error
+def schema_error_issues(error: jsonschema.exceptions.ValidationError, at: PointerParts) -> list[Issue]:
+    """Each fault one schema error names, at its path below `at`. A key its section does not declare is an
+    `unknown-field` at the key's own pointer, naming the closest field the section takes."""
+    issues = []
+    for cause in causes_of(error):
+        path = (*at, *cause.absolute_path)
+        if cause.validator == 'additionalProperties' and isinstance(cause.instance, dict):
+            known = list(cause.schema.get('properties') or {})
+            issues += [unknown_field(str(key), known, (*path, key)) for key in cause.instance if key not in known]
+        else:
+            issues.append(Issue(f'schema-{cause.validator}', pointer(path), cause.message))
+    return issues
+
+
+def unknown_field(key: str, known: list[str], at: PointerParts) -> Issue:
+    closest = tuple(difflib.get_close_matches(key, known, n=3))
+    hint = f'the closest is {closest[0]}, and ' if closest else ''
+    return Issue('unknown-field', pointer(at), f'{key!r} is not a field here; {hint}this section takes {", ".join(known)}', closest)
+
+
+def causes_of(error: jsonschema.exceptions.ValidationError) -> list[jsonschema.exceptions.ValidationError]:
+    """The errors naming the faults inside an `anyOf` or `oneOf`, each in the one branch the value was meant for.
+
+    A branch the value is not the type of is not meant, such as the `null` every optional field has, and nor is one whose
+    tag it does not hold, such as `derived`'s other `kind`. Where no one branch is meant, the error that best names the
+    fault.
+    """
+    if not error.context:
+        return [error]
+    branches: dict[Any, list[jsonschema.exceptions.ValidationError]] = {}
+    for inner in error.context:
+        branches.setdefault(inner.relative_schema_path[0], []).append(inner)
+    meant = [errors for errors in branches.values() if not any(map(another_branch, errors))]
+    if len(meant) == 1:
+        return [cause for inner in meant[0] for cause in causes_of(inner)]
+    best = jsonschema.exceptions.best_match([inner for errors in meant for inner in errors] or error.context)
+    return [error] if best is None else causes_of(best)
+
+
+def another_branch(error: jsonschema.exceptions.ValidationError) -> bool:
+    """Whether an error inside one branch of an `anyOf` or `oneOf` says the value is another branch's: the value is not
+    the branch's type, or a field of it does not hold the branch's tag."""
+    return (error.validator == 'type' and not error.relative_path) or (error.validator == 'const' and len(error.relative_path) == 1)
 
 
 def unrepresentable_numbers(value: Any, at: PointerParts) -> Iterator[Issue]:
@@ -581,7 +609,7 @@ class Profile:
         return digest_of(self.canonical())
 
     def save(self, path: str | Path | None = None) -> None:
-        """Write the profile as YAML, or as JSON to a `.json` path, keeping comments, order and unknown fields."""
+        """Write the profile as YAML, or as JSON to a `.json` path, keeping comments and key order."""
         target = Path(path) if path is not None else self.path
         if target is None:
             raise ValueError('this profile has no file of its own, so save needs a path')
@@ -601,7 +629,7 @@ class Bundle:
     def of(cls, name: str, tables: dict[str, Profile], relationships: list[Any] | None = None) -> 'Bundle':
         """A bundle named `name` of `tables` and the `relationships` between them, with no file of its own, so its
         `save` needs a path."""
-        document: dict[str, Any] = {'profile_version': FORMAT_VERSION, 'kind': 'bundle', 'name': name, 'tables': {}}
+        document: dict[str, Any] = {'kind': 'bundle', 'name': name, 'tables': {}}
         if relationships:
             document['relationships'] = relationships
         return cls(document, None, tables)

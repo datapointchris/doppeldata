@@ -1,5 +1,4 @@
-# A table profile with every section of format v1 filled in.
-profile_version: 1
+# A table profile with every section filled in.
 kind: table
 name: orders
 generated:
@@ -24,7 +23,7 @@ source:
     rows_per_file: {p50: 830000}
     partitioning: {style: hive, keys: [{name: order_year, type: int32, values: {count: 5}}]}
     sort_order: [order_id]
-  csv: {delimiter: ",", header: true}
+  csv: {writer: {delimiter: ",", header: true}}
 dataset:
   row_count: 10000000
   duplicate_row_rate: 0.0002

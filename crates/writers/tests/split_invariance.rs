@@ -23,7 +23,6 @@ use serde_json::json;
 /// errors and missing-value tokens.
 fn plan() -> Plan {
     let profile: Profile = serde_json::from_value(json!({
-        "profile_version": 1,
         "kind": "table",
         "name": "split_invariance",
         "columns": [

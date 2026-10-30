@@ -1,7 +1,6 @@
 import pyarrow as pa
 import pytest
 from doppeldata import Profile
-from doppeldata import _core
 from doppeldata import generate
 from doppeldata.profiling.detector_packs import BUILT_IN
 from doppeldata.profiling.detector_packs import load
@@ -28,7 +27,6 @@ def test_every_shipped_pack_hint_generates_values_its_own_validator_passes(pack_
             column['quality'] = {'invalid_rate': INVALID_RATE}
         columns.append(column)
     document = {
-        'profile_version': _core.FORMAT_VERSION,
         'kind': 'table',
         'name': 'hints',
         'dataset': {'row_count': ROWS},

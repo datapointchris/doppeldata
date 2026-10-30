@@ -12,7 +12,7 @@ fn main() -> io::Result<()> {
     for schema in doppeldata_core::published_schemas::all() {
         let staged = dir.join(format!(".{}.tmp", schema.file_name));
         fs::write(&staged, (schema.derive)())?;
-        fs::rename(&staged, dir.join(&schema.file_name))?;
+        fs::rename(&staged, dir.join(schema.file_name))?;
     }
     Ok(())
 }

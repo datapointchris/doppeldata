@@ -279,7 +279,6 @@ def profile_table(
     derived = derivation(backend.name, source.fingerprint, fitting.FITTER if fitting else None, packs, code_lists, readers)
     generated = generated_section(**derived, sample=sampling)
     document: dict[str, Any] = {
-        'profile_version': _core.FORMAT_VERSION,
         'kind': 'table',
         'name': source.name,
         'generated': generated,

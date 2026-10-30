@@ -124,7 +124,7 @@ impl WriteOptions {
             SourceFormat::Parquet => {
                 let mut settings = source
                     .and_then(|source| source.parquet.as_ref())
-                    .map(|parquet| parquet.settings.clone())
+                    .map(|parquet| parquet.writer.clone())
                     .unwrap_or_default();
                 if let Some(compression) = compression
                     && settings.compression == ParquetSettings::default().compression
@@ -143,7 +143,7 @@ impl WriteOptions {
             SourceFormat::Csv | SourceFormat::Tsv => {
                 let mut settings = source
                     .and_then(|source| source.csv.as_ref())
-                    .map(|csv| csv.settings.clone())
+                    .map(|csv| csv.writer.clone())
                     .unwrap_or_default();
                 if let Some(compression) = compression
                     && settings.compression == TextCompression::None
@@ -158,7 +158,7 @@ impl WriteOptions {
             SourceFormat::Json | SourceFormat::Ndjson => {
                 let mut settings: JsonSettings = source
                     .and_then(|source| source.json.as_ref())
-                    .map(|json| json.settings.clone())
+                    .map(|json| json.writer.clone())
                     .unwrap_or_default();
                 if let Some(compression) = compression
                     && settings.compression == TextCompression::None

@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "doppeldata manifest v1",
+  "title": "doppeldata manifest",
   "description": "The record of a generated dataset, which with its profile and scenario regenerates every file byte for byte.",
   "type": "object",
   "properties": {
     "cdc": {
-      "description": "The change stream and the expected table a `cdc` write adds beside its full load, which\n`files` lists. Null for any other write. A release reads a manifest no newer than itself.",
+      "description": "The change stream and the expected table a `cdc` write adds beside its full load, which\n`files` lists. Null for any other write.",
       "anyOf": [
         {
           "$ref": "#/$defs/ManifestCdc"
@@ -54,9 +54,6 @@
     },
     "layout": {
       "$ref": "#/$defs/LayoutSettings"
-    },
-    "manifest_version": {
-      "$ref": "#/$defs/ManifestVersion"
     },
     "partial": {
       "description": "True when the run stopped early, so `files` lists only the objects that completed. Such a\nmanifest is stored as `_manifest.partial.json`, and regenerates nothing.",
@@ -202,7 +199,6 @@
     }
   ],
   "required": [
-    "manifest_version",
     "tool",
     "dataset_digest",
     "identity",
@@ -725,17 +721,10 @@
             "string",
             "null"
           ]
-        },
-        "version": {
-          "description": "The profile format version it was read as.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
         }
       },
       "required": [
-        "name",
-        "version"
+        "name"
       ]
     },
     "ManifestScenario": {
@@ -772,10 +761,6 @@
         "name",
         "document"
       ]
-    },
-    "ManifestVersion": {
-      "description": "The manifest format version, which changes only on a breaking format change.",
-      "const": 1
     },
     "ParquetCompression": {
       "oneOf": [

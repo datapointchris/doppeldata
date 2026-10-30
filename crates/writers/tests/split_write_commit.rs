@@ -21,7 +21,6 @@ use serde_json::json;
 #[test]
 fn a_commit_missing_a_range_stores_the_partial_manifest_and_fails() {
     let profile: Profile = serde_json::from_value(json!({
-        "profile_version": 1,
         "kind": "table",
         "name": "split_write_commit",
         "columns": [{"name": "id", "physical_type": "int64", "numeric": {"sequence": {"start": 1, "step": 1}}}],

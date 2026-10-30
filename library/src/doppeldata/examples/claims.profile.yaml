@@ -1,7 +1,6 @@
 # Hand-written: a medical claims table under the healthcare policy, which adds HIPAA Safe Harbor to
 # the default floor. No data was read, so it holds no real value. `generated.at` alone is stated,
 # because the oldest birth year the policy admits is 90 years before it.
-profile_version: 1
 kind: table
 name: claims
 generated:

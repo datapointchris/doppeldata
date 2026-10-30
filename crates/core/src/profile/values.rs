@@ -7,41 +7,6 @@ use schemars::SchemaGenerator;
 use schemars::json_schema;
 use serde::Deserialize;
 
-/// The format version this engine reads. It changes only on a breaking format change.
-pub const FORMAT_VERSION: u64 = 1;
-
-/// `profile_version`, which must equal [`FORMAT_VERSION`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "u64")]
-pub struct ProfileVersion;
-
-impl TryFrom<u64> for ProfileVersion {
-    type Error = String;
-
-    fn try_from(version: u64) -> Result<Self, Self::Error> {
-        if version == FORMAT_VERSION {
-            Ok(Self)
-        } else {
-            Err(format!(
-                "profile_version {version} is not {FORMAT_VERSION}, the version this engine reads"
-            ))
-        }
-    }
-}
-
-impl JsonSchema for ProfileVersion {
-    fn schema_name() -> Cow<'static, str> {
-        "ProfileVersion".into()
-    }
-
-    fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        json_schema!({
-            "description": "The format version, which changes only on a breaking format change.",
-            "const": FORMAT_VERSION,
-        })
-    }
-}
-
 /// A share, from 0 to 1.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Deserialize)]
 #[serde(try_from = "f64")]

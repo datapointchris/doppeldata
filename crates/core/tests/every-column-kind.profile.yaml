@@ -1,6 +1,5 @@
 # One column of every kind the engine samples, and one per provider. The determinism contract test
 # pins a hash over the values and text cells this generates, so a column added here moves the pin.
-profile_version: 1
 kind: table
 name: every_column_kind
 privacy: {k_min: 11}

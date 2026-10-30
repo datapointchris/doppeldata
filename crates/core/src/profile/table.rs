@@ -4,7 +4,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-use super::values::ProfileVersion;
 use super::values::Quantiles;
 use super::values::Rate;
 use super::values::SignedDuration;
@@ -12,12 +11,12 @@ use crate::format_settings::DelimitedSettings;
 use crate::format_settings::JsonSettings;
 use crate::format_settings::LineTerminator;
 use crate::format_settings::ParquetSettings;
-use crate::format_settings::recorded_settings;
 
 /// One table's profile. Every section is optional, and the generator falls back to defaults.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TableProfile {
-    pub profile_version: ProfileVersion,
+    pub kind: TableKind,
     pub name: String,
     pub generated: Option<Generated>,
     pub privacy: Option<Privacy>,
@@ -26,9 +25,17 @@ pub struct TableProfile {
     pub columns: Option<Vec<Column>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+pub enum TableKind {
+    Table,
+}
+
 /// How and when the profile was made. `GENERATED_FIELDS` in the library's
 /// `doppeldata.profile_format` says which fields the profile's digest leaves out.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Generated {
     /// The tool and its version, as `doppeldata <version>`.
     pub tool: Option<String>,
@@ -102,6 +109,7 @@ pub enum DeclaredFact {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Sample {
     pub strategy: SampleStrategy,
     pub rows_read: Option<u64>,
@@ -120,6 +128,7 @@ pub const DEFAULT_K_MIN: u64 = 11;
 
 /// The privacy policy the profile was written under, and every literal it kept or withheld.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Privacy {
     pub policy: Option<PrivacyPolicy>,
     /// The fewest rows any stored literal or cell may rest on.
@@ -145,6 +154,7 @@ pub enum PrivacyPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DifferentialPrivacy {
     pub epsilon: f64,
     pub delta: f64,
@@ -152,6 +162,7 @@ pub struct DifferentialPrivacy {
 
 /// A column some of whose literals the policy withheld.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Suppression {
     pub column: String,
     pub reason: SuppressionReason,
@@ -179,6 +190,7 @@ pub enum SuppressionReason {
 
 /// One field holding literals, and the rule that admitted them.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AuditEntry {
     /// The RFC 6901 pointer to the field within `column`, such as `/string/top_values`.
     pub field: Option<String>,
@@ -192,6 +204,7 @@ pub struct AuditEntry {
 
 /// One dataset-level field a floor holds, and the rule it met.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DatasetAuditEntry {
     /// The RFC 6901 pointer to the field from the profile's root, such as `/dataset/conditionals/0`.
     pub field: String,
@@ -231,10 +244,11 @@ pub enum AuditRule {
     LhsAtLeastKMin,
 }
 
-/// The files the data came from. `csv`, `parquet` and `json` take the keys a manifest's `writer`
-/// takes for that format, so a generated dataset can be written the way its source was. Beside them
-/// each holds what the profiler observed of the files that no writer setting reproduces.
+/// The files the data came from. `csv`, `parquet` and `json` each hold the format's `writer`, as a
+/// manifest's `writer` holds it, so a generated dataset can be written the way its source was.
+/// Beside it each holds what the profiler observed of the files that no writer setting reproduces.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Source {
     pub format: Option<SourceFormat>,
     pub compression: Option<Compression>,
@@ -246,9 +260,11 @@ pub struct Source {
 
 /// A delimited source's dialect, as a writer takes it, and how it was found.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CsvSource {
-    #[serde(flatten, deserialize_with = "recorded_settings")]
-    pub settings: DelimitedSettings,
+    /// The dialect a writer writes the files in. A setting left out takes the writer's default.
+    #[serde(default)]
+    pub writer: DelimitedSettings,
     /// The encoding charset-normalizer named for the first block, such as `ascii`, `utf_8` or
     /// `cp1252`. `encoding` holds the nearest one a writer writes.
     pub detected_encoding: Option<String>,
@@ -264,6 +280,7 @@ pub struct CsvSource {
 /// dialect on the first block. DuckDB's is read where the two agree or CleverCSV names none, and
 /// CleverCSV's where they disagree.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DialectDetection {
     pub primary: Option<DialectSniffer>,
     pub confirm: Option<DialectSniffer>,
@@ -281,6 +298,7 @@ pub struct DialectDetection {
 /// One sniffer's dialect. Each part it named none of is null, and all are where it found no
 /// dialect.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SniffedDialect {
     pub sniffer: Option<DialectSniffer>,
     pub delimiter: Option<String>,
@@ -300,6 +318,7 @@ pub enum DialectSniffer {
 /// The data rows a reader rejects, as shares of every data row the files hold. A type held by
 /// fewer than `k_min` rows is left out, and `rate` is the sum of the rest.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MalformedRows {
     pub rate: Option<Rate>,
     /// Each rejected row is counted once, under its first error.
@@ -324,11 +343,14 @@ pub enum MalformedRow {
 /// A Parquet source's writer settings, read from its files' footers, and what the footers say of
 /// the writer. No value statistic is read from a footer.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ParquetSource {
-    #[serde(flatten, deserialize_with = "recorded_settings")]
-    pub settings: ParquetSettings,
+    /// The settings a writer reproduces the files' layout with. A setting left out takes the
+    /// writer's default.
+    #[serde(default)]
+    pub writer: ParquetSettings,
     /// The `created_by` most footers name, such as `parquet-mr version 1.13.1 (build ...)`.
-    pub writer: Option<String>,
+    pub created_by: Option<String>,
     /// `org.apache.spark.version` from the key-value metadata, where Spark wrote the files.
     pub spark_version: Option<String>,
     /// The format version most footers declare, such as `1.0` or `2.6`.
@@ -343,6 +365,7 @@ pub struct ParquetSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RowGroups {
     /// Row groups in each file.
     pub per_file: Option<Quantiles>,
@@ -362,9 +385,11 @@ pub enum StoredTimestampUnit {
 
 /// A JSON source's writer settings and its nesting.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct JsonSource {
-    #[serde(flatten, deserialize_with = "recorded_settings")]
-    pub settings: JsonSettings,
+    /// The settings a writer writes the files with. A setting left out takes the writer's default.
+    #[serde(default)]
+    pub writer: JsonSettings,
     /// The deepest nesting of objects and arrays, counting the record as 1.
     pub max_depth: Option<u32>,
 }
@@ -395,6 +420,7 @@ pub enum Compression {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Layout {
     pub files: Option<FileCounts>,
     pub rows_per_file: Option<Quantiles>,
@@ -403,12 +429,14 @@ pub struct Layout {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FileCounts {
     pub count: Option<u64>,
     pub size_bytes: Option<FileSizes>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FileSizes {
     pub min: Option<f64>,
     pub p50: Option<f64>,
@@ -417,6 +445,7 @@ pub struct FileSizes {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Partitioning {
     pub style: Option<PartitionStyle>,
     pub keys: Option<Vec<PartitionKey>>,
@@ -433,6 +462,7 @@ pub enum PartitionStyle {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PartitionKey {
     pub name: String,
     /// An Arrow type string.
@@ -442,6 +472,7 @@ pub struct PartitionKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ValueCount {
     pub count: Option<u64>,
     /// The share of rows under each value at least `k_min` rows hold, written where the key takes
@@ -453,6 +484,7 @@ pub struct ValueCount {
 
 /// Facts about the table as a whole.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Dataset {
     pub row_count: Option<u64>,
     /// The share of rows repeating an earlier row in every column, written as 0 where fewer than `k_min` rows do.
@@ -470,12 +502,14 @@ pub struct Dataset {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Keys {
     pub primary: Option<Key>,
     pub candidates: Option<Vec<Key>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Key {
     pub columns: Vec<String>,
     /// The share of rows whose key value no other row holds.
@@ -483,6 +517,7 @@ pub struct Key {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Correlation {
     pub a: String,
     pub b: String,
@@ -491,6 +526,7 @@ pub struct Correlation {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CorrelationRatio {
     pub a: String,
     pub b: String,
@@ -514,6 +550,7 @@ pub enum CorrelationMethod {
 /// Both columns are strings, integers or booleans, and each value is a key as its text: a string as
 /// itself, an integer in decimal, and a boolean as `true` or `false`.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Conditional {
     pub given: String,
     pub column: String,
@@ -559,6 +596,7 @@ pub struct OtherRates {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Dependency {
     pub kind: DependencyKind,
     pub lhs: Vec<String>,
@@ -581,6 +619,7 @@ pub enum DependencyKind {
 
 /// One column, or one field nested in a list or struct column.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Column {
     /// The column's name. A list's element is named `element`.
     pub name: String,
@@ -605,8 +644,7 @@ pub struct Column {
     pub struct_fields: Option<StructStats>,
     pub semantic: Option<Semantic>,
     pub quality: Option<Quality>,
-    /// How the column is computed from others, in place of being drawn from its own statistics. An engine that
-    /// ignores this field draws the column from them.
+    /// How the column is computed from others, in place of being drawn from its own statistics.
     pub derived: Option<Derived>,
 }
 
@@ -680,12 +718,14 @@ pub enum LogicalType {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Distinct {
     pub approx: Option<u64>,
     pub ratio: Option<Rate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NumericStats {
     pub integral: Option<bool>,
     pub precision: Option<u32>,
@@ -714,12 +754,14 @@ pub struct NumericStats {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NumericTopValue {
     pub value: f64,
     pub rate: Rate,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NumericExtremes {
     pub low: Option<f64>,
     pub high: Option<f64>,
@@ -752,6 +794,7 @@ impl ExtremesMethod {
 /// Bin edges and the rows in each bin. `counts` has one entry fewer than `edges`. Each bin holds
 /// the rows from its lower edge up to its upper one, and the last bin holds its upper edge too.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Histogram {
     pub kind: HistogramKind,
     pub edges: Vec<f64>,
@@ -763,6 +806,7 @@ pub struct Histogram {
 /// Rows below the first edge and above the last. A count of fewer than `k_min` rows is written as
 /// 0, and its rows are counted in the outermost bin on their side.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HistogramOverflow {
     pub below: u64,
     pub above: u64,
@@ -777,6 +821,7 @@ pub enum HistogramKind {
 
 /// A fitted distribution, named as scipy.stats names it, with its parameters.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Fit {
     pub family: String,
     pub params: BTreeMap<String, f64>,
@@ -803,12 +848,14 @@ pub enum Monotonic {
 
 /// An integer column counting from `start` by `step` with no gaps.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Sequence {
     pub start: i64,
     pub step: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StringStats {
     pub length: Option<LengthStats>,
     pub charset: Option<Charset>,
@@ -830,9 +877,9 @@ pub struct StringStats {
 }
 
 /// A column's values counted by their leading characters, each generated value a prefix followed
-/// by a value of `suffix`. An engine that ignores this field draws whole values from the column's
-/// other statistics, so it generates no value of the wrong length.
+/// by a value of `suffix`.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Prefixes {
     /// Each prefix at least `k_min` rows begin with, and its share of the column's values.
     pub values: Vec<TopValue>,
@@ -844,6 +891,7 @@ pub struct Prefixes {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ValueOverflow {
     /// The rows `other_rate` holds beyond the share it held when the list was first frozen: the
     /// earlier profile's `other_rate`, less its own `new_value_rows`. So a column whose values did
@@ -852,6 +900,7 @@ pub struct ValueOverflow {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LengthStats {
     pub min: Option<u64>,
     pub max: Option<u64>,
@@ -860,6 +909,7 @@ pub struct LengthStats {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Charset {
     pub ascii: Option<bool>,
     pub classes: Option<Vec<CharClass>>,
@@ -879,18 +929,21 @@ pub enum CharClass {
 /// A value's characters mapped to their class: `A` for an ASCII upper-case letter, `a` for an
 /// ASCII lower-case one, `9` for an ASCII digit, and any other character as itself.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Shape {
     pub shape: String,
     pub rate: Rate,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TopValue {
     pub value: String,
     pub rate: Rate,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TemporalStats {
     /// The strftime format of a textual date or time.
     pub format: Option<String>,
@@ -910,6 +963,7 @@ pub struct TemporalStats {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TemporalExtremes {
     pub low: Option<String>,
     pub high: Option<String>,
@@ -931,11 +985,13 @@ pub enum Granularity {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BooleanStats {
     pub true_rate: Option<Rate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListStats {
     pub length: Option<Quantiles>,
     pub empty_rate: Option<Rate>,
@@ -943,6 +999,7 @@ pub struct ListStats {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StructStats {
     pub fields: Option<Vec<Column>>,
     /// The share of rows in which each field is present.
@@ -951,6 +1008,7 @@ pub struct StructStats {
 
 /// What the column holds, as a semantic detector judged it.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Semantic {
     /// A type from the detector pack's vocabulary, such as `email`.
     #[serde(rename = "type")]
@@ -965,6 +1023,7 @@ pub struct Semantic {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GeneratorHint {
     pub provider: Option<Provider>,
     /// A regular expression every value matches. It takes the place of `string.pattern`.
@@ -1052,6 +1111,7 @@ pub enum Sensitivity {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Quality {
     /// The share of values failing the semantic validator, such as a bad check digit.
     pub invalid_rate: Option<Rate>,

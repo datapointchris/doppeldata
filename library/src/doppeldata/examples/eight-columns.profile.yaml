@@ -1,6 +1,5 @@
 # Hand-written: the eight-column table the engine's throughput is measured on.
 # No data was read, so it has no `generated` block.
-profile_version: 1
 kind: table
 name: eight-columns
 privacy:

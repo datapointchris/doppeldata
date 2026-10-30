@@ -314,10 +314,6 @@ fn profile_record(plan: &Plan, options: &WriteOptions) -> ManifestProfile {
     let metadata = schema.metadata();
     ManifestProfile {
         name: metadata.get(provenance::PROFILE_NAME).cloned().unwrap_or_default(),
-        version: metadata
-            .get(provenance::PROFILE_VERSION)
-            .and_then(|version| version.parse().ok())
-            .unwrap_or_default(),
         path: options.profile_path.clone(),
         embedded: options.output.embedded().is_some(),
     }

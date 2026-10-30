@@ -5,14 +5,14 @@ use serde::Deserialize;
 
 use super::table::Generated;
 use super::table::TableProfile;
-use super::values::ProfileVersion;
 use super::values::Quantiles;
 use super::values::Rate;
 
 /// Several tables' profiles and the relationships between them.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BundleProfile {
-    pub profile_version: ProfileVersion,
+    pub kind: BundleKind,
     pub name: String,
     pub generated: Option<Generated>,
     /// Each table by name: a profile file's path relative to the bundle, or the profile inline.
@@ -20,29 +20,25 @@ pub struct BundleProfile {
     pub relationships: Option<Vec<Relationship>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+pub enum BundleKind {
+    Bundle,
+}
+
+/// A table of a bundle: its file's path relative to the bundle, or the table profile inline, as
+/// its own file would hold it.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum BundleTable {
     File(String),
-    Inline(Box<InlineTable>),
-}
-
-/// A table profile written inside a bundle, as its own file would hold it.
-#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
-pub struct InlineTable {
-    pub kind: TableKind,
-    #[serde(flatten)]
-    pub table: TableProfile,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum TableKind {
-    Table,
+    Inline(Box<TableProfile>),
 }
 
 /// A foreign key between two tables, as shares and quantiles, never key values.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Relationship {
     /// `table.column` holding the reference.
     #[schemars(regex(pattern = r"^[^.]+\..+$"))]
@@ -69,6 +65,7 @@ pub enum Cardinality {
 
 /// Children per parent: the join skew a Spark comparison needs.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Fanout {
     /// The child rows each of `to`'s values is held by, counting the values no child row holds.
     pub quantiles: Option<Quantiles>,

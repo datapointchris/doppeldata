@@ -1,23 +1,31 @@
-//! Profile format v1: the file between a real dataset and every synthetic copy.
+//! The profile format: the file between a real dataset and every synthetic copy.
 //!
 //! The generator reads a profile as JSON the library hands it, never as YAML. The JSON Schema the
-//! library validates against is derived from these types, so the two cannot disagree. The library
-//! owns a profile's digest and passes it in.
+//! library validates against is derived from these types, so the two cannot disagree. Every section
+//! refuses a key it does not declare. The library owns a profile's digest and passes it in.
 
 mod bundle;
 mod table;
 mod values;
 
+use std::borrow::Cow;
+
+use schemars::JsonSchema;
+use schemars::Schema;
+use schemars::SchemaGenerator;
+use schemars::json_schema;
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::de::Error;
+
+pub use bundle::BundleKind;
 pub use bundle::BundleProfile;
 pub use bundle::BundleTable;
 pub use bundle::Cardinality;
 pub use bundle::Fanout;
-pub use bundle::InlineTable;
 pub use bundle::Relationship;
 pub use table::*;
 pub use values::Duration;
-pub use values::FORMAT_VERSION;
-pub use values::ProfileVersion;
 pub use values::Quantiles;
 pub use values::Rate;
 pub use values::SignedDuration;
@@ -29,8 +37,6 @@ pub use values::SignedDuration;
 pub mod provenance {
     /// The profile's `name`.
     pub const PROFILE_NAME: &str = "doppeldata.profile_name";
-    /// The format version the profile was read as.
-    pub const PROFILE_VERSION: &str = "doppeldata.profile_version";
     /// The profile's digest, which the library computes. An identity key.
     pub const PROFILE_DIGEST: &str = "doppeldata.profile_digest";
     /// The scenario's name.
@@ -55,18 +61,52 @@ pub mod provenance {
     pub const SCENARIO: &str = "doppeldata.scenario";
 }
 
-/// A profile file: one table, or a bundle of tables and their relationships.
-#[derive(Debug, Clone, PartialEq, serde::Deserialize, schemars::JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+/// A profile file: one table, or a bundle of tables and their relationships, as its `kind` names.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Profile {
     Table(Box<TableProfile>),
     Bundle(Box<BundleProfile>),
 }
 
+/// The profile a file's `kind` names, read before the rest of the file.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProfileKind {
+    Table,
+    Bundle,
+}
+
+/// Reads `kind`, then the whole object as the profile it names. `kind` is a field of each, so a
+/// table reads the same alone and inside a bundle.
+impl<'de> Deserialize<'de> for Profile {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let document = serde_json::Value::deserialize(deserializer)?;
+        let kind = document.get("kind").cloned().ok_or_else(|| D::Error::missing_field("kind"))?;
+        let read = match ProfileKind::deserialize(kind).map_err(D::Error::custom)? {
+            ProfileKind::Table => TableProfile::deserialize(document).map(|table| Self::Table(Box::new(table))),
+            ProfileKind::Bundle => BundleProfile::deserialize(document).map(|bundle| Self::Bundle(Box::new(bundle))),
+        };
+        read.map_err(D::Error::custom)
+    }
+}
+
+impl JsonSchema for Profile {
+    fn schema_name() -> Cow<'static, str> {
+        "Profile".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "A profile file: one table, or a bundle of tables and their relationships, as its `kind` names.",
+            "oneOf": [generator.subschema_for::<TableProfile>(), generator.subschema_for::<BundleProfile>()],
+        })
+    }
+}
+
 /// The profile's JSON Schema (Draft 2020-12), as the library ships it.
 pub fn json_schema() -> String {
     let mut schema = schemars::schema_for!(Profile);
-    schema.insert("title".into(), format!("doppeldata profile v{FORMAT_VERSION}").into());
+    schema.insert("title".into(), "doppeldata profile".into());
     let mut text = serde_json::to_string_pretty(&schema).expect("a derived schema always serializes");
     text.push('\n');
     text

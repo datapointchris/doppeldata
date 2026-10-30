@@ -46,6 +46,26 @@ def test_profile_check_passes_the_claims_example_and_points_at_a_three_row_top_v
     }
 
 
+def test_profile_check_names_each_key_no_section_declares_by_its_pointer_in_a_bundle_and_its_table(tmp_path):
+    table = Profile.example('orders').to_plain()
+    table['nmae'] = 'orders'
+    table['dataset']['row_cnt'] = 10
+    table['columns'][0]['nul_rate'] = 0.1
+    path = tmp_path / 'shop.json'
+    path.write_text(json.dumps({'kind': 'bundle', 'name': 'shop', 'tables': {'orders': table}, 'relationship': []}))
+
+    checked = CliRunner().invoke(app, ['profile', 'check', str(path), '--json'])
+
+    assert checked.exit_code == 3, checked.output
+    (refused,) = json.loads(checked.stdout)['tables']
+    assert {(violation['code'], violation['field']) for violation in refused['violations']} == {
+        ('unknown-field', '/relationship'),
+        ('unknown-field', '/tables/orders/nmae'),
+        ('unknown-field', '/tables/orders/dataset/row_cnt'),
+        ('unknown-field', '/tables/orders/columns/0/nul_rate'),
+    }
+
+
 def test_healthcare_suppresses_identifiers_caps_ages_keeps_years_and_merges_restricted_zips(tmp_path):
     """A birth year over 89, an age held as text, a ZIP read as a float, a timestamp and a city are each withheld too."""
     rows, draw = 2000, random.Random(7)

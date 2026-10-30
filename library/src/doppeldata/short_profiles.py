@@ -27,7 +27,6 @@ from doppeldata.inline_columns import decimals
 from doppeldata.inline_columns import integers
 from doppeldata.name_hinted_types import GENERAL
 from doppeldata.name_hinted_types import type_named_by
-from doppeldata.profile_format import FORMAT_VERSION
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
@@ -102,8 +101,8 @@ def file_profile(source: str | os.PathLike[str]) -> Profile:
 
 
 def is_short(document: Any) -> bool:
-    """Whether a file's document is the short form: a `columns` key, and neither `profile_version` nor `kind`."""
-    return isinstance(document, dict) and 'columns' in document and not {'profile_version', 'kind'} & document.keys()
+    """Whether a file's document is the short form: a `columns` key, and no `kind`."""
+    return isinstance(document, dict) and 'columns' in document and 'kind' not in document
 
 
 def validated(document: dict[str, Any], source: str) -> Profile:
@@ -194,7 +193,7 @@ def expanded(specs: dict[str, InlineColumn | None], rows: int | None, table: str
         columns.append(column)
     if issues:
         raise InvalidProfile(source, issues)
-    document: dict[str, Any] = {'profile_version': FORMAT_VERSION, 'kind': 'table', 'name': table}
+    document: dict[str, Any] = {'kind': 'table', 'name': table}
     if rows is not None:
         document['dataset'] = {'row_count': rows}
     document['columns'] = columns

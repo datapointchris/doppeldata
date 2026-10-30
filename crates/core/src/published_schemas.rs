@@ -8,7 +8,7 @@ use crate::scenario;
 pub struct PublishedSchema {
     /// The name `doppeldata schemas show` takes.
     pub name: &'static str,
-    pub file_name: String,
+    pub file_name: &'static str,
     pub derive: fn() -> String,
 }
 
@@ -16,32 +16,32 @@ pub fn all() -> Vec<PublishedSchema> {
     vec![
         PublishedSchema {
             name: "profile",
-            file_name: format!("profile.v{}.json", profile::FORMAT_VERSION),
+            file_name: "profile.json",
             derive: profile::json_schema,
         },
         PublishedSchema {
             name: "manifest",
-            file_name: format!("manifest.v{}.json", manifest::MANIFEST_VERSION),
+            file_name: "manifest.json",
             derive: manifest::json_schema,
         },
         PublishedSchema {
             name: "faults",
-            file_name: format!("faults.v{}.json", manifest::FAULTS_VERSION),
+            file_name: "faults.json",
             derive: manifest::faults_json_schema,
         },
         PublishedSchema {
             name: "check",
-            file_name: format!("check.v{}.json", profile_comparison::CHECK_VERSION),
+            file_name: "check.json",
             derive: profile_comparison::check_json_schema,
         },
         PublishedSchema {
             name: "diff",
-            file_name: format!("diff.v{}.json", profile_comparison::DIFF_VERSION),
+            file_name: "diff.json",
             derive: profile_comparison::diff_json_schema,
         },
         PublishedSchema {
             name: "scenario",
-            file_name: format!("scenario.v{}.json", scenario::SCENARIO_VERSION),
+            file_name: "scenario.json",
             derive: scenario::json_schema,
         },
     ]

@@ -36,8 +36,8 @@ def test_the_digest_ignores_format_comments_key_order_and_when_and_by_what_it_wa
     assert Profile.load(write_json(tmp_path / 'orders.json', reordered)).digest != original.digest
 
 
-def test_saving_changes_only_the_edited_value_and_keeps_fields_this_version_does_not_know(tmp_path):
-    text = EXAMPLE.read_text().replace('kind: table\n', 'kind: table\nfrom_a_newer_tool: {kept: true, since: 2026-01-01}\n')
+def test_saving_changes_only_the_edited_value(tmp_path):
+    text = EXAMPLE.read_text()
     path = tmp_path / 'orders.profile.yaml'
     path.write_text(text)
     profile = Profile.load(path)
@@ -51,7 +51,6 @@ def test_saving_changes_only_the_edited_value_and_keeps_fields_this_version_does
     [
         (lambda p: p['columns'][1].update(null_rate=1.5), {('schema-maximum', '/columns/1/null_rate')}),
         (lambda p: p['dataset']['keys'].update(primary={'uniqueness': 1.0}), {('schema-required', '/dataset/keys/primary')}),
-        (lambda p: p.update(profile_version=2), {('newer-profile-version', '/profile_version')}),
         (lambda p: p['columns'][1]['numeric'].update(skew=math.nan), {('not-finite', '/columns/1/numeric/skew')}),
         (lambda p: p['columns'][1]['numeric']['quantiles'].update(p5=1.0), {('schema-pattern', '/columns/1/numeric/quantiles')}),
         (
@@ -70,7 +69,6 @@ def test_saving_changes_only_the_edited_value_and_keeps_fields_this_version_does
     ids=[
         'out-of-range rate',
         'missing required field',
-        'newer version',
         'NaN',
         'ambiguous quantile name',
         'orderings the schema cannot state',
@@ -86,7 +84,7 @@ def test_each_fault_is_reported_at_the_field_that_holds_it(tmp_path, edit, expec
 
 def test_a_bundle_directory_and_its_single_file_form_share_one_digest(tmp_path):
     orders = Profile.load(EXAMPLE).to_plain()
-    customers = {'profile_version': 1, 'kind': 'table', 'name': 'customers', 'dataset': {'row_count': 5000}}
+    customers = {'kind': 'table', 'name': 'customers', 'dataset': {'row_count': 5000}}
     relationships = [{'from': 'orders.customer_id', 'to': 'customers.customer_id', 'cardinality': 'many_to_one'}]
 
     directory = tmp_path / 'shop'
@@ -94,7 +92,6 @@ def test_a_bundle_directory_and_its_single_file_form_share_one_digest(tmp_path):
     (directory / 'orders.profile.yaml').write_text(EXAMPLE.read_text())
     write_json(directory / 'customers.profile.json', customers)
     index = {
-        'profile_version': 1,
         'kind': 'bundle',
         'name': 'shop',
         'tables': {'orders': 'orders.profile.yaml', 'customers': 'customers.profile.json'},
