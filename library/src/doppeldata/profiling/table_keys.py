@@ -64,13 +64,15 @@ def table_keys(backend: Backend, full: Table, sample: Table, columns: list[KeyCo
 
 def composite_keys(backend: Backend, full: Table, sample: Table, columns: list[KeyColumn], rows: int, k_min: int) -> list[dict[str, Any]]:
     """The pairs of columns no other row's pair repeats, tried most distinct first among those whose distinct values
-    could make every row's pair unique, nominated where the sample repeats none, and confirmed over every row."""
+    could make every row's pair unique, nominated where the sample repeats none, and confirmed over every row. A pair
+    names its columns in table order, so an estimated distinct count never reorders it."""
+    position = {column.spec.name: at for at, column in enumerate(columns)}
     eligible = sorted(
         (column for column in columns if column.spec.kind in COMPOSITE_KINDS and not column.has_nulls and column.distinct > 1),
         key=lambda column: -column.distinct,
     )
     pairs = [
-        (first.spec.name, second.spec.name)
+        tuple(sorted((first.spec.name, second.spec.name), key=position.__getitem__))
         for at, first in enumerate(eligible)
         for second in eligible[at + 1 :]
         if first.distinct * second.distinct >= rows
