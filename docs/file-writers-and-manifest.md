@@ -174,6 +174,8 @@ written once, as plain key-value pairs alone. A profile runs to kilobytes, and a
 
 - **`timestamp_unit` casts timestamp columns to s, ms, us or ns.** parquet's Arrow writer has no
   INT96 path, so a profile's INT96 column is written at one of those units.
+- **A timestamp at `s` is stored at `ms`, as pyarrow stores it.** Parquet has no seconds unit, and
+  parquet's Arrow writer stores one as a bare INT64. Spark and DuckDB read that as a `bigint`.
 - **A file `parquet_int96` breaks is written column by column**, through parquet's own column
   writers, with each top-level timestamp column stored as INT96, as Hive and Impala wrote them.
 - *Rejected:* `sorting_columns`. Generated rows are not sorted, and a reader that trusts a declared
