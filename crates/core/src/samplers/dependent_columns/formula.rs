@@ -3,6 +3,10 @@
 
 use crate::samplers::numeric::power_of_ten;
 
+/// The most tokens an expression holds. Parsing, evaluating and dropping a formula each recurse once per level of its
+/// tree, which is never deeper than its tokens, so this bounds the stack each takes.
+const MOST_TOKENS: usize = 256;
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Formula {
     Number(f64),
@@ -123,6 +127,9 @@ fn tokens(text: &str) -> Result<Vec<Token>, String> {
             chars.next();
         } else {
             return Err(format!("{text:?} holds {character:?}, which no expression takes"));
+        }
+        if tokens.len() > MOST_TOKENS {
+            return Err(format!("the expression holds more than {MOST_TOKENS} names, numbers and symbols"));
         }
     }
     Ok(tokens)
