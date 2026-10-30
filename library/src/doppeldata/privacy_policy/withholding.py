@@ -15,17 +15,18 @@ from doppeldata.privacy_policy.column_treatment import column_treatment
 from doppeldata.privacy_policy.column_treatment import oldest_birth_year
 from doppeldata.privacy_policy.file_check import table_check
 from doppeldata.privacy_policy.literal_fields import EXACT
-from doppeldata.privacy_policy.literal_fields import GIVEN_LISTS
 from doppeldata.privacy_policy.literal_fields import FieldKind
 from doppeldata.privacy_policy.literal_fields import column_literals
 from doppeldata.privacy_policy.literal_fields import dataset_literals
 from doppeldata.privacy_policy.literal_fields import faults
 from doppeldata.privacy_policy.literal_fields import min_count
 from doppeldata.privacy_policy.treatment_rules import amend
+from doppeldata.privacy_policy.treatment_rules import capped_age_quantiles
 from doppeldata.privacy_policy.treatment_rules import conditional_faults
 from doppeldata.privacy_policy.treatment_rules import lag_faults
 from doppeldata.privacy_policy.treatment_rules import lookup_faults
 from doppeldata.privacy_policy.treatment_rules import refused
+from doppeldata.profile_format import GIVEN_LISTS
 from doppeldata.profile_format import PointerParts
 
 
@@ -76,9 +77,13 @@ def withheld(
             if found:
                 drop(document, field.path, field.kind, {fault.path for fault in found})
     dataset = document.get('dataset') or {}
+    ages = frozenset(column.name for column in column_literals(document) if treatments[column.path] is Treatment.AGE)
+    for entry in dataset.get('conditional_quantiles') or []:
+        if entry.get('column') in ages:
+            capped_age_quantiles(entry)
     for name in GIVEN_LISTS:
         entries = dataset.get(name) or []
-        kept = [entry for index, entry in enumerate(entries) if not conditional_faults(document, index, policy, name)]
+        kept = [entry for index, entry in enumerate(entries) if not conditional_faults(document, index, policy, name, ages)]
         if kept:
             dataset[name] = kept
         else:

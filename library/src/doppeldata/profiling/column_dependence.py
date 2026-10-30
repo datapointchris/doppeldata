@@ -9,11 +9,14 @@ import dataclasses as dc
 import math
 from typing import Any
 
+from doppeldata import _core
 from doppeldata.column_name_words import ZIP_HINTS
 from doppeldata.column_name_words import hint_runs_in
 from doppeldata.column_name_words import name_words
-from doppeldata.privacy_policy.literal_fields import GIVEN_LISTS
 from doppeldata.privacy_policy.literal_fields import listed_values
+from doppeldata.profile_format import FORMAT_VERSION
+from doppeldata.profile_format import GIVEN_LISTS
+from doppeldata.profile_format import engine_plan
 from doppeldata.profile_format import quantile_level
 from doppeldata.profiling.backend import Backend
 from doppeldata.profiling.backend import ColumnSpec
@@ -130,80 +133,115 @@ def column_dependence(
     rows: int,
     k_min: int,
     frozen: FrozenPairs | None = None,
-    derived: frozenset[str] = frozenset(),
+    derived: dict[str, dict[str, Any]] | None = None,
 ) -> Dependence:
-    """The dependence between `columns`, measured on `sample` and counted on `described`, which holds `rows` rows. Each
-    pair `frozen` holds is stated wherever its floors allow, whatever its strength. A column `derived` names or a lookup
-    gives is drawn from its parents, so no conditional table or quantiles of it are stated unless `frozen` holds them."""
+    """The dependence between `columns`, measured on `sample` and counted on `described`, which holds `rows` rows, each
+    column `derived` names computed by its entry there. Each pair `frozen` holds is stated wherever its floors allow,
+    whatever its strength.
+
+    The engine's plan of the draft decides what the generator draws. Its copula groups, after the lookups and tables,
+    decide which quantiles and zero rates a copula would dilute. Each entry its plan of the whole draft sets aside, as a
+    table of a column a lookup draws or an entry closing a cycle, is left out with its floor.
+    """
     frozen = frozen or FrozenPairs()
+    derived = derived or {}
     position = {column.name: index for index, column in enumerate(columns)}
     measured = measured_pairs(backend, sample, columns, k_min)
     correlations, ratios = kept_correlations(measured, position, frozen)
-    sections: dict[str, Any] = {}
-    if correlations:
-        sections['correlations'] = correlations
-    if ratios:
-        sections['correlation_ratios'] = ratios
-    floors: dict[tuple[str, str, str], int] = {}
     dependencies, looked_up = functional_dependencies(backend, described, columns, rows, k_min, position)
-    drawn = derived | {rhs for _, rhs in looked_up}
-    copula = copula_pairs(correlations, columns, drawn)
-    listed = (
-        ('conditionals', conditional_tables(backend, described, columns, measured, k_min, frozen)),
-        ('conditional_quantiles', conditional_quantiles(backend, described, columns, measured, k_min, frozen, copula)),
-    )
-    for name, (entries, floored) in listed:
-        kept = [entry for entry in entries if entry['column'] not in drawn or frozen.gives(name, entry['given'], entry['column'])]
-        if kept:
-            sections[name] = kept
-        floors |= {(name, given, child): floor for (given, child), floor in floored.items()}
-    curve_parents = {entry['column']: entry['given'] for entry in sections.get('conditional_quantiles', [])}
-    rates, floored = conditional_rates(backend, sample, described, columns, k_min, frozen, curve_parents, copula)
-    if rates:
-        sections['conditional_rates'] = rates
-    floors |= {('conditional_rates', given, child): floor for (given, child), floor in floored.items()}
-    if dependencies:
-        sections['dependencies'] = dependencies
-    floors |= {('dependencies', lhs, rhs): floor for (lhs, rhs), floor in looked_up.items()}
+    tables, table_floors = conditional_tables(backend, described, columns, measured, k_min, frozen)
+    before_warps = {'correlations': correlations, 'dependencies': dependencies, 'conditionals': tables}
+    copula = copula_pairs(correlations, draft_plan(columns, derived, before_warps).copula_groups())
+    quantiles, quantile_floors = conditional_quantiles(backend, described, columns, measured, k_min, frozen, copula)
+    curve_parents = {entry['column']: entry['given'] for entry in quantiles}
+    rates, rate_floors = conditional_rates(backend, sample, described, columns, k_min, frozen, curve_parents, copula)
+    sections = {
+        'correlations': correlations,
+        'correlation_ratios': ratios,
+        'conditionals': tables,
+        'conditional_quantiles': quantiles,
+        'conditional_rates': rates,
+        'dependencies': dependencies,
+    }
+    sections = without_set_aside(sections, draft_plan(columns, derived, sections).set_aside())
+    floors: dict[tuple[str, str, str], int] = {}
+    for name, floored in (('conditionals', table_floors), ('conditional_quantiles', quantile_floors)):
+        floors |= {(name, entry['given'], entry['column']): floored[(entry['given'], entry['column'])] for entry in sections.get(name, [])}
+    for entry in sections.get('conditional_rates', []):
+        by_rate = rate_floors[(entry['given'], entry['column'])]
+        floors[('conditional_rates', entry['given'], entry['column'])] = min(by_rate[name] for name in by_rate if name in entry)
+    for dependency in sections.get('dependencies', []):
+        if 'table' in dependency:
+            lhs, rhs = dependency['lhs'][0], dependency['rhs']
+            floors[('dependencies', lhs, rhs)] = looked_up[(lhs, rhs)]
     return Dependence(sections, floors)
+
+
+def draft_plan(columns: list[DependenceColumn], derived: dict[str, dict[str, Any]], sections: dict[str, Any]) -> _core.Plan:
+    """The engine's plan of a draft holding `columns`, each column `derived` names computed by its entry there, and the
+    dataset's `sections`."""
+    document = {
+        'profile_version': FORMAT_VERSION,
+        'kind': 'table',
+        'name': 'draft',
+        'dataset': {name: entries for name, entries in sections.items() if entries},
+        'columns': [column.entry | ({'derived': derived[column.name]} if column.name in derived else {}) for column in columns],
+    }
+    return engine_plan(document, 'the draft profile')
+
+
+def without_set_aside(sections: dict[str, Any], set_aside: list[str]) -> dict[str, Any]:
+    """The dataset's `sections`, each list left out where it is empty, without each entry or field whose JSON pointer
+    `set_aside` holds. A rate set aside leaves `other` too, and an entry of rates keeping neither is left out."""
+    aside: dict[tuple[str, int], set[str | None]] = {}
+    for pointer in set_aside:
+        _, _, listed, at, *field = pointer.split('/')
+        aside.setdefault((listed, int(at)), set()).add(field[0] if field else None)
+    kept: dict[str, Any] = {}
+    for name, entries in sections.items():
+        left = []
+        for index, entry in enumerate(entries):
+            fields = aside.get((name, index), set())
+            if None in fields:
+                continue
+            entry = {key: value for key, value in entry.items() if key not in fields}
+            other = {key: value for key, value in (entry.get('other') or {}).items() if key not in fields}
+            if name == 'conditional_rates':
+                if not {'zero_rate', 'null_rate'} & entry.keys():
+                    continue
+                entry.pop('other', None)
+                if other:
+                    entry['other'] = other
+            left.append(entry)
+        if left:
+            kept[name] = left
+    return kept
 
 
 @dc.dataclass(frozen=True)
 class CopulaPairs:
-    """The copula group of each column the generator draws through one, of numeric columns no other column gives and
-    joined by their Spearman pairs, and the most of each column's rank variance one partner explains, as the squared
-    correlation."""
+    """The copula group of each column the engine draws through one, by its place among the plan's groups, and the most
+    of each member's rank variance one partner in its group explains, as the squared correlation."""
 
-    groups: dict[str, str]
+    groups: dict[str, int]
     explained: dict[str, float]
 
     def share_group(self, a: str, b: str) -> bool:
         """Whether one copula draws both columns. A member's levels are drawn given every other member's, so no warp
         of them holds a quantile or a zero rate given another member's value."""
-        return a in self.groups and self.groups.get(a) == self.groups.get(b)
+        return a in self.groups and self.groups[a] == self.groups.get(b)
 
 
-def copula_pairs(correlations: list[dict[str, Any]], columns: list[DependenceColumn], drawn: frozenset[str]) -> CopulaPairs:
-    numeric = {column.name for column in columns if column.spec.kind in NUMERIC} - drawn
-    pairs = [
-        (stated['a'], stated['b'], stated['value'])
-        for stated in correlations
-        if stated['method'] == SPEARMAN and stated['a'] in numeric and stated['b'] in numeric
-    ]
-    root: dict[str, str] = {}
-
-    def found(name: str) -> str:
-        while root.setdefault(name, name) != name:
-            name = root[name]
-        return name
-
+def copula_pairs(correlations: list[dict[str, Any]], groups: list[list[str]]) -> CopulaPairs:
+    """The copula `groups` a plan draws, and what of each member's rank variance its strongest partner explains."""
+    group_of = {name: at for at, group in enumerate(groups) for name in group}
     explained: dict[str, float] = {}
-    for a, b, value in pairs:
-        first, second = sorted((found(a), found(b)))
-        root[second] = first
-        for name in (a, b):
-            explained[name] = max(explained.get(name, 0.0), value * value)
-    return CopulaPairs({name: found(name) for name in root}, explained)
+    for stated in correlations:
+        a, b = stated['a'], stated['b']
+        if stated['method'] == SPEARMAN and a in group_of and group_of[a] == group_of.get(b):
+            for name in (a, b):
+                explained[name] = max(explained.get(name, 0.0), stated['value'] ** 2)
+    return CopulaPairs(group_of, explained)
 
 
 def role(column: DependenceColumn) -> str | None:
@@ -394,17 +432,21 @@ def conditional_table(
     """The distribution of `child` within each listed value of `given`, and the fewest rows a kept cell holds.
 
     Only the child's listed values are distributed. A cell under k_min rows is left out, and a given value left with
-    no cell joins the values `other` describes. Then no difference a reader can take against a listed count names 1 to
-    k_min - 1 rows. A child value whose rows outside the kept cells number that many is left out of every row. A row
-    whose given values' rows outside its kept cells number that many loses its least kept cell. `cells` counts every
-    row, a null as None, so those rows outside include a null and an unlisted value on the other side.
+    no cell joins the values `other` describes. Each share is of the row's rows holding a child value, so the share its
+    cells leave is the rows of child values it does not state, which the generator spreads over the child values no row
+    states. Then no difference a reader can take against a listed count names 1 to k_min - 1 rows. A child value whose rows
+    outside the kept cells number that many is left out of every row. A row whose given values' rows, or those of them
+    holding a child value, outside its kept cells number that many loses its least kept cell. `cells` counts every row,
+    a null as None, so those rows outside include a null and an unlisted value on the other side.
     """
     listed_given, listed_child = set(given_values), set(child_values)
     by_given: dict[str, collections.Counter[str]] = collections.defaultdict(collections.Counter)
-    given_rows, child_rows = collections.Counter[str](), collections.Counter[str]()
+    given_rows, held_rows, child_rows = collections.Counter[str](), collections.Counter[str](), collections.Counter[str]()
     for given_value, child_value, count in cells:
         if given_value is not None:
             given_rows[given_value] += count
+            if child_value is not None:
+                held_rows[given_value] += count
             if child_value in listed_child:
                 by_given[given_value][child_value] += count
         if child_value is not None:
@@ -432,7 +474,8 @@ def conditional_table(
         thin = [
             (row, counts)
             for row, counts in kept.items()
-            if counts and 0 < sum(given_rows[value] for value in members[row]) - sum(counts.values()) < k_min
+            if counts
+            and any(0 < sum(rows[value] for value in members[row]) - sum(counts.values()) < k_min for rows in (given_rows, held_rows))
         ]
         if not thin:
             break
@@ -441,13 +484,14 @@ def conditional_table(
     if not listed_rows:
         return None
 
-    def shares(counts: dict[str, int]) -> dict[str, float]:
-        held = sum(counts.values())
+    def shares(row: str | None, counts: dict[str, int]) -> dict[str, float]:
+        held = sum(held_rows[value] for value in members[row])
         return {value: rate(counts[value], held) for value in sorted(counts, key=order.__getitem__)}
 
-    written: dict[str, Any] = {'given': given, 'column': child, 'table': {row: shares(counts) for row, counts in listed_rows.items()}}
+    table = {row: shares(row, counts) for row, counts in listed_rows.items()}
+    written: dict[str, Any] = {'given': given, 'column': child, 'table': table}
     if kept[None]:
-        written['other'] = shares(kept[None])
+        written['other'] = shares(None, kept[None])
     return written, min(count for counts in kept.values() for count in counts.values())
 
 
@@ -564,7 +608,7 @@ def conditional_rates(
     frozen: FrozenPairs,
     curve_parents: dict[str, str],
     copula: CopulaPairs,
-) -> tuple[list[dict[str, Any]], dict[tuple[str, str], int]]:
+) -> tuple[list[dict[str, Any]], dict[tuple[str, str], dict[str, int]]]:
     """Each column's null rate, and a numeric column's zero rate, within each value of a categorical column listing
     `GIVEN_VALUES` at most, where the rate depends on the value by `RATE_DEPENDENCE` over `described`, and by
     `RATE_TRIED` on `sample`, or `frozen` holds the pair. A pair one copula group draws takes its zeros from it, so
@@ -574,7 +618,7 @@ def conditional_rates(
     holds, else for its zero rate the parent `curve_parents` draws its quantiles from, else its strongest. A rate rests
     on its group's rows, and is stated only where those rows, the rows it counts and the rest each number 0 or at least
     k_min. A value breaking that folds into `other`, and the least listed value too where `other` breaks it. The fewest
-    rows any stated count holds, by given and child column.
+    rows any stated count of each rate holds, by given and child column and then the rate's name.
     """
     givens = [
         column for column in columns if role(column) == CATEGORICAL and column.distinct <= GIVEN_VALUES and listed_values(column.entry)
@@ -603,7 +647,8 @@ def conditional_rates(
             rank = (held, name == 'zero_rate' and curve_parents.get(child) == given, strength)
             if (child, name) not in best or rank > best[(child, name)][0]:
                 best[(child, name)] = (rank, given, rates)
-    found, floors = [], {}
+    found: list[dict[str, Any]] = []
+    floors: dict[tuple[str, str], dict[str, int]] = {}
     for given, rated_column in tried:
         kept = {name: rates for (column, name), (_, chosen, rates) in best.items() if column == rated_column and chosen == given}
         if not kept:
@@ -618,7 +663,7 @@ def conditional_rates(
         if other:
             entry['other'] = other
         found.append(entry)
-        floors[(given, rated_column)] = min(floor for _, _, floor in kept.values())
+        floors[(given, rated_column)] = {name: floor for name, (_, _, floor) in kept.items()}
     return found, floors
 
 

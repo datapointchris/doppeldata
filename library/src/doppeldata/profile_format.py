@@ -89,6 +89,45 @@ PointerParts = tuple[str | int, ...]
 
 
 @dc.dataclass(frozen=True)
+class GivenList:
+    """A dataset list whose entries each draw `column` given the values of the column `given`. `by_value` names the
+    fields of an entry keyed by a listed given value, beside `other`, which holds every other value's. Where `nested`,
+    each key's value is a group of literals, as a table's row is, and otherwise one literal. Where `child_keyed`, the
+    child's values key those groups, so its column must list them."""
+
+    by_value: tuple[str, ...]
+    nested: bool
+    child_keyed: bool
+
+    def keys(self, entry: dict[str, Any]) -> set[str]:
+        """The values of the given column the entry lists."""
+        return {key for field in self.by_value if isinstance(by := entry.get(field), dict) for key in by}
+
+    def groups(self, entry: dict[str, Any]) -> list[Any]:
+        """The groups of literals the entry holds, each listed value's and then `other`."""
+        fields = [entry.get(field) or {} for field in self.by_value]
+        listed = [group for by in fields if isinstance(by, dict) for group in by.values()] if self.nested else fields
+        return [*listed, entry.get('other') or {}]
+
+    def literals(self, entry: dict[str, Any]) -> int:
+        return sum(len(group) for group in self.groups(entry) if isinstance(group, dict))
+
+    def child_values(self, entry: dict[str, Any]) -> set[str] | None:
+        """The child's values the entry keys its groups by, or None where its values key nothing."""
+        if not self.child_keyed:
+            return None
+        return {value for group in self.groups(entry) if isinstance(group, dict) for value in group}
+
+
+# The dataset's lists naming a parent column and the values of it each entry is drawn given.
+GIVEN_LISTS = {
+    'conditionals': GivenList(('table',), nested=True, child_keyed=True),
+    'conditional_quantiles': GivenList(('quantiles',), nested=True, child_keyed=False),
+    'conditional_rates': GivenList(('zero_rate', 'null_rate'), nested=False, child_keyed=False),
+}
+
+
+@dc.dataclass(frozen=True)
 class Issue:
     """One reason a profile is invalid. `field` is an RFC 6901 JSON Pointer, because map keys hold category values with dots and slashes."""
 
@@ -245,6 +284,14 @@ def digest_of(canonical: bytes) -> str:
     return 'sha256:' + hashlib.sha256(canonical).hexdigest()
 
 
+def engine_plan(document: dict[str, Any], source: str) -> _core.Plan:
+    """The engine's plan of one row of `document`, read as `source`: how it draws each column, which columns each
+    Gaussian copula draws together, and which dependence entries it sets aside. Raises UngenerableProfile where the
+    engine refuses the document."""
+    canonical = rfc8785.dumps(without_unhashed_fields(document))
+    return _core.Plan(json.dumps(document), digest_of(canonical), 0, 1, source)
+
+
 def pointer(path: PointerParts) -> str:
     return ''.join('/' + str(part).replace('~', '~0').replace('/', '~1') for part in path)
 
@@ -315,9 +362,9 @@ def table_ordering_issues(table: dict[str, Any], at: PointerParts) -> Iterator[I
     yield from quantile_issues(layout.get('rows_per_file'), (*at, 'source', 'layout', 'rows_per_file'))
     for index, conditional in enumerate((table.get('dataset') or {}).get('conditionals') or []):
         for given, row in conditional['table'].items():
-            yield from rate_sum_issues(row.values(), (*at, 'dataset', 'conditionals', index, 'table', given))
+            yield from share_ceiling_issues(row.values(), (*at, 'dataset', 'conditionals', index, 'table', given))
         if conditional.get('other'):
-            yield from rate_sum_issues(conditional['other'].values(), (*at, 'dataset', 'conditionals', index, 'other'))
+            yield from share_ceiling_issues(conditional['other'].values(), (*at, 'dataset', 'conditionals', index, 'other'))
     for index, column in enumerate(table.get('columns') or []):
         yield from column_ordering_issues(column, (*at, 'columns', index))
 
@@ -388,6 +435,14 @@ def rate_sum_issues(rates: Any, at: PointerParts) -> Iterator[Issue]:
     total = sum(rates)
     if abs(total - 1) > RATE_SUM_TOLERANCE:
         yield Issue('rates-not-summing-to-one', pointer(at), f'the rates sum to {total:.4g}, not 1')
+
+
+def share_ceiling_issues(shares: Any, at: PointerParts) -> Iterator[Issue]:
+    """Where a table row's shares sum past 1. The share they leave short of it is the rows of values the row does not
+    state."""
+    total = sum(shares)
+    if total - 1 > RATE_SUM_TOLERANCE:
+        yield Issue('rates-over-one', pointer(at), f'the shares sum to {total:.4g}, over 1')
 
 
 def histogram_issues(histogram: dict[str, Any], at: PointerParts) -> Iterator[Issue]:

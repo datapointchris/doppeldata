@@ -313,9 +313,7 @@ def dataset_sections(
     found = table_keys(backend, full, profiled.dependence_sample, key_columns, rows, k_min)
     columns = [DependenceColumn(spec, distinct[spec.name], entries[spec.name]) for spec in profiled_specs if spec.name in entries]
     derived = derived_columns(backend, profiled.dependence_sample, FIT_SAMPLE_ROWS, profiled.table, columns, k_min)
-    dependence = column_dependence(
-        backend, profiled.dependence_sample, profiled.table, columns, profiled.described, k_min, frozen, frozenset(derived)
-    )
+    dependence = column_dependence(backend, profiled.dependence_sample, profiled.table, columns, profiled.described, k_min, frozen, derived)
     for name, entry in derived.items():
         entries[name]['derived'] = entry
     return found | dependence.sections, dependence.cell_floors

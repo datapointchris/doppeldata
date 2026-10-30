@@ -4,14 +4,12 @@ other numbers give by `+ - * /`.
 Each is screened on the dependence sample and confirmed over every row the profile describes. A lag is kept where the
 column is at or after its base on `ORDERED` of the rows holding both, and the base's variance and the lag's sum to the
 column's within `SPREAD_KEPT` of it, as they do where the lag is drawn apart from the base. An expression is kept where
-its result, rounded to the column's scale, is the column on `HOLDS` of the rows holding all three columns. A row where
-the column is zero and the result rounds to zero is left out, since an expression of two mostly zero columns holds
-there whatever its operator.
+its result, rounded to the column's scale, is the column on `HOLDS` of its informative rows, as `expression_rule`
+counts them, and states that scale as its `round`.
 """
 
 import itertools
 import math
-import re
 import statistics
 from typing import TYPE_CHECKING
 from typing import Any
@@ -20,6 +18,9 @@ from doppeldata.profiling.backend import Backend
 from doppeldata.profiling.backend import Table
 from doppeldata.profiling.column_dependence import PAIR_ROWS
 from doppeldata.profiling.column_dependence import DependenceColumn
+from doppeldata.profiling.expression_rule import ArrowOps
+from doppeldata.profiling.expression_rule import ExpressionCandidate
+from doppeldata.profiling.expression_rule import counted_rows
 from doppeldata.profiling.recorded_counts import clear_of_the_ends
 from doppeldata.profiling.recorded_counts import rate
 from doppeldata.profiling.statistic_catalog import NUMERIC
@@ -41,7 +42,6 @@ OPERAND_WINDOW = 12
 EXPRESSIONS_CONFIRMED = 200
 # The microseconds in the unit a lag is written in, by the column's kind.
 LAG_UNITS = {ColumnKind.DATE: (86_400_000_000, 'd'), ColumnKind.DATETIME: (1_000_000, 's')}
-UNQUOTED_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 
 
 def derived_columns(
@@ -157,29 +157,33 @@ def expressions(
     least = max(PAIR_ROWS, k_min)
     values = {column.name: held.column(column.name).cast(pa.float64()).combine_chunks() for column in columns if '`' not in column.name}
     first = {name: column.slice(0, SCREEN_ROWS) for name, column in values.items()}
-    best: dict[str, tuple[float, tuple[str, str, str, str, float]]] = {}
+    best: dict[str, tuple[float, ExpressionCandidate]] = {}
     for at, target in enumerate(columns):
         scale = target_scale(target)
         if scale is None or target.name not in values:
             continue
-        tolerance = 0.5 * 10.0**-scale
         window = [column.name for column in columns[max(0, at - OPERAND_WINDOW) : at] if column.name in values]
         for a, b in itertools.combinations(reversed(window), 2):
             for left, symbol, right in ((a, '+', b), (a, '*', b), (a, '-', b), (b, '-', a), (a, '/', b), (b, '/', a)):
-                informative, matched = matches(first[left], symbol, first[right], first[target.name], tolerance)
+                candidate = ExpressionCandidate(left, symbol, right, target.name, scale)
+                informative, matched = matches(candidate, first)
                 if not informative or informative - matched > (1 - HOLDS) * SCREEN_ROWS:
                     continue
-                informative, matched = matches(values[left], symbol, values[right], values[target.name], tolerance)
+                informative, matched = matches(candidate, values)
                 share = matched / informative if informative else 0.0
                 if informative >= least and share >= HOLDS and share > best.get(target.name, (0.0,))[0]:
-                    best[target.name] = (share, (left, symbol, right, target.name, tolerance))
+                    best[target.name] = (share, candidate)
     candidates = [candidate for _, candidate in sorted(best.values(), key=lambda found: -found[0])[:EXPRESSIONS_CONFIRMED]]
     found: dict[str, dict[str, Any]] = {}
     confirmed = backend.expression_matches(described, candidates)
-    for (left, symbol, right, given, _), (rows, informative, matched) in zip(candidates, confirmed, strict=True):
+    for candidate, (rows, informative, matched) in zip(candidates, confirmed, strict=True):
         if informative >= least and matched >= HOLDS * informative:
-            expr = f'{quoted(left)} {symbol} {quoted(right)}'
-            found[given] = {'kind': 'expression', 'expr': expr, 'violation_rate': rate(informative - matched, rows)}
+            found[candidate.target] = {
+                'kind': 'expression',
+                'expr': candidate.expr,
+                'round': candidate.scale,
+                'violation_rate': rate(informative - matched, rows),
+            }
     return found
 
 
@@ -192,23 +196,9 @@ def target_scale(column: DependenceColumn) -> int | None:
     return int(scale) if scale is not None else None
 
 
-def matches(left: 'pa.Array', symbol: str, right: 'pa.Array', target: 'pa.Array', tolerance: float) -> tuple[int, int]:
-    """The rows where all three hold a value, less those whose target and `left symbol right` both lie within
-    `tolerance` of zero, and those of the rest whose target lies within `tolerance` of it. A division by zero holds for
-    no row, as `Backend.expression_matches` counts."""
-    import pyarrow as pa
+def matches(candidate: ExpressionCandidate, values: dict[str, 'pa.Array']) -> tuple[int, int]:
+    """The candidate's informative rows among `values`, and those of them where the target is its result."""
     import pyarrow.compute as pc
 
-    if symbol == '/':
-        computed = pc.if_else(pc.not_equal(right, 0), pc.divide(left, right), pa.scalar(None, pa.float64()))
-    else:
-        computed = {'+': pc.add, '-': pc.subtract, '*': pc.multiply}[symbol](left, right)
-    held = pc.and_kleene(pc.and_kleene(pc.is_valid(left), pc.is_valid(right)), pc.is_valid(target))
-    near_zero = pc.fill_null(pc.and_kleene(pc.equal(target, 0), pc.less_equal(pc.abs(computed), tolerance)), False)
-    informative = pc.and_kleene(held, pc.invert(near_zero))
-    close = pc.fill_null(pc.less_equal(pc.abs(pc.subtract(target, computed)), tolerance), False)
-    return int(pc.sum(informative).as_py() or 0), int(pc.sum(pc.and_kleene(informative, close)).as_py() or 0)
-
-
-def quoted(name: str) -> str:
-    return name if UNQUOTED_NAME.fullmatch(name) else f'`{name}`'
+    _, informative, matched = counted_rows(candidate, values.__getitem__, ArrowOps())
+    return int(pc.sum(informative).as_py() or 0), int(pc.sum(matched).as_py() or 0)

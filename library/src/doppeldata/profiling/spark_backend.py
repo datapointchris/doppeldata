@@ -44,6 +44,8 @@ from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import SourceRead
+from doppeldata.profiling.expression_rule import ExpressionCandidate
+from doppeldata.profiling.expression_rule import counted_rows
 from doppeldata.profiling.sources import is_spark_frame
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
@@ -150,6 +152,32 @@ def column(name: str) -> Column:
 
 def count_where(condition: Column) -> Column:
     return sf.count(sf.when(condition, 1))
+
+
+class SparkOps:
+    """The operations `expression_rule.counted_rows` counts with, over Spark columns."""
+
+    def arithmetic(self, operator: str, left: Column, right: Column) -> Column:
+        return {'+': left + right, '-': left - right, '*': left * right}[operator]
+
+    def quotient(self, left: Column, right: Column) -> Column:
+        """Null where `right` is zero, as every engine holds it. Under ANSI mode the division itself would raise."""
+        return sf.when(right != 0, left / right)
+
+    def held(self, value: Column) -> Column:
+        return value.isNotNull()
+
+    def is_zero(self, value: Column) -> Column:
+        return value == 0
+
+    def within(self, value: Column, tolerance: float) -> Column:
+        return sf.coalesce(sf.abs(value) <= tolerance, sf.lit(False))
+
+    def both(self, first: Column, second: Column) -> Column:
+        return first & second
+
+    def negated(self, condition: Column) -> Column:
+        return ~condition
 
 
 @dc.dataclass(frozen=True)
@@ -954,20 +982,29 @@ class SparkBackend:
     def grouped_quantiles(
         self, table: DataFrame, requests: list[tuple[str, str, list[str], tuple[float, ...]]]
     ) -> list[list[tuple[str | None, int, list[float]]]]:
+        """Requests naming one given and keeping the same values share one `groupBy`, `PAIRS_PER_QUERY` at a time."""
         specs = {spec.name: spec for spec in self.schema(table)}
-        found = []
-        for child, given, keep, levels in requests:
+        batches: dict[tuple[str, tuple[str, ...]], list[int]] = {}
+        for at, (_, given, listed, _) in enumerate(requests):
+            batches.setdefault((given, tuple(listed)), []).append(at)
+        found: list[list[tuple[str | None, int, list[float]]]] = [[] for _ in requests]
+        for (given, keep), batch in batches.items():
             text = column(given).cast('string')
-            value = Operand(column(child), specs[child], self.major).value
-            groups = (
-                table.where(column(given).isNotNull())
-                .select(sf.when(text.isin(keep), text).alias('g'), value.alias('v'))
-                .groupBy('g')
-                .agg(sf.count('v').alias('n'), sf.percentile_approx('v', list(levels), QUANTILE_ACCURACY).alias('q'))
-                .where(sf.col('n') > 0)
-                .collect()
-            )
-            found.append([(row['g'], int(row['n']), [float(at) for at in row['q']]) for row in groups])
+            for start in range(0, len(batch), PAIRS_PER_QUERY):
+                indexes = batch[start : start + PAIRS_PER_QUERY]
+                measured = []
+                for at in indexes:
+                    child, _, _, levels = requests[at]
+                    value = Operand(column(child), specs[child], self.major).value
+                    measured += [
+                        sf.count(value).alias(f'n{at}'),
+                        sf.percentile_approx(value, list(levels), QUANTILE_ACCURACY).alias(f'q{at}'),
+                    ]
+                groups = (
+                    table.where(column(given).isNotNull()).groupBy(sf.when(text.isin(list(keep)), text).alias('g')).agg(*measured).collect()
+                )
+                for at in indexes:
+                    found[at] = [(row['g'], int(row[f'n{at}']), [float(q) for q in row[f'q{at}']]) for row in groups if row[f'n{at}'] > 0]
         return found
 
     def grouped_rates(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, int, int, int]]]:
@@ -1037,7 +1074,7 @@ class SparkBackend:
             found.append((held, quantiles, float(low[k_min - 1]) if ends_held else None, float(high[-k_min]) if ends_held else None))
         return found
 
-    def expression_matches(self, table: DataFrame, candidates: list[tuple[str, str, str, str, float]]) -> list[tuple[int, int, int]]:
+    def expression_matches(self, table: DataFrame, candidates: list[ExpressionCandidate]) -> list[tuple[int, int, int]]:
         specs = {spec.name: spec for spec in self.schema(table)}
 
         def value(name: str) -> Column:
@@ -1046,19 +1083,8 @@ class SparkBackend:
         found: list[tuple[int, int, int]] = []
         for start in range(0, len(candidates), PAIRS_PER_QUERY):
             measured = []
-            for a, operator, b, target, tolerance in candidates[start : start + PAIRS_PER_QUERY]:
-                left, right, held_target = value(a), value(b), value(target)
-                # Under ANSI mode a division by zero raises, so it is null as it is in every engine.
-                quotient = sf.when(right != 0, left / right)
-                computed = {'+': left + right, '-': left - right, '*': left * right, '/': quotient}[operator]
-                held = left.isNotNull() & right.isNotNull() & held_target.isNotNull()
-                trivial = (held_target == 0) & sf.coalesce(sf.abs(computed) <= tolerance, sf.lit(False))
-                informative = held & ~trivial
-                measured += [
-                    count_where(held),
-                    count_where(informative),
-                    count_where(informative & (sf.abs(held_target - computed) <= tolerance)),
-                ]
+            for candidate in candidates[start : start + PAIRS_PER_QUERY]:
+                measured += [count_where(rows) for rows in counted_rows(candidate, value, SparkOps())]
             row = table.agg(*measured).collect()[0]
             found += [(int(row[at] or 0), int(row[at + 1] or 0), int(row[at + 2] or 0)) for at in range(0, len(row), 3)]
         return found

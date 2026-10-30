@@ -15,9 +15,9 @@ from doppeldata.errors import CheckFailed
 from doppeldata.privacy_policy.column_treatment import CHECKED_POLICIES
 from doppeldata.privacy_policy.column_treatment import ColumnFacts
 from doppeldata.privacy_policy.column_treatment import Policy
+from doppeldata.privacy_policy.column_treatment import Treatment
 from doppeldata.privacy_policy.column_treatment import column_treatment
 from doppeldata.privacy_policy.column_treatment import oldest_birth_year
-from doppeldata.privacy_policy.literal_fields import GIVEN_LISTS
 from doppeldata.privacy_policy.literal_fields import FieldKind
 from doppeldata.privacy_policy.literal_fields import LiteralField
 from doppeldata.privacy_policy.literal_fields import column_literals
@@ -28,6 +28,7 @@ from doppeldata.privacy_policy.treatment_rules import lag_faults
 from doppeldata.privacy_policy.treatment_rules import lookup_faults
 from doppeldata.privacy_policy.treatment_rules import refused
 from doppeldata.privacy_policy.treatment_rules import treatment_faults
+from doppeldata.profile_format import GIVEN_LISTS
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import PointerParts
@@ -169,8 +170,11 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
     violations: list[Violation] = []
     seen: set[int] = set()
     fields = 0
+    ages: set[str] = set()
     for column in column_literals(table):
         treatment = column_treatment(ColumnFacts.of(column.column), policy)
+        if treatment is Treatment.AGE:
+            ages.add(column.name)
         for fault in treatment_faults(column, treatment, birth_floor):
             violations.append(Violation(fault.code, pointer((*at, *fault.path)), None, treatment.value, fault.detail))
         for field in column.fields:
@@ -203,7 +207,10 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
     for field in dataset_literals(table):
         fields += 1
         name, index = str(field.path[1]), int(field.path[2])
-        keyed = conditional_faults(table, index, policy, name) if name in GIVEN_LISTS else lookup_faults(table, index, policy)
+        if name in GIVEN_LISTS:
+            keyed = conditional_faults(table, index, policy, name, frozenset(ages))
+        else:
+            keyed = lookup_faults(table, index, policy)
         for keyed_fault in keyed:
             violations.append(Violation(keyed_fault.code, pointer((*at, *keyed_fault.path)), field.kind.rule, None, keyed_fault.detail))
         audited_at = dataset_audited.get(field.pointer)

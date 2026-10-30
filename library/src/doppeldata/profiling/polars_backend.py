@@ -29,6 +29,8 @@ from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import SourceRead
+from doppeldata.profiling.expression_rule import ExpressionCandidate
+from doppeldata.profiling.expression_rule import counted_rows
 from doppeldata.profiling.first_blocks import FIRST_BLOCK_BYTES
 from doppeldata.profiling.first_blocks import first_block
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
@@ -506,7 +508,7 @@ class PolarsBackend:
             found.append((held, quantiles, low, high))
         return found
 
-    def expression_matches(self, table: pl.LazyFrame, candidates: list[tuple[str, str, str, str, float]]) -> list[tuple[int, int, int]]:
+    def expression_matches(self, table: pl.LazyFrame, candidates: list[ExpressionCandidate]) -> list[tuple[int, int, int]]:
         if not candidates:
             return []
         kinds = {spec.name: spec.kind for spec in self.schema(table)}
@@ -515,14 +517,9 @@ class PolarsBackend:
             return numeric_value(pl.col(name), kinds[name]).cast(pl.Float64)
 
         counts = []
-        for at, (a, operator, b, target, tolerance) in enumerate(candidates):
-            left, right, held_target = value(a), value(b), value(target)
-            quotient = pl.when(right != 0).then(left / right)
-            computed = {'+': left + right, '-': left - right, '*': left * right, '/': quotient}[operator]
-            held = left.is_not_null() & right.is_not_null() & held_target.is_not_null()
-            informative = held & ~((held_target == 0) & (computed.abs() <= tolerance).fill_null(False))
-            close = ((held_target - computed).abs() <= tolerance).fill_null(False)
-            counts += [held.sum().alias(f'n{at}'), informative.sum().alias(f'i{at}'), (informative & close).sum().alias(f'm{at}')]
+        for at, candidate in enumerate(candidates):
+            held, informative, matched = counted_rows(candidate, value, PolarsOps())
+            counts += [held.sum().alias(f'n{at}'), informative.sum().alias(f'i{at}'), matched.sum().alias(f'm{at}')]
         row = table.select(counts).collect(engine='streaming').row(0)
         return [(int(row[at]), int(row[at + 1]), int(row[at + 2])) for at in range(0, len(row), 3)]
 
@@ -548,6 +545,31 @@ def numeric_value(c: pl.Expr, kind: ColumnKind) -> pl.Expr:
     if kind is ColumnKind.FLOAT:
         return pl.when(c.is_finite()).then(c)
     return c
+
+
+class PolarsOps:
+    """The operations `expression_rule.counted_rows` counts with, over Polars expressions."""
+
+    def arithmetic(self, operator: str, left: pl.Expr, right: pl.Expr) -> pl.Expr:
+        return {'+': left + right, '-': left - right, '*': left * right}[operator]
+
+    def quotient(self, left: pl.Expr, right: pl.Expr) -> pl.Expr:
+        return pl.when(right != 0).then(left / right)
+
+    def held(self, value: pl.Expr) -> pl.Expr:
+        return value.is_not_null()
+
+    def is_zero(self, value: pl.Expr) -> pl.Expr:
+        return value == 0
+
+    def within(self, value: pl.Expr, tolerance: float) -> pl.Expr:
+        return (value.abs() <= tolerance).fill_null(False)
+
+    def both(self, first: pl.Expr, second: pl.Expr) -> pl.Expr:
+        return first & second
+
+    def negated(self, condition: pl.Expr) -> pl.Expr:
+        return ~condition
 
 
 def join_key(table: pl.LazyFrame, name: str) -> pl.Expr:

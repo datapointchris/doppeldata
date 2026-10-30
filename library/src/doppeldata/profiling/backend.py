@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 from typing import Protocol
 
+from doppeldata.profiling.expression_rule import ExpressionCandidate
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
 from doppeldata.published_schemas import published_enum
@@ -335,10 +336,9 @@ class Backend(Protocol):
         rows hold both."""
         ...
 
-    def expression_matches(self, table: Table, candidates: list[tuple[str, str, str, str, float]]) -> list[tuple[int, int, int]]:
-        """For each `(a, operator, b, target, tolerance)` of numeric columns, the operator one of `+ - * /`, the rows
-        holding all three, those of them where the target or `a operator b` is not zero, and those of the latter whose
-        target lies within `tolerance` of `a operator b`. A division by zero holds for no row."""
+    def expression_matches(self, table: Table, candidates: list[ExpressionCandidate]) -> list[tuple[int, int, int]]:
+        """For each candidate, the rows `expression_rule.counted_rows` selects: those holding its three columns, the
+        informative ones among them, and those of the latter where the target is its result."""
         ...
 
     def foreign_key_counts(self, child: Table, child_column: str, parent: Table, parent_column: str) -> list[tuple[bool, int, int]]:
