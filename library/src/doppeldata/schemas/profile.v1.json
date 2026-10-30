@@ -449,7 +449,7 @@
       ]
     },
     "Conditional": {
-      "description": "The distribution of `column` within each value of `given`. Each row of `table` sums to 1.\n\nBoth columns are strings, integers or booleans, and each value is a key as its text: a string as\nitself, an integer in decimal, and a boolean as `true` or `false`.",
+      "description": "The distribution of `column` within each value of `given`. Each row of `table` sums to 1 at most, and the share it\nleaves is the rows of values it does not state. Each value `column` lists takes as much of that share as no row\nstates of it, and the share of values it lists none of draws `column`'s own values.\n\nBoth columns are strings, integers or booleans, and each value is a key as its text: a string as\nitself, an integer in decimal, and a boolean as `true` or `false`.",
       "type": "object",
       "properties": {
         "column": {
@@ -459,7 +459,7 @@
           "type": "string"
         },
         "other": {
-          "description": "The distribution of `column` over every value of `given` that `table` does not list. It sums to 1.",
+          "description": "The distribution of `column` over every value of `given` that `table` does not list, summing to 1 at most as a\nrow does.",
           "type": [
             "object",
             "null"

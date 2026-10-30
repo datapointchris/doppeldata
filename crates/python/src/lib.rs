@@ -391,6 +391,12 @@ mod _core {
             self.plan.copula_groups()
         }
 
+        /// The JSON pointer of each dependence entry the profile states and the plan does not draw,
+        /// each child's sampler naming why.
+        fn set_aside(&self) -> Vec<String> {
+            self.plan.set_aside()
+        }
+
         /// Every row, as one table holding a batch per block, generated on ``threads`` threads,
         /// zero taking one per core. An interrupt stops it and is raised.
         #[pyo3(signature = (*, threads))]

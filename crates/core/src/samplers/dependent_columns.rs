@@ -38,7 +38,9 @@ use rand_distr::Distribution;
 use rand_distr::weighted::WeightedAliasIndex;
 
 use self::copula::CopulaGroup;
+use self::copula::CurveScores;
 use self::copula::LatentGrid;
+use self::copula::PairSeries;
 use self::copula::RankScores;
 use self::copula::TIE_SHARE;
 use self::copula::calibrated;
@@ -64,6 +66,7 @@ use super::text::StringOutput;
 use crate::plan::ColumnFault;
 use crate::plan::PlanError;
 use crate::profile::Column;
+use crate::profile::Conditional;
 use crate::profile::CorrelationMethod;
 use crate::profile::Derived;
 use crate::profile::Granularity;
@@ -84,6 +87,8 @@ pub(crate) struct DependentColumns {
     order: Vec<usize>,
     groups: Vec<CopulaGroup>,
     draws: Vec<ColumnDraw>,
+    /// The JSON pointer of each dependence entry the plan does not draw, in the order it was set aside.
+    set_aside: Vec<String>,
 }
 
 /// One block's columns as drawn, each beside the rows its null mask drew, which its text cells follow.
@@ -191,8 +196,9 @@ enum ChildValues {
 #[derive(Debug, Clone)]
 struct TableRow {
     choice: WeightedAliasIndex<f64>,
-    /// Each cell's place among the child's values.
-    values: Vec<u32>,
+    /// Each slot's place among the child's values, and `None` for the share of the row's rest the column's own draw
+    /// fills.
+    values: Vec<Option<u32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +244,21 @@ fn drawn(arrays: &[Option<ArrayRef>], index: usize) -> &ArrayRef {
     arrays[index].as_ref().expect("a column is drawn after every column it depends on")
 }
 
+/// The dependence entries a plan does not draw, each by its JSON pointer, and what each column's plan says of those
+/// set aside for it.
+#[derive(Default)]
+struct SetAside {
+    pointers: Vec<String>,
+    notes: Vec<(usize, String)>,
+}
+
+impl SetAside {
+    fn entry(&mut self, pointer: String, child: usize, what: String, why: String) {
+        self.pointers.push(pointer);
+        self.notes.push((child, format!("its {what} set aside, since {why}")));
+    }
+}
+
 fn refuse(field: String, message: String) -> PlanError {
     PlanError::Column {
         code: ColumnFault::InvalidDependence,
@@ -264,21 +285,29 @@ impl<'a> Planner<'a> {
         })
     }
 
-    /// Draws `child` after `parent`, refusing an edge that would make a column depend on itself.
-    fn depend(&mut self, parent: usize, child: usize, field: &str) -> Result<(), PlanError> {
+    /// Whether `later` is drawn after `column`, through the edges planned so far, or is it.
+    fn draws_from(&self, later: usize, column: usize) -> bool {
         let mut reached = vec![false; self.columns.len()];
-        let mut stack = vec![child];
+        let mut stack = vec![column];
         while let Some(at) = stack.pop() {
-            if at == parent {
-                let (parent, child) = (&self.profile[parent].name, &self.profile[child].name);
-                return Err(refuse(
-                    field.to_string(),
-                    format!("{child:?} would be drawn from {parent:?}, which is drawn from it"),
-                ));
+            if at == later {
+                return true;
             }
             if !std::mem::replace(&mut reached[at], true) {
                 stack.extend(self.children[at].iter().copied());
             }
+        }
+        false
+    }
+
+    /// Draws `child` after `parent`, refusing an edge that would make a column depend on itself.
+    fn depend(&mut self, parent: usize, child: usize, field: &str) -> Result<(), PlanError> {
+        if self.draws_from(parent, child) {
+            let (parent, child) = (&self.profile[parent].name, &self.profile[child].name);
+            return Err(refuse(
+                field.to_string(),
+                format!("{child:?} would be drawn from {parent:?}, which is drawn from it"),
+            ));
         }
         self.children[parent].insert(child);
         Ok(())
@@ -334,17 +363,118 @@ impl<'a> Planner<'a> {
     }
 }
 
-fn table_row(cells: &BTreeMap<String, Rate>, values: &mut Vec<String>, field: &str) -> Result<TableRow, PlanError> {
-    let mut places = Vec::with_capacity(cells.len());
-    for value in cells.keys() {
+/// The shortfall from 1 a table row's shares may hold and still draw no rest, so a sum off in its last bits draws none.
+const SHARE_SLACK: f64 = 1e-9;
+
+/// The share of a value's own a table's rows may leave unstated and still spread none of their rest to it. Below it
+/// the gap is the rounding of the rates it is taken from, and drawing it would scatter a few rows of the value into
+/// rows that hold none.
+const UNSTATED_FLOOR: f64 = 0.01;
+
+/// Each value a column lists, keyed as a table keys it, with its share of the column's values, and the share of
+/// values it lists none of.
+fn listed_shares(column: &Column) -> Option<(Vec<(String, f64)>, f64)> {
+    let other = |rate: Option<Rate>| rate.map_or(0.0, |rate| rate.0);
+    if let Some(string) = &column.string
+        && let Some(top) = &string.top_values
+    {
+        return Some((
+            top.iter().map(|listed| (listed.value.clone(), listed.rate.0)).collect(),
+            other(string.other_rate),
+        ));
+    }
+    if let Some(numeric) = &column.numeric
+        && let Some(top) = &numeric.top_values
+    {
+        let listed = top.iter().map(|listed| (format!("{}", listed.value), listed.rate.0)).collect();
+        return Some((listed, other(numeric.other_rate)));
+    }
+    let yes = column.boolean.as_ref()?.true_rate?.0;
+    Some((vec![("true".to_string(), yes), ("false".to_string(), 1.0 - yes)], 0.0))
+}
+
+/// Where the share a conditional table's row leaves short of 1 is drawn. Each value the child lists takes the share
+/// of it the table's rows leave unstated, each row weighted by its given value's share, which is one step of
+/// iterative proportional fitting toward the child's own shares. The share of values the child lists none of takes
+/// its own draw.
+struct RestShares {
+    unstated: Vec<(String, f64)>,
+    unlisted: f64,
+}
+
+impl RestShares {
+    /// The rest of `conditional`'s rows, or `None` where its given or child column lists no values, which leaves each
+    /// row's rest to the child's own draw.
+    fn of(conditional: &Conditional, given: &Column, child: &Column) -> Option<Self> {
+        let (child_listed, unlisted) = listed_shares(child)?;
+        let (given_listed, given_other) = listed_shares(given)?;
+        let share_of = |key: &str| given_listed.iter().find(|(value, _)| value == key).map_or(0.0, |(_, rate)| *rate);
+        let other_share = given_other
+            + given_listed
+                .iter()
+                .filter(|(value, _)| !conditional.table.contains_key(value))
+                .map(|(_, rate)| rate)
+                .sum::<f64>();
+        let rows = conditional.table.iter().map(|(given, cells)| (share_of(given), cells));
+        let mut stated: HashMap<&str, f64> = HashMap::new();
+        for (weight, cells) in rows.chain(conditional.other.iter().map(|cells| (other_share, cells))) {
+            for (value, rate) in cells {
+                *stated.entry(value.as_str()).or_default() += weight * rate.0;
+            }
+        }
+        let unstated = child_listed
+            .into_iter()
+            .filter_map(|(value, own)| {
+                let left = own - stated.get(value.as_str()).copied().unwrap_or(0.0);
+                (left > UNSTATED_FLOOR * own).then_some((value, left))
+            })
+            .collect();
+        Some(Self { unstated, unlisted })
+    }
+}
+
+/// A row of a conditional table. The share its cells leave short of 1 is the rows whose value the table does not
+/// state, spread as `rest` says, or drawn as the column's own value where it says nothing.
+fn table_row(
+    cells: &BTreeMap<String, Rate>,
+    rest: Option<&RestShares>,
+    values: &mut Vec<String>,
+    field: &str,
+) -> Result<TableRow, PlanError> {
+    let mut place_of = |value: &String| {
         let place = values.iter().position(|known| known == value).unwrap_or_else(|| {
             values.push(value.clone());
             values.len() - 1
         });
-        places.push(place as u32);
+        Some(place as u32)
+    };
+    let mut places: Vec<Option<u32>> = cells.keys().map(&mut place_of).collect();
+    let mut shares: Vec<f64> = cells.values().map(|rate| rate.0).collect();
+    let left = 1.0 - shares.iter().sum::<f64>();
+    if left > SHARE_SLACK {
+        let spread: Vec<&(String, f64)> = rest
+            .into_iter()
+            .flat_map(|rest| &rest.unstated)
+            .filter(|(value, share)| *share > 0.0 && !cells.contains_key(value))
+            .collect();
+        let unlisted = rest.map_or(0.0, |rest| rest.unlisted);
+        let total = spread.iter().map(|(_, share)| share).sum::<f64>() + unlisted;
+        if spread.is_empty() {
+            shares.push(left);
+            places.push(None);
+        } else {
+            for (value, share) in spread {
+                shares.push(left * share / total);
+                places.push(place_of(value));
+            }
+            if unlisted > 0.0 {
+                shares.push(left * unlisted / total);
+                places.push(None);
+            }
+        }
     }
-    let choice = WeightedAliasIndex::new(cells.values().map(|rate| rate.0).collect())
-        .map_err(|error| refuse(field.to_string(), format!("the row's shares are unusable: {error}")))?;
+    let choice =
+        WeightedAliasIndex::new(shares).map_err(|error| refuse(field.to_string(), format!("the row's shares are unusable: {error}")))?;
     Ok(TableRow { choice, values: places })
 }
 
@@ -378,6 +508,9 @@ impl DependentColumns {
         let mut draws = vec![ColumnDraw::default(); columns.len()];
         let mut described: Vec<Option<String>> = vec![None; columns.len()];
         let mut notes: Vec<Vec<String>> = vec![Vec::new(); columns.len()];
+        let mut set_aside = SetAside::default();
+        // What draws each column's values, once an entry does, as an entry set aside for it names it.
+        let mut drawn_by: Vec<Option<String>> = vec![None; columns.len()];
         let mut planner = Planner {
             profile,
             columns,
@@ -433,6 +566,7 @@ impl DependentColumns {
                     )?;
                     let count = quantiles.as_ref().map_or(0, |q| q.0.len());
                     let draw = TimedeltaDraw { base, lag, step, output };
+                    drawn_by[index] = Some(format!("its lag from {}", timedelta.base));
                     (
                         ValueDraw::Timedelta(Box::new(draw)),
                         format!("{} plus a lag at {count} quantiles", timedelta.base),
@@ -480,22 +614,32 @@ impl DependentColumns {
                         output,
                         violation,
                     };
+                    drawn_by[index] = Some(format!("the expression {}", expression.expr));
                     (ValueDraw::Formula(Box::new(draw)), format!("the expression {}", expression.expr))
                 }
             };
             draws[index].values = Some(draw);
             described[index] = Some(note);
         }
+        let looped = |parent: usize| format!("{} is drawn from it", profile[parent].name);
         for (at, dependency) in dataset.and_then(|d| d.dependencies.as_ref()).into_iter().flatten().enumerate() {
-            let (Some(table), [lhs]) = (&dependency.table, dependency.lhs.as_slice()) else {
-                continue;
-            };
+            let Some(table) = &dependency.table else { continue };
             let field = format!("/dataset/dependencies/{at}");
             let rhs = planner.column(&dependency.rhs, &format!("{field}/rhs"))?;
-            if draws[rhs].values.is_some() {
+            let what = format!("lookup from {}", dependency.lhs.join(", "));
+            let [lhs] = dependency.lhs.as_slice() else {
+                set_aside.entry(format!("{field}/table"), rhs, what, "a lookup reads one column".into());
+                continue;
+            };
+            let lhs_index = planner.column(lhs, &format!("{field}/lhs/0"))?;
+            if let Some(drawn) = &drawn_by[rhs] {
+                set_aside.entry(format!("{field}/table"), rhs, what, format!("{drawn} draws it"));
                 continue;
             }
-            let lhs_index = planner.column(lhs, &format!("{field}/lhs/0"))?;
+            if planner.draws_from(lhs_index, rhs) {
+                set_aside.entry(format!("{field}/table"), rhs, what, looped(lhs_index));
+                continue;
+            }
             let values: Vec<String> = table.values().cloned().collect();
             let child = planner.child_values(rhs, &values, &format!("{field}/table"))?;
             planner.depend(lhs_index, rhs, &format!("{field}/lhs/0"))?;
@@ -509,20 +653,29 @@ impl DependentColumns {
                 values: child,
                 violation,
             })));
+            drawn_by[rhs] = Some(format!("its lookup from {lhs}"));
             described[rhs] = Some(format!("looked up from {lhs}, else {}", planner.columns[rhs].sampler));
         }
         for (at, conditional) in dataset.and_then(|d| d.conditionals.as_ref()).into_iter().flatten().enumerate() {
             let field = format!("/dataset/conditionals/{at}");
             let child = planner.column(&conditional.column, &format!("{field}/column"))?;
-            if draws[child].values.is_some() {
+            let parent = planner.column(&conditional.given, &format!("{field}/given"))?;
+            let what = format!("conditional table given {}", conditional.given);
+            if let Some(drawn) = &drawn_by[child] {
+                set_aside.entry(field, child, what, format!("{drawn} draws it"));
                 continue;
             }
-            let parent = planner.column(&conditional.given, &format!("{field}/given"))?;
+            if planner.draws_from(parent, child) {
+                set_aside.entry(field, child, what, looped(parent));
+                continue;
+            }
+            let rest = RestShares::of(conditional, &planner.profile[parent], &planner.profile[child]);
             let mut values = Vec::new();
             let mut rows = Vec::with_capacity(conditional.table.len());
             for (given, cells) in &conditional.table {
                 rows.push(table_row(
                     cells,
+                    rest.as_ref(),
                     &mut values,
                     &format!("{field}/table/{}", crate::perturbations::pointer_token(given)),
                 )?);
@@ -530,7 +683,7 @@ impl DependentColumns {
             let other = conditional
                 .other
                 .as_ref()
-                .map(|cells| table_row(cells, &mut values, &format!("{field}/other")))
+                .map(|cells| table_row(cells, rest.as_ref(), &mut values, &format!("{field}/other")))
                 .transpose()?;
             let child_values = planner.child_values(child, &values, &format!("{field}/table"))?;
             planner.depend(parent, child, &format!("{field}/given"))?;
@@ -543,6 +696,7 @@ impl DependentColumns {
             })));
             let own = &planner.columns[child].sampler;
             described[child] = Some(format!("its conditional table given {}, else {own}", conditional.given));
+            drawn_by[child] = Some(format!("its {what}"));
         }
         let ranked = |draws: &[ColumnDraw], index: usize| {
             draws[index].values.is_none() && matches!(planner.columns[index].values, ValueSampler::Numeric(_))
@@ -553,6 +707,25 @@ impl DependentColumns {
         // holding one value of another member, and no warp of them holds a quantile or a zero rate given that value.
         let same_copula = |a: usize, b: usize| component[a].is_some() && component[a] == component[b];
         let mut curves: Vec<Option<ParentCurves>> = vec![None; profile.len()];
+        // The pointer of each entry warping a column's level, which is set aside with the warp.
+        let mut warp_entries: Vec<Vec<String>> = vec![Vec::new(); profile.len()];
+        // Why a warp of `child`'s level given `parent` cannot be drawn, where it cannot, `held` naming the parent of
+        // the warp of that kind the child already takes.
+        let unwarped = |planner: &Planner, draws: &[ColumnDraw], child: usize, parent: usize, held: Option<(&str, usize)>| {
+            if let Some(drawn) = &drawn_by[child] {
+                return Some(format!("{drawn} draws it"));
+            }
+            if !ranked(draws, child) {
+                return Some("it is not numeric".to_string());
+            }
+            if let Some((kind, held)) = held {
+                return Some(format!("its {kind} is given {}", profile[held].name));
+            }
+            if same_copula(child, parent) {
+                return Some(format!("{} shares its copula", profile[parent].name));
+            }
+            planner.draws_from(parent, child).then(|| looped(parent))
+        };
         for (at, conditional) in dataset
             .and_then(|d| d.conditional_quantiles.as_ref())
             .into_iter()
@@ -561,11 +734,10 @@ impl DependentColumns {
         {
             let field = format!("/dataset/conditional_quantiles/{at}");
             let child = planner.column(&conditional.column, &format!("{field}/column"))?;
-            if !ranked(&draws, child) || curves[child].is_some() {
-                continue;
-            }
             let parent = planner.column(&conditional.given, &format!("{field}/given"))?;
-            if same_copula(child, parent) {
+            let held = curves[child].as_ref().map(|curves| ("quantiles", curves.parent));
+            if let Some(why) = unwarped(&planner, &draws, child, parent, held) {
+                set_aside.entry(field, child, format!("quantiles given {}", conditional.given), why);
                 continue;
             }
             let ValueSampler::Numeric(sampler) = &planner.columns[child].values else {
@@ -616,6 +788,7 @@ impl DependentColumns {
                 curves: by_given,
                 other,
             });
+            warp_entries[child].push(field);
         }
         let mut zeros: Vec<Option<ParentShares>> = vec![None; profile.len()];
         for (at, rates) in dataset.and_then(|d| d.conditional_rates.as_ref()).into_iter().flatten().enumerate() {
@@ -623,23 +796,34 @@ impl DependentColumns {
             let child = planner.column(&rates.column, &format!("{field}/column"))?;
             let parent = planner.column(&rates.given, &format!("{field}/given"))?;
             let other = rates.other.as_ref();
-            if let Some(zero_rate) = &rates.zero_rate
-                && ranked(&draws, child)
-                && zeros[child].is_none()
-                && !same_copula(child, parent)
-            {
-                planner.depend(parent, child, &format!("{field}/given"))?;
-                zeros[child] = Some(ParentShares {
-                    parent,
-                    keys: planner.keys(zero_rate.keys()),
-                    shares: zero_rate.values().map(|rate| rate.0).collect(),
-                    other: other.and_then(|other| other.zero_rate).map(|rate| rate.0),
-                });
+            if let Some(zero_rate) = &rates.zero_rate {
+                let pointer = format!("{field}/zero_rate");
+                let held = zeros[child].as_ref().map(|zeros| ("zero rate", zeros.parent));
+                if let Some(why) = unwarped(&planner, &draws, child, parent, held) {
+                    set_aside.entry(pointer, child, format!("zero rate given {}", rates.given), why);
+                } else {
+                    planner.depend(parent, child, &format!("{field}/given"))?;
+                    zeros[child] = Some(ParentShares {
+                        parent,
+                        keys: planner.keys(zero_rate.keys()),
+                        shares: zero_rate.values().map(|rate| rate.0).collect(),
+                        other: other.and_then(|other| other.zero_rate).map(|rate| rate.0),
+                    });
+                    warp_entries[child].push(pointer);
+                }
             }
-            if let Some(null_rate) = &rates.null_rate
-                && planner.columns[child].field.is_nullable()
-                && draws[child].nulls.is_none()
-            {
+            if let Some(null_rate) = &rates.null_rate {
+                let why = if !planner.columns[child].field.is_nullable() {
+                    Some("its field holds no nulls".to_string())
+                } else if let Some(nulls) = &draws[child].nulls {
+                    Some(format!("its null rate is given {}", profile[nulls.parent].name))
+                } else {
+                    planner.draws_from(parent, child).then(|| looped(parent))
+                };
+                if let Some(why) = why {
+                    set_aside.entry(format!("{field}/null_rate"), child, format!("null rate given {}", rates.given), why);
+                    continue;
+                }
                 planner.depend(parent, child, &format!("{field}/given"))?;
                 draws[child].nulls = Some(ParentTrials {
                     parent,
@@ -661,7 +845,9 @@ impl DependentColumns {
                 return MemberScores { own, warped: None };
             }
             let (zero_low, zero_high) = marginal.zero_band();
-            let scored: Vec<(f64, Vec<f64>)> = parent_mixture(planner.columns, curves[index].as_ref(), zeros[index].as_ref())
+            let (curves, zeros) = (curves[index].as_ref(), zeros[index].as_ref());
+            let (combos, rows) = parent_mixture(planner.columns, curves, zeros);
+            let scored: Vec<(f64, Vec<f64>)> = combos
                 .into_iter()
                 .map(|(share, warp, zero)| {
                     let at = |level: f64| {
@@ -671,12 +857,15 @@ impl DependentColumns {
                 })
                 .collect();
             let mixture: Vec<(f64, &[f64])> = scored.iter().map(|(share, scores)| (*share, scores.as_slice())).collect();
-            MemberScores {
-                own,
-                warped: Some(RankScores::mixed(grid, &mixture)),
-            }
+            let warped = CurveScores::of(grid, &mixture).map(|by_curve| Warped {
+                mixed: by_curve.mixed(),
+                by_curve,
+                rows,
+                parents: [curves.map(|c| c.parent), zeros.map(|z| z.parent)].into_iter().flatten().collect(),
+            });
+            MemberScores { own, warped }
         };
-        let (groups, set_aside) = copula_groups(context, profile, &spearman, &component, scores);
+        let (groups, warps_aside) = copula_groups(context, profile, &spearman, &component, scores);
         let name = |index: usize| profile[index].name.as_str();
         let given = |curves: Option<&ParentCurves>, zeros: Option<&ParentShares>| {
             let kinds = [
@@ -685,13 +874,18 @@ impl DependentColumns {
             ];
             kinds.into_iter().flatten().collect::<Vec<_>>().join(" and ")
         };
-        for (index, partners) in set_aside {
+        for (index, partners) in warps_aside {
             let (curves, zeros) = (curves[index].take(), zeros[index].take());
-            notes[index].push(format!(
+            let note = format!(
                 "its {} set aside for its Spearman with {}, which no copula holds beside it",
                 given(curves.as_ref(), zeros.as_ref()),
                 partners.join(", ")
-            ));
+            );
+            set_aside.pointers.append(&mut warp_entries[index]);
+            set_aside.notes.push((index, note));
+        }
+        for (child, note) in set_aside.notes {
+            notes[child].push(note);
         }
         for index in 0..profile.len() {
             if curves[index].is_some() || zeros[index].is_some() {
@@ -708,10 +902,10 @@ impl DependentColumns {
                     .filter(|name| **name != profile[member].name)
                     .map(String::as_str)
                     .collect();
-                let repaired = if group.repaired {
-                    ", its correlations repaired to the nearest valid matrix"
-                } else {
-                    ""
+                let repaired = match (group.independent, group.repaired) {
+                    (true, _) => ", each member drawn alone, since no valid matrix lies near its correlations",
+                    (false, true) => ", its correlations repaired to the nearest valid matrix",
+                    (false, false) => "",
                 };
                 let name = profile[member].name.as_str();
                 let beyond: Vec<&str> = group
@@ -752,7 +946,12 @@ impl DependentColumns {
                 column.sampler = format!("{}, {}", column.sampler, notes.join(", "));
             }
         }
-        Ok(Self { order, groups, draws })
+        Ok(Self {
+            order,
+            groups,
+            draws,
+            set_aside: set_aside.pointers,
+        })
     }
 
     /// Whether every column is drawn alone, as it is from a profile stating no dependence.
@@ -763,6 +962,11 @@ impl DependentColumns {
     /// Each Gaussian copula's member names, sorted.
     pub(crate) fn copula_groups(&self) -> Vec<Vec<String>> {
         self.groups.iter().map(|group| group.names.clone()).collect()
+    }
+
+    /// The JSON pointer of each dependence entry the plan does not draw.
+    pub(crate) fn set_aside(&self) -> &[String] {
+        &self.set_aside
     }
 
     /// The columns derived or looked up from others, in the order that computes each after what it reads.
@@ -859,7 +1063,41 @@ fn copula_components(stored: &BTreeMap<(usize, usize), f64>, columns: usize) -> 
 /// A copula member's rank scores through its own marginal, and through its parents' warps where it has any.
 struct MemberScores {
     own: RankScores,
-    warped: Option<RankScores>,
+    warped: Option<Warped>,
+}
+
+/// A member's scores through its parents' warps: curve by curve, mixed as a partner choosing its curves apart reads
+/// them, the curve each row of [`parent_mixture`]'s draw takes, and the parents choosing it.
+struct Warped {
+    by_curve: CurveScores,
+    mixed: RankScores,
+    rows: Vec<u32>,
+    parents: Vec<usize>,
+}
+
+impl MemberScores {
+    fn scores(&self) -> &RankScores {
+        self.warped.as_ref().map_or(&self.own, |warped| &warped.mixed)
+    }
+}
+
+/// The series two members' Spearman value takes in their normals' Pearson. Members warped by one parent choose their
+/// curves together, row by row, so their pairs of curves are counted from the same rows of their parents' draw.
+fn pair_series(a: &MemberScores, b: &MemberScores, grid: &LatentGrid) -> PairSeries {
+    match (&a.warped, &b.warped) {
+        (Some(a), Some(b)) if a.parents.iter().any(|parent| b.parents.contains(parent)) => {
+            let mut counts: BTreeMap<(u32, u32), usize> = BTreeMap::new();
+            for pair in a.rows.iter().copied().zip(b.rows.iter().copied()) {
+                *counts.entry(pair).or_default() += 1;
+            }
+            let joint: Vec<(usize, usize, f64)> = counts
+                .into_iter()
+                .map(|((first, second), count)| (first as usize, second as usize, count as f64 / a.rows.len() as f64))
+                .collect();
+            PairSeries::joint(&a.by_curve, &b.by_curve, &joint)
+        }
+        _ => PairSeries::apart(a.scores(), b.scores(), grid),
+    }
 }
 
 /// The copula groups of the Spearman correlations `stored` holds, one per `component`, its members ordered by name
@@ -891,14 +1129,16 @@ fn copula_groups(
         let mut scored: Vec<(usize, MemberScores)> = group.into_iter().map(|index| (index, scores(&grid, index))).collect();
         for at in 0..scored.len() {
             let (index, member) = (scored[at].0, &scored[at].1);
-            let Some(warped) = &member.warped else { continue };
+            if member.warped.is_none() {
+                continue;
+            }
             let beyond: Vec<String> = scored
                 .iter()
                 .filter(|(other, _)| *other != index)
                 .filter_map(|(other, partner)| {
                     let rho = stored.get(&(index.min(*other), index.max(*other)))?.clamp(-1.0, 1.0);
-                    let partner = partner.warped.as_ref().unwrap_or(&partner.own);
-                    let lost = calibrated(rho, warped, partner, &grid).is_none() && calibrated(rho, &member.own, partner, &grid).is_some();
+                    let lost = calibrated(rho, &pair_series(member, partner, &grid)).is_none()
+                        && calibrated(rho, &PairSeries::apart(&member.own, partner.scores(), &grid)).is_some();
                     lost.then(|| profile[*other].name.clone())
                 })
                 .collect();
@@ -907,14 +1147,17 @@ fn copula_groups(
                 set_aside.push((index, beyond));
             }
         }
-        let scored = scored
-            .into_iter()
-            .map(|(index, scores)| (index, profile[index].name.clone(), scores.warped.unwrap_or(scores.own)))
-            .collect();
-        groups.push(CopulaGroup::new(context.table, scored, &grid, |a, b| {
-            let (a, b) = (names[a], names[b]);
-            stored.get(&(a.min(b), a.max(b))).copied()
-        }));
+        let by_index: HashMap<usize, &MemberScores> = scored.iter().map(|(index, scores)| (*index, scores)).collect();
+        let members = scored.iter().map(|(index, _)| (*index, profile[*index].name.clone())).collect();
+        groups.push(CopulaGroup::new(
+            context.table,
+            members,
+            |a, b| {
+                let (a, b) = (names[a], names[b]);
+                stored.get(&(a.min(b), a.max(b))).copied()
+            },
+            |a, b, rho| calibrated(rho, &pair_series(by_index[&a], by_index[&b], &grid)),
+        ));
     }
     (groups, set_aside)
 }
@@ -922,14 +1165,18 @@ fn copula_groups(
 /// The rows a parent's places are counted over, in a draw of its own values.
 const SHARE_ROWS: usize = 1 << 16;
 
+/// One curve a member's rows draw through: the share of rows taking it, its parent's warp, and its zero share.
+type CurveChoice<'a> = (f64, Option<&'a LevelWarp>, Option<f64>);
+
 /// Each `(share, warp, zero share)` a member's rows draw through, by the share of rows its parents' values send
-/// through it, counted in a draw of each parent's own values. A parent outside the member's copula group is drawn
-/// apart from it, so its value is independent of the member's level.
+/// through it, counted in a draw of each parent's own values, and the place among them each row of that draw takes.
+/// A parent outside the member's copula group is drawn apart from it, so its value is independent of the member's
+/// level.
 fn parent_mixture<'a>(
     columns: &[ColumnPlan],
     curves: Option<&'a ParentCurves>,
     zeros: Option<&ParentShares>,
-) -> Vec<(f64, Option<&'a LevelWarp>, Option<f64>)> {
+) -> (Vec<CurveChoice<'a>>, Vec<u32>) {
     let at = BlockPosition {
         seed: 0,
         block: 0,
@@ -945,12 +1192,18 @@ fn parent_mixture<'a>(
     };
     let curve_places = curves.map(|curves| places(curves.parent, &curves.keys));
     let zero_places = zeros.map(|zeros| places(zeros.parent, &zeros.keys));
+    let combos: Vec<(u32, u32)> = (0..SHARE_ROWS)
+        .map(|row| {
+            let place = |places: &Option<Vec<u32>>| places.as_ref().map_or(NULL, |places| places[row]);
+            (place(&curve_places), place(&zero_places))
+        })
+        .collect();
     let mut counts: BTreeMap<(u32, u32), usize> = BTreeMap::new();
-    for row in 0..SHARE_ROWS {
-        let place = |places: &Option<Vec<u32>>| places.as_ref().map_or(NULL, |places| places[row]);
-        *counts.entry((place(&curve_places), place(&zero_places))).or_default() += 1;
+    for combo in &combos {
+        *counts.entry(*combo).or_default() += 1;
     }
-    counts
+    let at: HashMap<(u32, u32), u32> = counts.keys().enumerate().map(|(at, combo)| (*combo, at as u32)).collect();
+    let mixture = counts
         .into_iter()
         .map(|((curve, zero), count)| {
             (
@@ -959,7 +1212,8 @@ fn parent_mixture<'a>(
                 zeros.and_then(|zeros| zeros.share(zero)),
             )
         })
-        .collect()
+        .collect();
+    (mixture, combos.iter().map(|combo| at[combo]).collect())
 }
 
 /// The level of `own` a row at `level` draws, through its parent's `warp` and `zero` share where stated, or `None`
@@ -1047,7 +1301,7 @@ impl ValueDraw {
                             OTHER => draw.other.as_ref(),
                             listed => Some(&draw.rows[listed as usize]),
                         };
-                        row.map(|row| row.values[row.choice.sample(&mut rng)])
+                        row.and_then(|row| row.values[row.choice.sample(&mut rng)])
                     })
                     .collect();
                 draw.values.array(&chosen, column, at, rows, nulls)

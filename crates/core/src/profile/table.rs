@@ -507,7 +507,9 @@ pub enum CorrelationMethod {
     CramersV,
 }
 
-/// The distribution of `column` within each value of `given`. Each row of `table` sums to 1.
+/// The distribution of `column` within each value of `given`. Each row of `table` sums to 1 at most, and the share it
+/// leaves is the rows of values it does not state. Each value `column` lists takes as much of that share as no row
+/// states of it, and the share of values it lists none of draws `column`'s own values.
 ///
 /// Both columns are strings, integers or booleans, and each value is a key as its text: a string as
 /// itself, an integer in decimal, and a boolean as `true` or `false`.
@@ -516,7 +518,8 @@ pub struct Conditional {
     pub given: String,
     pub column: String,
     pub table: BTreeMap<String, BTreeMap<String, Rate>>,
-    /// The distribution of `column` over every value of `given` that `table` does not list. It sums to 1.
+    /// The distribution of `column` over every value of `given` that `table` does not list, summing to 1 at most as a
+    /// row does.
     pub other: Option<BTreeMap<String, Rate>>,
 }
 

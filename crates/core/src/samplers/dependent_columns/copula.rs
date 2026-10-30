@@ -8,7 +8,9 @@
 //! many of whose rows hold one value ties their ranks, which lowers the Spearman value its pairs
 //! hold. So a pair with such a column takes the Pearson whose values hold `ρ` with their ties, as
 //! NORTA (Cario and Nelson, 1997) calibrates one: each column's tie-averaged ranks as a series in
-//! Hermite polynomials of its normal, whose correlation is a power series in the Pearson.
+//! Hermite polynomials of its normal, whose correlation is a power series in the Pearson. Two members
+//! warped by one parent's value hold some Spearman value through that parent alone, which the series
+//! holds as its constant term.
 
 use std::f64::consts::PI;
 
@@ -20,7 +22,7 @@ use crate::samplers::fitted_family::normal_quantile;
 
 /// The least eigenvalue a repaired matrix keeps, so its Cholesky factor exists.
 const EIGEN_FLOOR: f64 = 1e-6;
-/// The most Jacobi sweeps the repair takes. A matrix of a few dozen columns converges in under ten.
+/// The most Jacobi sweeps the repair takes.
 const JACOBI_SWEEPS: usize = 64;
 /// The most sweeps the completion of unstated pairs takes, and the largest change of an entry that settles it.
 const COMPLETION_SWEEPS: usize = 500;
@@ -74,44 +76,7 @@ impl RankScores {
         if !tied {
             return Self(None);
         }
-        Self::mixed(grid, &[(1.0, scores)])
-    }
-
-    /// The scores of a member drawn through one of several curves, each `(share, scores)` the share of rows drawn
-    /// through it and its score at each of `grid`'s levels. A row's curve is chosen apart from its normal, so a
-    /// partner's scores meet the curves' share-weighted mean, standardized by the spread of every curve's scores.
-    pub(crate) fn mixed(grid: &LatentGrid, curves: &[(f64, &[f64])]) -> Self {
-        let total: f64 = curves.iter().map(|(share, _)| share).sum();
-        let scores: Vec<f64> = (0..grid.levels.len())
-            .map(|at| curves.iter().map(|(share, scores)| share * scores[at]).sum::<f64>() / total)
-            .collect();
-        let mean: f64 = grid.weights.iter().zip(&scores).map(|(w, s)| w * s).sum();
-        let variance: f64 = curves
-            .iter()
-            .map(|(share, curve)| {
-                share / total
-                    * grid
-                        .weights
-                        .iter()
-                        .zip(*curve)
-                        .map(|(w, s)| w * (s - mean) * (s - mean))
-                        .sum::<f64>()
-            })
-            .sum();
-        if variance <= 0.0 {
-            return Self(None);
-        }
-        let mut coefficients = vec![0.0; HERMITE_TERMS];
-        for ((&z, &weight), &score) in grid.normals.iter().zip(&grid.weights).zip(&scores) {
-            let (mut previous, mut current) = (1.0, z);
-            for (k, coefficient) in coefficients.iter_mut().enumerate() {
-                *coefficient += weight * (score - mean) * current;
-                let next = (z * current - ((k + 1) as f64).sqrt() * previous) / ((k + 2) as f64).sqrt();
-                (previous, current) = (current, next);
-            }
-        }
-        let scale = variance.sqrt();
-        Self(Some(coefficients.into_iter().map(|c| c / scale).collect()))
+        CurveScores::of(grid, &[(1.0, scores)]).map_or(Self(None), |curves| curves.mixed())
     }
 
     /// The continuous column's scores, its level itself, as a tied column's partner reads them.
@@ -120,23 +85,133 @@ impl RankScores {
     }
 }
 
-/// The Pearson between two members' normals under which their values hold the Spearman value `rho`, or `None`
-/// where their ties hold no Pearson within [`PEARSON_REACH`] to it.
-pub(crate) fn calibrated(rho: f64, a: &RankScores, b: &RankScores, grid: &LatentGrid) -> Option<f64> {
-    let (a, b) = match (&a.0, &b.0) {
-        (None, None) => return Some(2.0 * libm::sin(PI * rho / 6.0)),
-        (Some(_), None) => (a.clone(), RankScores::continuous(grid)),
-        (None, Some(_)) => (RankScores::continuous(grid), b.clone()),
-        (Some(_), Some(_)) => (a.clone(), b.clone()),
-    };
-    let (Some(a), Some(b)) = (a.0, b.0) else {
-        unreachable!("both sides hold a series")
+/// A member drawn through one of several curves, kept curve by curve, so that a partner whose rows choose their curves
+/// by the same parent's value pairs each row's two curves.
+#[derive(Debug, Clone)]
+pub(crate) struct CurveScores {
+    /// Each curve's share of rows, its mean score less the member's, and the coefficients of its scores in the
+    /// normalized Hermite polynomials of the member's normal, the first left out.
+    curves: Vec<(f64, f64, Vec<f64>)>,
+    /// The spread of the member's scores over every curve.
+    scale: f64,
+}
+
+impl CurveScores {
+    /// The member whose rows are drawn through `curves`, each `(share, scores)` the share of rows drawn through it and
+    /// its score at each of `grid`'s levels, or `None` where its scores do not vary.
+    pub(crate) fn of(grid: &LatentGrid, curves: &[(f64, &[f64])]) -> Option<Self> {
+        let total: f64 = curves.iter().map(|(share, _)| share).sum();
+        let means: Vec<f64> = curves
+            .iter()
+            .map(|(_, scores)| grid.weights.iter().zip(*scores).map(|(w, s)| w * s).sum())
+            .collect();
+        let mean: f64 = curves.iter().zip(&means).map(|((share, _), m)| share / total * m).sum();
+        let variance: f64 = curves
+            .iter()
+            .map(|(share, scores)| {
+                share / total
+                    * grid
+                        .weights
+                        .iter()
+                        .zip(*scores)
+                        .map(|(w, s)| w * (s - mean) * (s - mean))
+                        .sum::<f64>()
+            })
+            .sum();
+        if variance <= 0.0 {
+            return None;
+        }
+        let curves = curves
+            .iter()
+            .zip(&means)
+            .map(|((share, scores), curve_mean)| (share / total, curve_mean - mean, hermite(grid, scores, mean)))
+            .collect();
+        Some(Self {
+            curves,
+            scale: variance.sqrt(),
+        })
+    }
+
+    /// The scores a partner reads where a row's curve is chosen apart from its partner's: the curves' share-weighted
+    /// mean, standardized by the spread of every curve's scores.
+    pub(crate) fn mixed(&self) -> RankScores {
+        let mut coefficients = vec![0.0; HERMITE_TERMS];
+        for (share, _, curve) in &self.curves {
+            for (sum, c) in coefficients.iter_mut().zip(curve) {
+                *sum += share * c;
+            }
+        }
+        RankScores(Some(coefficients.into_iter().map(|c| c / self.scale).collect()))
+    }
+}
+
+/// The coefficients of `scores` less `mean` in the normalized Hermite polynomials of the normal at `grid`'s points,
+/// the first left out.
+fn hermite(grid: &LatentGrid, scores: &[f64], mean: f64) -> Vec<f64> {
+    let mut coefficients = vec![0.0; HERMITE_TERMS];
+    for ((&z, &weight), &score) in grid.normals.iter().zip(&grid.weights).zip(scores) {
+        let (mut previous, mut current) = (1.0, z);
+        for (k, coefficient) in coefficients.iter_mut().enumerate() {
+            *coefficient += weight * (score - mean) * current;
+            let next = (z * current - ((k + 1) as f64).sqrt() * previous) / ((k + 2) as f64).sqrt();
+            (previous, current) = (current, next);
+        }
+    }
+    coefficients
+}
+
+/// The Spearman value two members hold as a function of their normals' Pearson `r`: the closed form where neither
+/// ties, else a constant and the coefficient of each power of `r` from the first.
+pub(crate) enum PairSeries {
+    Closed,
+    Series(f64, Vec<f64>),
+}
+
+impl PairSeries {
+    /// Two members whose rows choose their curves apart.
+    pub(crate) fn apart(a: &RankScores, b: &RankScores, grid: &LatentGrid) -> Self {
+        let (a, b) = match (&a.0, &b.0) {
+            (None, None) => return Self::Closed,
+            (Some(_), None) => (a.clone(), RankScores::continuous(grid)),
+            (None, Some(_)) => (RankScores::continuous(grid), b.clone()),
+            (Some(_), Some(_)) => (a.clone(), b.clone()),
+        };
+        let (Some(a), Some(b)) = (a.0, b.0) else {
+            unreachable!("both sides hold a series")
+        };
+        Self::Series(0.0, a.iter().zip(&b).map(|(x, y)| x * y).collect())
+    }
+
+    /// Two members whose rows choose their curves together, `joint` holding each pair of their curves' places and the
+    /// share of rows choosing both. Their covariance within each pair of curves meets the covariance of the two
+    /// curves' means, which no Pearson moves.
+    pub(crate) fn joint(a: &CurveScores, b: &CurveScores, joint: &[(usize, usize, f64)]) -> Self {
+        let scale = a.scale * b.scale;
+        let mut constant = 0.0;
+        let mut terms = vec![0.0; HERMITE_TERMS];
+        for &(first, second, share) in joint {
+            let ((_, mean_a, curve_a), (_, mean_b, curve_b)) = (&a.curves[first], &b.curves[second]);
+            constant += share * mean_a * mean_b / scale;
+            for ((term, x), y) in terms.iter_mut().zip(curve_a).zip(curve_b) {
+                *term += share * x * y / scale;
+            }
+        }
+        Self::Series(constant, terms)
+    }
+}
+
+/// The Pearson between two members' normals under which their values hold the Spearman value `rho`, by the series
+/// of their scores, or `None` where no Pearson within [`PEARSON_REACH`] holds it.
+pub(crate) fn calibrated(rho: f64, series: &PairSeries) -> Option<f64> {
+    let (constant, terms) = match series {
+        PairSeries::Closed => return Some(2.0 * libm::sin(PI * rho / 6.0)),
+        PairSeries::Series(constant, terms) => (*constant, terms),
     };
     let spearman = |r: f64| {
         let mut power = 1.0;
-        a.iter().zip(&b).fold(0.0, |sum, (x, y)| {
+        terms.iter().fold(constant, |sum, term| {
             power *= r;
-            sum + x * y * power
+            sum + term * power
         })
     };
     let (mut low, mut high) = (-PEARSON_REACH, PEARSON_REACH);
@@ -164,19 +239,22 @@ pub(crate) struct CopulaGroup {
     key: u64,
     /// Whether no valid matrix holds every stored pair, so the group holds the one nearest them.
     pub(crate) repaired: bool,
-    /// The stored pairs, by the members' names, whose Spearman value their ties hold under no Pearson, so the
-    /// completion fills them as it fills a pair the profile leaves out.
+    /// Whether no valid matrix was found near the stored pairs either, so every member draws its level alone.
+    pub(crate) independent: bool,
+    /// The stored pairs, by the members' names, whose Spearman value their ties hold under no Pearson. Each is drawn
+    /// at [`PEARSON_REACH`] with its value's sign.
     pub(crate) unreachable: Vec<(String, String)>,
 }
 
 impl CopulaGroup {
-    /// The group of `members`, each its column index, name and rank scores, with `spearman` giving each stored
-    /// pair's value by the members' names. A pair it does not store takes the value `completed` fills.
+    /// The group of `members`, each its column index and name, with `spearman` giving each stored pair's value by the
+    /// members' names, and `pearson` the Pearson under which two members, by their column indices, hold a Spearman
+    /// value, or `None` where none does. A pair it does not store takes the value `completed` fills.
     pub(crate) fn new(
         table: &str,
-        mut members: Vec<(usize, String, RankScores)>,
-        grid: &LatentGrid,
+        mut members: Vec<(usize, String)>,
         spearman: impl Fn(&str, &str) -> Option<f64>,
+        pearson: impl Fn(usize, usize, f64) -> Option<f64>,
     ) -> Self {
         members.sort_by(|a, b| a.1.cmp(&b.1));
         let k = members.len();
@@ -188,27 +266,25 @@ impl CopulaGroup {
                 let Some(rho) = spearman(&members[i].1, &members[j].1) else {
                     continue;
                 };
-                let pearson = calibrated(rho.clamp(-1.0, 1.0), &members[i].2, &members[j].2, grid).unwrap_or_else(|| {
+                let value = pearson(members[i].0, members[j].0, rho.clamp(-1.0, 1.0)).unwrap_or_else(|| {
                     unreachable.push((members[j].1.clone(), members[i].1.clone()));
                     PEARSON_REACH.copysign(rho)
                 });
-                (matrix[i * k + j], matrix[j * k + i]) = (pearson, pearson);
+                (matrix[i * k + j], matrix[j * k + i]) = (value, value);
                 (stated[i * k + j], stated[j * k + i]) = (true, true);
             }
         }
         let (factor, repaired) = match completed(&matrix, &stated, k).and_then(|filled| cholesky(&filled, k)) {
-            Some(factor) => (factor, false),
-            None => (
-                cholesky(&nearest_on_stated(&matrix, &stated, k), k).unwrap_or_else(|| identity(k)),
-                true,
-            ),
+            Some(factor) => (Some(factor), false),
+            None => (cholesky(&nearest_on_stated(&matrix, &stated, k), k), true),
         };
-        let names: Vec<String> = members.iter().map(|(_, name, _)| name.clone()).collect();
+        let names: Vec<String> = members.iter().map(|(_, name)| name.clone()).collect();
         Self {
             key: stream_key(table, &names.join("\0"), "copula"),
-            members: members.into_iter().map(|(index, _, _)| index).collect(),
+            members: members.into_iter().map(|(index, _)| index).collect(),
             names,
-            factor,
+            independent: factor.is_none(),
+            factor: factor.unwrap_or_else(|| identity(k)),
             repaired,
             unreachable,
         }
@@ -366,7 +442,8 @@ fn eigen_clipped(matrix: &[f64], k: usize) -> Vec<f64> {
     rebuilt
 }
 
-/// The eigenvalues of a symmetric matrix and its eigenvectors as columns, by cyclic Jacobi rotations.
+/// The eigenvalues of a symmetric matrix and its eigenvectors as columns, by cyclic Jacobi rotations. The sweeps stop
+/// once what is left off the diagonal is under the rounding of what is on it.
 fn symmetric_eigen(matrix: &[f64], k: usize) -> (Vec<f64>, Vec<f64>) {
     let mut a = matrix.to_vec();
     let mut v = identity(k);
@@ -375,7 +452,8 @@ fn symmetric_eigen(matrix: &[f64], k: usize) -> (Vec<f64>, Vec<f64>) {
             .flat_map(|p| (p + 1..k).map(move |q| (p, q)))
             .map(|(p, q)| a[p * k + q] * a[p * k + q])
             .sum();
-        if off == 0.0 {
+        let diagonal: f64 = (0..k).map(|p| a[p * k + p] * a[p * k + p]).sum();
+        if off <= f64::EPSILON * f64::EPSILON * diagonal {
             break;
         }
         for p in 0..k {

@@ -167,6 +167,11 @@ class Plan:
         """
         The rows the files hold: those generated, and every copy the scenario plans.
         """
+    def set_aside(self, /) -> list[str]:
+        """
+        The JSON pointer of each dependence entry the profile states and the plan does not draw,
+        each child's sampler naming why.
+        """
     def stream(self, /, *, threads: SupportsIndex) -> Any:
         """
         The blocks in order, as a reader. ``threads`` threads, zero taking one per core, each

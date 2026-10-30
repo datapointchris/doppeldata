@@ -657,6 +657,12 @@ impl Plan {
         self.dependent.copula_groups()
     }
 
+    /// The JSON pointer of each dependence entry the profile states and the plan does not draw, as a lookup or a
+    /// conditional whose child another entry already draws, or one closing a cycle. Each child's sampler names why.
+    pub fn set_aside(&self) -> Vec<String> {
+        self.dependent.set_aside().to_vec()
+    }
+
     fn position(&self, block: u64) -> Result<(BlockPosition, usize), BlockOutOfRange> {
         if block >= self.block_count {
             return Err(BlockOutOfRange {
