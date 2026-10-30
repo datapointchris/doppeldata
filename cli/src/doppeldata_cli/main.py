@@ -235,7 +235,8 @@ ThresholdsOption = Annotated[
     ),
 ]
 METRIC_DEFINITIONS = '\n\n'.join(
-    f'{metric.name}: {metric.summary}. Passes at {metric.bound.value.removeprefix("at_")} {metric.threshold:g} by default.'
+    f'{metric.name}: {metric.summary}. Passes at {metric.bound.value.removeprefix("at_")} {metric.threshold:g} by default'
+    + (', set under defaults alone.' if metric.pairs else '.')
     for metric in METRICS
 )
 SCORE_DEFINITIONS = (

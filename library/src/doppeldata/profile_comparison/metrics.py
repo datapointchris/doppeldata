@@ -7,7 +7,6 @@ added to `METRICS` reaches the reports, `--thresholds` and the CLI's help with n
 import dataclasses as dc
 import enum
 import itertools
-import json
 import math
 from collections.abc import Callable
 from collections.abc import Iterator
@@ -15,16 +14,13 @@ from collections.abc import Mapping
 from typing import Any
 from typing import NamedTuple
 
-import rfc8785
-
 from doppeldata import _core
 from doppeldata.profile_format import LISTING_SECTIONS
 from doppeldata.profile_format import UngenerableProfile
 from doppeldata.profile_format import described_rows
-from doppeldata.profile_format import digest_of
+from doppeldata.profile_format import engine_plan
 from doppeldata.profile_format import listed_section
 from doppeldata.profile_format import quantile_level
-from doppeldata.profile_format import without_unhashed_fields
 
 Document = dict[str, Any]
 Column = dict[str, Any]
@@ -68,12 +64,15 @@ class Measurement:
 
 @dc.dataclass(frozen=True)
 class Thresholded:
-    """What a report row is judged by: the name `--thresholds` keys it by, its summary, its bound and its default threshold."""
+    """What a report row is judged by: the name `--thresholds` keys it by, its summary, its bound and its default
+    threshold, and whether it measures a pair of columns, whose threshold a thresholds file sets under `defaults`
+    alone."""
 
     name: str
     summary: str
     bound: Bound
     threshold: float
+    pairs: bool = dc.field(default=False, kw_only=True)
 
     def passes(self, value: float, threshold: float) -> bool:
         return self.bound.holds(value, threshold)
@@ -473,22 +472,28 @@ def malformed_rate_change(source: Document, observed: Document) -> Iterator[Meas
     yield Measurement(None, max(changes, key=lambda compared: compared.value))
 
 
-def copula_groups(source: Document) -> list[list[str]]:
-    """The columns each Gaussian copula draws together from the source, as the engine plans it, and none where the
-    engine cannot plan the source, as a diff of two profiles may hold one."""
-    canonical = rfc8785.dumps(without_unhashed_fields(source))
+def source_plan(source: Document) -> '_core.Plan | Unmeasured':
+    """The engine's plan of the source, or why it refuses to plan it, as a diff of two profiles may hold a source it
+    refuses."""
     try:
-        return _core.Plan(json.dumps(source), digest_of(canonical), 0, 1, 'the source profile').copula_groups()
-    except (UngenerableProfile, ValueError):
-        return []
+        return engine_plan(source, 'the source profile')
+    except UngenerableProfile as refused:
+        issue = refused.issues[0]
+        return Unmeasured(f'the engine cannot plan the source profile: {issue.message} at {issue.field or "/"} [{issue.code}]')
 
 
 def correlation_changes(source: Document, observed: Document) -> Iterator[Measurement]:
     """For each Gaussian copula the source plans, the largest change in a Spearman correlation it states between two of
     the copula's columns, as the pair it names. A pair the other profile states no correlation for is the largest."""
     stated = spearman_values(source)
+    if not stated:
+        return
+    planned = source_plan(source)
+    if isinstance(planned, Unmeasured):
+        yield Measurement(None, planned)
+        return
     found = spearman_values(observed)
-    for group in copula_groups(source):
+    for group in planned.copula_groups():
         changes = []
         for (a, b), value in stated.items():
             if a not in group or b not in group:
@@ -514,12 +519,22 @@ KL_SMOOTHING = 1e-3
 
 
 def conditional_divergences(source: Document, observed: Document) -> Iterator[Measurement]:
-    """For each conditional table the source states, the Kullback-Leibler divergence of the other profile's shares of the
-    child within each given value from the source's, weighted by the given value's share of the source's rows, and summed.
-    The given value adding most is named."""
+    """For each conditional table the engine draws from the source, the Kullback-Leibler divergence of the other
+    profile's shares of the child within each given value from the source's, weighted by the given value's share of the
+    source's rows, and summed. The given value adding most is named."""
+    conditionals = (source.get('dataset') or {}).get('conditionals') or []
+    if not conditionals:
+        return
+    planned = source_plan(source)
+    if isinstance(planned, Unmeasured):
+        yield Measurement(None, planned)
+        return
+    set_aside = set(planned.set_aside())
     theirs = {(entry['given'], entry['column']): entry for entry in (observed.get('dataset') or {}).get('conditionals') or []}
     columns = {column['name']: column for column in source.get('columns') or []}
-    for conditional in (source.get('dataset') or {}).get('conditionals') or []:
+    for at, conditional in enumerate(conditionals):
+        if f'/dataset/conditionals/{at}' in set_aside:
+            continue
         given, child = conditional['given'], conditional['column']
         other = theirs.get((given, child))
         if other is None:
@@ -639,6 +654,7 @@ METRICS = (
         Bound.AT_MOST,
         0.05,
         correlation_changes,
+        pairs=True,
     ),
     Metric(
         'conditional_kl',
@@ -647,6 +663,7 @@ METRICS = (
         Bound.AT_MOST,
         0.05,
         conditional_divergences,
+        pairs=True,
     ),
 )
 METRICS_BY_NAME = {metric.name: metric for metric in METRICS}
