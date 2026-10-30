@@ -9,6 +9,7 @@ from doppeldata import Bundle
 from doppeldata import Profile
 from doppeldata import plan
 from doppeldata import profile
+from doppeldata.privacy_policy.file_check import table_check
 from doppeldata_cli.main import app
 from typer.testing import CliRunner
 
@@ -171,6 +172,7 @@ def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_an
     assert ('tier', 'plan') not in conditionals
     samplers = {column.name: column.sampler for column in plan(written, tmp_path / 'orders.parquet', rows=10).columns}
     assert samplers['tier'].startswith('looked up from plan')
+    assert table_check(profiled, ()).table == profiled['name']
     for (given, child), entry in conditionals.items():
         counted = {(row[given], row[child]): row['len'] for row in frame.group_by(given, child).len().iter_rows(named=True)}
         given_rows = dict(frame.group_by(given).len().iter_rows())

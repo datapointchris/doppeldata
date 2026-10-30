@@ -206,9 +206,9 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
     dataset_seen: set[int] = set()
     for field in dataset_literals(table):
         fields += 1
-        name, index = str(field.path[1]), int(field.path[2])
-        if name in GIVEN_LISTS:
-            keyed = conditional_faults(table, index, policy, name, frozenset(ages))
+        section, index = str(field.path[1]), int(field.path[2])
+        if section in GIVEN_LISTS:
+            keyed = conditional_faults(table, index, policy, section, frozenset(ages))
         else:
             keyed = lookup_faults(table, index, policy)
         for keyed_fault in keyed:
