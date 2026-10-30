@@ -56,6 +56,7 @@ tasks:
       - echo '| Arm | Threads | Work | Per second, range of 5 runs | Output | Load average, before and after |'
       - echo '| --- | --- | --- | --- | --- | --- |'
       - uv run benchmarks/engine_throughput.py
+      - uv run benchmarks/dependent_columns.py
       - uv run benchmarks/numpy_throughput.py
       - uv run benchmarks/name_generators.py
 
