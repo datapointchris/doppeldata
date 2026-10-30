@@ -168,11 +168,12 @@ driver. Both profiles must pass `profile check`, and the Spark one is held to th
 - row and null counts, types, nullability and extremes exactly;
 - each quantile within a rank error of `RANK_ERROR`, measured against the file's own values;
 - each distinct count within `DISTINCT_ERROR`, three of HyperLogLog++'s 1% standard errors;
-- the repeated rows, keys, dependencies and relationships exactly, and each cell of a conditional
-  table both profiles state;
-- any other field that differs is printed. So are the correlations, the correlation ratios and
-  any conditional table one profile states alone, because each engine measures them on its own
-  sample.
+- the repeated rows, keys, dependencies, lookup tables and relationships exactly, and each cell of
+  a conditional table and each conditional rate both profiles state;
+- each quantile given a category within `RANK_ERROR`, measured against that category's rows;
+- any other field that differs is printed. So are the correlations, the correlation ratios, any
+  conditional table, quantiles or rates one profile states alone, and any composite key short of
+  unique one profile nominates alone, because each engine measures them on its own sample.
 
 A dataset or relationship field the published schema gains stops the check until it compares the
 field, so no field the engines might write differently goes unread.
@@ -277,6 +278,11 @@ one query over every column it covers, except the compiled aggregate, which is o
 | cross counts | Cramér's V and conditional cells | every pair's values in one stream, grouped by `(pair, value, value)` |
 | rank moments | η | each sampled numeric column's average rank as for Spearman's ρ, persisted beside the categorical columns, whose values form one stream grouped by `(column, value)`, with each rank's count, mean and `var_pop` |
 | dependency counts | functional dependencies | one `groupBy` on each `lhs`, with every `rhs`'s count and whether its least and greatest values differ |
+| grouped quantiles | a numeric column's quantiles given a category | one `groupBy` on the category, its unlisted values as one group, with `percentile_approx` at `QUANTILE_ACCURACY` |
+| grouped rates | a column's zero and null rates given a category | one `groupBy` on the category, counting each child's rows, nulls and zeros |
+| ordered shares | which dates and timestamps are at or after another | one `agg` per `PAIRS_PER_QUERY` pairs, counting the rows holding both and those in order |
+| lag quantiles | a lag's quantiles, `min` and `max` | one `agg` of `percentile_approx` over each lag, then one pass of `EndValues` for the values at rank `k_min` from each end |
+| expression matches | which expression of two columns gives a third | one `agg` per `PAIRS_PER_QUERY` candidates, counting the rows holding all three columns, those of them not zero on both sides, and those of the latter within tolerance; a division by zero is null, because ANSI mode would raise |
 | foreign key counts | a bundle's relationships | a full join of the parent's distinct keys and the child's rows per key, grouped by `(in parent, child rows)` |
 
 The split follows what Spark compiles:

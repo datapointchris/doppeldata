@@ -74,6 +74,12 @@ raised to the year of `generated.at` less 90, so no birth year names an age over
 treats a birth year as an element of an age. `profile check` reports a date of birth in a file that
 states no `generated.at` as `birth-date-unanchored`, because nothing then bounds its years.
 
+A lag between two dates, such as a discharge's days after its admission, is kept. It is a span,
+and names neither date. Its quantiles and ends are held to `k_min` rows from each end, as a
+column's are. A lag from or to a date of birth is an age at the other date, and an age over 89 is
+what Safe Harbor removes. So it is withheld, and `profile check` reports one as `birth-date-lag`.
+A lag counting from a quasi-identifier is withheld too, as `strict` withholds it.
+
 ## A place below a state is an identifier
 
 Safe Harbor removes every geographic subdivision smaller than a state. No shipped pack types a

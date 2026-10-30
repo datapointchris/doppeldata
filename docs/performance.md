@@ -15,7 +15,8 @@ defect.
 | At least 10M rows/s end to end on 16 threads | 17.3M to 18.8M | met |
 | At least 25M rows/s generating alone on 16 threads | 58.8M to 72.6M | met |
 | At least 5M values/s per core for a semantic string column | 6.25M to 7.06M names on one thread | met |
-| A Gaussian-copula group or a conditional table at most twice the time of sampling its columns independently | no sampler draws either yet | — |
+| A Gaussian-copula group or a conditional table at most twice the time of sampling its columns independently | a 4-column copula 1.73 to 1.86 times, a conditional table 1.11 to 1.35 times, on 16 threads | met |
+| At least 12M rows/s generating alone on 16 threads, with a 4-column copula | 32.1M to 33.1M | met |
 
 ## Every local table comes from one profile at ZSTD level 1, on one shared 16-thread machine
 
@@ -86,6 +87,37 @@ Mimesis draws 31 to 38 times as many as Faker. Each generator makes 200,000 pers
 thread. Faker and Mimesis return Python strings in a list. The engine fills an Arrow string column
 through `sd.generate`, from a one-column profile whose `semantic.generator_hint.provider` is `name`.
 `name_generators.py` builds that profile when it runs.
+
+## A 4-column copula takes 1.6 to 1.9 times as long as drawing its columns alone, and a conditional table at most 1.35
+
+`benchmarks/dependent_columns.py`, which `task bench` runs, adds one column to `eight-columns` and
+times `sd.generate` with and without the dependence. Its copula arm adds a normal `discount` and
+states Spearman values from 0.2 to 0.9 between it, `amount`, `qty` and `score`. Its conditional arm
+adds a three-value `tier`, drawn given each of the 50 categories. It printed:
+
+| Arm | Threads | Work | Per second, range of 5 runs | Output | Load average, before and after |
+| --- | --- | --- | --- | --- | --- |
+| engine, `sd.generate` | 1 | eight columns and `discount`, independently, 10M rows | 6.99M to 8.4M | — | 3.6 to 3.5 |
+| engine, `sd.generate` | 1 | the same, with a 4-column copula, 10M rows | 4.34M to 4.49M | — | 3.5 to 3.2 |
+| engine, `sd.generate` | 1 | eight columns and `tier`, independently, 10M rows | 7.8M to 7.9M | — | 3.2 to 3.1 |
+| engine, `sd.generate` | 1 | the same, with `tier` given `category`, 10M rows | 6.8M to 6.85M | — | 3.1 to 2.9 |
+| engine, `sd.generate` | 16 | eight columns and `discount`, independently, 10M rows | 57.2M to 59.8M | — | 2.9 to 2.9 |
+| engine, `sd.generate` | 16 | the same, with a 4-column copula, 10M rows | 32.1M to 33.1M | — | 2.9 to 2.9 |
+| engine, `sd.generate` | 16 | eight columns and `tier`, independently, 10M rows | 55M to 56.2M | — | 2.9 to 4.1 |
+| engine, `sd.generate` | 16 | the same, with `tier` given `category`, 10M rows | 41.5M to 49.5M | — | 4.1 to 4.1 |
+| engine, `sd.generate` | — | Spearman amount x qty over 1M rows, stated 0.9 | 0.9001 | — | — |
+| engine, `sd.generate` | — | Spearman amount x score over 1M rows, stated 0.6 | 0.6001 | — | — |
+| engine, `sd.generate` | — | Spearman amount x discount over 1M rows, stated 0.4 | 0.4011 | — | — |
+| engine, `sd.generate` | — | Spearman qty x score over 1M rows, stated 0.5 | 0.5010 | — | — |
+| engine, `sd.generate` | — | Spearman qty x discount over 1M rows, stated 0.3 | 0.3010 | — | — |
+| engine, `sd.generate` | — | Spearman score x discount over 1M rows, stated 0.2 | 0.2005 | — | — |
+
+- **Drawing alone takes one uniform per column and row. The copula takes one normal per member**,
+  multiplies the four by the 4×4 Cholesky factor, and takes each result's normal CDF. Each column
+  then reads that level through its own inverse CDF, as it reads its own uniform.
+- **A conditional table draws from the alias table its parent's value picks.** Drawing alone draws
+  from the column's own, so the row adds a lookup of the parent's value.
+- **The runs shared the machine with other work**, at the load averages each row records.
 
 ## Snappy writes no faster than ZSTD level 1, and a partition key of 50 values holds a write to one thread
 
