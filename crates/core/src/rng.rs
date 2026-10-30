@@ -8,7 +8,7 @@ use rand_chacha::ChaCha8Rng;
 
 /// The version of every sampler's draw order. It is part of a dataset's identity, and any change
 /// that alters a generated value for the same inputs raises it.
-pub const STREAM_VERSION: u32 = 9;
+pub const STREAM_VERSION: u32 = 10;
 
 /// The rows one block holds. A block's streams start fresh, so any thread can produce any block.
 pub const BLOCK_ROWS: u64 = 65_536;
@@ -46,6 +46,12 @@ pub(crate) fn rng_for(seed: u64, key: u64, block: u64) -> ChaCha8Rng {
 pub(crate) fn unit(rng: &mut ChaCha8Rng) -> f64 {
     const SCALE: f64 = 1.0 / (1u64 << 53) as f64;
     (rng.next_u64() >> 11) as f64 * SCALE
+}
+
+/// A uniform draw from (0, 1), never either end, from one 64-bit word.
+pub(crate) fn open_unit(rng: &mut ChaCha8Rng) -> f64 {
+    const SCALE: f64 = 1.0 / (1u64 << 53) as f64;
+    ((rng.next_u64() >> 11) as f64 + 0.5) * SCALE
 }
 
 /// A draw from `0..n` as one 32-bit word, by multiply and shift. Its bias is below n / 2^32.

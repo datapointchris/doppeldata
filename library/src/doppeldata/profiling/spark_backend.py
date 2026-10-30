@@ -44,12 +44,15 @@ from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import SourceRead
+from doppeldata.profiling.expression_rule import ExpressionCandidate
+from doppeldata.profiling.expression_rule import counted_rows
 from doppeldata.profiling.sources import is_spark_frame
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
 from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT
 from doppeldata.profiling.statistic_catalog import DIGITS_TEXT
 from doppeldata.profiling.statistic_catalog import INTEGER_TEXT
+from doppeldata.profiling.statistic_catalog import NUMERIC
 from doppeldata.profiling.statistic_catalog import PADDED_DIGITS_TEXT
 from doppeldata.profiling.statistic_catalog import RAW_TYPE_FOLDS
 from doppeldata.profiling.statistic_catalog import RAW_TYPE_LAYOUTS
@@ -68,6 +71,7 @@ from doppeldata.spark_polars_arrow_types import spark_arrow_type
 DISTINCT_RSD = 0.01
 # Greenwald-Khanna's accuracy, whose reciprocal is the largest rank error a quantile may carry.
 QUANTILE_ACCURACY = 10_000
+MICROS_PER_DAY = 86_400_000_000
 # The columns one compiled aggregate covers. Too many make its generated code pass the JVM's 64 KB method limit, and Spark
 # then runs the query interpreted. docs/profiling-with-spark.md gives the split that was measured.
 COLUMNS_PER_QUERY = 16
@@ -150,6 +154,32 @@ def count_where(condition: Column) -> Column:
     return sf.count(sf.when(condition, 1))
 
 
+class SparkOps:
+    """The operations `expression_rule.counted_rows` counts with, over Spark columns."""
+
+    def arithmetic(self, operator: str, left: Column, right: Column) -> Column:
+        return {'+': left + right, '-': left - right, '*': left * right}[operator]
+
+    def quotient(self, left: Column, right: Column) -> Column:
+        """Null where `right` is zero, as every engine holds it. Under ANSI mode the division itself would raise."""
+        return sf.when(right != 0, left / right)
+
+    def held(self, value: Column) -> Column:
+        return value.isNotNull()
+
+    def is_zero(self, value: Column) -> Column:
+        return value == 0
+
+    def within(self, value: Column, tolerance: float) -> Column:
+        return sf.coalesce(sf.abs(value) <= tolerance, sf.lit(False))
+
+    def both(self, first: Column, second: Column) -> Column:
+        return first & second
+
+    def negated(self, condition: Column) -> Column:
+        return ~condition
+
+
 @dc.dataclass(frozen=True)
 class Operand:
     """One column as the statistics read it.
@@ -194,6 +224,11 @@ class Operand:
         if self.kind is ColumnKind.INTEGER:
             return int(value)
         return float(value)
+
+
+def epoch_micros(o: Operand) -> Column:
+    """A date or timestamp as microseconds since the epoch."""
+    return o.ordered * MICROS_PER_DAY if o.kind is ColumnKind.DATE else o.ordered
 
 
 def zone_of(spec: ColumnSpec | None) -> dt.tzinfo:
@@ -861,22 +896,29 @@ class SparkBackend:
         return ranks
 
     def rank_correlations(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:
+        """Each pair's ρ from the count, sums, squares and product of its ranks where both are present, taken on the
+        driver. Twice a rank less the middle one is a whole number within ±rows, so below about 200,000 rows every sum
+        is exact in a double, and a constant column's variance is exactly zero rather than a division ANSI mode raises."""
         if not pairs:
             return []
         names = list(dict.fromkeys(name for pair in pairs for name in pair))
+        twice_middle = self.row_count(table) + 1
         ranked = self.persist(table.select(*self.average_ranks(table, names)))
+        centered = ranked.select(*((2 * sf.col(f'r{index}') - twice_middle).alias(f'r{index}') for index in range(len(names))))
         found: list[tuple[float | None, int]] = []
         for start in range(0, len(pairs), PAIRS_PER_QUERY):
-            chunk = pairs[start : start + PAIRS_PER_QUERY]
             measured = []
-            for a, b in chunk:
+            for a, b in pairs[start : start + PAIRS_PER_QUERY]:
                 first, second = sf.col(f'r{names.index(a)}'), sf.col(f'r{names.index(b)}')
-                measured += [sf.corr(first, second), count_where(first.isNotNull() & second.isNotNull())]
-            row = ranked.agg(*measured).collect()[0]
-            found += [
-                (float(value) if value is not None and math.isfinite(value) else None, int(held or 0))
-                for value, held in zip(row[::2], row[1::2], strict=True)
-            ]
+                both = first.isNotNull() & second.isNotNull()
+                x, y = sf.when(both, first), sf.when(both, second)
+                measured += [count_where(both), sf.sum(x), sf.sum(y), sf.sum(x * x), sf.sum(y * y), sf.sum(x * y)]
+            row = [int(value or 0) for value in centered.agg(*measured).collect()[0]]
+            for at in range(0, len(row), 6):
+                held, sx, sy, sxx, syy, sxy = row[at : at + 6]
+                spread_x, spread_y = held * sxx - sx * sx, held * syy - sy * sy
+                value = (held * sxy - sx * sy) / (math.sqrt(spread_x) * math.sqrt(spread_y)) if spread_x and spread_y else None
+                found.append((value, held))
         return found
 
     def cross_counts(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
@@ -936,6 +978,116 @@ class SparkBackend:
         )
         row = [int(value or 0) for value in totals.collect()[0]]
         return [(row[index], row[len(rhs) + index], row[2 * len(rhs) + index]) for index in range(len(rhs))]
+
+    def grouped_quantiles(
+        self, table: DataFrame, requests: list[tuple[str, str, list[str], tuple[float, ...]]]
+    ) -> list[list[tuple[str | None, int, list[float]]]]:
+        """Requests naming one given and keeping the same values share one `groupBy`, `PAIRS_PER_QUERY` at a time."""
+        specs = {spec.name: spec for spec in self.schema(table)}
+        batches: dict[tuple[str, tuple[str, ...]], list[int]] = {}
+        for at, (_, given, listed, _) in enumerate(requests):
+            batches.setdefault((given, tuple(listed)), []).append(at)
+        found: list[list[tuple[str | None, int, list[float]]]] = [[] for _ in requests]
+        for (given, keep), batch in batches.items():
+            text = column(given).cast('string')
+            for start in range(0, len(batch), PAIRS_PER_QUERY):
+                indexes = batch[start : start + PAIRS_PER_QUERY]
+                measured = []
+                for at in indexes:
+                    child, _, _, levels = requests[at]
+                    value = Operand(column(child), specs[child], self.major).value
+                    measured += [
+                        sf.count(value).alias(f'n{at}'),
+                        sf.percentile_approx(value, list(levels), QUANTILE_ACCURACY).alias(f'q{at}'),
+                    ]
+                groups = (
+                    table.where(column(given).isNotNull()).groupBy(sf.when(text.isin(list(keep)), text).alias('g')).agg(*measured).collect()
+                )
+                for at in indexes:
+                    found[at] = [(row['g'], int(row[f'n{at}']), [float(q) for q in row[f'q{at}']]) for row in groups if row[f'n{at}'] > 0]
+        return found
+
+    def grouped_rates(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, int, int, int]]]:
+        specs = {spec.name: spec for spec in self.schema(table)}
+
+        def zeros(name: str) -> Column:
+            return count_where(column(name) == 0) if specs[name].kind in NUMERIC else sf.lit(0)
+
+        by_given: dict[str, list[int]] = {}
+        for at, (given, _) in enumerate(pairs):
+            by_given.setdefault(given, []).append(at)
+        found: list[list[tuple[str | None, int, int, int]]] = [[] for _ in pairs]
+        for given, indexes in by_given.items():
+            counted = (
+                table.groupBy(column(given).cast('string').alias('g'))
+                .agg(
+                    sf.count(sf.lit(1)).alias('n'),
+                    *(count_where(column(pairs[at][1]).isNull()).alias(f'u{at}') for at in indexes),
+                    *(zeros(pairs[at][1]).alias(f'z{at}') for at in indexes),
+                )
+                .collect()
+            )
+            for at in indexes:
+                found[at] = [(row['g'], int(row['n']), int(row[f'u{at}']), int(row[f'z{at}'] or 0)) for row in counted]
+        return found
+
+    def ordered_shares(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[tuple[int, int]]:
+        specs = {spec.name: spec for spec in self.schema(table)}
+        found: list[tuple[int, int]] = []
+        for start in range(0, len(pairs), PAIRS_PER_QUERY):
+            measured = []
+            for first, second in pairs[start : start + PAIRS_PER_QUERY]:
+                earlier, later = (epoch_micros(Operand(column(name), specs[name], self.major)) for name in (first, second))
+                both = earlier.isNotNull() & later.isNotNull()
+                measured += [count_where(both), count_where(both & (later >= earlier))]
+            row = table.agg(*measured).collect()[0]
+            found += [(int(held or 0), int(ordered or 0)) for held, ordered in zip(row[::2], row[1::2], strict=True)]
+        return found
+
+    def lag_quantiles(
+        self, table: DataFrame, pairs: list[tuple[str, str]], levels: tuple[float, ...], k_min: int
+    ) -> list[tuple[int, list[float], float | None, float | None]]:
+        """The quantiles from one `agg`, and the values at rank k_min from each end from one pass of `EndValues`."""
+        if not pairs:
+            return []
+        specs = {spec.name: spec for spec in self.schema(table)}
+        lags = [
+            (
+                epoch_micros(Operand(column(second), specs[second], self.major))
+                - epoch_micros(Operand(column(first), specs[first], self.major))
+            )
+            for first, second in pairs
+        ]
+        measured = [aggregate for lag in lags for aggregate in (sf.count(lag), sf.percentile_approx(lag, list(levels), QUANTILE_ACCURACY))]
+        row = table.agg(*measured).collect()[0]
+        keys = [lag.alias(f'{HIDDEN_COLUMN_PREFIX}_end_{index}') for index, lag in enumerate(lag for lag in lags for _ in range(2))]
+        ends = tuple((k_min, low) for _ in lags for low in (True, False))
+        nearest: dict[int, list[int]] = {}
+        for end in table.select(*keys).mapInArrow(EndValues(ends), END_VALUES_SCHEMA).collect():
+            nearest.setdefault(end['request'], []).append(int(end['value']))
+        found = []
+        for index in range(len(pairs)):
+            held, at = int(row[2 * index] or 0), row[2 * index + 1]
+            quantiles = [float(value) for value in at] if held and at is not None else []
+            low, high = sorted(nearest.get(2 * index, [])), sorted(nearest.get(2 * index + 1, []))
+            ends_held = held >= k_min and len(low) >= k_min and len(high) >= k_min
+            found.append((held, quantiles, float(low[k_min - 1]) if ends_held else None, float(high[-k_min]) if ends_held else None))
+        return found
+
+    def expression_matches(self, table: DataFrame, candidates: list[ExpressionCandidate]) -> list[tuple[int, int, int]]:
+        specs = {spec.name: spec for spec in self.schema(table)}
+
+        def value(name: str) -> Column:
+            return Operand(column(name), specs[name], self.major).value.cast('double')
+
+        found: list[tuple[int, int, int]] = []
+        for start in range(0, len(candidates), PAIRS_PER_QUERY):
+            measured = []
+            for candidate in candidates[start : start + PAIRS_PER_QUERY]:
+                measured += [count_where(rows) for rows in counted_rows(candidate, value, SparkOps())]
+            row = table.agg(*measured).collect()[0]
+            found += [(int(row[at] or 0), int(row[at + 1] or 0), int(row[at + 2] or 0)) for at in range(0, len(row), 3)]
+        return found
 
     def foreign_key_counts(self, child: DataFrame, child_column: str, parent: DataFrame, parent_column: str) -> list[tuple[bool, int, int]]:
         def key(table: DataFrame, name: str) -> Column:

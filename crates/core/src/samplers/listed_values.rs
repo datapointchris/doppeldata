@@ -12,6 +12,8 @@ pub(crate) struct ListedValues<T> {
     values: Vec<T>,
     /// One entry per value, then one for `other` where its rate is above zero.
     choice: WeightedAliasIndex<f64>,
+    /// Each value's share of the draws.
+    shares: Vec<f64>,
     other_share: f64,
 }
 
@@ -24,12 +26,19 @@ impl<T> ListedValues<T> {
             weights.push(other_rate);
         }
         let total: f64 = weights.iter().sum();
+        let shares = listed.iter().map(|&(_, rate)| rate / total).collect();
         let choice = WeightedAliasIndex::new(weights).map_err(|error| format!("top_values rates are unusable: {error}"))?;
         Ok(Self {
             values: listed.into_iter().map(|(value, _)| value).collect(),
             choice,
+            shares,
             other_share: other_rate / total,
         })
+    }
+
+    /// Each value beside its share of the draws.
+    pub(crate) fn shared(&self) -> impl Iterator<Item = (&T, f64)> {
+        self.values.iter().zip(self.shares.iter().copied())
     }
 
     /// The next row's listed value, or `None` where the row falls in the `other` share.

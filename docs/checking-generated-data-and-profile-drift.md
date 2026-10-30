@@ -134,6 +134,49 @@ Every kind of column is measured. A float column whose source holds cents, gener
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.
 
+## `correlation_max_abs_diff` and `conditional_kl` measure the dependence the generator draws
+
+Both read the pairs PROFILE states. The check's profile freezes those pairs, so it states each
+one again however weak it measures. Each metric writes one row per copula group or conditional
+table, naming its columns in `column` and `paired_with`.
+
+- **`correlation_max_abs_diff` is the largest change in a Spearman correlation within one Gaussian
+  copula.** The library plans PROFILE through the engine, which names each group, so the metric
+  measures exactly the pairs the generator draws together. A Spearman pair outside every group,
+  such as one holding a derived column or a timestamp, is not measured. The row names the pair
+  that moved most, with `expected` and `observed` its two values.
+- **`conditional_kl` is the Kullback-Leibler divergence of each given value's shares from
+  PROFILE's, weighted by the given value's share of PROFILE's rows, and summed.** The child values
+  a row does not list count as one more value. The other profile's shares are smoothed by
+  `KL_SMOOTHING`, so a value it holds no row of costs a bounded amount. `worst_given_value` names
+  the given value adding most.
+
+300,000 rows generated from the committed fixture pass both:
+
+```bash
+profile=crates/core/tests/every-column-kind.profile.yaml
+doppeldata data generate $profile --rows 300000 --out generated/
+doppeldata data check $profile generated/ --json \
+  | jq -c '.metrics[] | select(.metric == "correlation_max_abs_diff" or .metric == "conditional_kl")
+           | {metric, column, paired_with, worst_given_value, value, passed}'
+```
+
+```json
+{"metric":"correlation_max_abs_diff","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.0083,"passed":true}
+{"metric":"conditional_kl","column":"channel","paired_with":"region","worst_given_value":"north","value":0.0010055,"passed":true}
+```
+
+Shuffling `channel` across those rows fails the second, and shuffling `copula_weight` fails the
+first:
+
+```json
+{"metric":"conditional_kl","column":"channel","paired_with":"region","worst_given_value":"north","value":0.0882845,"passed":false}
+{"metric":"correlation_max_abs_diff","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.407373,"passed":false}
+```
+
+*Rejected:* a row per pair for `correlation_max_abs_diff`. A copula holds its pairs through one
+matrix, so one pair drifting moves the group, and the row names which pair moved most.
+
 ## Three metrics measure the files against the source's layout, scaled to the rows checked
 
 A source profile with a `source.layout` gets three metrics, one statistic each. Each value is a
@@ -273,9 +316,10 @@ Three scores sit beside a profile metric of a like name, and compare another thi
 - **The pairs grow quadratically.** n scored columns make n(n − 1)/2 pairs, so a wide table's pairs
   dominate the run.
 - **A score decides nothing until a thresholds file sets its threshold.** A pair score measures a
-  dependence the generator reproduces only where a sampler draws one column from another. No sampler
-  reads a profile's `correlations` or `conditionals`. So a round trip that passes every profile metric
-  still misses the reference on its correlated pairs.
+  dependence the generator reproduces only where the profile states it: a Spearman pair, a
+  conditional table or quantiles, or a derived column. A pair the profile does not state is drawn
+  independently. So a round trip that passes every profile metric can still miss the reference on
+  a pair too weak to state.
 - **A score that decides nothing passes.** Its row carries `decides: false`, and its `threshold` is the
   score's reference. The Markdown's "Meets it" column says whether its value meets it.
 - **Where `--thresholds` sets a score's threshold, for its column or under `defaults`, the row

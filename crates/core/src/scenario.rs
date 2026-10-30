@@ -21,6 +21,7 @@ use crate::format_settings::Output;
 use crate::perturbations::ScenarioFault;
 use crate::perturbations::pointer_token;
 use crate::plan::PlanError;
+pub use crate::profile::Duration;
 use crate::profile::Rate;
 
 /// The scenario format version the engine reads, which names the published schema's file.
@@ -533,56 +534,6 @@ pub struct LagSpread {
 #[serde(rename_all = "snake_case")]
 pub enum SpreadFamily {
     Lognormal,
-}
-
-/// A length of time written as an integer and a unit: `250ms`, `30s`, `15m`, `6h`, `2d` or `1w`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "String")]
-pub struct Duration {
-    pub microseconds: i64,
-}
-
-impl TryFrom<String> for Duration {
-    type Error = String;
-
-    fn try_from(text: String) -> Result<Self, String> {
-        let split = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
-        let (count, unit) = text.split_at(split);
-        let per_unit: i64 = match unit {
-            "ms" => 1_000,
-            "s" => 1_000_000,
-            "m" => 60_000_000,
-            "h" => 3_600_000_000,
-            "d" => 86_400_000_000,
-            "w" => 604_800_000_000,
-            _ => {
-                return Err(format!(
-                    "{text:?} is not a duration such as 30s, 6h or 2d; the units are ms, s, m, h, d and w"
-                ));
-            }
-        };
-        let count: i64 = count
-            .parse()
-            .map_err(|_| format!("{text:?} is not a duration: it needs a whole number before its unit"))?;
-        let microseconds = count.checked_mul(per_unit).filter(|&total| total > 0);
-        microseconds
-            .map(|microseconds| Self { microseconds })
-            .ok_or_else(|| format!("{text:?} is not a duration above zero and under 292,000 years"))
-    }
-}
-
-impl JsonSchema for Duration {
-    fn schema_name() -> Cow<'static, str> {
-        "Duration".into()
-    }
-
-    fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        json_schema!({
-            "description": "A length of time as a whole number above zero and a unit: ms, s, m, h, d or w, such as 2d.",
-            "type": "string",
-            "pattern": "^0*[1-9][0-9]*(ms|s|m|h|d|w)$",
-        })
-    }
 }
 
 /// Nulls written into `column`: MCAR uniformly, MAR more often for higher values of `depends_on`,

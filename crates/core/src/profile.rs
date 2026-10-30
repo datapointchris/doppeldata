@@ -15,10 +15,12 @@ pub use bundle::Fanout;
 pub use bundle::InlineTable;
 pub use bundle::Relationship;
 pub use table::*;
+pub use values::Duration;
 pub use values::FORMAT_VERSION;
 pub use values::ProfileVersion;
 pub use values::Quantiles;
 pub use values::Rate;
+pub use values::SignedDuration;
 
 /// The schema-level metadata keys the generator writes into every Arrow schema it builds, so every
 /// Parquet and Arrow file names its profile and its whole dataset identity. A scenario key is left

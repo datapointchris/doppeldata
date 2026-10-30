@@ -3,8 +3,8 @@
 Profile a dataset once, commit the profile, and generate synthetic data from it whenever a test or a
 benchmark needs some.
 
-A profile is a YAML file holding a dataset's types, distributions, skew, null and error rates, file
-layout and table relationships. It holds no rows. doppeldata is built to read CSV, TSV, JSON,
+A profile is a YAML file holding a dataset's types, distributions, skew, null and error rates, the
+dependence between its columns, file layout and table relationships. It holds no rows. doppeldata is built to read CSV, TSV, JSON,
 Parquet, Arrow and Spark DataFrames, and to write any of them back at any size: in memory, to disk,
 to S3, or inside Spark executors.
 
@@ -112,7 +112,8 @@ A profile is written under a privacy policy, `default` unless `--policy` names a
 it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. A
 column typed as an identifier keeps its format and no value, free text keeps its lengths, and
 `privacy.audit` lists every literal a column keeps with the rule that admits it.
-`privacy.dataset_audit` does the same for each conditional table and dependency. `strict` treats
+`privacy.dataset_audit` does the same for each conditional table, quantile and rate, and each
+dependency's lookup table. `strict` treats
 quasi-identifiers as identifiers. `healthcare` adds HIPAA Safe Harbor and the healthcare detector
 pack: ZIP codes keep three-digit prefixes, ages over 89 share one bin, places below a state keep no
 value, and every date keeps only its years. `none` keeps every value, for data that is already synthetic or public. `profile check` reads a
@@ -143,6 +144,13 @@ bin edges and value lists, so the two compare bin for bin, and the rows outside 
 overflow. Where the files, the run's settings, the doppeldata, scipy and reader versions, the
 detector packs and the code lists match the ones the earlier profile was made with, it is kept as it is, with any edits a
 reviewer made. Otherwise `profile create` says what differs.
+
+Columns that move together are written as Spearman correlations, as a categorical column's shares,
+quantiles, zero and null rates given another, as lookup tables, and as columns derived from others:
+a date a lag after another, or a number one of `+ - * /` of two more gives. `data generate` draws a
+group of correlated numeric columns through one Gaussian copula, and each other dependent column
+from its parent's row. [Generating dependent columns](docs/generating-dependent-columns.md) shows
+each in a profile.
 
 `data check` profiles generated data with its profile's edges frozen, and reads the real data only
 with `--against`. It measures each column against the profile by the metrics `data check --help`

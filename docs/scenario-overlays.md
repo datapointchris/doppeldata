@@ -291,7 +291,10 @@ Each parameter stands for a DMS endpoint setting, as the
   not model that.
 - **An update redraws at least one column other than the key and the profile's `keys.primary`, and
   leaves the rest as they were.** Its new values come from each column's sampler, on the op's own
-  stream. `updates_per_row` sets how many times an updated row changes.
+  stream. Each is drawn from its own marginal, so an updated value keeps no copula or conditional
+  table with the row's other columns. A derived or looked-up column is never drawn. It is
+  recomputed wherever a column it reads changed, and a lag keeps its base row's length.
+  `updates_per_row` sets how many times an updated row changes.
 - **An op that writes rows applies to the full load and the inserts.** An update's new values
   come from the samplers alone, so no other op reaches them.
 - **A change file holds the changes committed in one `file_interval`.** It is named for the

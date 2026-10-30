@@ -25,7 +25,8 @@ if len(THRESHOLDED) != len(METRICS) + len(SCORES):
 
 @dc.dataclass(frozen=True)
 class Thresholds:
-    """`defaults` replaces a metric's threshold for every column, and `columns` replaces it for one column.
+    """`defaults` replaces a metric's threshold for every column, and `columns` replaces it for one column. A metric
+    or score of a pair of columns is set under `defaults` alone.
 
     In YAML: `{defaults: {ks: 0.03}, columns: {paid_amount: {ks: 0.08}}}`.
     """
@@ -88,15 +89,16 @@ class Thresholds:
 
 
 def metric_faults(metrics: Any, at: str, *, for_column: bool) -> list[str]:
-    """Each name in `metrics` no check measures, each value not a number, and, under a column, each score of a pair."""
+    """Each name in `metrics` no check measures, each value not a number, and, under a column, each metric or score of
+    a pair."""
     if not isinstance(metrics, dict):
         return [f'{at} must map each metric name to its threshold']
     faults = []
     for name, value in metrics.items():
         if name not in THRESHOLDED:
             faults.append(f'{at}/{name}: {name!r} is not a metric; choose from {", ".join(THRESHOLDED)}')
-        elif for_column and name in SCORES_BY_NAME and SCORES_BY_NAME[name].pairs:
-            faults.append(f'{at}/{name}: {name} scores a pair of columns; set it under `defaults`')
+        elif for_column and THRESHOLDED[name].pairs:
+            faults.append(f'{at}/{name}: {name} measures a pair of columns; set it under `defaults`')
         elif isinstance(value, bool) or not isinstance(value, int | float):
             faults.append(f'{at}/{name}: {value!r} is not a number')
     return faults

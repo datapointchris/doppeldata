@@ -7,7 +7,9 @@ import polars as pl
 import pytest
 from doppeldata import Bundle
 from doppeldata import Profile
+from doppeldata import plan
 from doppeldata import profile
+from doppeldata.privacy_policy.file_check import table_check
 from doppeldata_cli.main import app
 from typer.testing import CliRunner
 
@@ -130,7 +132,7 @@ def test_no_histogram_bin_less_the_listed_values_in_it_leaves_a_cell_under_k_min
     assert not 0 < round(numeric['zero_rate'] * len(values)) < 11
 
 
-def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_and_a_gapped_id_as_a_sequence():
+def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_and_a_gapped_id_as_a_sequence(tmp_path):
     draw, rows = random.Random(3), 4000
     amounts = [round(draw.lognormvariate(3, 1), 2) for _ in range(rows)]
     regions = [('north', 'south', 'east')[i % 3] for i in range(rows)]
@@ -154,16 +156,23 @@ def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_an
             'channel': channels,
         }
     )
-    profiled = profile(frame).to_plain()
+    written = profile(frame)
+    profiled = written.to_plain()
     dataset = profiled['dataset']
 
     assert dataset['keys']['primary']['columns'] == ['order_id']
     pairs = {(entry['a'], entry['b']): entry for entry in dataset['correlations']}
     assert pairs['amount', 'fee']['method'] == 'spearman'
     assert pairs['amount', 'fee']['value'] > 0.9
-    assert {'kind': 'functional', 'lhs': ['plan'], 'rhs': 'tier', 'violation_rate': 0.0} in dataset['dependencies']
+    looked_up = {f'p{i:02d}': ('bronze', 'silver', 'gold', 'platinum')[i // 10] for i in range(40)}
+    assert {'kind': 'functional', 'lhs': ['plan'], 'rhs': 'tier', 'violation_rate': 0.0, 'table': looked_up} in dataset['dependencies']
     conditionals = {(entry['given'], entry['column']): entry for entry in dataset['conditionals']}
-    assert {('tier', 'plan'), ('region', 'channel')} <= conditionals.keys()
+    # The lookup draws tier from plan, so a table of plan given tier would close a cycle, and is left out.
+    assert ('region', 'channel') in conditionals
+    assert ('tier', 'plan') not in conditionals
+    samplers = {column.name: column.sampler for column in plan(written, tmp_path / 'orders.parquet', rows=10).columns}
+    assert samplers['tier'].startswith('looked up from plan')
+    assert table_check(profiled, ()).table == profiled['name']
     for (given, child), entry in conditionals.items():
         counted = {(row[given], row[child]): row['len'] for row in frame.group_by(given, child).len().iter_rows(named=True)}
         given_rows = dict(frame.group_by(given).len().iter_rows())

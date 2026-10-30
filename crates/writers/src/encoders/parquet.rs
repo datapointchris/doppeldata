@@ -110,13 +110,18 @@ impl ParquetEncoder {
             TimestampUnit::Us => TimeUnit::Microsecond,
             TimestampUnit::Ns => TimeUnit::Nanosecond,
         });
-        let mut target_schema = match cast_to {
+        let target_schema = match cast_to {
             Some(unit) => Arc::new(retyped(schema, |data_type| match data_type {
                 DataType::Timestamp(_, zone) => Some(DataType::Timestamp(unit, zone.clone())),
                 _ => None,
             })),
             None => schema.clone(),
         };
+        // Parquet has no seconds unit, so a seconds column would land as a bare INT64, a bigint to Spark.
+        let mut target_schema = Arc::new(retyped(&target_schema, |data_type| match data_type {
+            DataType::Timestamp(TimeUnit::Second, zone) => Some(DataType::Timestamp(TimeUnit::Millisecond, zone.clone())),
+            _ => None,
+        }));
         let mut fault = None;
         let mut int96 = None;
         match file_fault.map(|fault| fault.kind) {

@@ -125,7 +125,8 @@ pub struct ParquetSettings {
     pub statistics: ParquetStatistics,
     /// The columns written with a dictionary. Null gives every column one.
     pub dictionary_columns: Option<Vec<String>>,
-    /// The unit every timestamp column is cast to. Null keeps each column's own. parquet's Arrow
+    /// The unit every timestamp column is cast to. Null keeps each column's own. Parquet holds no
+    /// seconds unit, so a column at `s` is stored at `ms`, as pyarrow stores it. parquet's Arrow
     /// writer cannot write INT96, so no unit reproduces it.
     pub timestamp_unit: Option<TimestampUnit>,
 }

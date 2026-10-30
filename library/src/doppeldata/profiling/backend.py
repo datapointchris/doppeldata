@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 from typing import Protocol
 
+from doppeldata.profiling.expression_rule import ExpressionCandidate
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
 from doppeldata.published_schemas import published_enum
@@ -307,6 +308,37 @@ class Backend(Protocol):
     def dependency_counts(self, table: Table, lhs: str, rhs: list[str], k_min: int) -> list[tuple[int, int, int]]:
         """For each column of `rhs`, the rows holding it and `lhs`, those of them whose `lhs` value at least k_min such
         rows hold, and those of these whose `lhs` value holds more than one `rhs` value."""
+        ...
+
+    def grouped_quantiles(
+        self, table: Table, requests: list[tuple[str, str, list[str], tuple[float, ...]]]
+    ) -> list[list[tuple[str | None, int, list[float]]]]:
+        """For each `(child, given, keep, levels)`, the numeric `child` within each value of `given` that `keep` lists,
+        written as text, and within every other value not null as one group keyed None: each group's rows holding a
+        child value, and the child's quantile at each of `levels` over them, taken as `aggregate` takes a column's
+        quantiles. A group holding no child value is left out."""
+        ...
+
+    def grouped_rates(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, int, int, int]]]:
+        """For each `(given, child)` pair, each value of `given` written as text, a null as None, with its rows, those
+        whose child is null, and those whose child is zero. A child that is not numeric holds no zero."""
+        ...
+
+    def ordered_shares(self, table: Table, pairs: list[tuple[str, str]]) -> list[tuple[int, int]]:
+        """For each pair of dates or timestamps, the rows holding both, and those whose second is at or after its first."""
+        ...
+
+    def lag_quantiles(
+        self, table: Table, pairs: list[tuple[str, str]], levels: tuple[float, ...], k_min: int
+    ) -> list[tuple[int, list[float], float | None, float | None]]:
+        """For each pair of dates or timestamps, the rows holding both, and of the second less the first, in
+        microseconds, its quantile at each of `levels` and its value at rank k_min from each end, None where fewer
+        rows hold both."""
+        ...
+
+    def expression_matches(self, table: Table, candidates: list[ExpressionCandidate]) -> list[tuple[int, int, int]]:
+        """For each candidate, the rows `expression_rule.counted_rows` selects: those holding its three columns, the
+        informative ones among them, and those of the latter where the target is its result."""
         ...
 
     def foreign_key_counts(self, child: Table, child_column: str, parent: Table, parent_column: str) -> list[tuple[bool, int, int]]:

@@ -12,12 +12,13 @@ DIFF_VERSION = 1
 BOUND_SIGNS = {Bound.AT_MOST: '≤', Bound.AT_LEAST: '≥'}
 
 
-OPTIONAL_METRIC_FIELDS = ('expected', 'observed', 'unmeasured', 'skipped_by', 'paired_with')
+OPTIONAL_METRIC_FIELDS = ('expected', 'observed', 'unmeasured', 'skipped_by', 'paired_with', 'worst_given_value')
 
 
 @dc.dataclass(frozen=True)
 class MetricResult:
-    """One metric's value for one column, or a pair where `paired_with` names the second, with its verdict.
+    """One metric's value for one column, or a pair where `paired_with` names the second, with its verdict. A metric of
+    a column given another names the value of `paired_with` it is worst within in `worst_given_value`.
 
     `value` is None where `unmeasured` says why it has none, or where `skipped_by` names the scenario's perturbation that
     moves what it compares. A row whose `decides` is False is one the report's verdict leaves out, such as a score against
@@ -35,6 +36,7 @@ class MetricResult:
     unmeasured: str | None = None
     skipped_by: str | None = None
     paired_with: str | None = None
+    worst_given_value: str | None = None
     decides: bool = True
 
     def to_plain(self) -> dict[str, Any]:
@@ -46,7 +48,9 @@ class MetricResult:
         return self.value is not None and self.bound.holds(self.value, self.threshold)
 
     def where(self) -> str:
-        """` on amount`, ` on fare and total`, or nothing for the table."""
+        """` on amount`, ` on fare and total`, ` on channel given region = north`, or nothing for the table."""
+        if self.worst_given_value is not None:
+            return f' on {self.column} given {self.paired_with} = {self.worst_given_value}'
         if self.paired_with is not None:
             return f' on {self.column} and {self.paired_with}'
         return f' on {self.column}' if self.column else ''

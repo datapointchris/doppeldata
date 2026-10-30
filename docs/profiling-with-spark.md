@@ -168,11 +168,12 @@ driver. Both profiles must pass `profile check`, and the Spark one is held to th
 - row and null counts, types, nullability and extremes exactly;
 - each quantile within a rank error of `RANK_ERROR`, measured against the file's own values;
 - each distinct count within `DISTINCT_ERROR`, three of HyperLogLog++'s 1% standard errors;
-- the repeated rows, keys, dependencies and relationships exactly, and each cell of a conditional
-  table both profiles state;
-- any other field that differs is printed. So are the correlations, the correlation ratios and
-  any conditional table one profile states alone, because each engine measures them on its own
-  sample.
+- the repeated rows, keys, dependencies, lookup tables and relationships exactly, and each cell of
+  a conditional table and each conditional rate both profiles state;
+- each quantile given a category within `RANK_ERROR`, measured against that category's rows;
+- any other field that differs is printed. So are the correlations, the correlation ratios, any
+  conditional table, quantiles or rates one profile states alone, and any composite key short of
+  unique one profile nominates alone, because each engine measures them on its own sample.
 
 A dataset or relationship field the published schema gains stops the check until it compares the
 field, so no field the engines might write differently goes unread.
@@ -196,17 +197,14 @@ TABLES=1 spark-parity/check-profiler-parity.sh \
 ```
 
 It ran on CMS DE-SynPUF sample 1 under `--policy healthcare`, in `apache/spark:3.5.9-python3`,
-`apache/spark:4.1.3-python3` and `public.ecr.aws/glue/aws-glue-libs:5`. The beneficiary summary
-also ran in `apache/spark:4.2.0-python3`:
+`apache/spark:4.1.3-python3` and `public.ecr.aws/glue/aws-glue-libs:5`:
 
 | File | Rows | Columns | Worst quantile rank error | Worst distinct count error | `profile check` |
 | --- | --- | --- | --- | --- | --- |
-| 2008 beneficiary summary | 116,352 | 32 | 0.0001, `MEDREIMB_OP` p99.9 | 1.0%, `BENRES_CAR` 403 against 399 | 123 literal fields, 0 violations |
-| 2008–2010 carrier claims 1A | 2,370,667 | 142 | 0.00005, `CLM_ID` p99.9 | 1.3%, `LINE_ICD9_DGNS_CD_7` 2,565 against 2,599 | 437 literal fields, 0 violations |
+| 2008–2010 carrier claims 1A | 2,370,667 | 142 | 0.00005, `CLM_ID` p99.9 | 1.3%, `LINE_ICD9_DGNS_CD_7` 2,565 against 2,599 | 445 literal fields, 0 violations |
 
-- **Every image wrote the same profile.** Outside `generated` and `source`, all 3,401 fields of
-  the beneficiary profile and all 10,945 of the claims profile match across them. Spark 4 reads
-  through `try_cast`, and Spark 3.5 with ANSI off.
+- **Every image wrote the same profile.** Outside `generated` and `source`, every field matches
+  across them. Spark 4 reads through `try_cast`, and Spark 3.5 with ANSI off.
 - **Every exact field matches Polars'.** That covers each value list, other rate and decimal scale.
   The fields that differ are the estimates: distinct counts, tail quantiles, and the histogram edges
   and counts set by those quantiles. The fits differ too, because each engine fits its own sample.
@@ -273,10 +271,15 @@ one query over every column it covers, except the compiled aggregate, which is o
 | split steps | `step_min` and `step_max` | `mapInArrow` over each file split in read order, stitched in the listing's order |
 | distinct days | `distinct_days` | `collect_set` of the days between the trimmed extremes |
 | tuple counts | `distinct_rows` and `unique_rows`, for repeated rows and keys | one `xxhash64` per tuple over each value and whether it is null, every tuple in one stream grouped by `(tuple, hash)` |
-| rank correlations | Spearman's ρ | each sampled column's average rank from `rank` and `cume_dist` over one window, persisted, then `corr` over up to `PAIRS_PER_QUERY` pairs a query |
+| rank correlations | Spearman's ρ | each sampled column's average rank from `rank` and `cume_dist` over one window, persisted, then each pair's count, sums, squares and product where both ranks are present, over up to `PAIRS_PER_QUERY` pairs a query, with ρ taken from them on the driver |
 | cross counts | Cramér's V and conditional cells | every pair's values in one stream, grouped by `(pair, value, value)` |
 | rank moments | η | each sampled numeric column's average rank as for Spearman's ρ, persisted beside the categorical columns, whose values form one stream grouped by `(column, value)`, with each rank's count, mean and `var_pop` |
 | dependency counts | functional dependencies | one `groupBy` on each `lhs`, with every `rhs`'s count and whether its least and greatest values differ |
+| grouped quantiles | a numeric column's quantiles given a category | one `groupBy` on the category, its unlisted values as one group, with `percentile_approx` at `QUANTILE_ACCURACY` |
+| grouped rates | a column's zero and null rates given a category | one `groupBy` on the category, counting each child's rows, nulls and zeros |
+| ordered shares | which dates and timestamps are at or after another | one `agg` per `PAIRS_PER_QUERY` pairs, counting the rows holding both and those in order |
+| lag quantiles | a lag's quantiles, `min` and `max` | one `agg` of `percentile_approx` over each lag, then one pass of `EndValues` for the values at rank `k_min` from each end |
+| expression matches | which expression of two columns gives a third | one `agg` per `PAIRS_PER_QUERY` candidates, counting the rows holding all three columns, those of them not zero on both sides, and those of the latter within tolerance; a division by zero is null, because ANSI mode would raise |
 | foreign key counts | a bundle's relationships | a full join of the parent's distinct keys and the child's rows per key, grouped by `(in parent, child rows)` |
 
 The split follows what Spark compiles:
@@ -302,6 +305,10 @@ The split follows what Spark compiles:
 
 *Rejected:* unioned `orderBy().limit()` queries for the trimmed extremes. Each branch is a full scan
 with its own shuffle, so a table of 32 columns ran 128 of them.
+
+*Rejected:* `corr` for Spearman's ρ. It divides by a constant column's zero variance, which raises
+under Spark 4's ANSI mode. `try_divide` over `covar_pop` and two masked `var_pop` passed the 64 KB
+limit at 128 pairs a query, where the sums compile up to 160 on Spark 3.5.
 
 *Rejected:* datasketches' KLL and frequent-items sketches. `percentile_approx` gives every quantile
 and bin edge within a rank error of 1/10,000. KLL at its default `k` of 200 carries about 1.3%,

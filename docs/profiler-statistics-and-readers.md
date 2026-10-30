@@ -187,6 +187,11 @@ parameters write two profiles, and those generate different tails.
   `new_value_rows` 500 of 2,000 rows, and `profile diff` reports it.
 - **Two profiles of one table then compare bin for bin**, which the round-trip check and drift
   detection read. Rebinning stays explicit, by profiling again without `edges_from`.
+- **Every pair the earlier profile states is stated again, however weak, where `k_min` allows.**
+  That covers its correlations, correlation ratios, conditional tables, conditional quantiles and
+  rates. So `data
+  check` compares each pair the source states, even where the generated data lost it. A pair the
+  earlier profile does not state still needs its usual strength.
 
 The generator places each edge at its share of every row, the overflow included, so a frozen
 profile generates the body it describes. Reading `overflow` raised the stream version to 3.
@@ -548,12 +553,17 @@ The phone row drops its 878 invoices too. Its card and invoice rows would leave 
 unstated, which `channel`'s listed count less the row would name. The store row's 14 unstated rows
 reach `k_min`, so it keeps both cells.
 
-`profiling/table_keys.py`, `profiling/column_dependence.py` and `profiling/foreign_keys.py` compute
-them through the `Backend` protocol, so Polars and Spark write the same fields. Each threshold below
-is a constant in its module, not an option. `data generate` reads one of them, `keys.primary`, which
-a scenario's `duplicates` op leaves unvaried in a near-duplicate. Repeated rows and keys are
-counted over the whole table, even under `--sample`. Conditional tables and dependencies are
-counted over the rows profiled, which `--sample` makes its sample.
+`profiling/table_keys.py`, `profiling/column_dependence.py`, `profiling/derived_columns.py` and
+`profiling/foreign_keys.py` compute them through the `Backend` protocol, so Polars and Spark write
+the same fields. Each threshold below is a constant in its module, not an option. `data generate`
+reads `keys.primary`, which a scenario's `duplicates` op leaves unvaried in a near-duplicate. It
+also draws every Spearman correlation, conditional table, conditional quantile and rate, lookup
+table and `derived` entry, as [generating-dependent-columns.md](generating-dependent-columns.md)
+shows. Repeated rows and keys are counted over the whole table, even under `--sample`. Conditional
+tables, quantiles, rates, dependencies and derived columns are counted over the rows profiled,
+which `--sample` makes its sample.
+
+[performance.md](performance.md) gives what these passes take of a Polars profile.
 
 - **`duplicate_row_rate` is the rows less the distinct rows, as a share of the rows.** A null
   equals a null. Polars counts the distinct rows by a 64-bit hash of each
@@ -569,7 +579,8 @@ counted over the rows profiled, which `--sample` makes its sample.
 - **A pair of columns is tried as a key only where no column is one.** Up to `COMPOSITE_PAIRS`
   pairs of integer, string, date and timestamp columns are tried, the most distinct first, among
   those whose distinct counts multiply to the rows or more. A pair is nominated where the fits'
-  seeded sample repeats none of its values, then confirmed over the whole table.
+  seeded sample repeats none of its values, then confirmed over the whole table. A pair names its
+  columns in table order, so Spark's estimated counts never reorder it.
 - **A correlation is measured on the seeded sample of `FIT_SAMPLE_ROWS` rows the fits read.** A
   correlation names no value, so a sample costs the floor nothing. The measure follows the
   columns' roles:
@@ -577,11 +588,14 @@ counted over the rows profiled, which `--sample` makes its sample.
   | Columns | Written as | Measure |
   | --- | --- | --- |
   | both numeric or temporal | `correlations`, `method: spearman` | Pearson's r over each column's average ranks |
+  | one ranked, one a categorical integer | `correlations`, `method: spearman` | the same |
   | both categorical | `correlations`, `method: cramers_v` | Cramér's V with Bergsma's bias correction |
   | one numeric, one categorical | `correlation_ratios` | η of the numeric column's average ranks: the root of the share of their variance between the categorical column's values, corrected as Kelley's ε² corrects η² |
 
   A boolean is categorical, and so is a string or integer column holding at most
-  `CATEGORICAL_VALUES` distinct values. Other numeric and temporal columns are ranked. A constant
+  `CATEGORICAL_VALUES` distinct values. Other numeric and temporal columns are ranked. A categorical
+  integer, such as an item count, is ranked against a ranked column too, so a copula can hold it.
+  Its correlation ratio beside that column is still written. A constant
   and a `sequence` take no part. Each column is ranked over its own values, then a pair is
   correlated over the rows holding both. A pair whose magnitude reaches `CORRELATION_FLOOR` is
   kept, the strongest `CORRELATIONS_KEPT` of both lists. `a` and `b` follow the columns' order, so
@@ -622,15 +636,63 @@ counted over the rows profiled, which `--sample` makes its sample.
   - a row, `other` included, whose given rows outside its kept cells number 1 to `k_min − 1`
     drops its least kept cell, until none does.
 
-  So no listed count less the cells stated beside it names a dropped cell's rows.
+  So no listed count less the cells stated beside it names a dropped cell's rows. The generator
+  draws a column from one table, so a child keeps one: the pair `--edges-from` freezes, else the
+  pair whose V is highest. No table is written for a column a lookup or a `derived` entry draws,
+  because the generator would never read it.
+- **A numeric column's quantiles are written within each value of a categorical column where η²
+  reaches `SHARE_EXPLAINED`.** η² is the bias-corrected one the correlation ratio's row gives, on
+  the sample. The categorical column holds `GIVEN_QUANTILE_VALUES` values at most, and lists them.
+  Each group's quantiles are counted over every row, at the levels the column itself states, each
+  `k_min` rows clear of the group's ends. A group with no quantile left joins `other`. A child
+  keeps one parent, as it keeps one table: the frozen pair, else the highest η². Unless frozen, no
+  parent is kept from the child's copula group, the columns its kept Spearman pairs join. Nor is
+  one whose η² falls short of the child's largest squared Spearman with a partner, because the
+  copula then holds more of the child's ranks than the curve would. They are written
+  as `conditional_quantiles`. Of a million checkouts whose payment depends on the channel, cut here
+  to three levels:
+
+  ```yaml
+    conditional_quantiles:
+      - given: channel
+        column: paid_amount
+        quantiles:
+          web: {p05: 1.2230127805426625, p50: 29.15621791942477, p95: 253.1321842403189}
+          store: {p05: 0.0, p50: 5.022225280981942, p95: 230.04449263651617}
+          phone: {p05: 0.0, p50: 12.807252362141831, p95: 241.45019207767126}
+  ```
+
+  A group's quantiles count its zeros. So the store row's `p05` of 0 says at least a twentieth of
+  its rows paid nothing.
+- **A column's zero and null rates are written within each value of a categorical column where they
+  differ by it.** The test is Cohen's w over the given values' table of rows holding the rate
+  against the rest, with its chance share taken off as Bergsma's correction takes Cramér's V's. A
+  pair is counted over every row where its sampled w reaches `RATE_TRIED`, and a rate is written
+  where w over every row reaches `RATE_DEPENDENCE`, Cohen's small effect. Each rate of a child
+  keeps one parent: the frozen pair, then for a zero rate the parent its quantiles are given, then
+  the highest w. A curve's zeros are then its own group's. Unless frozen, no zero rate is given a
+  column of the child's copula group, which draws the child's zeros itself. The same checkouts
+  write:
+
+  ```yaml
+    conditional_rates:
+      - given: channel
+        column: paid_amount
+        null_rate: {web: 0.009989, store: 0.009795, phone: 0.1489}
+        zero_rate: {web: 0.02019, store: 0.1984, phone: 0.09952}
+  ```
+
 - **A functional dependency `lhs → rhs` is recorded where at most `DEPENDENCY_VIOLATION` of the
   rows break it.** A row breaks it where its `lhs` value holds more than one `rhs` value. Only
   `lhs` values `k_min` rows hold are counted, and they must cover `DEPENDENCY_SUPPORT` of the rows
   holding both columns. An `lhs` is an integer, string, boolean, date or decimal column holding at
   least two values and fewer than `KEY_SHARE` of the rows. An `rhs` holds 2 to `DEPENDENT_VALUES`
-  values, fewer than its `lhs`, and is not a timestamp. A ZIP column against a column named for a
-  place in `PLACE_HINTS` is tried first, then the `lhs` holding fewest values, `DEPENDENCY_TESTS`
-  pairs at most. One ZIP code holding two states counts all its rows as breaking it.
+  values, fewer than its `lhs`, and is not a timestamp. Two columns holding as many values as each
+  other are tried with the earlier as `lhs`. A ZIP column against a column named for a place in
+  `PLACE_HINTS` is tried first, then the `lhs` holding fewest values, `DEPENDENCY_TESTS` pairs at
+  most. One ZIP code holding two states counts all its rows as breaking it.
+- **A one-column dependency writes its `table`: each `lhs` value `k_min` rows hold, beside the
+  `rhs` value most of its rows hold.** The generator looks `rhs` up there.
 - **A child column is a foreign key where its name refers to another table's single-column key, and
   the key holds `CONTAINMENT_FLOOR` of the column's distinct values.** The names refer where they
   are equal ignoring case and separators, other than a bare `id`. They also refer where the column
@@ -660,6 +722,62 @@ keeps two runs' profiles comparable.
 
 *Rejected:* counting the distinct rows as structs. Polars hashes each row first, because counting
 the structs of the taxi trips' rows took over three times as long.
+
+## A date or number computed from other columns is found on the sample and confirmed over every row
+
+Both kinds are written as the column's `derived` entry. `profiling/derived_columns.py` screens
+each candidate on the fits' seeded sample, then counts the survivors over every row. A sequence
+and a constant take no part.
+
+- **A date or timestamp is a lag after another of its kind where it is at or after it on `ORDERED`
+  of the rows.** At least `PAIR_ROWS` rows, or `k_min` where that is more, must hold both. The
+  base's variance and the lag's must sum to the column's within `SPREAD_KEPT` of it, so the lag
+  is independent of the base. A lag that grew with its base would fail that.
+- **Of several bases, the one whose median lag is smallest is kept.** Where each of two columns
+  is at or after the other, the later in column order is derived. No base is derived from its own
+  column, by way of others or directly.
+- **The lag is written at the levels `QUANTILES` names, each `k_min` rows clear of the ends.**
+  A date's lag is in whole days and a timestamp's in whole seconds, as `2d` or `-45s`. `min` and
+  `max` are the lags at rank `k_min` from each end, written where `2·k_min − 1` rows hold one.
+  The million checkouts above ship 0 to 14 days after the order, and `ship_date` writes:
+
+  ```yaml
+  derived:
+    kind: timedelta
+    base: order_date
+    lag:
+      quantiles: {p001: 0d, p01: 0d, p05: 0d, p25: 1d, p50: 2d, p75: 6d, p95: 9d, p99: 10d, p999: 14d}
+      min: 0d
+      max: 14d
+  ```
+
+- **A number is an expression where one of `+ − × ÷` of two numeric columns gives it on `HOLDS`
+  of the rows.** Both operands sit among the `OPERAND_WINDOW` numeric columns before it in column
+  order, as a total follows its quantity and price. Each order of a non-commuting operation is
+  tried. A row holds where the result lies within half a unit of the column's last decimal place.
+  A float column with no `scale` is never tried, because no tolerance follows from it. A row where
+  the column is zero and the result lies within that tolerance of zero is left out, because an
+  operation over a zero operand holds there whatever its operator. Counted with them, the claims'
+  `LINE_NCH_PMT_AMT_7 / CLM_THRU_DT` gives `LINE_NCH_PMT_AMT_8` on most rows, because both amounts
+  are mostly 0.
+- **An expression is screened on the first `SCREEN_ROWS` rows of the sample, then on all of it.**
+  At most `EXPRESSIONS_CONFIRMED` survivors are counted over every row. `violation_rate` is the
+  share of the rows holding all three columns that it fails on. A rate names no value, so it is
+  written however few rows fail, as a dependency's is. One checkout in a hundred holds a total that
+  is not its price times its quantity, and `total` writes:
+
+  ```yaml
+  derived:
+    kind: expression
+    expr: unit_price * quantity
+    violation_rate: 0.01019
+  ```
+
+  The generator rounds an expression to the column's `numeric.scale`, so none writes `round`.
+
+*Rejected:* searching expressions of three or more columns, or operands anywhere in the table.
+The candidates grow as the cube of the columns tried. An expression whose operands sit further
+apart is written into the profile by hand.
 
 ## A JSON source is profiled path by path
 
@@ -692,6 +810,11 @@ A float column's NaN and infinities count as nulls, because canonical JSON write
 integer extreme or quantile beyond ±2^53 is written as the nearest double. A sequence whose start or
 step lies beyond it is not written.
 
+A struct or list column of a Parquet or Arrow file holds no statistic. It is written with its
+`struct.fields` or `list.element`, each named with its Arrow type, read from the column's
+`physical_type`. So it generates in the shape and types it was read at, each field drawn from its
+type alone. A fixed-size list writes neither.
+
 ## No literal rests on fewer than k_min rows
 
 The default `k_min` is `DEFAULT_K_MIN`, from the privacy floor in
@@ -704,7 +827,12 @@ and the policy's pass then removes what each column's rule withholds:
   numeric, temporal and string-length extremes. They are omitted when fewer than `2 · k_min - 1`
   values would let the two cross.
 - **A quantile** closer than `k_min` rows to either end is dropped, because it is an extreme under
-  another name. The samplers then use the trimmed extremes as the inverse CDF's end knots.
+  another name. The samplers then use the trimmed extremes as the inverse CDF's end knots. A lag's
+  quantiles and a column's quantiles given another's value are held the same way, within the lags
+  or the group's rows. A lag's `min` and `max` are trimmed as extremes are.
+- **A rate given another column's value** is written only where the value's rows, the rows the
+  rate counts and the rest each number 0 or at least `k_min`. A value breaking that joins `other`.
+- **A lookup table** lists only the `lhs` values `k_min` rows hold.
 - **A top value** is kept only when `k_min` rows hold it. While the remainder holds 1 to `k_min - 1`
   rows, the smallest kept value folds into it, so `other_rate` never reveals a small cell. That
   holds for a numeric column's list as for a string's.

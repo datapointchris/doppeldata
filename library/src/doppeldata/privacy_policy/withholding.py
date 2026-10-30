@@ -21,19 +21,27 @@ from doppeldata.privacy_policy.literal_fields import dataset_literals
 from doppeldata.privacy_policy.literal_fields import faults
 from doppeldata.privacy_policy.literal_fields import min_count
 from doppeldata.privacy_policy.treatment_rules import amend
+from doppeldata.privacy_policy.treatment_rules import capped_age_quantiles
 from doppeldata.privacy_policy.treatment_rules import conditional_faults
+from doppeldata.privacy_policy.treatment_rules import lag_faults
+from doppeldata.privacy_policy.treatment_rules import lookup_faults
 from doppeldata.privacy_policy.treatment_rules import refused
+from doppeldata.profile_format import GIVEN_LISTS
 from doppeldata.profile_format import PointerParts
 
 
-def withheld(document: dict[str, Any], policy: Policy, k_min: int, cell_floors: dict[tuple[str, str], int] | None = None) -> dict[str, Any]:
+def withheld(
+    document: dict[str, Any], policy: Policy, k_min: int, cell_floors: dict[tuple[str, str, str], int] | None = None
+) -> dict[str, Any]:
     """The document with what `policy` withholds removed, and its `privacy` section written: the policy, `k_min`,
     each column withheld from and why, each literal field kept with the rule that admitted it, and each dataset-level
     field a floor holds.
 
-    `cell_floors` holds the fewest rows a cell of each conditional table rests on, by its given and child column,
-    which `dataset_audit` records because the file does not count them. A conditional table naming a column whose values
-    the policy withholds is dropped.
+    `cell_floors` holds the fewest rows a literal of each entry of the dataset's `GIVEN_LISTS` rests on, by the list's
+    name and the entry's given and child column, and the fewest a lookup table's key rests on, by `dependencies` and its
+    left- and right-hand column. `dataset_audit` records them because the file does not count them. An entry naming a
+    column whose values the policy withholds, or a quasi-identifier the policy never joins, is dropped, and so is such a
+    dependency's lookup table.
 
     `none` withholds nothing, audits nothing and states no `k_min`, because `profile check` reports a `none` profile
     whatever it holds. It is profiled with a `k_min` of 1, so its numeric extremes are the exact ones.
@@ -62,19 +70,27 @@ def withheld(document: dict[str, Any], policy: Policy, k_min: int, cell_floors: 
         suppressed.append(entry)
     for column in column_literals(document):
         for field in column.fields:
-            if refused(field, column, treatments[column.path]):
+            if refused(field, column, treatments[column.path]) or (field.kind is FieldKind.LAG and lag_faults(document, column, policy)):
                 drop(document, field.path, field.kind, set())
                 continue
             found = faults(field, column, k_min)
             if found:
                 drop(document, field.path, field.kind, {fault.path for fault in found})
     dataset = document.get('dataset') or {}
-    conditionals = dataset.get('conditionals') or []
-    kept = [conditional for index, conditional in enumerate(conditionals) if not conditional_faults(document, index, policy)]
-    if kept:
-        dataset['conditionals'] = kept
-    else:
-        dataset.pop('conditionals', None)
+    ages = frozenset(column.name for column in column_literals(document) if treatments[column.path] is Treatment.AGE)
+    for entry in dataset.get('conditional_quantiles') or []:
+        if entry.get('column') in ages:
+            capped_age_quantiles(entry)
+    for name in GIVEN_LISTS:
+        entries = dataset.get(name) or []
+        kept = [entry for index, entry in enumerate(entries) if not conditional_faults(document, index, policy, name, ages)]
+        if kept:
+            dataset[name] = kept
+        else:
+            dataset.pop(name, None)
+    for index, dependency in enumerate(dataset.get('dependencies') or []):
+        if lookup_faults(document, index, policy):
+            del dependency['table']
     audit = []
     for column in column_literals(document):
         for field in column.fields:
@@ -86,9 +102,12 @@ def withheld(document: dict[str, Any], policy: Policy, k_min: int, cell_floors: 
     floors = cell_floors or {}
     dataset_audit = []
     for field in dataset_literals(document):
-        if field.kind is FieldKind.CONDITIONAL:
-            conditional = kept[int(field.path[-1])]
-            fewest = floors[(conditional['given'], conditional['column'])]
+        name, index = str(field.path[1]), int(field.path[2])
+        entry = dataset[name][index]
+        if name in GIVEN_LISTS:
+            fewest = floors[(name, entry['given'], entry['column'])]
+        elif entry.get('table'):
+            fewest = floors[(name, entry['lhs'][0], entry['rhs'])]
         else:
             fewest = min_count(field, k_min) or k_min
         dataset_audit.append({'field': field.pointer, 'values': field.values, 'rule': field.kind.rule, 'min_count': fewest})
@@ -108,7 +127,10 @@ def withheld(document: dict[str, Any], policy: Policy, k_min: int, cell_floors: 
 
 
 def drop(document: dict[str, Any], path: PointerParts, kind: FieldKind, failing: set[PointerParts]) -> None:
-    """Remove a field. A quantile fails alone, so where some fail only those go; any other field goes whole."""
+    """Remove a field. A quantile fails alone, so where some fail only those go; any other field goes whole, and a lag
+    takes its derivation with it."""
+    if kind is FieldKind.LAG:
+        path = path[:-1]
     parent: Any = document
     for part in path[:-1]:
         parent = parent[part]

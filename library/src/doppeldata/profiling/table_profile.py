@@ -50,15 +50,19 @@ from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import Table
 from doppeldata.profiling.backend import is_hidden
 from doppeldata.profiling.column_dependence import DependenceColumn
+from doppeldata.profiling.column_dependence import FrozenPairs
 from doppeldata.profiling.column_dependence import column_dependence
+from doppeldata.profiling.derived_columns import derived_columns
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import SuppliedCodeList
 from doppeldata.profiling.profiled_columns import Answers
 from doppeldata.profiling.profiled_columns import ProfiledColumns
 from doppeldata.profiling.recorded_counts import RATE_DIGITS
+from doppeldata.profiling.recorded_counts import clear_of_the_ends
 from doppeldata.profiling.recorded_counts import kept_values
 from doppeldata.profiling.recorded_counts import rate
 from doppeldata.profiling.recorded_counts import significant
+from doppeldata.profiling.recorded_counts import written_number
 from doppeldata.profiling.statistic_catalog import COLUMN_STATISTICS
 from doppeldata.profiling.statistic_catalog import NUMERIC
 from doppeldata.profiling.statistic_catalog import PROFILED
@@ -156,11 +160,13 @@ Stat = Callable[[str], Any]
 
 @dc.dataclass(frozen=True)
 class FrozenLayout:
-    """An earlier profile's histogram edges and value lists, by column, which a re-profile counts its rows against."""
+    """An earlier profile's histogram edges and value lists, by column, which a re-profile counts its rows against, and
+    the pairs of columns it states a dependence between, which a re-profile states again wherever its floors allow."""
 
     # Each numeric column's histogram kind and edges.
     histograms: dict[str, tuple[str, tuple[float, ...]]] = dc.field(default_factory=dict)
     values: dict[str, 'FrozenValues'] = dc.field(default_factory=dict)
+    pairs: FrozenPairs = dc.field(default_factory=FrozenPairs)
 
     @classmethod
     def of(cls, document: dict[str, Any]) -> 'FrozenLayout':
@@ -179,7 +185,7 @@ class FrozenLayout:
                 held = described * (1 - (column.get('null_rate') or 0.0)) if described else 0
                 baseline = max(0.0, other - drifted / held) if held else other
                 values[column['name']] = FrozenValues(tuple(entry['value'] for entry in section['top_values']), baseline, section_name)
-        return cls(histograms, values)
+        return cls(histograms, values, FrozenPairs.of(document))
 
 
 def relisted_columns(earlier: dict[str, Any], now: dict[str, Any]) -> list[str]:
@@ -264,9 +270,9 @@ def profile_table(
     profiled = profile_columns(backend, table, settings, rows, whole_distinct, json_root, read.table if sampled else None)
     full = profiled.table if profiled.whole is None else profiled.whole
     dataset: dict[str, Any] = {'row_count': rows}
-    cell_floors: dict[tuple[str, str], int] = {}
+    cell_floors: dict[tuple[str, str, str], int] = {}
     if read.json is None and profiled.dependence_sample is not None:
-        found, cell_floors = dataset_sections(backend, full, profiled, rows, whole_distinct, k_min)
+        found, cell_floors = dataset_sections(backend, full, profiled, rows, whole_distinct, k_min, settings.frozen.pairs)
         dataset |= found
     fitting, _ = fitting_module()
     sampling = {'strategy': 'reservoir', 'rows_read': profiled.described} if profiled.described < rows else {'strategy': 'full'}
@@ -287,10 +293,16 @@ def profile_table(
 
 
 def dataset_sections(
-    backend: Backend, full: Table, profiled: ProfiledColumns, rows: int, whole_distinct: dict[str, int], k_min: int
-) -> tuple[dict[str, Any], dict[tuple[str, str], int]]:
-    """The dataset's repeated rows and keys over `full`, and its columns' dependence, with the fewest rows a cell of each
-    conditional table rests on."""
+    backend: Backend,
+    full: Table,
+    profiled: ProfiledColumns,
+    rows: int,
+    whole_distinct: dict[str, int],
+    k_min: int,
+    frozen: FrozenPairs,
+) -> tuple[dict[str, Any], dict[tuple[str, str, str], int]]:
+    """The dataset's repeated rows and keys over `full`, and its columns' dependence, with the fewest rows a literal of
+    each entry naming a parent rests on. Each column computed from others gains its `derived` entry."""
     profiled_specs = [spec for spec in profiled.specs if spec.kind in PROFILED]
     distinct: dict[str, int] = {
         spec.name: whole_distinct[spec.name] if spec.name in whole_distinct else profiled.stats[(spec.name, 'distinct_count')]
@@ -300,7 +312,10 @@ def dataset_sections(
     key_columns = [KeyColumn(spec, distinct[spec.name], profiled.stats[(spec.name, 'null_count')] > 0) for spec in profiled_specs]
     found = table_keys(backend, full, profiled.dependence_sample, key_columns, rows, k_min)
     columns = [DependenceColumn(spec, distinct[spec.name], entries[spec.name]) for spec in profiled_specs if spec.name in entries]
-    dependence = column_dependence(backend, profiled.dependence_sample, profiled.table, columns, profiled.described, k_min)
+    derived = derived_columns(backend, profiled.dependence_sample, FIT_SAMPLE_ROWS, profiled.table, columns, k_min)
+    dependence = column_dependence(backend, profiled.dependence_sample, profiled.table, columns, profiled.described, k_min, frozen, derived)
+    for name, entry in derived.items():
+        entries[name]['derived'] = entry
     return found | dependence.sections, dependence.cell_floors
 
 
@@ -604,6 +619,36 @@ def pass_one_requests(specs: list[ColumnSpec], k_min: int) -> list[Request]:
     return requests
 
 
+def nested_types(physical_type: str) -> dict[str, Any]:
+    """A struct's fields or a list's element, each by its name and its Arrow type as pyarrow spells it, so a nested
+    column the statistics do not reach still generates at the types it was read at."""
+    container, _, inner = physical_type.partition('<')
+    if container not in CONTAINER_LOGICAL_TYPES or not inner.endswith('>'):
+        return {}
+    children = []
+    for part in top_level_parts(inner[:-1]):
+        name, _, child_type = part.partition(': ')
+        child: dict[str, Any] = {'name': name, 'physical_type': child_type}
+        logical = CONTAINER_LOGICAL_TYPES.get(child_type.split('<')[0])
+        if logical:
+            child['logical_type'] = logical
+        children.append(child | nested_types(child_type))
+    if container == 'struct':
+        return {'struct': {'fields': children}} if children else {}
+    return {'list': {'element': children[0]}} if len(children) == 1 else {}
+
+
+def top_level_parts(text: str) -> list[str]:
+    """`text` split at each `, ` outside every bracket."""
+    parts, depth, start = [], 0, 0
+    for at, character in enumerate(text):
+        depth += (character in '<([') - (character in '>)]')
+        if depth == 0 and text.startswith(', ', at):
+            parts.append(text[start:at])
+            start = at + 2
+    return [*parts, text[start:]] if text else parts
+
+
 def column_stat(stats: Answers, column: str) -> Stat:
     return lambda name: stats[(column, name)]
 
@@ -643,7 +688,7 @@ def column_entry(
     if text and text.non_null:
         entry['type_mix'] = {raw: rate(count, text.non_null) for raw, count in text.counts.items() if count}
     if spec.kind is ColumnKind.OTHER:
-        return entry
+        return entry | nested_types(spec.physical_type)
     values = described - stat('null_count')
     count, counted_over = distinct[spec.name]
     prefixes = None
@@ -690,11 +735,6 @@ def value_list(spec: ColumnSpec, treatment: Treatment) -> ValueList | None:
     if FieldKind.TOP_VALUES in REFUSED.get(treatment, frozenset()):
         return None
     return VALUE_LISTS.get(spec.kind)
-
-
-def written_number(value: Any, integral: bool) -> int | float:
-    """A data value as the profile writes it. An integer canonical JSON cannot write exactly is written as the nearest double."""
-    return int(value) if integral and abs(value) <= LARGEST_EXACT_INTEGER else float(value)
 
 
 def counting_sequences(
@@ -1236,12 +1276,6 @@ def floored_shares(counts: list[int], k_min: int) -> list[float] | None:
 def has_trimmed_extremes(values: int, k_min: int) -> bool:
     """Whether the values at rank k_min from each end exist and do not cross."""
     return values >= 2 * k_min - 1
-
-
-def clear_of_the_ends(level: float, values: int, k_min: int) -> bool:
-    """Whether the quantile sits at least k_min rows from both ends, so it is not an extreme in disguise."""
-    position = level * (values - 1)
-    return position >= k_min - 1 and values - 1 - position >= k_min - 1
 
 
 def is_finite(value: Any) -> bool:

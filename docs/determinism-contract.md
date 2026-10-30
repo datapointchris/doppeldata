@@ -57,7 +57,15 @@ offset inside the index's band. So the value at an index is the same in every bl
 
 A copula group, the set of numeric columns correlated through one matrix, draws from one stream keyed
 by its sorted column names. Adding an unrelated column changes nothing. Adding a column to the group
-changes that group's values.
+changes that group's values. So does a curve or zero rate on a member, because the group's Pearsons
+are calibrated through it. That calibration weighs each parent value by its share in a draw at seed
+0, so the matrix is the same for every seed.
+
+A column drawn given another reads the parent's generated values and draws only from its own
+streams. Its conditional table's cell, and whether a row breaks its lookup or expression, come from
+its `given` stream. Its lag and its quantile curve's level come from its `values` stream. So stating
+a dependence moves the child's values and never the parent's. A row that breaks a lookup or an
+expression takes the value the column's own sampler draws at that row.
 
 A scenario's perturbation draws from streams keyed by its id, never its place in the list. A value it
 takes from a column's sampler comes from that sampler under a table name holding the id. So

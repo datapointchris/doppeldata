@@ -293,3 +293,90 @@ columns:
   - {name: provider_country_code, semantic: {generator_hint: {provider: country_code}}}
   - {name: provider_credit_card, semantic: {generator_hint: {provider: credit_card}}}
   - {name: provider_uuid, semantic: {generator_hint: {provider: uuid}}}
+  # The copula group the dataset's Spearman pairs join, one member listing its values.
+  - name: copula_amount
+    physical_type: double
+    numeric:
+      quantiles: {p01: 1.0, p25: 10.0, p50: 25.0, p75: 60.0, p99: 400.0}
+      extremes: {low: 0.5, high: 900.0}
+  - name: copula_items
+    physical_type: int64
+    numeric:
+      integral: true
+      quantiles: {p01: 1, p50: 2, p99: 12}
+      extremes: {low: 1, high: 20}
+      top_values: [{value: 1, rate: 0.4}, {value: 2, rate: 0.25}, {value: 3, rate: 0.15}]
+      other_rate: 0.2
+  - name: copula_weight
+    physical_type: double
+    null_rate: 0.05
+    numeric:
+      quantiles: {p05: 0.2, p50: 1.5, p95: 8.0}
+      extremes: {low: 0.0, high: 20.0}
+      fit: {family: gamma, params: {a: 2.0, loc: 0.0, scale: 1.0}}
+  - name: region
+    string:
+      top_values: [{value: north, rate: 0.4}, {value: south, rate: 0.35}, {value: west, rate: 0.25}]
+  # Drawn from its conditional table given region.
+  - name: channel
+    null_rate: 0.02
+    string:
+      top_values: [{value: web, rate: 0.5}, {value: store, rate: 0.3}, {value: phone, rate: 0.2}]
+  # Drawn through its quantiles given channel, with its zero and null rates given channel.
+  - name: paid_amount
+    physical_type: double
+    null_rate: 0.03
+    numeric:
+      zero_rate: 0.1
+      quantiles: {p25: 5.0, p50: 20.0, p75: 50.0}
+      extremes: {low: 0.0, high: 300.0}
+  # Looked up from region by the dependency's table.
+  - name: region_code
+    string:
+      top_values: [{value: "N", rate: 0.4}, {value: "S", rate: 0.35}, {value: "W", rate: 0.25}]
+  - name: order_date
+    physical_type: date32
+    temporal: {extremes: {low: "2024-01-01", high: "2024-12-31"}}
+  - name: ship_date
+    physical_type: date32
+    derived: {kind: timedelta, base: order_date, lag: {quantiles: {p01: 0d, p50: 2d, p99: 10d}, min: 0d, max: 14d}}
+  - name: shipped_at
+    physical_type: "timestamp[s]"
+    derived: {kind: timedelta, base: timestamp_uniform, lag: {quantiles: {p25: 3600s, p75: 86400s}, min: -60s, max: 2d}}
+  - name: quantity
+    physical_type: int64
+    numeric: {integral: true, quantiles: {p01: 1, p50: 2, p99: 9}, extremes: {low: 1, high: 12}}
+  - name: unit_price
+    physical_type: "decimal128(10, 2)"
+    numeric: {quantiles: {p05: 1.0, p50: 9.99, p95: 80.0}, extremes: {low: 0.5, high: 150.0}}
+  - name: total
+    physical_type: "decimal128(12, 2)"
+    numeric: {quantiles: {p05: 2.0, p50: 20.0, p95: 400.0}, extremes: {low: 0.5, high: 1800.0}}
+    derived: {kind: expression, expr: "round(quantity * unit_price, 2)", violation_rate: 0.01}
+dataset:
+  correlations:
+    - {a: copula_amount, b: copula_items, method: spearman, value: 0.7}
+    - {a: copula_amount, b: copula_weight, method: spearman, value: 0.4}
+    - {a: copula_items, b: copula_weight, method: spearman, value: 0.3}
+  conditionals:
+    - given: region
+      column: channel
+      table:
+        north: {web: 0.7, store: 0.2, phone: 0.1}
+        south: {web: 0.3, store: 0.5, phone: 0.2}
+      other: {web: 0.4, store: 0.3, phone: 0.3}
+  conditional_quantiles:
+    - given: channel
+      column: paid_amount
+      quantiles:
+        web: {p25: 10.0, p50: 30.0, p75: 70.0}
+        store: {p25: 2.0, p50: 8.0, p75: 20.0}
+      other: {p25: 5.0, p50: 15.0, p75: 40.0}
+  conditional_rates:
+    - given: channel
+      column: paid_amount
+      zero_rate: {web: 0.02, store: 0.2}
+      null_rate: {phone: 0.15}
+      other: {zero_rate: 0.1, null_rate: 0.01}
+  dependencies:
+    - {kind: functional, lhs: [region], rhs: region_code, table: {north: "N", south: "S", west: "W"}}

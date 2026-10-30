@@ -109,15 +109,16 @@ The `default` policy:
    It draws them from a distinct index, so they repeat as often as the distinct ratio says.
 3. Exact extremes are replaced by the values at rank `k_min` from each end, or omitted.
 4. Free text stores length and token statistics only.
-5. Every histogram bin, frequency entry, conditional-table cell and partition share meets `k_min`.
+5. Every histogram bin, frequency entry, conditional-table cell, rate given another column's
+   value, lookup entry and partition share meets `k_min`.
    A smaller cell merges or folds into `other`. A cell a reader can subtract counts too, such as a
    bin's count less the values listed in it, or `negative_rate` less the listed negative values.
 6. Parquet footer minimums and maximums are never copied for an `identifier` or `sensitive` column.
 7. A pattern is stored only when it holds no alternation of data literals.
 
-`strict` also treats quasi-identifiers as identifiers, and drops every lookup and conditional table
-involving one. `healthcare` adds HIPAA Safe Harbor, as `healthcare-policy.md` describes, and drops a
-quasi-identifier's conditional tables too. `none`
+`strict` also treats quasi-identifiers as identifiers. It drops every lookup, conditional table,
+conditional quantiles and rates given one, and every lag counting from one. `healthcare` adds
+HIPAA Safe Harbor, as `healthcare-policy.md` describes, and drops those entries too. `none`
 writes everything, with exact extremes and no `k_min`. It exists for data that is already synthetic
 or public, and `profile check` always reports a `none` profile. `dp` is reserved in the format for
 a differential-privacy policy, which doppeldata does not apply. `profile create --policy dp` is a
@@ -157,7 +158,8 @@ privacy:
 
 An `audit` entry's `field` is the field's RFC 6901 pointer within its column, so reordering the
 columns or adding one leaves every other entry true. A `dataset_audit` entry's `field` points from
-the profile's root, at a conditional table or a functional dependency. `values` counts the literals
+the profile's root, at a conditional table, conditional quantiles or rates, or a functional
+dependency. A lag's entry is in `audit`, at `/derived/lag` in its column. `values` counts the literals
 it holds, and `min_count` is the fewest rows any of them or any cell of it rests on. A
 suppression's `reason` is one of the `SuppressionReason` values `doppeldata schemas show profile`
 prints.
@@ -177,14 +179,21 @@ Each kind of field is admitted by one rule:
 | a fitted family | `fitted within the trimmed extremes` | trimmed extremes beside it |
 | a sequence start | `follows the trimmed extreme` | the trimmed extreme at its end, less `k_min − 1` steps |
 | a conditional table | `cell >= k_min` | nothing: each value is one its column lists, and the entry's `min_count` reaches `k_min` |
-| a functional dependency | `lhs >= k_min` | nothing: the entry's `min_count` reaches `k_min` |
+| conditional quantiles, a lag | `k_min rows from each end` | nothing: the entry's `min_count` reaches `k_min` |
+| conditional rates | `cell >= k_min` | nothing: each given value is one its column lists, and the entry's `min_count` reaches `k_min` |
+| a functional dependency | `lhs >= k_min` | nothing: each lookup key and value is one its column lists, and the entry's `min_count` reaches `k_min` |
 
-An integer identifier's digit bounds hold no data value, so they are not a literal.
+An integer identifier's digit bounds hold no data value, so they are not a literal. Nor does an
+expression, which names columns and numbers.
 
 A conditional table's `values` counts its cells, and `min_count` is the fewest rows a cell holds.
 The writer counts every cell over the rows profiled, and floors each one before the table is
-written. A dependency's `values` is 1, and its `min_count` is `k_min`. Its violation rate is
-counted only over the left-hand values at least `k_min` rows hold.
+written. Conditional quantiles count each quantile, and their `min_count` is the fewest rows any
+lies from its group's nearer end. Conditional rates count each rate, and their `min_count` is the
+fewest rows any count beside a rate holds. A lag counts its quantiles, `min` and `max`. A
+dependency's `values` counts its lookup table's entries, and its `min_count` is the fewest rows a
+listed left-hand value holds. One stating no table counts 1, at `k_min`. Its violation rate is counted only
+over the left-hand values at least `k_min` rows hold.
 
 ## profile check reads the file alone
 

@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from doppeldata.profile_format import LARGEST_EXACT_INTEGER
+
 # Deequ's DEFAULT_CARDINALITY_THRESHOLD: a column with no more distinct values than this has its values counted.
 TOP_VALUES_THRESHOLD = 120
 # A numeric code, such as a location id, holds a few hundred values, and a money or distance column
@@ -32,3 +34,19 @@ def rate(count: int, total: int) -> float:
 
 def significant(value: float, digits: int) -> float:
     return float(f'{value:.{digits}g}')
+
+
+def clear_of_the_ends(level: float, values: int, k_min: int) -> bool:
+    """Whether the quantile sits at least k_min rows from both ends, so it is not an extreme in disguise."""
+    position = level * (values - 1)
+    return position >= k_min - 1 and values - 1 - position >= k_min - 1
+
+
+def rows_to_the_nearer_end(level: float, values: int) -> int:
+    """The rows between a quantile and the nearer end of `values`, counting its own."""
+    return round(min(level * (values - 1), (1 - level) * (values - 1)) + 1)
+
+
+def written_number(value: Any, integral: bool) -> int | float:
+    """A data value as the profile writes it. An integer canonical JSON cannot write exactly is written as the nearest double."""
+    return int(value) if integral and abs(value) <= LARGEST_EXACT_INTEGER else float(value)

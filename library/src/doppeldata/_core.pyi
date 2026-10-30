@@ -126,6 +126,10 @@ class Plan:
         divided among, and ``elapsed_ms`` the time from the claim. A range with no record leaves
         the partial manifest under the claim's name, and raises.
         """
+    def copula_groups(self, /) -> list[list[str]]:
+        """
+        The names of the columns each Gaussian copula draws together, each group sorted.
+        """
     @property
     def dataset_digest(self, /) -> str:
         """
@@ -162,6 +166,11 @@ class Plan:
     def rows_written(self, /) -> int:
         """
         The rows the files hold: those generated, and every copy the scenario plans.
+        """
+    def set_aside(self, /) -> list[str]:
+        """
+        The JSON pointer of each dependence entry the profile states and the plan does not draw,
+        each child's sampler naming why.
         """
     def stream(self, /, *, threads: SupportsIndex) -> Any:
         """

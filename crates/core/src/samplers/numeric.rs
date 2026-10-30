@@ -336,7 +336,7 @@ impl Rounding {
     }
 }
 
-fn power_of_ten(exponent: i32) -> f64 {
+pub(crate) fn power_of_ten(exponent: i32) -> f64 {
     let power = (0..exponent.unsigned_abs()).fold(1.0, |power, _| power * 10.0);
     if exponent < 0 { 1.0 / power } else { power }
 }

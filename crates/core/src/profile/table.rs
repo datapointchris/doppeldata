@@ -7,6 +7,7 @@ use serde::Serialize;
 use super::values::ProfileVersion;
 use super::values::Quantiles;
 use super::values::Rate;
+use super::values::SignedDuration;
 use crate::format_settings::DelimitedSettings;
 use crate::format_settings::JsonSettings;
 use crate::format_settings::LineTerminator;
@@ -463,6 +464,8 @@ pub struct Dataset {
     /// they explain by chance. `a` and `b` follow the columns' order, and the column kinds tell which is the category.
     pub correlation_ratios: Option<Vec<CorrelationRatio>>,
     pub conditionals: Option<Vec<Conditional>>,
+    pub conditional_quantiles: Option<Vec<ConditionalQuantiles>>,
+    pub conditional_rates: Option<Vec<ConditionalRates>>,
     pub dependencies: Option<Vec<Dependency>>,
 }
 
@@ -504,7 +507,9 @@ pub enum CorrelationMethod {
     CramersV,
 }
 
-/// The distribution of `column` within each value of `given`. Each row of `table` sums to 1.
+/// The distribution of `column` within each value of `given`. Each row of `table` sums to 1 at most, and the share it
+/// leaves is the rows of values it does not state. Each value `column` lists takes as much of that share as no row
+/// states of it, and the share of values it lists none of draws `column`'s own values.
 ///
 /// Both columns are strings, integers or booleans, and each value is a key as its text: a string as
 /// itself, an integer in decimal, and a boolean as `true` or `false`.
@@ -513,8 +518,44 @@ pub struct Conditional {
     pub given: String,
     pub column: String,
     pub table: BTreeMap<String, BTreeMap<String, Rate>>,
-    /// The distribution of `column` over every value of `given` that `table` does not list. It sums to 1.
+    /// The distribution of `column` over every value of `given` that `table` does not list, summing to 1 at most as a
+    /// row does.
     pub other: Option<BTreeMap<String, Rate>>,
+}
+
+/// The quantiles of the numeric `column` within each value of the categorical `given`, each value a key as a
+/// conditional table's is. Each row takes the same names `column`'s own quantiles do, and holds its zeros as they
+/// do: a zero rate stated for the value given the same column, else `column`'s own, places its run of zeros.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConditionalQuantiles {
+    pub given: String,
+    pub column: String,
+    pub quantiles: BTreeMap<String, Quantiles>,
+    /// `column`'s quantiles over every value of `given` that `quantiles` does not list.
+    pub other: Option<Quantiles>,
+}
+
+/// The share of `column`'s values that are zero, and of its rows that are null, within each value of the categorical
+/// `given`, each value a key as a conditional table's is.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConditionalRates {
+    pub given: String,
+    pub column: String,
+    /// The share of `column`'s values that are zero, among the rows holding each value of `given`.
+    pub zero_rate: Option<BTreeMap<String, Rate>>,
+    /// The share of rows where `column` is null, among the rows holding each value of `given`.
+    pub null_rate: Option<BTreeMap<String, Rate>>,
+    /// Both rates over every value of `given` that the two maps do not list.
+    pub other: Option<OtherRates>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OtherRates {
+    pub zero_rate: Option<Rate>,
+    pub null_rate: Option<Rate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
@@ -525,6 +566,10 @@ pub struct Dependency {
     /// The share of rows whose `lhs` value holds more than one `rhs` value, of the rows whose `lhs` value at least
     /// `k_min` rows hold.
     pub violation_rate: Option<Rate>,
+    /// Each value of a one-column `lhs` at least `k_min` rows hold, with the `rhs` value it determines, each a key as
+    /// a conditional table's is. The generator looks `rhs` up here, and draws it from its own statistics for an
+    /// `lhs` value the table does not list.
+    pub table: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -560,6 +605,51 @@ pub struct Column {
     pub struct_fields: Option<StructStats>,
     pub semantic: Option<Semantic>,
     pub quality: Option<Quality>,
+    /// How the column is computed from others, in place of being drawn from its own statistics. An engine that
+    /// ignores this field draws the column from them.
+    pub derived: Option<Derived>,
+}
+
+/// How a column is computed from other columns of its table.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Derived {
+    /// A temporal column offset from `base` by a lag drawn from its quantiles.
+    Timedelta(Timedelta),
+    /// A numeric column computed from others by an arithmetic expression.
+    Expression(Expression),
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Timedelta {
+    /// The temporal column the lag is added to.
+    pub base: String,
+    pub lag: Lag,
+}
+
+/// The lag between the base column and the column, at named quantiles as [`Quantiles`] names them, between its
+/// trimmed extremes. A date's lag is written in days, and a timestamp's in seconds.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Lag {
+    pub quantiles: Option<BTreeMap<String, SignedDuration>>,
+    /// The lag at rank `k_min` from the low end.
+    pub min: Option<SignedDuration>,
+    /// The lag at rank `k_min` from the high end.
+    pub max: Option<SignedDuration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Expression {
+    /// Column names, numbers, `+ - * /`, parentheses and `round(x)` or `round(x, places)`. A name holding a character
+    /// other than a letter, a digit or `_` is quoted in backticks.
+    pub expr: String,
+    /// The decimal places the result is rounded to, else the column's own `numeric.scale`.
+    pub round: Option<i32>,
+    /// The share of rows the expression does not hold for, which draw the column from its own statistics instead.
+    pub violation_rate: Option<Rate>,
 }
 
 /// A type a raw value in a text source parses as.

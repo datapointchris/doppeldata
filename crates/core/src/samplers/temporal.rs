@@ -212,7 +212,7 @@ fn granules_inside(first: i64, granules: u64, granule: i64, low: i64, high: i64)
 
 #[derive(Debug, Clone)]
 pub(crate) struct TemporalSampler {
-    output: TemporalOutput,
+    pub(crate) output: TemporalOutput,
     draw: TemporalDraw,
 }
 

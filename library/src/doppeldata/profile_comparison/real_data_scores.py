@@ -62,10 +62,9 @@ ScoreMeasure = Callable[['pl.DataFrame', 'pl.DataFrame', tuple[str, ...], Scored
 class Score(Thresholded):
     """One score: `reads` yields each column, or pair of columns, it scores, and `measure` scores one of them.
 
-    A score decides nothing unless a thresholds file sets its threshold, and a pair's is set under `defaults` alone.
+    A score decides nothing unless a thresholds file sets its threshold.
     """
 
-    pairs: bool
     reads: Callable[[ScoredColumns], Iterator[tuple[str, ...]]]
     measure: ScoreMeasure
 
@@ -298,7 +297,6 @@ SCORES = (
         "one minus the Kolmogorov-Smirnov distance between a numeric or temporal column's real and checked values",
         Bound.AT_LEAST,
         0.8,
-        False,
         each_continuous,
         on_column(ks_complement),
     ),
@@ -307,7 +305,6 @@ SCORES = (
         "the share of a numeric or temporal column's checked values inside the real values' minimum and maximum",
         Bound.AT_LEAST,
         0.99,
-        False,
         each_continuous,
         on_column(boundary_adherence),
     ),
@@ -316,7 +313,6 @@ SCORES = (
         "one minus the total variation distance between a categorical column's real and checked shares",
         Bound.AT_LEAST,
         0.9,
-        False,
         each_discrete,
         on_column(tv_complement),
     ),
@@ -325,7 +321,6 @@ SCORES = (
         "the share of a categorical column's real values that the checked data holds",
         Bound.AT_LEAST,
         0.9,
-        False,
         each_discrete,
         on_column(category_coverage),
     ),
@@ -335,9 +330,9 @@ SCORES = (
         'in the real and checked data',
         Bound.AT_LEAST,
         0.8,
-        True,
         continuous_pairs,
         correlation_similarity,
+        pairs=True,
     ),
     Score(
         'ContingencySimilarity',
@@ -345,9 +340,9 @@ SCORES = (
         f"a numeric or temporal one cut at {CONTINGENCY_BINS} equal-width bins of the real values' range",
         Bound.AT_LEAST,
         0.8,
-        True,
         pairs_holding_discrete,
         contingency_similarity,
+        pairs=True,
     ),
 )
 SCORES_BY_NAME = {score.name: score for score in SCORES}

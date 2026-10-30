@@ -158,6 +158,14 @@ impl ValueIndex {
         let offset = unit(&mut rng_for(seed, keys.indexed_values, index));
         ((index as f64 + offset) / self.range as f64).min(1.0 - f64::EPSILON)
     }
+
+    /// The level of the value in the band `level` falls in, placed as [`Self::stratified_level`] places it. So a
+    /// level another column's rank decides keeps the distinct values the index holds the column to.
+    pub(crate) fn band_level(self, level: f64, seed: u64, keys: &StreamKeys) -> f64 {
+        let index = ((level * self.range as f64) as u64).min(self.range - 1);
+        let offset = unit(&mut rng_for(seed, keys.indexed_values, index));
+        ((index as f64 + offset) / self.range as f64).min(1.0 - f64::EPSILON)
+    }
 }
 
 /// The distinct indices that `draws` uniform draws from `0..range` are expected to hold.

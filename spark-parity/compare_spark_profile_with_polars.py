@@ -4,12 +4,14 @@ compare_spark_profile_with_polars.py POLARS SPARK DATA
 
 Row counts, null rates, types and the trimmed extremes must be equal, but for a timestamp's unit, which Spark always holds
 as microseconds. Each Spark quantile's rank error is measured
-against the data and must stay within RANK_ERROR. Each distinct count must stay within DISTINCT_ERROR of Polars' exact
-count. Every other field that differs is printed, except those a sample or a float sum's order decides.
+against the data and must stay within RANK_ERROR, and so must each quantile of a column given another's value, among the
+rows holding that value. Each distinct count must stay within DISTINCT_ERROR of Polars' exact count. Every other field
+that differs is printed, except those a sample or a float sum's order decides.
 
 The dataset section and a bundle's relationships must hold the same entries, and each value the same. Correlations are read
-from each engine's own sample, as the fits are, and so is which correlated pairs get a conditional table. So their
-differences are printed and fail nothing, while a conditional table both profiles state must match cell for cell. A
+from each engine's own sample, as the fits are, and so is which pairs get a conditional table, quantiles or rates, and which
+composite key short of unique is nominated. So their
+differences are printed and fail nothing, while a conditional table or rate both profiles state must match cell for cell. A
 bundle's DATA is a directory holding each table in a folder of the table's name.
 """
 
@@ -62,13 +64,26 @@ TIMESTAMP_UNIT = re.compile(r'^timestamp\[(s|ms|us|ns)')
 # The fields `dataset_entries` and `relationship_entries` read, by schema definition. A field the format gains stops the
 # script until one of them reads it, so no field goes uncompared.
 READ_FIELDS = {
-    'Dataset': {'row_count', 'duplicate_row_rate', 'keys', 'correlations', 'correlation_ratios', 'conditionals', 'dependencies'},
+    'Dataset': {
+        'row_count',
+        'duplicate_row_rate',
+        'keys',
+        'correlations',
+        'correlation_ratios',
+        'conditionals',
+        'conditional_quantiles',
+        'conditional_rates',
+        'dependencies',
+    },
     'Keys': {'primary', 'candidates'},
     'Key': {'columns', 'uniqueness'},
     'Correlation': {'a', 'b', 'method', 'value'},
     'CorrelationRatio': {'a', 'b', 'value'},
     'Conditional': {'given', 'column', 'table', 'other'},
-    'Dependency': {'kind', 'lhs', 'rhs', 'violation_rate'},
+    'ConditionalQuantiles': {'given', 'column', 'quantiles', 'other'},
+    'ConditionalRates': {'given', 'column', 'zero_rate', 'null_rate', 'other'},
+    'OtherRates': {'zero_rate', 'null_rate'},
+    'Dependency': {'kind', 'lhs', 'rhs', 'violation_rate', 'table'},
     'Relationship': {'from', 'to', 'containment', 'orphan_rate', 'cardinality', 'fanout'},
     'Fanout': {'quantiles', 'top_share', 'zipf_s'},
 }
@@ -140,9 +155,21 @@ def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
         for given, row in rows.items():
             for value, rate in row.items():
                 yield 'conditionals', f'{conditional_name(conditional)}: {conditional["column"]}={value} | {given}', rate
+    for stated in dataset.get('conditional_quantiles') or []:
+        groups = {**{f'{stated["given"]}={given}': row for given, row in stated['quantiles'].items()}, '(other)': stated.get('other') or {}}
+        for given, quantiles in groups.items():
+            for level in quantiles:
+                yield 'conditional_quantiles', f'{conditional_name(stated)}: {level} | {given}', None
+    for stated in dataset.get('conditional_rates') or []:
+        for rate in ('zero_rate', 'null_rate'):
+            for given, value in (stated.get(rate) or {}).items():
+                yield 'conditional_rates', f'{conditional_name(stated)}: {rate} | {stated["given"]}={given}', value
+            yield 'conditional_rates', f'{conditional_name(stated)}: {rate} | (other)', (stated.get('other') or {}).get(rate)
     for dependency in dataset.get('dependencies') or []:
         described = f'{dependency["kind"]} {"+".join(dependency["lhs"])} -> {dependency["rhs"]}'
         yield 'dependencies', described, dependency.get('violation_rate')
+        for value, determined in (dependency.get('table') or {}).items():
+            yield 'dependencies table', f'{described}: {value}', determined
 
 
 def relationship_entries(relationships: list[dict[str, Any]]) -> Iterator[tuple[str, str, Any]]:
@@ -194,11 +221,25 @@ def entries_compared(
 
 
 def compared(polars: dict[str, Any], spark: dict[str, Any], frame: pl.LazyFrame) -> list[str]:
-    stated = [{conditional_name(entry) for entry in profile['dataset'].get('conditionals') or []} for profile in (polars, spark)]
-    shared = stated[0] & stated[1]
+    shared = {
+        field: {conditional_name(entry) for entry in polars['dataset'].get(field) or []}
+        & {conditional_name(entry) for entry in spark['dataset'].get(field) or []}
+        for field in ('conditionals', 'conditional_quantiles', 'conditional_rates')
+    }
+
+    nominated = {
+        f'candidate {"+".join(key["columns"])}'
+        for profile in (polars, spark)
+        for key in (profile['dataset'].get('keys') or {}).get('candidates') or []
+        if key['uniqueness'] < 1
+    }
 
     def sampled(field: str, described: str) -> bool:
-        return field.startswith('correlation') or (field == 'conditionals' and described.split(': ', 1)[0] not in shared)
+        return (
+            field.startswith('correlation')
+            or (field in shared and described.split(': ', 1)[0] not in shared[field])
+            or (field == 'keys' and described in nominated)
+        )
 
     failures = entries_compared(dataset_entries(polars['dataset']), dataset_entries(spark['dataset']), sampled)
     found_columns = {column['name']: column for column in spark['columns']}
@@ -244,6 +285,21 @@ def compared(polars: dict[str, Any], spark: dict[str, Any], frame: pl.LazyFrame)
         ]
         if differing:
             print(f'note {name}: ' + ', '.join(f'{path} {want_leaves.get(path)!r} -> {got_leaves.get(path)!r}' for path in differing[:6]))
+    for stated in spark['dataset'].get('conditional_quantiles') or []:
+        given, column, listed = stated['given'], stated['column'], list(stated['quantiles'])
+        rows = (
+            frame.select(pl.col(given).cast(pl.String).alias('given'), pl.col(column).cast(pl.Float64, strict=False).alias('value'))
+            .filter(pl.col('value').is_not_null() & pl.col('value').is_not_nan())
+            .collect()
+        )
+        groups = {
+            **{f'={value}': (rows.filter(pl.col('given') == value), quantiles) for value, quantiles in stated['quantiles'].items()},
+            ' (other)': (rows.filter(~pl.col('given').is_in(listed) | pl.col('given').is_null()), stated.get('other') or {}),
+        }
+        for label, (group, quantiles) in groups.items():
+            for level, value in quantiles.items():
+                error = rank_error(group['value'], value, QUANTILE_LEVELS[level])
+                worst_rank = max(worst_rank, (error, f'{column} given {given}{label} {level}: {value}'))
     print(f'worst quantile rank error {worst_rank[0]:.5f} ({worst_rank[1]})')
     print(f'worst distinct relative error {worst_distinct[0]:.5f} ({worst_distinct[1]})')
     if worst_rank[0] > RANK_ERROR:
