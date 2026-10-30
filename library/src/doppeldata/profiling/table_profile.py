@@ -604,6 +604,36 @@ def pass_one_requests(specs: list[ColumnSpec], k_min: int) -> list[Request]:
     return requests
 
 
+def nested_types(physical_type: str) -> dict[str, Any]:
+    """A struct's fields or a list's element, each by its name and its Arrow type as pyarrow spells it, so a nested
+    column the statistics do not reach still generates at the types it was read at."""
+    container, _, inner = physical_type.partition('<')
+    if container not in CONTAINER_LOGICAL_TYPES or not inner.endswith('>'):
+        return {}
+    children = []
+    for part in top_level_parts(inner[:-1]):
+        name, _, child_type = part.partition(': ')
+        child: dict[str, Any] = {'name': name, 'physical_type': child_type}
+        logical = CONTAINER_LOGICAL_TYPES.get(child_type.split('<')[0])
+        if logical:
+            child['logical_type'] = logical
+        children.append(child | nested_types(child_type))
+    if container == 'struct':
+        return {'struct': {'fields': children}} if children else {}
+    return {'list': {'element': children[0]}} if len(children) == 1 else {}
+
+
+def top_level_parts(text: str) -> list[str]:
+    """`text` split at each `, ` outside every bracket."""
+    parts, depth, start = [], 0, 0
+    for at, character in enumerate(text):
+        depth += (character in '<([') - (character in '>)]')
+        if depth == 0 and text.startswith(', ', at):
+            parts.append(text[start:at])
+            start = at + 2
+    return [*parts, text[start:]] if text else parts
+
+
 def column_stat(stats: Answers, column: str) -> Stat:
     return lambda name: stats[(column, name)]
 
@@ -643,7 +673,7 @@ def column_entry(
     if text and text.non_null:
         entry['type_mix'] = {raw: rate(count, text.non_null) for raw, count in text.counts.items() if count}
     if spec.kind is ColumnKind.OTHER:
-        return entry
+        return entry | nested_types(spec.physical_type)
     values = described - stat('null_count')
     count, counted_over = distinct[spec.name]
     prefixes = None
