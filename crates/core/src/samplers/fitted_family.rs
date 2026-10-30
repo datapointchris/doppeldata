@@ -249,7 +249,7 @@ impl FittedFamily {
 }
 
 /// Φ(x), the standard normal CDF.
-fn normal_cdf(x: f64) -> f64 {
+pub(crate) fn normal_cdf(x: f64) -> f64 {
     0.5 * libm::erfc(-x / std::f64::consts::SQRT_2)
 }
 

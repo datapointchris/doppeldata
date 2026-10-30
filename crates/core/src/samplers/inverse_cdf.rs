@@ -114,6 +114,24 @@ impl InverseCdf {
             .collect()
     }
 
+    /// The least level whose value reaches `value`, or above it where `above`: 0 below the curve, 1 past it.
+    pub(crate) fn level_of(&self, value: f64, above: bool) -> f64 {
+        let past = |v: f64| if above { v > value } else { v >= value };
+        let Some(at) = self.values.iter().position(|&v| past(v)) else {
+            return 1.0;
+        };
+        if at == 0 {
+            return 0.0;
+        }
+        let (low, high) = (self.values[at - 1], self.values[at]);
+        let (from, to) = (self.levels[at - 1], self.levels[at]);
+        if high > low {
+            from + (value - low) / (high - low) * (to - from)
+        } else {
+            to
+        }
+    }
+
     /// The value at level `u`, for `u` in [0, 1).
     pub(crate) fn value_at(&self, u: f64) -> f64 {
         let bucket = ((u * BUCKETS as f64) as usize).min(BUCKETS - 1);

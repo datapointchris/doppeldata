@@ -38,6 +38,8 @@ use crate::rng::BLOCK_ROWS;
 use crate::samplers::BlockPosition;
 use crate::samplers::ColumnPlan;
 use crate::samplers::ColumnSite;
+use crate::samplers::DependentColumns;
+use crate::samplers::DrawnColumns;
 use crate::samplers::PlanContext;
 use crate::samplers::TextCell;
 use crate::samplers::column_plan;
@@ -91,6 +93,12 @@ pub enum ColumnFault {
     StructWithoutFields,
     /// `missing_tokens` whose rates, each a share of rows, sum above the column's null rate.
     TokensExceedNullRate,
+    /// A dependence between columns names a column the table lacks.
+    UnknownColumn,
+    /// A dependence between columns the engine cannot draw: an expression that does not parse, a column of a
+    /// kind the dependence cannot apply to, a value its column's type cannot hold, or one that would make a
+    /// column depend on itself.
+    InvalidDependence,
 }
 
 impl ColumnFault {
@@ -106,6 +114,8 @@ impl ColumnFault {
             Self::InvalidExtreme => "invalid-extreme",
             Self::StructWithoutFields => "struct-without-fields",
             Self::TokensExceedNullRate => "tokens-exceed-null-rate",
+            Self::UnknownColumn => "unknown-column",
+            Self::InvalidDependence => "invalid-dependence",
         }
     }
 }
@@ -179,6 +189,7 @@ pub struct Plan {
     /// The schema the samplers' rows carry, before any perturbation.
     generated_schema: SchemaRef,
     columns: Vec<ColumnPlan>,
+    dependent: DependentColumns,
     block_count: u64,
     stages: Vec<PlannedStage>,
     drift: Option<SchemaDriftPlan>,
@@ -332,6 +343,7 @@ pub fn plan_with_scenario(
         }
         planned.push(column_plan(&context, column, &ColumnSite::top_level(index, column))?);
     }
+    let dependent = DependentColumns::plan(&context, table, &mut planned)?;
     let mut identity = DatasetIdentity::new(profile_digest, seed, rows);
     if let Some(applied) = scenario {
         if !is_sha256_digest(applied.digest) {
@@ -359,6 +371,7 @@ pub fn plan_with_scenario(
         identity,
         generated_schema: Arc::new(Schema::new_with_metadata(fields, metadata)),
         columns: planned,
+        dependent,
         block_count: rows.div_ceil(BLOCK_ROWS),
         stages: Vec::new(),
         drift: None,
@@ -523,7 +536,7 @@ impl Plan {
                 index,
                 id: &ids[index],
             };
-            let cdc = perturbations::plan_cdc(op, &planning, &self.columns)?;
+            let cdc = perturbations::plan_cdc(op, &planning, &self.columns, self.dependent.following())?;
             refuse_beside_cdc(scenario, &cdc)?;
             self.cdc = Some(cdc);
         }
@@ -639,6 +652,11 @@ impl Plan {
             .collect()
     }
 
+    /// The names of the columns each Gaussian copula draws together, each group sorted.
+    pub fn copula_groups(&self) -> Vec<Vec<String>> {
+        self.dependent.copula_groups()
+    }
+
     fn position(&self, block: u64) -> Result<(BlockPosition, usize), BlockOutOfRange> {
         if block >= self.block_count {
             return Err(BlockOutOfRange {
@@ -665,11 +683,27 @@ impl Plan {
 
     /// `rows` rows drawn at `position`, every perturbation up to `through` applied.
     fn staged(&self, position: &BlockPosition, rows: usize, through: usize, cells: bool) -> Block {
-        let arrays = self.columns.iter().map(|column| column.generate(position, rows)).collect();
         let options = RecordBatchOptions::new().with_row_count(Some(rows));
+        let (arrays, cells) = match self.dependent.is_empty() {
+            true => {
+                let arrays = self.columns.iter().map(|column| column.generate(position, rows)).collect();
+                let cells = cells.then(|| self.columns.iter().map(|column| column.text_cells(position, rows)).collect());
+                (arrays, cells)
+            }
+            false => {
+                let DrawnColumns { arrays, nulls } = self.dependent.generate(&self.columns, position, rows);
+                let cells = cells.then(|| {
+                    self.columns
+                        .iter()
+                        .zip(&nulls)
+                        .map(|(column, nulls)| column.text_cells_given(position, rows, nulls.as_ref()))
+                        .collect()
+                });
+                (arrays, cells)
+            }
+        };
         let batch = RecordBatch::try_new_with_options(self.generated_schema.clone(), arrays, &options)
             .expect("every column's array matches its field");
-        let cells = cells.then(|| self.columns.iter().map(|column| column.text_cells(position, rows)).collect());
         let mut placed = Block { batch, cells, homes: None };
         for (index, stage) in self.stages[..through].iter().enumerate() {
             let at = perturbations::Stage {

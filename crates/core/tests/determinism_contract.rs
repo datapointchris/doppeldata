@@ -36,10 +36,10 @@ const _: () = assert!(
 /// expected table. A release freezes the version and every hash beside it: once released, a change
 /// to any value raises STREAM_VERSION. `crates/check-stream-version-raised.sh` reads these lines
 /// and refuses a new hash at a released version.
-const PINNED_STREAM_VERSION: u32 = 9;
-const PINNED_VALUES: &str = "5b1f0e247a6e63037c68c74370b06d3c9ff321427de3eed57ee6b348fdf14f03";
-const PINNED_SCENARIO_VALUES: &str = "b41a2f0cf005eea2961f4c01edd10cce28762df492da6fc619812bef83daf6e7";
-const PINNED_CDC_VALUES: &str = "f9032a90598cad987720a5143c89e0bcf0c21fb7b0d74dd5d5df98fbf37a1a7b";
+const PINNED_STREAM_VERSION: u32 = 10;
+const PINNED_VALUES: &str = "e94b2a09dea184e612515d8cf3af10c945ce269a87457ff7652aec2e7806edb4";
+const PINNED_SCENARIO_VALUES: &str = "a5ab8058ba012f2dafbf9a493347d8a11cb30f5a35e1bd6f19d78b81f47f00c5";
+const PINNED_CDC_VALUES: &str = "06c550d0a6294e9c0b73314914aaca66057d1bae1c72aa9133e712fc9d4a5063";
 
 fn document(path: &Path) -> serde_json::Value {
     let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -207,12 +207,12 @@ fn a_dataset_identity_digests_to_its_pinned_value() {
         concat!(
             r#"{"dataset_rows":"10000000","#,
             r#""profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
-            r#""scenario_digest":null,"seed":"18446744073709551615","stream_version":9}"#
+            r#""scenario_digest":null,"seed":"18446744073709551615","stream_version":10}"#
         )
     );
     assert_eq!(
         identity.digest(),
-        "sha256:61a833f5d648990c86922d5ad6639673dd10febfc4944d00b036322b4511421d"
+        "sha256:71ab1af9546001685b3a359c4819f9c5d419819814bf51e1cc7bfab429efaa24"
     );
     let with_scenario = identity.with_scenario(SCENARIO_DIGEST);
     assert_eq!(
@@ -221,11 +221,11 @@ fn a_dataset_identity_digests_to_its_pinned_value() {
             r#"{"dataset_rows":"10000000","#,
             r#""profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
             r#""scenario_digest":"sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","#,
-            r#""seed":"18446744073709551615","stream_version":9}"#
+            r#""seed":"18446744073709551615","stream_version":10}"#
         )
     );
     assert_eq!(
         with_scenario.digest(),
-        "sha256:e8aa84a5d7bfb88cfc9d2b17894b2f174dbc29cef43d131e06d365a093a5b822"
+        "sha256:3f81730d9a2b05fec747d9af7251d0ee6adf007029216e71318a27d82f596324"
     );
 }

@@ -19,8 +19,10 @@ from doppeldata.privacy_policy.literal_fields import ColumnLiterals
 from doppeldata.privacy_policy.literal_fields import Fault
 from doppeldata.privacy_policy.literal_fields import FieldKind
 from doppeldata.privacy_policy.literal_fields import LiteralField
+from doppeldata.privacy_policy.literal_fields import given_keys
 from doppeldata.privacy_policy.literal_fields import listed_values
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
+from doppeldata.profile_format import PointerParts
 
 ZIP_PREFIX = re.compile(r'\d{3}')
 YEAR_START = re.compile(r'\d{4}-01-01(?:[T ]00:00(?::00(?:\.0+)?)?)?(?:Z|[+-]\d\d:?\d\d)?')
@@ -132,33 +134,80 @@ def treatment_faults(column: ColumnLiterals, treatment: Treatment, oldest_birth_
     return found
 
 
-def conditional_faults(table: dict[str, Any], index: int, policy: Policy) -> list[Fault]:
-    """Where the table's conditional at `index` names a column that lists no values, a value its column does not list,
-    or under `strict` and `healthcare` a quasi-identifier. A column whose list the policy withheld lists none."""
-    conditional = table['dataset']['conditionals'][index]
-    at = ('dataset', 'conditionals', index)
-    columns = {column.get('name'): column for column in table.get('columns') or [] if isinstance(column, dict)}
-    rows = conditional.get('table') or {}
-    held = {'given': set(rows), 'column': {value for row in [*rows.values(), conditional.get('other') or {}] for value in row}}
+def conditional_faults(table: dict[str, Any], index: int, policy: Policy, name: str = 'conditionals') -> list[Fault]:
+    """Where the entry at `index` of the dataset's list `name`, one of `GIVEN_LISTS`, names a column that lists no values
+    where its values are keys, a value its column does not list, or under `strict` and `healthcare` a quasi-identifier.
+    A column whose list the policy withheld lists none. A conditional table's child holds listed values as its cells'
+    keys, and a numeric child of conditional quantiles or rates holds none."""
+    entry = table['dataset'][name][index]
+    at = ('dataset', name, index)
+    held: dict[str, set[str] | None] = {'given': given_keys(name, entry), 'column': None}
+    if name == 'conditionals':
+        rows = entry.get('table') or {}
+        held['column'] = {value for row in [*rows.values(), entry.get('other') or {}] for value in row}
+    roles: list[tuple[PointerParts, Any, set[str] | None]] = [((role,), entry.get(role), values) for role, values in held.items()]
+    return keyed_faults(table, at, roles, policy, 'conditional table')
+
+
+def lag_faults(table: dict[str, Any], column: ColumnLiterals, policy: Policy) -> list[Fault]:
+    """Where a column's lag counts from a quasi-identifier under `strict` or `healthcare`, or under `healthcare` from or
+    to a date of birth, which turns the lag into an age."""
+    derived = column.column.get('derived') or {}
+    if derived.get('kind') != 'timedelta':
+        return []
+    base, at = str(derived.get('base')), (*column.path, 'derived', 'lag')
+    columns = {entry.get('name'): entry for entry in table.get('columns') or [] if isinstance(entry, dict)}
     found = []
-    for role, values in held.items():
-        name = conditional.get(role)
+    if not policy.joins_quasi_identifiers and ((columns.get(base) or {}).get('semantic') or {}).get('sensitivity') == 'quasi_identifier':
+        detail = f'{base} is a quasi-identifier under {policy.value}; expected no lag counted from it'
+        found.append(Fault('conditional-quasi-identifier', at, detail))
+    born = next((name for name in (column.name, base) if is_birth_date(name)), None)
+    if policy is Policy.HEALTHCARE and born:
+        detail = f'{born} is a date of birth under healthcare, so the lag from {base} to {column.name} states an age; expected no lag'
+        found.append(Fault('birth-date-lag', at, detail))
+    return found
+
+
+def lookup_faults(table: dict[str, Any], index: int, policy: Policy) -> list[Fault]:
+    """As `conditional_faults`, for the lookup table of the dependency at `index`: each key a listed value of its
+    left-hand column, and each value one of its right-hand column's. A dependency stating no table has none."""
+    dependency = table['dataset']['dependencies'][index]
+    looked_up = dependency.get('table')
+    if not looked_up:
+        return []
+    lhs = (dependency.get('lhs') or [None])[0]
+    roles: list[tuple[PointerParts, Any, set[str] | None]] = [
+        (('lhs', 0), lhs, set(looked_up)),
+        (('rhs',), dependency.get('rhs'), set(looked_up.values())),
+    ]
+    return keyed_faults(table, ('dataset', 'dependencies', index), roles, policy, 'lookup table')
+
+
+def keyed_faults(
+    table: dict[str, Any], at: PointerParts, roles: list[tuple[PointerParts, Any, set[str] | None]], policy: Policy, naming: str
+) -> list[Fault]:
+    """Where each role's column, by name, lists no values, holds a value it does not list, or is a quasi-identifier
+    under a policy that never joins one. Each role sits at its parts below `at`. A role whose values are None needs no
+    list, and is checked as a quasi-identifier alone."""
+    columns = {column.get('name'): column for column in table.get('columns') or [] if isinstance(column, dict)}
+    found = []
+    for role, name, values in roles:
+        role_at = (*at, *role)
         column = columns.get(name) or {}
+        if not policy.joins_quasi_identifiers and (column.get('semantic') or {}).get('sensitivity') == 'quasi_identifier':
+            detail = f'{name} is a quasi-identifier under {policy.value}; expected no {naming} naming it'
+            found.append(Fault('conditional-quasi-identifier', role_at, detail))
+        if values is None:
+            continue
         listed = listed_values(column)
         if listed is None:
-            found.append(
-                Fault(
-                    'conditional-column-unlisted', (*at, role), f'{name} lists no values; expected a column whose values the profile lists'
-                )
-            )
+            detail = f'{name} lists no values; expected a column whose values the profile lists'
+            found.append(Fault('conditional-column-unlisted', role_at, detail))
             continue
-        if not policy.joins_quasi_identifiers and (column.get('semantic') or {}).get('sensitivity') == 'quasi_identifier':
-            detail = f'{name} is a quasi-identifier under {policy.value}; expected no conditional table naming it'
-            found.append(Fault('conditional-quasi-identifier', (*at, role), detail))
         unlisted = sorted(values - set(listed))
         if unlisted:
             detail = f'{name} holds {", ".join(map(repr, unlisted[:3]))}, which it does not list; expected only its listed values'
-            found.append(Fault('conditional-value-unlisted', (*at, role), detail))
+            found.append(Fault('conditional-value-unlisted', role_at, detail))
     return found
 
 

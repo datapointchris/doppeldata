@@ -115,6 +115,10 @@ pub struct MetricResult {
     /// A pair's second column, for a score of two columns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paired_with: Option<String>,
+    /// The value of `paired_with` the metric's value is worst within, for a metric of one column
+    /// given another, such as `conditional_kl`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worst_given_value: Option<String>,
     /// The metric's value. It is null where `unmeasured` says why the other profile cannot supply
     /// it, and where `skipped_by` names the perturbation that moves it.
     pub value: Option<f64>,

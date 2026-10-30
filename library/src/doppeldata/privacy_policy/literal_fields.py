@@ -46,7 +46,10 @@ class FieldKind(enum.Enum):
     FIT = ('fit', 'fitted within the trimmed extremes', 'fitted family')
     SEQUENCE = ('sequence', 'follows the trimmed extreme', 'sequence start')
     CONDITIONAL = ('conditional', 'cell >= k_min', 'conditional table')
+    CONDITIONAL_QUANTILES = ('conditional_quantiles', 'k_min rows from each end', 'conditional quantiles')
+    CONDITIONAL_RATES = ('conditional_rates', 'cell >= k_min', 'conditional rates')
     DEPENDENCY = ('dependency', 'lhs >= k_min', 'functional dependency')
+    LAG = ('lag', 'k_min rows from each end', 'lag')
 
     @property
     def rule(self) -> str:
@@ -80,7 +83,8 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
             'type_mix',
         )
     )
-    | {'missing_tokens': FieldKind.MISSING_TOKENS},
+    # An expression names columns and holds no data value, so only a timedelta's lag is read.
+    | {'missing_tokens': FieldKind.MISSING_TOKENS, 'derived': FieldKind.LAG},
     'BooleanStats': {'true_rate': FieldKind.BOOLEAN},
     # `other_rate` and `overflow` count what a top-value list leaves out, so they are read as part of it.
     'NumericStats': dict.fromkeys(
@@ -118,7 +122,18 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
     },
     # A key, a correlation and a dependency name columns, and a repeated row's share is written as 0 under k_min rows.
     'Dataset': dict.fromkeys(('row_count', 'duplicate_row_rate', 'keys', 'correlations', 'correlation_ratios'))
-    | {'conditionals': FieldKind.CONDITIONAL, 'dependencies': FieldKind.DEPENDENCY},
+    | {
+        'conditionals': FieldKind.CONDITIONAL,
+        'conditional_quantiles': FieldKind.CONDITIONAL_QUANTILES,
+        'conditional_rates': FieldKind.CONDITIONAL_RATES,
+        'dependencies': FieldKind.DEPENDENCY,
+    },
+}
+# The dataset's lists naming a parent column and the values of it each entry is drawn given, with the kind each holds.
+GIVEN_LISTS = {
+    'conditionals': FieldKind.CONDITIONAL,
+    'conditional_quantiles': FieldKind.CONDITIONAL_QUANTILES,
+    'conditional_rates': FieldKind.CONDITIONAL_RATES,
 }
 
 
@@ -277,22 +292,53 @@ def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None,
         if temporal.get(name):
             cells = tuple(Cell((*at, 'temporal', name, index), share(rate, held), True) for index, rate in enumerate(temporal[name]))
             yield LiteralField((*at, 'temporal', name), FieldKind.CALENDAR_SHARES, sum(1 for rate in temporal[name] if rate), cells)
+    derived = column.get('derived') or {}
+    lag = derived.get('lag') if derived.get('kind') == 'timedelta' else None
+    if lag:
+        lag_at = (*at, 'derived', 'lag')
+        cells = quantile_field((*lag_at, 'quantiles'), lag.get('quantiles') or {}, held).cells
+        # A trimmed end holds k_min rows beyond it at both ends where the rows reach 2·k_min − 1, as an extreme's check asks.
+        middle = (held + 1) / 2 if held is not None else None
+        cells += tuple(Cell((*lag_at, end), middle) for end in ('min', 'max') if lag.get(end) is not None)
+        yield LiteralField(lag_at, FieldKind.LAG, len(cells), cells)
 
 
 def dataset_literals(table: dict[str, Any]) -> Iterator[LiteralField]:
-    """Each conditional table and each dependency as one field, which `privacy.dataset_audit` names by its pointer.
+    """Each entry of a list `GIVEN_LISTS` names, and each dependency, as one field, which `privacy.dataset_audit` names
+    by its pointer. A conditional table's values are its cells, conditional quantiles' each quantile, conditional rates'
+    each rate, and a dependency's the entries of its lookup table, or 1 where it states none.
 
     The file counts neither a cell's rows nor a dependency's left-hand values, so neither is recomputed from it, and
     `min_count` in the audit is what states them.
     """
     dataset = table.get('dataset') or {}
-    for index, conditional in enumerate(dataset.get('conditionals') or []):
-        if isinstance(conditional, dict):
-            rows = [*(conditional.get('table') or {}).values(), conditional.get('other') or {}]
-            cells = sum(len(row) for row in rows if isinstance(row, dict))
-            yield LiteralField(('dataset', 'conditionals', index), FieldKind.CONDITIONAL, cells)
-    for index, _ in enumerate(dataset.get('dependencies') or []):
-        yield LiteralField(('dataset', 'dependencies', index), FieldKind.DEPENDENCY, 1)
+    for name, kind in GIVEN_LISTS.items():
+        for index, entry in enumerate(dataset.get(name) or []):
+            if isinstance(entry, dict):
+                yield LiteralField(('dataset', name, index), kind, given_values(name, entry))
+    for index, dependency in enumerate(dataset.get('dependencies') or []):
+        looked_up = dependency.get('table') if isinstance(dependency, dict) else None
+        yield LiteralField(('dataset', 'dependencies', index), FieldKind.DEPENDENCY, len(looked_up) if looked_up else 1)
+
+
+def given_values(name: str, entry: dict[str, Any]) -> int:
+    """The literals one entry of the dataset's list `name` holds."""
+    if name == 'conditionals':
+        groups = [*(entry.get('table') or {}).values(), entry.get('other') or {}]
+    elif name == 'conditional_quantiles':
+        groups = [*(entry.get('quantiles') or {}).values(), entry.get('other') or {}]
+    else:
+        groups = [entry.get('zero_rate') or {}, entry.get('null_rate') or {}, entry.get('other') or {}]
+    return sum(len(group) for group in groups if isinstance(group, dict))
+
+
+def given_keys(name: str, entry: dict[str, Any]) -> set[str]:
+    """The values of the parent column one entry of the dataset's list `name` is drawn given."""
+    if name == 'conditionals':
+        return set(entry.get('table') or {})
+    if name == 'conditional_quantiles':
+        return set(entry.get('quantiles') or {})
+    return {key for rates in (entry.get('zero_rate'), entry.get('null_rate')) if isinstance(rates, dict) for key in rates}
 
 
 def listed_values(column: dict[str, Any]) -> list[str] | None:
@@ -386,6 +432,8 @@ def sequence_start(end: int, step: int, k_min: int) -> int:
 def min_count(field: LiteralField, k_min: int) -> int | None:
     """The fewest rows any literal or cell of the field rests on, as `privacy.audit` records it."""
     if field.kind in (FieldKind.NUMERIC_EXTREMES, FieldKind.TEMPORAL_EXTREMES, FieldKind.DEPENDENCY):
+        return k_min
+    if field.kind is FieldKind.LAG and any(cell.path[-1] in ('min', 'max') for cell in field.cells):
         return k_min
     counts = [round(cell.rows) for cell in field.cells if cell.rows is not None and round(cell.rows) > 0]
     return min(counts) if counts else None

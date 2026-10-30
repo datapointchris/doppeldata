@@ -43,6 +43,7 @@ use crate::rng::unit;
 use crate::samplers::BlockPosition;
 use crate::samplers::ColumnPlan;
 use crate::samplers::ColumnSite;
+use crate::samplers::FollowingColumns;
 use crate::samplers::column_plan;
 use crate::scenario::Cdc;
 use crate::scenario::CdcStyle;
@@ -69,8 +70,10 @@ pub struct CdcPlan {
     /// Every column an update holds: the op's key, and each column of the profile's primary key.
     fixed: Vec<String>,
     /// Each column an update may change, by its place in the rows, with the sampler its new
-    /// values are drawn from.
+    /// values are drawn from. Each is drawn alone, from its own marginal.
     updatable: Vec<(usize, ColumnPlan)>,
+    /// The columns derived or looked up from others, recomputed where an update changes what they read.
+    following: FollowingColumns,
     full_load_rows: u64,
     block_count: u64,
     insert_rows: u64,
@@ -92,7 +95,7 @@ pub struct CdcPlan {
     faults_key: u64,
 }
 
-pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan]) -> Result<CdcPlan, PlanError> {
+pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan], following: FollowingColumns) -> Result<CdcPlan, PlanError> {
     let invalid = |field: &str, message: String| planning.refuse(ScenarioFault::InvalidParameter, field, message);
     if op.schema.is_empty() || op.schema.contains('/') || op.schema == "." || op.schema == ".." {
         return Err(invalid(
@@ -153,7 +156,10 @@ pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan]) ->
     let context = planning.sampler_context(&sampler_table);
     let mut updatable = Vec::new();
     for (index, field) in planning.schema.fields().iter().enumerate() {
-        let Some(column) = profile_columns.get(index).filter(|column| !fixed.contains(&column.name)) else {
+        let Some(column) = profile_columns
+            .get(index)
+            .filter(|column| !fixed.contains(&column.name) && !following.follows(index))
+        else {
             continue;
         };
         let sampler = column_plan(&context, column, &ColumnSite::top_level(index, column))?;
@@ -196,6 +202,7 @@ pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan]) ->
         data_schema: planning.schema.clone(),
         fixed,
         updatable,
+        following,
         full_load_rows: planning.rows,
         block_count: planning.block_count,
         insert_rows: libm::round(inserts * planning.rows as f64) as u64,
@@ -443,7 +450,7 @@ impl CdcPlan {
                 });
             }
         }
-        let arrays: Vec<ArrayRef> = (0..width)
+        let mut arrays: Vec<ArrayRef> = (0..width)
             .map(|column| {
                 let mut from: Vec<&dyn Array> = vec![base.column(column).as_ref()];
                 if let Some(at) = updatable_at[column] {
@@ -452,6 +459,12 @@ impl CdcPlan {
                 interleave(&from, &sources[column]).expect("every source is a row of its array")
             })
             .collect();
+        let mut changed: Vec<Vec<bool>> = sources
+            .iter()
+            .map(|sources| sources.iter().map(|(array, _)| *array == 1).collect())
+            .collect();
+        let base_rows: Vec<usize> = changes.iter().map(|change| (change.row - first_row) as usize).collect();
+        self.following.refresh(&mut arrays, base.columns(), &base_rows, &mut changed);
         batch(base.schema(), arrays, changes.len())
     }
 }

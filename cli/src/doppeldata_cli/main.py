@@ -313,6 +313,7 @@ def profile_create(
             metavar='FILE',
             help=(
                 "Count each column against FILE's histogram edges and value list, writing the rows outside them as overflow. "
+                'Every correlation and conditional pair FILE states is stated again, however weak, where k_min allows. '
                 'FILE is returned unchanged when nothing it was made from has changed: the files, the settings, '
                 'the versions of the tools, readers and detector packs that made it, and the code lists it read.'
             ),

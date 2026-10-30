@@ -126,6 +126,10 @@ class Plan:
         divided among, and ``elapsed_ms`` the time from the claim. A range with no record leaves
         the partial manifest under the claim's name, and raises.
         """
+    def copula_groups(self, /) -> list[list[str]]:
+        """
+        The names of the columns each Gaussian copula draws together, each group sorted.
+        """
     @property
     def dataset_digest(self, /) -> str:
         """

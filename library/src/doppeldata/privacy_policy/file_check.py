@@ -17,12 +17,15 @@ from doppeldata.privacy_policy.column_treatment import ColumnFacts
 from doppeldata.privacy_policy.column_treatment import Policy
 from doppeldata.privacy_policy.column_treatment import column_treatment
 from doppeldata.privacy_policy.column_treatment import oldest_birth_year
+from doppeldata.privacy_policy.literal_fields import GIVEN_LISTS
 from doppeldata.privacy_policy.literal_fields import FieldKind
 from doppeldata.privacy_policy.literal_fields import LiteralField
 from doppeldata.privacy_policy.literal_fields import column_literals
 from doppeldata.privacy_policy.literal_fields import dataset_literals
 from doppeldata.privacy_policy.literal_fields import faults
 from doppeldata.privacy_policy.treatment_rules import conditional_faults
+from doppeldata.privacy_policy.treatment_rules import lag_faults
+from doppeldata.privacy_policy.treatment_rules import lookup_faults
 from doppeldata.privacy_policy.treatment_rules import refused
 from doppeldata.privacy_policy.treatment_rules import treatment_faults
 from doppeldata.profile_format import Bundle
@@ -172,9 +175,12 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
             violations.append(Violation(fault.code, pointer((*at, *fault.path)), None, treatment.value, fault.detail))
         for field in column.fields:
             fields += 1
-            refusal = refused(field, column, treatment)
-            if refusal:
+            refusals = [found for found in [refused(field, column, treatment)] if found]
+            if field.kind is FieldKind.LAG:
+                refusals += lag_faults(table, column, policy)
+            for refusal in refusals:
                 violations.append(Violation(refusal.code, pointer((*at, *refusal.path)), None, treatment.value, refusal.detail))
+            if refusals:
                 continue
             index = audited.get((column.name, column.within(field)))
             if index is None:
@@ -196,9 +202,10 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
     dataset_seen: set[int] = set()
     for field in dataset_literals(table):
         fields += 1
-        if field.kind is FieldKind.CONDITIONAL:
-            for fault in conditional_faults(table, int(field.path[-1]), policy):
-                violations.append(Violation(fault.code, pointer((*at, *fault.path)), field.kind.rule, None, fault.detail))
+        name, index = str(field.path[1]), int(field.path[2])
+        keyed = conditional_faults(table, index, policy, name) if name in GIVEN_LISTS else lookup_faults(table, index, policy)
+        for keyed_fault in keyed:
+            violations.append(Violation(keyed_fault.code, pointer((*at, *keyed_fault.path)), field.kind.rule, None, keyed_fault.detail))
         audited_at = dataset_audited.get(field.pointer)
         if audited_at is None:
             detail = f'no privacy.dataset_audit entry for the {field.kind.label} at {field.pointer}; expected one with that field'
@@ -212,7 +219,7 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
             violations.append(Violation('rows-not-stated', pointer(entry_at), field.kind.rule, None, detail))
     for index, entry in enumerate(dataset_audit):
         if index not in dataset_seen:
-            detail = f'the file holds no conditional table or dependency at {entry.get("field")}; expected the pointer of one it holds'
+            detail = f'the file holds no dependence between columns at {entry.get("field")}; expected the pointer of one it holds'
             violations.append(Violation('stale-audit-entry', pointer((*at, 'privacy', 'dataset_audit', index)), None, None, detail))
     return TableCheck(name, policy.value, k_min, fields, violations)
 

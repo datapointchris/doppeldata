@@ -1,0 +1,410 @@
+//! A Gaussian copula over a group of numeric columns. The profile's Spearman values become Pearson
+//! correlations, and each pair the profile leaves out is filled as conditionally independent given
+//! the stated ones. Only where no such matrix exists is it repaired, to the valid matrix nearest the
+//! stated pairs. Each row's correlated normals become one uniform level per column. Every operation is IEEE
+//! arithmetic, `sqrt` or a libm function, so the levels are the same bits on every platform.
+//!
+//! Two continuous columns hold the Spearman value `ρ` under the Pearson `2·sin(πρ/6)`. A column
+//! many of whose rows hold one value ties their ranks, which lowers the Spearman value its pairs
+//! hold. So a pair with such a column takes the Pearson whose values hold `ρ` with their ties, as
+//! NORTA (Cario and Nelson, 1997) calibrates one: each column's tie-averaged ranks as a series in
+//! Hermite polynomials of its normal, whose correlation is a power series in the Pearson.
+
+use std::f64::consts::PI;
+
+use crate::rng::open_unit;
+use crate::rng::rng_for;
+use crate::rng::stream_key;
+use crate::samplers::fitted_family::normal_cdf;
+use crate::samplers::fitted_family::normal_quantile;
+
+/// The least eigenvalue a repaired matrix keeps, so its Cholesky factor exists.
+const EIGEN_FLOOR: f64 = 1e-6;
+/// The most Jacobi sweeps the repair takes. A matrix of a few dozen columns converges in under ten.
+const JACOBI_SWEEPS: usize = 64;
+/// The most sweeps the completion of unstated pairs takes, and the largest change of an entry that settles it.
+const COMPLETION_SWEEPS: usize = 500;
+const COMPLETION_TOLERANCE: f64 = 1e-12;
+/// The most projections the repair of stated pairs no matrix holds takes, and the largest change of an entry that
+/// settles it.
+const REPAIR_SWEEPS: usize = 2000;
+const REPAIR_TOLERANCE: f64 = 1e-10;
+/// The normals a column's rank scores are integrated over: this many points, evenly spaced across ±`LATENT_REACH`.
+const LATENT_POINTS: usize = 4001;
+const LATENT_REACH: f64 = 8.0;
+/// The Hermite polynomials a rank score's series holds.
+const HERMITE_TERMS: usize = 256;
+/// A column ties its ranks where one value spans more than this share of its levels.
+pub(crate) const TIE_SHARE: f64 = 0.001;
+/// The bisection steps that find a calibrated Pearson, each halving its interval.
+const CALIBRATION_STEPS: usize = 60;
+/// The largest Pearson magnitude a calibration reaches.
+const PEARSON_REACH: f64 = 0.9999;
+
+/// The normals a rank score is integrated over, their levels, and each one's share of the normal's mass.
+pub(crate) struct LatentGrid {
+    normals: Vec<f64>,
+    pub(crate) levels: Vec<f64>,
+    weights: Vec<f64>,
+}
+
+impl LatentGrid {
+    pub(crate) fn new() -> Self {
+        let step = 2.0 * LATENT_REACH / (LATENT_POINTS - 1) as f64;
+        let normals: Vec<f64> = (0..LATENT_POINTS).map(|at| -LATENT_REACH + at as f64 * step).collect();
+        let levels = normals.iter().map(|&z| normal_cdf(z)).collect();
+        let density: Vec<f64> = normals.iter().map(|&z| libm::exp(-z * z / 2.0)).collect();
+        let total: f64 = density.iter().sum();
+        Self {
+            normals,
+            levels,
+            weights: density.into_iter().map(|mass| mass / total).collect(),
+        }
+    }
+}
+
+/// One member's rank scores as the coefficients of their standardized series in the normalized Hermite polynomials
+/// of its normal, the first left out, or `None` where its values hold no ties and the closed form holds.
+#[derive(Debug, Clone)]
+pub(crate) struct RankScores(Option<Vec<f64>>);
+
+impl RankScores {
+    /// The scores `scores` gives at each of `grid`'s levels, tied or not.
+    pub(crate) fn of(grid: &LatentGrid, scores: &[f64], tied: bool) -> Self {
+        if !tied {
+            return Self(None);
+        }
+        Self::mixed(grid, &[(1.0, scores)])
+    }
+
+    /// The scores of a member drawn through one of several curves, each `(share, scores)` the share of rows drawn
+    /// through it and its score at each of `grid`'s levels. A row's curve is chosen apart from its normal, so a
+    /// partner's scores meet the curves' share-weighted mean, standardized by the spread of every curve's scores.
+    pub(crate) fn mixed(grid: &LatentGrid, curves: &[(f64, &[f64])]) -> Self {
+        let total: f64 = curves.iter().map(|(share, _)| share).sum();
+        let scores: Vec<f64> = (0..grid.levels.len())
+            .map(|at| curves.iter().map(|(share, scores)| share * scores[at]).sum::<f64>() / total)
+            .collect();
+        let mean: f64 = grid.weights.iter().zip(&scores).map(|(w, s)| w * s).sum();
+        let variance: f64 = curves
+            .iter()
+            .map(|(share, curve)| {
+                share / total
+                    * grid
+                        .weights
+                        .iter()
+                        .zip(*curve)
+                        .map(|(w, s)| w * (s - mean) * (s - mean))
+                        .sum::<f64>()
+            })
+            .sum();
+        if variance <= 0.0 {
+            return Self(None);
+        }
+        let mut coefficients = vec![0.0; HERMITE_TERMS];
+        for ((&z, &weight), &score) in grid.normals.iter().zip(&grid.weights).zip(&scores) {
+            let (mut previous, mut current) = (1.0, z);
+            for (k, coefficient) in coefficients.iter_mut().enumerate() {
+                *coefficient += weight * (score - mean) * current;
+                let next = (z * current - ((k + 1) as f64).sqrt() * previous) / ((k + 2) as f64).sqrt();
+                (previous, current) = (current, next);
+            }
+        }
+        let scale = variance.sqrt();
+        Self(Some(coefficients.into_iter().map(|c| c / scale).collect()))
+    }
+
+    /// The continuous column's scores, its level itself, as a tied column's partner reads them.
+    fn continuous(grid: &LatentGrid) -> Self {
+        Self::of(grid, &grid.levels, true)
+    }
+}
+
+/// The Pearson between two members' normals under which their values hold the Spearman value `rho`, or `None`
+/// where their ties hold no Pearson within [`PEARSON_REACH`] to it.
+pub(crate) fn calibrated(rho: f64, a: &RankScores, b: &RankScores, grid: &LatentGrid) -> Option<f64> {
+    let (a, b) = match (&a.0, &b.0) {
+        (None, None) => return Some(2.0 * libm::sin(PI * rho / 6.0)),
+        (Some(_), None) => (a.clone(), RankScores::continuous(grid)),
+        (None, Some(_)) => (RankScores::continuous(grid), b.clone()),
+        (Some(_), Some(_)) => (a.clone(), b.clone()),
+    };
+    let (Some(a), Some(b)) = (a.0, b.0) else {
+        unreachable!("both sides hold a series")
+    };
+    let spearman = |r: f64| {
+        let mut power = 1.0;
+        a.iter().zip(&b).fold(0.0, |sum, (x, y)| {
+            power *= r;
+            sum + x * y * power
+        })
+    };
+    let (mut low, mut high) = (-PEARSON_REACH, PEARSON_REACH);
+    if rho < spearman(low) || rho > spearman(high) {
+        return None;
+    }
+    for _ in 0..CALIBRATION_STEPS {
+        let middle = (low + high) / 2.0;
+        if spearman(middle) < rho {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    Some((low + high) / 2.0)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CopulaGroup {
+    /// The members' column indices, in the order of their sorted names.
+    pub(crate) members: Vec<usize>,
+    pub(crate) names: Vec<String>,
+    /// The lower-triangular Cholesky factor of the members' Pearson matrix, row by row.
+    factor: Vec<f64>,
+    key: u64,
+    /// Whether no valid matrix holds every stored pair, so the group holds the one nearest them.
+    pub(crate) repaired: bool,
+    /// The stored pairs, by the members' names, whose Spearman value their ties hold under no Pearson, so the
+    /// completion fills them as it fills a pair the profile leaves out.
+    pub(crate) unreachable: Vec<(String, String)>,
+}
+
+impl CopulaGroup {
+    /// The group of `members`, each its column index, name and rank scores, with `spearman` giving each stored
+    /// pair's value by the members' names. A pair it does not store takes the value `completed` fills.
+    pub(crate) fn new(
+        table: &str,
+        mut members: Vec<(usize, String, RankScores)>,
+        grid: &LatentGrid,
+        spearman: impl Fn(&str, &str) -> Option<f64>,
+    ) -> Self {
+        members.sort_by(|a, b| a.1.cmp(&b.1));
+        let k = members.len();
+        let mut matrix = identity(k);
+        let mut stated = vec![false; k * k];
+        let mut unreachable = Vec::new();
+        for i in 0..k {
+            for j in 0..i {
+                let Some(rho) = spearman(&members[i].1, &members[j].1) else {
+                    continue;
+                };
+                let pearson = calibrated(rho.clamp(-1.0, 1.0), &members[i].2, &members[j].2, grid).unwrap_or_else(|| {
+                    unreachable.push((members[j].1.clone(), members[i].1.clone()));
+                    PEARSON_REACH.copysign(rho)
+                });
+                (matrix[i * k + j], matrix[j * k + i]) = (pearson, pearson);
+                (stated[i * k + j], stated[j * k + i]) = (true, true);
+            }
+        }
+        let (factor, repaired) = match completed(&matrix, &stated, k).and_then(|filled| cholesky(&filled, k)) {
+            Some(factor) => (factor, false),
+            None => (
+                cholesky(&nearest_on_stated(&matrix, &stated, k), k).unwrap_or_else(|| identity(k)),
+                true,
+            ),
+        };
+        let names: Vec<String> = members.iter().map(|(_, name, _)| name.clone()).collect();
+        Self {
+            key: stream_key(table, &names.join("\0"), "copula"),
+            members: members.into_iter().map(|(index, _, _)| index).collect(),
+            names,
+            factor,
+            repaired,
+            unreachable,
+        }
+    }
+
+    /// Each member's levels for the block's rows, in the members' order. A row draws one normal per member
+    /// from the group's stream, multiplies them by the factor, and takes each result's normal CDF.
+    pub(crate) fn levels(&self, seed: u64, block: u64, rows: usize) -> Vec<Vec<f64>> {
+        let k = self.members.len();
+        let mut rng = rng_for(seed, self.key, block);
+        let mut levels = vec![Vec::with_capacity(rows); k];
+        let mut normals = vec![0.0; k];
+        for _ in 0..rows {
+            for normal in &mut normals {
+                *normal = normal_quantile(open_unit(&mut rng));
+            }
+            for (i, member) in levels.iter_mut().enumerate() {
+                let row = &self.factor[i * k..i * k + i + 1];
+                let z: f64 = row.iter().zip(&normals).map(|(l, n)| l * n).sum();
+                member.push(normal_cdf(z).min(1.0 - f64::EPSILON));
+            }
+        }
+        levels
+    }
+}
+
+fn identity(k: usize) -> Vec<f64> {
+    let mut matrix = vec![0.0; k * k];
+    for i in 0..k {
+        matrix[i * k + i] = 1.0;
+    }
+    matrix
+}
+
+/// The lower-triangular factor `L` with `L·Lᵀ = matrix`, or `None` where the matrix is not positive definite.
+fn cholesky(matrix: &[f64], k: usize) -> Option<Vec<f64>> {
+    let mut factor = vec![0.0; k * k];
+    for i in 0..k {
+        for j in 0..=i {
+            let sum = matrix[i * k + j] - (0..j).map(|m| factor[i * k + m] * factor[j * k + m]).sum::<f64>();
+            if i == j {
+                if sum <= EIGEN_FLOOR / 2.0 {
+                    return None;
+                }
+                factor[i * k + i] = sum.sqrt();
+            } else {
+                factor[i * k + j] = sum / factor[j * k + j];
+            }
+        }
+    }
+    Some(factor)
+}
+
+/// `matrix` with each pair `stated` leaves out filled so that its inverse is zero there, every stated entry kept: the
+/// maximum-determinant completion of Dempster's covariance selection, a Gaussian graphical model whose missing edges
+/// are conditional independences. Each sweep regresses every member on its stated partners, as Hastie, Tibshirani
+/// and Friedman's Algorithm 17.1 does. `None` where a regression is singular or the sweeps do not settle.
+fn completed(matrix: &[f64], stated: &[bool], k: usize) -> Option<Vec<f64>> {
+    let mut filled = matrix.to_vec();
+    for _ in 0..COMPLETION_SWEEPS {
+        let mut moved = 0.0_f64;
+        for j in 0..k {
+            let partners: Vec<usize> = (0..k).filter(|&i| stated[i * k + j]).collect();
+            let n = partners.len();
+            let mut system = vec![0.0; n * n];
+            for (a, &p) in partners.iter().enumerate() {
+                for (b, &q) in partners.iter().enumerate() {
+                    system[a * n + b] = filled[p * k + q];
+                }
+            }
+            let weights = solved(system, partners.iter().map(|&p| matrix[p * k + j]).collect(), n)?;
+            for i in (0..k).filter(|&i| i != j) {
+                let value: f64 = partners.iter().zip(&weights).map(|(&p, w)| filled[i * k + p] * w).sum();
+                moved = moved.max((value - filled[i * k + j]).abs());
+                (filled[i * k + j], filled[j * k + i]) = (value, value);
+            }
+        }
+        if moved <= COMPLETION_TOLERANCE {
+            return Some(filled);
+        }
+    }
+    None
+}
+
+/// The `x` with `system·x = target`, `system` being `n × n` row by row, by Gaussian elimination with partial
+/// pivoting. `None` where a pivot vanishes.
+fn solved(mut system: Vec<f64>, mut target: Vec<f64>, n: usize) -> Option<Vec<f64>> {
+    for column in 0..n {
+        let pivot = (column..n).max_by(|&a, &b| system[a * n + column].abs().total_cmp(&system[b * n + column].abs()))?;
+        if system[pivot * n + column].abs() <= EIGEN_FLOOR {
+            return None;
+        }
+        for at in 0..n {
+            system.swap(column * n + at, pivot * n + at);
+        }
+        target.swap(column, pivot);
+        for row in column + 1..n {
+            let factor = system[row * n + column] / system[column * n + column];
+            for at in column..n {
+                system[row * n + at] -= factor * system[column * n + at];
+            }
+            target[row] -= factor * target[column];
+        }
+    }
+    let mut x = vec![0.0; n];
+    for row in (0..n).rev() {
+        let known: f64 = (row + 1..n).map(|at| system[row * n + at] * x[at]).sum();
+        x[row] = (target[row] - known) / system[row * n + row];
+    }
+    Some(x)
+}
+
+/// The correlation matrix nearest `matrix` on the pairs `stated` holds, each other pair free: alternating projections
+/// between the matrices whose eigenvalues reach [`EIGEN_FLOOR`] and those holding every stated pair and a unit
+/// diagonal, which settle on the valid matrix nearest the stated pairs, as Higham (2002) finds a nearest correlation
+/// matrix. It is rescaled to a unit diagonal last.
+fn nearest_on_stated(matrix: &[f64], stated: &[bool], k: usize) -> Vec<f64> {
+    let mut held = matrix.to_vec();
+    for _ in 0..REPAIR_SWEEPS {
+        let clipped = eigen_clipped(&held, k);
+        let mut moved = 0.0_f64;
+        for at in 0..k * k {
+            let target = match (at % (k + 1) == 0, stated[at]) {
+                (true, _) => 1.0,
+                (false, true) => matrix[at],
+                (false, false) => clipped[at],
+            };
+            moved = moved.max((target - held[at]).abs());
+            held[at] = target;
+        }
+        if moved <= REPAIR_TOLERANCE {
+            break;
+        }
+    }
+    let mut rebuilt = eigen_clipped(&held, k);
+    let scale: Vec<f64> = (0..k).map(|i| rebuilt[i * k + i].sqrt()).collect();
+    for i in 0..k {
+        for j in 0..k {
+            rebuilt[i * k + j] = if i == j { 1.0 } else { rebuilt[i * k + j] / (scale[i] * scale[j]) };
+        }
+    }
+    rebuilt
+}
+
+/// The symmetric `matrix` with each eigenvalue raised to at least [`EIGEN_FLOOR`].
+fn eigen_clipped(matrix: &[f64], k: usize) -> Vec<f64> {
+    let (values, vectors) = symmetric_eigen(matrix, k);
+    let clipped: Vec<f64> = values.iter().map(|&value| value.max(EIGEN_FLOOR)).collect();
+    let mut rebuilt = vec![0.0; k * k];
+    for i in 0..k {
+        for j in 0..k {
+            rebuilt[i * k + j] = (0..k).map(|m| vectors[i * k + m] * clipped[m] * vectors[j * k + m]).sum();
+        }
+    }
+    rebuilt
+}
+
+/// The eigenvalues of a symmetric matrix and its eigenvectors as columns, by cyclic Jacobi rotations.
+fn symmetric_eigen(matrix: &[f64], k: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut a = matrix.to_vec();
+    let mut v = identity(k);
+    for _ in 0..JACOBI_SWEEPS {
+        let off: f64 = (0..k)
+            .flat_map(|p| (p + 1..k).map(move |q| (p, q)))
+            .map(|(p, q)| a[p * k + q] * a[p * k + q])
+            .sum();
+        if off == 0.0 {
+            break;
+        }
+        for p in 0..k {
+            for q in p + 1..k {
+                let apq = a[p * k + q];
+                if apq == 0.0 {
+                    continue;
+                }
+                let theta = (a[q * k + q] - a[p * k + p]) / (2.0 * apq);
+                let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+                let c = 1.0 / (t * t + 1.0).sqrt();
+                let s = t * c;
+                for r in 0..k {
+                    let (arp, arq) = (a[r * k + p], a[r * k + q]);
+                    a[r * k + p] = c * arp - s * arq;
+                    a[r * k + q] = s * arp + c * arq;
+                }
+                for r in 0..k {
+                    let (apr, aqr) = (a[p * k + r], a[q * k + r]);
+                    a[p * k + r] = c * apr - s * aqr;
+                    a[q * k + r] = s * apr + c * aqr;
+                }
+                for r in 0..k {
+                    let (vrp, vrq) = (v[r * k + p], v[r * k + q]);
+                    v[r * k + p] = c * vrp - s * vrq;
+                    v[r * k + q] = s * vrp + c * vrq;
+                }
+            }
+        }
+    }
+    ((0..k).map(|i| a[i * k + i]).collect(), v)
+}

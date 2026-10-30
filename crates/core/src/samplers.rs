@@ -2,6 +2,7 @@
 //! mask and text-only values every column shares.
 
 mod categorical;
+mod dependent_columns;
 mod distinct_values;
 mod file_rows;
 mod fitted_family;
@@ -10,6 +11,7 @@ mod listed_values;
 mod nested;
 mod numeric;
 mod numeric_top_values;
+mod ranked_marginal;
 mod temporal;
 mod text;
 mod text_cells;
@@ -27,6 +29,9 @@ use arrow_schema::TimeUnit;
 use rand_distr::weighted::WeightedAliasIndex;
 
 use self::categorical::CategoricalSampler;
+pub(crate) use self::dependent_columns::DependentColumns;
+pub(crate) use self::dependent_columns::DrawnColumns;
+pub(crate) use self::dependent_columns::FollowingColumns;
 use self::distinct_values::DistinctTarget;
 use self::distinct_values::ValueIndex;
 pub use self::file_rows::file_rows_draws;
@@ -206,6 +211,9 @@ pub(crate) struct StreamKeys {
     index: u64,
     /// Positioned at an index rather than a block: the value at that index.
     indexed_values: u64,
+    /// A row's draw given another column: its cell of a conditional table, or whether it breaks a lookup or an
+    /// expression.
+    given: u64,
 }
 
 impl StreamKeys {
@@ -220,6 +228,7 @@ impl StreamKeys {
             gap_days: key("gap_days"),
             index: key("index"),
             indexed_values: key("indexed_values"),
+            given: key("given"),
         }
     }
 }
@@ -312,11 +321,16 @@ impl ColumnPlan {
     }
 
     pub(crate) fn text_cells(&self, at: &BlockPosition, rows: usize) -> Vec<TextCell> {
+        self.text_cells_given(at, rows, self.drawn_nulls(at, rows).as_ref())
+    }
+
+    /// As [`Self::text_cells`], for the rows `nulls` drew as null.
+    pub(crate) fn text_cells_given(&self, at: &BlockPosition, rows: usize, nulls: Option<&BooleanBuffer>) -> Vec<TextCell> {
         let Some(text_only) = &self.text_only else {
             return Vec::new();
         };
         let mut tokens = rng_for(at.seed, self.keys.missing_tokens, at.block);
-        text_only.cells(self.drawn_nulls(at, rows).as_ref(), &mut tokens, rows)
+        text_only.cells(nulls, &mut tokens, rows)
     }
 }
 

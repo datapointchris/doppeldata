@@ -834,7 +834,7 @@
           "default": "page"
         },
         "timestamp_unit": {
-          "description": "The unit every timestamp column is cast to. Null keeps each column's own. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
+          "description": "The unit every timestamp column is cast to. Null keeps each column's own. Parquet holds no\nseconds unit, so a column at `s` is stored at `ms`, as pyarrow stores it. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
           "anyOf": [
             {
               "$ref": "#/$defs/TimestampUnit"

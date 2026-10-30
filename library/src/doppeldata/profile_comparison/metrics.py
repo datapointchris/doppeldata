@@ -7,6 +7,7 @@ added to `METRICS` reaches the reports, `--thresholds` and the CLI's help with n
 import dataclasses as dc
 import enum
 import itertools
+import json
 import math
 from collections.abc import Callable
 from collections.abc import Iterator
@@ -14,11 +15,16 @@ from collections.abc import Mapping
 from typing import Any
 from typing import NamedTuple
 
+import rfc8785
+
 from doppeldata import _core
 from doppeldata.profile_format import LISTING_SECTIONS
+from doppeldata.profile_format import UngenerableProfile
 from doppeldata.profile_format import described_rows
+from doppeldata.profile_format import digest_of
 from doppeldata.profile_format import listed_section
 from doppeldata.profile_format import quantile_level
+from doppeldata.profile_format import without_unhashed_fields
 
 Document = dict[str, Any]
 Column = dict[str, Any]
@@ -51,10 +57,13 @@ class Unmeasured(NamedTuple):
 
 @dc.dataclass(frozen=True)
 class Measurement:
-    """One metric's outcome for one column, or for the table where `column` is None."""
+    """One metric's outcome for one column, or for the table where `column` is None. A metric of a pair names its
+    second column in `paired_with`, and one of a column given another the value it is worst within in `given_value`."""
 
     column: str | None
     compared: Compared | Unmeasured
+    paired_with: str | None = None
+    given_value: str | None = None
 
 
 @dc.dataclass(frozen=True)
@@ -464,6 +473,93 @@ def malformed_rate_change(source: Document, observed: Document) -> Iterator[Meas
     yield Measurement(None, max(changes, key=lambda compared: compared.value))
 
 
+def copula_groups(source: Document) -> list[list[str]]:
+    """The columns each Gaussian copula draws together from the source, as the engine plans it, and none where the
+    engine cannot plan the source, as a diff of two profiles may hold one."""
+    canonical = rfc8785.dumps(without_unhashed_fields(source))
+    try:
+        return _core.Plan(json.dumps(source), digest_of(canonical), 0, 1, 'the source profile').copula_groups()
+    except (UngenerableProfile, ValueError):
+        return []
+
+
+def correlation_changes(source: Document, observed: Document) -> Iterator[Measurement]:
+    """For each Gaussian copula the source plans, the largest change in a Spearman correlation it states between two of
+    the copula's columns, as the pair it names. A pair the other profile states no correlation for is the largest."""
+    stated = spearman_values(source)
+    found = spearman_values(observed)
+    for group in copula_groups(source):
+        changes = []
+        for (a, b), value in stated.items():
+            if a not in group or b not in group:
+                continue
+            if (a, b) in found:
+                changes.append(Measurement(a, Compared(abs(found[a, b] - value), value, found[a, b]), paired_with=b))
+            else:
+                missing = f'the other profile states no Spearman correlation between {a} and {b}, which it writes from enough rows'
+                changes.append(Measurement(a, Unmeasured(missing, value), paired_with=b))
+        if changes:
+            yield max(changes, key=lambda change: math.inf if isinstance(change.compared, Unmeasured) else change.compared.value)
+
+
+def spearman_values(document: Document) -> dict[tuple[str, str], float]:
+    """Each Spearman correlation the profile states, by its columns in the order it names them."""
+    correlations = (document.get('dataset') or {}).get('correlations') or []
+    return {(entry['a'], entry['b']): entry['value'] for entry in correlations if entry.get('method') == 'spearman'}
+
+
+# Each share of the other profile is smoothed by this before the divergence is taken, so a child value it holds no row
+# of costs a bounded amount.
+KL_SMOOTHING = 1e-3
+
+
+def conditional_divergences(source: Document, observed: Document) -> Iterator[Measurement]:
+    """For each conditional table the source states, the Kullback-Leibler divergence of the other profile's shares of the
+    child within each given value from the source's, weighted by the given value's share of the source's rows, and summed.
+    The given value adding most is named."""
+    theirs = {(entry['given'], entry['column']): entry for entry in (observed.get('dataset') or {}).get('conditionals') or []}
+    columns = {column['name']: column for column in source.get('columns') or []}
+    for conditional in (source.get('dataset') or {}).get('conditionals') or []:
+        given, child = conditional['given'], conditional['column']
+        other = theirs.get((given, child))
+        if other is None:
+            missing = f'the other profile states no conditional table of {child} given {given}, which it writes from k_min rows a cell'
+            yield Measurement(child, Unmeasured(missing), paired_with=given)
+            continue
+        weights = given_weights(conditional, category_shares(columns.get(given) or {}) or {})
+        rows = other.get('table') or {}
+        added = {}
+        for value, shares in conditional['table'].items():
+            held = rows.get(value, other.get('other'))
+            if held is None:
+                missing = f"the other profile's conditional table of {child} given {given} holds no row for {value} and no other row"
+                yield Measurement(child, Unmeasured(missing), paired_with=given, given_value=value)
+                break
+            added[value] = weights[value] * divergence(shares, held)
+        else:
+            worst = max(added, key=added.__getitem__)
+            yield Measurement(child, Compared(sum(added.values())), paired_with=given, given_value=worst)
+
+
+def given_weights(conditional: dict[str, Any], shares: Mapping[Any, float]) -> dict[str, float]:
+    """Each listed given value's share of the given column's values, scaled to sum to 1, or equal shares where the column
+    lists none."""
+    held = {value: shares.get(value, 0.0) for value in conditional['table']}
+    total = sum(held.values())
+    if not total:
+        return {value: 1 / len(held) for value in held}
+    return {value: share / total for value, share in held.items()}
+
+
+def divergence(p: Mapping[str, float], q: Mapping[str, float]) -> float:
+    """KL(p ‖ q) over `p`'s values and the rest of each as one more, `q` smoothed by `KL_SMOOTHING`."""
+    values = [*p]
+    shares_p = [p[value] for value in values] + [max(0.0, 1 - sum(p.values()))]
+    shares_q = [q.get(value, 0.0) for value in values] + [max(0.0, 1 - sum(q.get(value, 0.0) for value in values))]
+    smoothed = [(share + KL_SMOOTHING) / (1 + KL_SMOOTHING * len(shares_q)) for share in shares_q]
+    return sum(share * math.log(share / held) for share, held in zip(shares_p, smoothed, strict=True) if share > 0)
+
+
 METRICS = (
     Metric(
         'ks',
@@ -535,6 +631,22 @@ METRICS = (
         Bound.AT_MOST,
         0.20,
         malformed_rate_change,
+    ),
+    Metric(
+        'correlation_max_abs_diff',
+        'the largest change in a Spearman correlation the source states between two columns of one Gaussian copula, '
+        'on the pair that moved most',
+        Bound.AT_MOST,
+        0.05,
+        correlation_changes,
+    ),
+    Metric(
+        'conditional_kl',
+        "the Kullback-Leibler divergence of a conditional table's shares from the source's, weighted by each given value's "
+        'share, naming the given value adding most',
+        Bound.AT_MOST,
+        0.05,
+        conditional_divergences,
     ),
 )
 METRICS_BY_NAME = {metric.name: metric for metric in METRICS}

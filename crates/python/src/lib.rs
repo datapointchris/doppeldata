@@ -386,6 +386,11 @@ mod _core {
                 .collect()
         }
 
+        /// The names of the columns each Gaussian copula draws together, each group sorted.
+        fn copula_groups(&self) -> Vec<Vec<String>> {
+            self.plan.copula_groups()
+        }
+
         /// Every row, as one table holding a batch per block, generated on ``threads`` threads,
         /// zero taking one per core. An interrupt stops it and is raised.
         #[pyo3(signature = (*, threads))]

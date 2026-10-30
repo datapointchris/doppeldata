@@ -200,6 +200,13 @@
             "null"
           ],
           "format": "double"
+        },
+        "worst_given_value": {
+          "description": "The value of `paired_with` the metric's value is worst within, for a metric of one column\ngiven another, such as `conditional_kl`.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

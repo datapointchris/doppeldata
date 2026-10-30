@@ -309,6 +309,38 @@ class Backend(Protocol):
         rows hold, and those of these whose `lhs` value holds more than one `rhs` value."""
         ...
 
+    def grouped_quantiles(
+        self, table: Table, requests: list[tuple[str, str, list[str], tuple[float, ...]]]
+    ) -> list[list[tuple[str | None, int, list[float]]]]:
+        """For each `(child, given, keep, levels)`, the numeric `child` within each value of `given` that `keep` lists,
+        written as text, and within every other value not null as one group keyed None: each group's rows holding a
+        child value, and the child's quantile at each of `levels` over them, taken as `aggregate` takes a column's
+        quantiles. A group holding no child value is left out."""
+        ...
+
+    def grouped_rates(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, int, int, int]]]:
+        """For each `(given, child)` pair, each value of `given` written as text, a null as None, with its rows, those
+        whose child is null, and those whose child is zero. A child that is not numeric holds no zero."""
+        ...
+
+    def ordered_shares(self, table: Table, pairs: list[tuple[str, str]]) -> list[tuple[int, int]]:
+        """For each pair of dates or timestamps, the rows holding both, and those whose second is at or after its first."""
+        ...
+
+    def lag_quantiles(
+        self, table: Table, pairs: list[tuple[str, str]], levels: tuple[float, ...], k_min: int
+    ) -> list[tuple[int, list[float], float | None, float | None]]:
+        """For each pair of dates or timestamps, the rows holding both, and of the second less the first, in
+        microseconds, its quantile at each of `levels` and its value at rank k_min from each end, None where fewer
+        rows hold both."""
+        ...
+
+    def expression_matches(self, table: Table, candidates: list[tuple[str, str, str, str, float]]) -> list[tuple[int, int, int]]:
+        """For each `(a, operator, b, target, tolerance)` of numeric columns, the operator one of `+ - * /`, the rows
+        holding all three, those of them where the target or `a operator b` is not zero, and those of the latter whose
+        target lies within `tolerance` of `a operator b`. A division by zero holds for no row."""
+        ...
+
     def foreign_key_counts(self, child: Table, child_column: str, parent: Table, parent_column: str) -> list[tuple[bool, int, int]]:
         """The values of both columns, counted as `(in_parent, child_rows, values)`: how many values the parent holds or
         not that `child_rows` child rows hold. A parent value no child row holds is counted at 0 child rows."""

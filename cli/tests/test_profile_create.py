@@ -161,7 +161,8 @@ def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_an
     pairs = {(entry['a'], entry['b']): entry for entry in dataset['correlations']}
     assert pairs['amount', 'fee']['method'] == 'spearman'
     assert pairs['amount', 'fee']['value'] > 0.9
-    assert {'kind': 'functional', 'lhs': ['plan'], 'rhs': 'tier', 'violation_rate': 0.0} in dataset['dependencies']
+    looked_up = {f'p{i:02d}': ('bronze', 'silver', 'gold', 'platinum')[i // 10] for i in range(40)}
+    assert {'kind': 'functional', 'lhs': ['plan'], 'rhs': 'tier', 'violation_rate': 0.0, 'table': looked_up} in dataset['dependencies']
     conditionals = {(entry['given'], entry['column']): entry for entry in dataset['conditionals']}
     assert {('tier', 'plan'), ('region', 'channel')} <= conditionals.keys()
     for (given, child), entry in conditionals.items():

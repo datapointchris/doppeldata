@@ -258,6 +258,17 @@
             }
           ]
         },
+        "derived": {
+          "description": "How the column is computed from others, in place of being drawn from its own statistics. An engine that\nignores this field draws the column from them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Derived"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "distinct": {
           "anyOf": [
             {
@@ -471,6 +482,89 @@
         "given",
         "column",
         "table"
+      ]
+    },
+    "ConditionalQuantiles": {
+      "description": "The quantiles of the numeric `column` within each value of the categorical `given`, each value a key as a\nconditional table's is. Each row takes the same names `column`'s own quantiles do, and holds its zeros as they\ndo: a zero rate stated for the value given the same column, else `column`'s own, places its run of zeros.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "string"
+        },
+        "given": {
+          "type": "string"
+        },
+        "other": {
+          "description": "`column`'s quantiles over every value of `given` that `quantiles` does not list.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quantiles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quantiles": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Quantiles"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "given",
+        "column",
+        "quantiles"
+      ]
+    },
+    "ConditionalRates": {
+      "description": "The share of `column`'s values that are zero, and of its rows that are null, within each value of the categorical\n`given`, each value a key as a conditional table's is.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "string"
+        },
+        "given": {
+          "type": "string"
+        },
+        "null_rate": {
+          "description": "The share of rows where `column` is null, among the rows holding each value of `given`.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
+        },
+        "other": {
+          "description": "Both rates over every value of `given` that the two maps do not list.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OtherRates"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zero_rate": {
+          "description": "The share of `column`'s values that are zero, among the rows holding each value of `given`.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "given",
+        "column"
       ]
     },
     "Correlation": {
@@ -692,6 +786,24 @@
       "description": "Facts about the table as a whole.",
       "type": "object",
       "properties": {
+        "conditional_quantiles": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ConditionalQuantiles"
+          }
+        },
+        "conditional_rates": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ConditionalRates"
+          }
+        },
         "conditionals": {
           "type": [
             "array",
@@ -865,6 +977,16 @@
         "rhs": {
           "type": "string"
         },
+        "table": {
+          "description": "Each value of a one-column `lhs` at least `k_min` rows hold, with the `rhs` value it determines, each a key as\na conditional table's is. The generator looks `rhs` up here, and draws it from its own statistics for an\n`lhs` value the table does not list.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "violation_rate": {
           "description": "The share of rows whose `lhs` value holds more than one `rhs` value, of the rows whose `lhs` value at least\n`k_min` rows hold.",
           "anyOf": [
@@ -889,6 +1011,72 @@
           "description": "`lhs` determines `rhs`.",
           "type": "string",
           "const": "functional"
+        }
+      ]
+    },
+    "Derived": {
+      "description": "How a column is computed from other columns of its table.",
+      "oneOf": [
+        {
+          "description": "A temporal column offset from `base` by a lag drawn from its quantiles.",
+          "type": "object",
+          "properties": {
+            "base": {
+              "description": "The temporal column the lag is added to.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "timedelta"
+            },
+            "lag": {
+              "$ref": "#/$defs/Lag"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "base",
+            "lag"
+          ]
+        },
+        {
+          "description": "A numeric column computed from others by an arithmetic expression.",
+          "type": "object",
+          "properties": {
+            "expr": {
+              "description": "Column names, numbers, `+ - * /`, parentheses and `round(x)` or `round(x, places)`. A name holding a character\nother than a letter, a digit or `_` is quoted in backticks.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "expression"
+            },
+            "round": {
+              "description": "The decimal places the result is rounded to, else the column's own `numeric.scale`.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "violation_rate": {
+              "description": "The share of rows the expression does not hold for, which draw the column from its own statistics instead.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "expr"
+          ]
         }
       ]
     },
@@ -1593,6 +1781,44 @@
         }
       }
     },
+    "Lag": {
+      "description": "The lag between the base column and the column, at named quantiles as [`Quantiles`] names them, between its\ntrimmed extremes. A date's lag is written in days, and a timestamp's in seconds.",
+      "type": "object",
+      "properties": {
+        "max": {
+          "description": "The lag at rank `k_min` from the high end.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignedDuration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min": {
+          "description": "The lag at rank `k_min` from the low end.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignedDuration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quantiles": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/SignedDuration"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Layout": {
       "type": "object",
       "properties": {
@@ -1978,6 +2204,32 @@
         "rate"
       ]
     },
+    "OtherRates": {
+      "type": "object",
+      "properties": {
+        "null_rate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zero_rate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "ParquetCompression": {
       "oneOf": [
         {
@@ -2076,7 +2328,7 @@
           "default": "page"
         },
         "timestamp_unit": {
-          "description": "The unit every timestamp column is cast to. Null keeps each column's own. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
+          "description": "The unit every timestamp column is cast to. Null keeps each column's own. Parquet holds no\nseconds unit, so a column at `s` is stored at `ms`, as pyarrow stores it. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
           "anyOf": [
             {
               "$ref": "#/$defs/TimestampUnit"
@@ -2636,6 +2888,11 @@
         "shape",
         "rate"
       ]
+    },
+    "SignedDuration": {
+      "description": "A length of time as a whole number, `-` before it where negative, and a unit: ms, s, m, h, d or w, such as 2d or -690s.",
+      "type": "string",
+      "pattern": "^-?[0-9]+(ms|s|m|h|d|w)$"
     },
     "SniffedDialect": {
       "description": "One sniffer's dialect. Each part it named none of is null, and all are where it found no\ndialect.",

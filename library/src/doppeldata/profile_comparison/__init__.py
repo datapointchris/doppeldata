@@ -339,6 +339,7 @@ def metric_row(
     *,
     unmeasured_passes: bool,
     paired_with: str | None = None,
+    worst_given_value: str | None = None,
     decides: bool = True,
 ) -> MetricResult:
     """One measure's row at `threshold`, its value written to `REPORT_DIGITS`. A row that decides nothing passes."""
@@ -354,6 +355,7 @@ def metric_row(
             expected=compared.expected,
             unmeasured=compared.reason,
             paired_with=paired_with,
+            worst_given_value=worst_given_value,
             decides=decides,
         )
     written = significant(compared.value)
@@ -368,6 +370,7 @@ def metric_row(
         expected=compared.expected,
         observed=compared.observed,
         paired_with=paired_with,
+        worst_given_value=worst_given_value,
         decides=decides,
     )
 
@@ -399,6 +402,8 @@ def measured(source: Document, observed: Document, thresholds: Thresholds, *, un
             measurement.compared,
             thresholds.threshold(metric, measurement.column),
             unmeasured_passes=unmeasured_passes,
+            paired_with=measurement.paired_with,
+            worst_given_value=measurement.given_value,
         )
         for metric in METRICS
         for measurement in metric.measure(source, observed)

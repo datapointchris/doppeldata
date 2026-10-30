@@ -411,6 +411,126 @@ class PolarsBackend:
         row = [int(value or 0) for value in totals.collect(engine='streaming').row(0)]
         return [(row[index], row[len(rhs) + index], row[2 * len(rhs) + index]) for index in range(len(rhs))]
 
+    def grouped_quantiles(
+        self, table: pl.LazyFrame, requests: list[tuple[str, str, list[str], tuple[float, ...]]]
+    ) -> list[list[tuple[str | None, int, list[float]]]]:
+        kinds = {spec.name: spec.kind for spec in self.schema(table)}
+        # Children grouped by one parent's same values share a scan and its grouping.
+        shared: dict[tuple[str, tuple[str, ...]], list[int]] = {}
+        for at, (_, given, listed, _) in enumerate(requests):
+            shared.setdefault((given, tuple(listed)), []).append(at)
+        frames = []
+        for (given, keep), indexes in shared.items():
+            text = pl.col(given).cast(pl.String)
+            values = [numeric_value(pl.col(requests[at][0]), kinds[requests[at][0]]).alias(f'v{at}') for at in indexes]
+            counted = []
+            for at in indexes:
+                value = pl.col(f'v{at}')
+                counted += [
+                    value.count().alias(f'n{at}'),
+                    *(value.quantile(level, 'nearest').alias(f'q{at}_{index}') for index, level in enumerate(requests[at][3])),
+                ]
+            frames.append(
+                table.filter(pl.col(given).is_not_null())
+                .select(pl.when(text.is_in(list(keep))).then(text).alias('g'), *values)
+                .group_by('g')
+                .agg(counted)
+            )
+        found: list[list[tuple[str | None, int, list[float]]]] = [[] for _ in requests]
+        for indexes, groups in zip(shared.values(), pl.collect_all(frames, engine='streaming'), strict=True):
+            for row in groups.iter_rows(named=True):
+                for at in indexes:
+                    if row[f'n{at}']:
+                        levels = range(len(requests[at][3]))
+                        found[at].append((row['g'], int(row[f'n{at}']), [float(row[f'q{at}_{index}']) for index in levels]))
+        return found
+
+    def grouped_rates(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, int, int, int]]]:
+        kinds = {spec.name: spec.kind for spec in self.schema(table)}
+
+        def zeros(name: str) -> pl.Expr:
+            if kinds[name] in (ColumnKind.INTEGER, ColumnKind.FLOAT, ColumnKind.DECIMAL):
+                return (pl.col(name) == 0).sum()
+            return pl.lit(0, pl.UInt32)
+
+        by_given: dict[str, list[int]] = {}
+        for at, (given, _) in enumerate(pairs):
+            by_given.setdefault(given, []).append(at)
+        frames = [
+            table.group_by(pl.col(given).cast(pl.String).alias('g')).agg(
+                pl.len().alias('n'),
+                *(pl.col(pairs[at][1]).is_null().sum().alias(f'u{at}') for at in indexes),
+                *(zeros(pairs[at][1]).alias(f'z{at}') for at in indexes),
+            )
+            for given, indexes in by_given.items()
+        ]
+        found: list[list[tuple[str | None, int, int, int]]] = [[] for _ in pairs]
+        for indexes, counted in zip(by_given.values(), pl.collect_all(frames, engine='streaming'), strict=True):
+            for row in counted.iter_rows(named=True):
+                for at in indexes:
+                    found[at].append((row['g'], int(row['n']), int(row[f'u{at}']), int(row[f'z{at}'] or 0)))
+        return found
+
+    def ordered_shares(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[tuple[int, int]]:
+        if not pairs:
+            return []
+        epochs = self.epoch_micros(table, {name for pair in pairs for name in pair})
+        counts = []
+        for at, (first, second) in enumerate(pairs):
+            both = epochs[first].is_not_null() & epochs[second].is_not_null()
+            counts += [both.sum().alias(f'n{at}'), (both & (epochs[second] >= epochs[first])).sum().alias(f'o{at}')]
+        row = table.select(counts).collect(engine='streaming').row(0)
+        return [(int(held), int(ordered)) for held, ordered in zip(row[::2], row[1::2], strict=True)]
+
+    def lag_quantiles(
+        self, table: pl.LazyFrame, pairs: list[tuple[str, str]], levels: tuple[float, ...], k_min: int
+    ) -> list[tuple[int, list[float], float | None, float | None]]:
+        if not pairs:
+            return []
+        epochs = self.epoch_micros(table, {name for pair in pairs for name in pair})
+        measured = []
+        for at, (first, second) in enumerate(pairs):
+            lag = (epochs[second] - epochs[first]).cast(pl.Float64)
+            measured += [
+                lag.count().alias(f'n{at}'),
+                *(lag.quantile(level, 'nearest').alias(f'q{at}_{index}') for index, level in enumerate(levels)),
+                lag.bottom_k(k_min).max().alias(f'l{at}'),
+                lag.top_k(k_min).min().alias(f'h{at}'),
+            ]
+        row = table.select(measured).collect(engine='streaming').row(0, named=True)
+        found = []
+        for at in range(len(pairs)):
+            held = int(row[f'n{at}'])
+            quantiles = [float(row[f'q{at}_{index}']) for index in range(len(levels))] if held else []
+            low, high = (row[f'l{at}'], row[f'h{at}']) if held >= k_min else (None, None)
+            found.append((held, quantiles, low, high))
+        return found
+
+    def expression_matches(self, table: pl.LazyFrame, candidates: list[tuple[str, str, str, str, float]]) -> list[tuple[int, int, int]]:
+        if not candidates:
+            return []
+        kinds = {spec.name: spec.kind for spec in self.schema(table)}
+
+        def value(name: str) -> pl.Expr:
+            return numeric_value(pl.col(name), kinds[name]).cast(pl.Float64)
+
+        counts = []
+        for at, (a, operator, b, target, tolerance) in enumerate(candidates):
+            left, right, held_target = value(a), value(b), value(target)
+            quotient = pl.when(right != 0).then(left / right)
+            computed = {'+': left + right, '-': left - right, '*': left * right, '/': quotient}[operator]
+            held = left.is_not_null() & right.is_not_null() & held_target.is_not_null()
+            informative = held & ~((held_target == 0) & (computed.abs() <= tolerance).fill_null(False))
+            close = ((held_target - computed).abs() <= tolerance).fill_null(False)
+            counts += [held.sum().alias(f'n{at}'), informative.sum().alias(f'i{at}'), (informative & close).sum().alias(f'm{at}')]
+        row = table.select(counts).collect(engine='streaming').row(0)
+        return [(int(row[at]), int(row[at + 1]), int(row[at + 2])) for at in range(0, len(row), 3)]
+
+    def epoch_micros(self, table: pl.LazyFrame, names: set[str]) -> dict[str, pl.Expr]:
+        """Each named date or timestamp column as microseconds since the epoch."""
+        schema = table.collect_schema()
+        return {name: (pl.col(name).cast(pl.Datetime('us')) if schema[name] == pl.Date else pl.col(name)).dt.epoch('us') for name in names}
+
     def foreign_key_counts(
         self, child: pl.LazyFrame, child_column: str, parent: pl.LazyFrame, parent_column: str
     ) -> list[tuple[bool, int, int]]:
