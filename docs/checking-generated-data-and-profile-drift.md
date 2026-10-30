@@ -151,19 +151,27 @@ table, naming its columns in `column` and `paired_with`.
   `KL_SMOOTHING`, so a value it holds no row of costs a bounded amount. `worst_given_value` names
   the given value adding most.
 
-300,000 rows generated from a 14-column profile of checkouts pass both:
+300,000 rows generated from the committed fixture pass both:
 
-```json
-{"metric":"correlation_max_abs_diff","column":"copula_amount","paired_with":"copula_weight","value":0.0085,"passed":true}
-{"metric":"conditional_kl","column":"channel","paired_with":"region","worst_given_value":"north","value":0.00101128,"passed":true}
+```bash
+profile=crates/core/tests/every-column-kind.profile.yaml
+doppeldata data generate $profile --rows 300000 --out generated/
+doppeldata data check $profile generated/ --json \
+  | jq -c '.metrics[] | select(.metric == "correlation_max_abs_diff" or .metric == "conditional_kl")
+           | {metric, column, paired_with, worst_given_value, value, passed}'
 ```
 
-Shuffling `channel` against `region` in those rows fails the second, and shuffling `copula_weight`
-fails the first:
+```json
+{"metric":"correlation_max_abs_diff","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.0083,"passed":true}
+{"metric":"conditional_kl","column":"channel","paired_with":"region","worst_given_value":"north","value":0.0010055,"passed":true}
+```
+
+Shuffling `channel` across those rows fails the second, and shuffling `copula_weight` fails the
+first:
 
 ```json
-{"metric":"conditional_kl","column":"channel","paired_with":"region","worst_given_value":"north","value":0.0900156,"threshold":0.05,"passed":false}
-{"metric":"correlation_max_abs_diff","column":"copula_amount","paired_with":"copula_weight","value":0.403604,"expected":0.4,"observed":-0.003604,"passed":false}
+{"metric":"conditional_kl","column":"channel","paired_with":"region","worst_given_value":"north","value":0.0882845,"passed":false}
+{"metric":"correlation_max_abs_diff","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.407373,"passed":false}
 ```
 
 *Rejected:* a row per pair for `correlation_max_abs_diff`. A copula holds its pairs through one

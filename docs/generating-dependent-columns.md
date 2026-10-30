@@ -14,20 +14,27 @@ doppeldata profile create checkouts.parquet --out checkouts.profile.yaml
 doppeldata data generate checkouts.profile.yaml --out generated/ --rows 1000000
 ```
 
-`data plan` names how each column is drawn. A 14-column profile of checkouts plans:
+`data plan` names how each column is drawn. The committed fixture ends in columns of checkouts
+that state each kind, and these are its last lines:
+
+```bash
+doppeldata data plan crates/core/tests/every-column-kind.profile.yaml --rows 1000000 --out generated/
+```
 
 ```text
-copula_amount      double             quantiles with linear tails, ranked with copula_items, copula_weight in a Gaussian copula
-copula_items       int64              3 top values, the rest from quantiles with linear tails, ranked with copula_amount, copula_weight in a Gaussian copula
-copula_weight      double             quantiles with linear tails, ranked with copula_amount, copula_items in a Gaussian copula, 0.05 null
-region             string             3 top values
-channel            string             its conditional table given region, else 3 top values, 0.02 null
-paid_amount        double             quantiles with linear tails, its quantiles given channel, its zero rate given channel, its null rate given channel, 0.03 null
-region_code        string             looked up from region, else 3 top values
-order_date         date32[day]        uniform between the extremes
-ship_date          date32[day]        order_date plus a lag at 3 quantiles
-shipped_at         timestamp[s]       timestamp_uniform plus a lag at 2 quantiles
-total              decimal128(12, 2)  the expression round(quantity * unit_price, 2)
+copula_amount  double             quantiles with linear tails, ranked with copula_items, copula_weight in a Gaussian copula
+copula_items   int64              3 top values, the rest from quantiles with linear tails, ranked with copula_amount, copula_weight in a Gaussian copula
+copula_weight  double             quantiles with linear tails, ranked with copula_amount, copula_items in a Gaussian copula, 0.05 null
+region         string             3 top values
+channel        string             its conditional table given region, else 3 top values, 0.02 null
+paid_amount    double             quantiles with linear tails, its quantiles given channel and zero rate given channel, its null rate given channel, 0.03 null
+region_code    string             looked up from region, else 3 top values
+order_date     date32[day]        uniform between the extremes
+ship_date      date32[day]        order_date plus a lag at 3 quantiles
+shipped_at     timestamp[s]       timestamp_uniform plus a lag at 2 quantiles
+quantity       int64              quantiles with linear tails
+unit_price     decimal128(10, 2)  quantiles with linear tails
+total          decimal128(12, 2)  the expression round(quantity * unit_price, 2)
 ```
 
 Each kind is a field a reviewer reads and edits like any other. The sections below show each one
@@ -72,17 +79,15 @@ dataset:
   unstated pair free. The plan says `its correlations repaired to the nearest valid matrix`. A
   column that is the sum of others, such as a fare total, gives such a group.
 
-On a 4-column group with values from 0.2 to 0.9, a million rows hold each pair within 0.0011 of
-its stated value, and no marginal's stated quantile moves more than 0.0007 in rank. Three months
-of New York yellow taxi trips profile into a 10-column group the repair holds. Two million rows
-drawn from it hold every stated pair within 0.022 of the real trips.
-[performance.md](performance.md) gives its speed.
+`cargo test --test dependent_columns`, run from `crates/`, draws rows from the fixture and holds
+each stated Spearman value within the tolerance it sets. [performance.md](performance.md) gives
+the copula's speed.
 
-*Rejected:* the plain `2·sin(πρ/6)` for a tied column. On the pair above it gave 0.663 and 0.681
-against a stated 0.7. The calibration gives 0.6999.
+*Rejected:* the plain `2·sin(πρ/6)` for a tied column. Ties lower the Spearman value a Pearson
+holds, so each tied pair drew under its stated value.
 
 *Rejected:* filling an unstated pair with 0, and clipping the eigenvalues where that breaks the
-matrix. Clipping shrinks every pair toward 0. On the taxi trips it drew a stated 0.7293 at 0.087.
+matrix. Clipping shrinks every pair toward 0, the stated ones too.
 
 ## A conditional table draws a categorical column from the row its parent's value picks
 
@@ -96,15 +101,31 @@ matrix. Clipping shrinks every pair toward 0. On the taxi trips it drew a stated
       other: {web: 0.4, store: 0.3, phone: 0.3}
 ```
 
-- **Each row of `table` sums to 1, and `other` covers every value of `given` the table does not
-  list.** Without `other`, such a row draws from the column's own values. A null parent does too.
+- **Each row of `table` sums to 1 at most, and `other` covers every value of `given` the table
+  does not list.** Without `other`, such a row draws from the column's own values. A null parent
+  does too. `profile check` refuses a row over 1 as `rates-over-one`.
+- **The share a row leaves short of 1 is the rows of child values it does not state.** The
+  profiler leaves out a cell under `k_min` rows. Each child value the column lists takes as much of
+  that share as no row states of it, each row weighted by its given value's share. That is one step
+  of iterative proportional fitting toward the child's own shares, so its marginal holds. The share
+  of values the column lists none of draws from its own values.
 - **A value is a key as its text**: a string as itself, an integer in decimal, a boolean as
   `true` or `false`.
 - **A column takes one parent.** Where two entries name the same child, the first is drawn and the
-  second ignored.
+  second set aside.
 
-A million rows from that table hold each share within 0.003 of it, `west` included through
-`other`.
+The same test holds each share of that table within its tolerance.
+
+*Rejected:* scaling a row's stated cells up to 1. A row missing its rare values then draws its
+common ones too often, and the child's marginal drifts.
+
+*Rejected:* drawing the whole rest from the column's own values. Those are mostly values other rows
+already state, so the values only this row holds were drawn too seldom.
+
+*Rejected:* spreading the rest over every value with any unstated share. Rounding a rate to 4
+digits leaves a sliver of most values unstated. Drawing those slivers scattered a few rows of a
+value into rows that hold none, too few for a profile to state. So a value whose unstated share is
+under 1% of its own takes none.
 
 ## A numeric column given a category draws through that category's quantiles, zeros and nulls
 
@@ -144,13 +165,8 @@ A million rows from that table hold each share within 0.003 of it, `west` includ
   member's value, another member's levels are not uniform, and no warp of them holds the stated
   quantiles or zeros. The profiler writes no such entry unless `--edges-from` freezes it.
 
-A million rows from that profile hold each channel's median within 0.5% of its stated one, and
-each rate within 0.0015. On the taxi trips, each listed payment type's share of zero tips and of
-zero distances lands within 0.005 of the real trips.
-
 *Rejected:* a separate curve per category, drawn from its quantiles alone. It lost the column's
-listed values and tails, and on the taxi trips the marginals of `trip_distance` and `tip_amount`
-missed their KS bound at 0.0506 and 0.066. Through the warp the worst column holds 0.009.
+listed values and tails, so the column's own marginal missed its KS bound.
 
 ## A lookup table gives a column the value its parent's value determines
 
@@ -191,8 +207,8 @@ A row whose `lhs` value the table lacks draws `rhs` from its own statistics. So 
   in backticks. The result is rounded to `round` places where the entry sets it, else to the
   column's `numeric.scale`. A null operand and a division by zero give a null.
 - **`violation_rate` is the share of rows that take the column's own statistics instead.** With
-  `violation_rate: 0`, `total = round(quantity * unit_price, 2)` held on all of a million rows,
-  and `ship_date ≥ order_date` held on all of them.
+  `violation_rate: 0`, every row holds its expression. A lag whose `min` is `0d` keeps `ship_date`
+  on or after `order_date`.
 
 ## Each column takes one draw, in an order its parents allow
 
@@ -207,9 +223,20 @@ values ── derived ──→ lookup ──→ conditional table ──→ own
 nulls ─── given a category, else the column's own null rate
 ```
 
-A later entry naming a column an earlier one draws is not read, and the profiler writes none. A
-dependence on a column the table lacks, and one that would draw a column from itself, are
-refused at plan time:
+**An entry the plan cannot draw is set aside, never refused.** That covers an entry naming a
+column an earlier one draws, and one that would draw a column from itself. It covers a lookup
+reading more than one column, and quantiles or a zero rate on a column that is not numeric.
+`data plan` names each beside its column:
+
+```text
+city      string  looked up from zip_code, else 12 top values, its conditional table given zip_code set aside, since its lookup from zip_code draws it
+```
+
+`Plan.set_aside` lists each one's JSON pointer, and `data check` measures none of them. The
+profiler plans its draft through the same planner, and writes no entry it sets aside.
+
+A dependence on a column the table lacks is refused at plan time. So is a derived column that
+would draw a column from itself:
 
 ```text
 /columns/13/derived/expr: the table holds no column "qty" [unknown-column]
@@ -231,7 +258,9 @@ after-image keeps its lags, expressions and lookups.
 
 `correlation_max_abs_diff` is the largest change in a Spearman value within one copula group.
 `conditional_kl` is a conditional table's KL divergence, weighted by each given value's share, and
-names the given value adding most. Each passes at 0.05 or less.
+names the given value adding most. `data check --help` gives each one's default threshold. Each
+measures a pair of columns, so a `--thresholds` file sets it under `defaults` and is refused
+where it sets it under `columns`.
 [checking-generated-data-and-profile-drift.md](checking-generated-data-and-profile-drift.md)
 shows both on generated and on shuffled rows.
 
@@ -240,7 +269,9 @@ shows both on generated and on shuffled rows.
 A parent's values are written as keys, so a table given a ZIP code or a birth date would list
 them. Under `strict` and `healthcare`, `profile check` refuses a conditional table, quantiles,
 rates or lookup given a quasi-identifier, and a lag counting from one, as
-`conditional-quasi-identifier`. The policy pass withholds each such entry. Under `healthcare` a
-lag from or to a birth date is an age, so it is refused as `birth-date-lag` and withheld.
+`dependence-quasi-identifier`. The policy pass withholds each such entry. Under `healthcare` a
+lag from or to a birth date is an age, so it is refused as `birth-date-lag` and withheld. An
+age's quantiles given a category are capped at 90, as its own are. `profile check` refuses one
+above 90 as `age-over-89`.
 [profile-format-and-privacy-floor.md](profile-format-and-privacy-floor.md) says how each entry is
 audited.

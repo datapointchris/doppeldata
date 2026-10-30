@@ -188,7 +188,8 @@ parameters write two profiles, and those generate different tails.
 - **Two profiles of one table then compare bin for bin**, which the round-trip check and drift
   detection read. Rebinning stays explicit, by profiling again without `edges_from`.
 - **Every pair the earlier profile states is stated again, however weak, where `k_min` allows.**
-  That covers its correlations, conditional tables, conditional quantiles and rates. So `data
+  That covers its correlations, correlation ratios, conditional tables, conditional quantiles and
+  rates. So `data
   check` compares each pair the source states, even where the generated data lost it. A pair the
   earlier profile does not state still needs its usual strength.
 
@@ -562,9 +563,7 @@ shows. Repeated rows and keys are counted over the whole table, even under `--sa
 tables, quantiles, rates, dependencies and derived columns are counted over the rows profiled,
 which `--sample` makes its sample.
 
-On Polars these passes make the taxi trips' profile take 16.2 s against 11.7 s without them, on
-16 threads. The quantiles within each group take 3.4 s of it, one sort of each child per parent
-value. The claims below, a CSV of 2.4 million rows, take 42.1 s against 39.1 s.
+[performance.md](performance.md) gives what these passes take of a Polars profile.
 
 - **`duplicate_row_rate` is the rows less the distinct rows, as a share of the rows.** A null
   equals a null. Polars counts the distinct rows by a 64-bit hash of each

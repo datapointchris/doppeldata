@@ -55,8 +55,9 @@ prints it.
 Typing runs before binning, so an age's histogram is binned to the cap: every edge above 89.5 gives
 way to one last bin from 89.5 to 90.5, and the rows above that bin are counted in it. Edges frozen
 from an earlier profile by `--edges-from` keep those below 89.5 and end in the same bin. Its
-extremes and quantiles are capped at 90. It holds no fitted family, whose support could reach past
-90. An age held as text keeps no top values, which would list each age over 89 alone. The numeric
+extremes and quantiles are capped at 90, and so are its quantiles given a category. So no
+diagnosis or other group states an age over 89, and `profile check` reports one that does as
+`age-over-89`. It holds no fitted family, whose support could reach past 90. An age held as text keeps no top values, which would list each age over 89 alone. The numeric
 sampler draws a histogram's bins only between the outermost quantiles, and its tail ends at the
 extremes, so no generated age exceeds 90.
 

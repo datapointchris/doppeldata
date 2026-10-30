@@ -119,6 +119,31 @@ adds a three-value `tier`, drawn given each of the 50 categories. It printed:
   from the column's own, so the row adds a lookup of the parent's value.
 - **The runs shared the machine with other work**, at the load averages each row records.
 
+## The dependence passes take a sixth of a Polars profile of the taxi trips, and a fifth of the claims
+
+`profile create` under cProfile gives each pass's share of one profile:
+
+```bash
+python -m cProfile -o profile.prof "$(command -v doppeldata)" profile create yellow_tripdata_2024-03.parquet --out taxi.yaml
+```
+
+`pstats` reads each function's cumulative time from `profile.prof`. Each share below is of
+`profile_table`, which profiles the whole table. A share within one run moves less with the
+machine's load than the run's wall time does.
+
+| Source | Rows | Columns | `derived_columns` | `column_dependence` | `draft_plan`, inside it |
+| --- | --- | --- | --- | --- | --- |
+| New York yellow taxi trips, March 2024, Parquet | 3,582,628 | 19 | 9% | 7% | 1% |
+| CMS DE-SynPUF carrier claims 1A, CSV | 2,370,667 | 142 | 5% | 15% | 7% |
+
+- **`derived_columns` screens each candidate lag and expression on a sample**, then confirms each
+  one the sample keeps on the rows profiled.
+- **`draft_plan` plans the draft twice through the engine.** The first plan names the copula
+  groups. The second names what the plan sets aside. Most of the claims' share is one 37-member
+  copula group whose stated pairs no valid matrix holds, so each plan repairs it.
+- **The runs shared the machine at a load average of 34 to 42 on 16 threads**, so their wall
+  times are left out.
+
 ## Snappy writes no faster than ZSTD level 1, and a partition key of 50 values holds a write to one thread
 
 Each row is the writers' own example writing into memory, which keeps nothing:

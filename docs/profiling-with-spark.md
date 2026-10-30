@@ -197,17 +197,14 @@ TABLES=1 spark-parity/check-profiler-parity.sh \
 ```
 
 It ran on CMS DE-SynPUF sample 1 under `--policy healthcare`, in `apache/spark:3.5.9-python3`,
-`apache/spark:4.1.3-python3` and `public.ecr.aws/glue/aws-glue-libs:5`. The beneficiary summary
-also ran in `apache/spark:4.2.0-python3`:
+`apache/spark:4.1.3-python3` and `public.ecr.aws/glue/aws-glue-libs:5`:
 
 | File | Rows | Columns | Worst quantile rank error | Worst distinct count error | `profile check` |
 | --- | --- | --- | --- | --- | --- |
-| 2008 beneficiary summary | 116,352 | 32 | 0.0001, `MEDREIMB_OP` p99.9 | 1.0%, `BENRES_CAR` 403 against 399 | 123 literal fields, 0 violations |
 | 2008–2010 carrier claims 1A | 2,370,667 | 142 | 0.00005, `CLM_ID` p99.9 | 1.3%, `LINE_ICD9_DGNS_CD_7` 2,565 against 2,599 | 476 literal fields, 0 violations |
 
-- **Every image wrote the same profile.** Outside `generated` and `source`, all 3,401 fields of
-  the beneficiary profile and all 12,509 of the claims profile match across them. Spark 4 reads
-  through `try_cast`, and Spark 3.5 with ANSI off.
+- **Every image wrote the same profile.** Outside `generated` and `source`, every field matches
+  across them. Spark 4 reads through `try_cast`, and Spark 3.5 with ANSI off.
 - **Every exact field matches Polars'.** That covers each value list, other rate and decimal scale.
   The fields that differ are the estimates: distinct counts, tail quantiles, and the histogram edges
   and counts set by those quantiles. The fits differ too, because each engine fits its own sample.
