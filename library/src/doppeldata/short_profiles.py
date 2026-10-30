@@ -33,6 +33,7 @@ from doppeldata.profile_format import Profile
 from doppeldata.profile_format import pointer
 from doppeldata.profile_format import read_document
 from doppeldata.profile_format import to_plain
+from doppeldata.profile_format import unknown_field
 
 # The table a profile expanded from columns given in Python or on the command line is named.
 INLINE_TABLE = 'table'
@@ -115,11 +116,7 @@ def validated(document: dict[str, Any], source: str) -> Profile:
 
 def short_expanded(document: dict[str, Any], path: Path) -> dict[str, Any]:
     """A short YAML's profile, named for its file. Each column's value is a fake, a `low..high` range, a list, or empty."""
-    issues = [
-        Issue('unknown-field', pointer((key,)), f'a short profile holds {" and ".join(SHORT_KEYS)}, not {key}')
-        for key in document
-        if key not in SHORT_KEYS
-    ]
+    issues = [unknown_field(str(key), list(SHORT_KEYS), (key,)) for key in document if key not in SHORT_KEYS]
     rows = document.get('rows')
     if rows is not None and (isinstance(rows, bool) or not isinstance(rows, int) or rows < 0):
         issues.append(Issue('invalid-rows', '/rows', f'rows is a count of rows, 0 or more, not {rows!r}'))
