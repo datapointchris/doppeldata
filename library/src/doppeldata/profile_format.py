@@ -164,12 +164,12 @@ def integer_format_checker() -> jsonschema.FormatChecker:
 
 
 @cache
-def validators() -> dict[str | None, jsonschema.Draft202012Validator]:
+def validators() -> dict[str, jsonschema.Draft202012Validator]:
     """One validator per `kind`, so an error inside a table is not reported as a bundle's."""
     schema = json.loads(schema_text('profile'))
     checker = integer_format_checker()
     root = {key: value for key, value in schema.items() if key != 'oneOf'}
-    by_kind: dict[str | None, jsonschema.Draft202012Validator] = {None: jsonschema.Draft202012Validator(schema, format_checker=checker)}
+    by_kind: dict[str, jsonschema.Draft202012Validator] = {}
     for branch in schema['oneOf']:
         (kind,) = schema['$defs'][branch['$ref'].rsplit('/', 1)[1]]['properties']['kind']['enum']
         by_kind[kind] = jsonschema.Draft202012Validator(root | branch, format_checker=checker)
@@ -303,8 +303,9 @@ def check(plain: Any) -> list[Issue]:
     if issues:
         return issues
     kind = plain.get('kind')
-    validator = validators().get(kind if isinstance(kind, str) else None, validators()[None])
-    for error in validator.iter_errors(plain):
+    if not isinstance(kind, str) or kind not in validators():
+        return [kind_issue(plain, list(validators()))]
+    for error in validators()[kind].iter_errors(plain):
         issues += schema_error_issues(error, ())
     if issues:
         return issues
@@ -331,6 +332,16 @@ def unknown_field(key: str, known: list[str], at: PointerParts) -> Issue:
     closest = tuple(difflib.get_close_matches(key, known, n=3))
     hint = f'the closest is {closest[0]}, and ' if closest else ''
     return Issue('unknown-field', pointer(at), f'{key!r} is not a field here; {hint}this section takes {", ".join(known)}', closest)
+
+
+def kind_issue(plain: dict[str, Any], kinds: list[str]) -> Issue:
+    """A missing `kind`, or one no profile has. The kind picks the schema, so no other field is checked."""
+    if 'kind' not in plain:
+        return Issue('schema-required', '', f"'kind' is a required property; a profile is one of {', '.join(kinds)}")
+    kind = plain['kind']
+    closest = tuple(difflib.get_close_matches(kind, kinds, n=1)) if isinstance(kind, str) else ()
+    hint = f'the closest is {closest[0]}, and ' if closest else ''
+    return Issue('schema-enum', '/kind', f'{kind!r} is not a kind of profile; {hint}a profile is one of {", ".join(kinds)}', closest)
 
 
 def causes_of(error: jsonschema.exceptions.ValidationError) -> list[jsonschema.exceptions.ValidationError]:
