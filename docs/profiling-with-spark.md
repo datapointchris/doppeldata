@@ -201,7 +201,7 @@ It ran on CMS DE-SynPUF sample 1 under `--policy healthcare`, in `apache/spark:3
 
 | File | Rows | Columns | Worst quantile rank error | Worst distinct count error | `profile check` |
 | --- | --- | --- | --- | --- | --- |
-| 2008–2010 carrier claims 1A | 2,370,667 | 142 | 0.00005, `CLM_ID` p99.9 | 1.3%, `LINE_ICD9_DGNS_CD_7` 2,565 against 2,599 | 476 literal fields, 0 violations |
+| 2008–2010 carrier claims 1A | 2,370,667 | 142 | 0.00005, `CLM_ID` p99.9 | 1.3%, `LINE_ICD9_DGNS_CD_7` 2,565 against 2,599 | 445 literal fields, 0 violations |
 
 - **Every image wrote the same profile.** Outside `generated` and `source`, every field matches
   across them. Spark 4 reads through `try_cast`, and Spark 3.5 with ANSI off.
