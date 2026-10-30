@@ -203,10 +203,10 @@ also ran in `apache/spark:4.2.0-python3`:
 | File | Rows | Columns | Worst quantile rank error | Worst distinct count error | `profile check` |
 | --- | --- | --- | --- | --- | --- |
 | 2008 beneficiary summary | 116,352 | 32 | 0.0001, `MEDREIMB_OP` p99.9 | 1.0%, `BENRES_CAR` 403 against 399 | 123 literal fields, 0 violations |
-| 2008–2010 carrier claims 1A | 2,370,667 | 142 | 0.00005, `CLM_ID` p99.9 | 1.3%, `LINE_ICD9_DGNS_CD_7` 2,565 against 2,599 | 437 literal fields, 0 violations |
+| 2008–2010 carrier claims 1A | 2,370,667 | 142 | 0.00005, `CLM_ID` p99.9 | 1.3%, `LINE_ICD9_DGNS_CD_7` 2,565 against 2,599 | 476 literal fields, 0 violations |
 
 - **Every image wrote the same profile.** Outside `generated` and `source`, all 3,401 fields of
-  the beneficiary profile and all 10,945 of the claims profile match across them. Spark 4 reads
+  the beneficiary profile and all 12,509 of the claims profile match across them. Spark 4 reads
   through `try_cast`, and Spark 3.5 with ANSI off.
 - **Every exact field matches Polars'.** That covers each value list, other rate and decimal scale.
   The fields that differ are the estimates: distinct counts, tail quantiles, and the histogram edges
@@ -274,7 +274,7 @@ one query over every column it covers, except the compiled aggregate, which is o
 | split steps | `step_min` and `step_max` | `mapInArrow` over each file split in read order, stitched in the listing's order |
 | distinct days | `distinct_days` | `collect_set` of the days between the trimmed extremes |
 | tuple counts | `distinct_rows` and `unique_rows`, for repeated rows and keys | one `xxhash64` per tuple over each value and whether it is null, every tuple in one stream grouped by `(tuple, hash)` |
-| rank correlations | Spearman's ρ | each sampled column's average rank from `rank` and `cume_dist` over one window, persisted, then `corr` over up to `PAIRS_PER_QUERY` pairs a query |
+| rank correlations | Spearman's ρ | each sampled column's average rank from `rank` and `cume_dist` over one window, persisted, then each pair's count, sums, squares and product where both ranks are present, over up to `PAIRS_PER_QUERY` pairs a query, with ρ taken from them on the driver |
 | cross counts | Cramér's V and conditional cells | every pair's values in one stream, grouped by `(pair, value, value)` |
 | rank moments | η | each sampled numeric column's average rank as for Spearman's ρ, persisted beside the categorical columns, whose values form one stream grouped by `(column, value)`, with each rank's count, mean and `var_pop` |
 | dependency counts | functional dependencies | one `groupBy` on each `lhs`, with every `rhs`'s count and whether its least and greatest values differ |
@@ -308,6 +308,10 @@ The split follows what Spark compiles:
 
 *Rejected:* unioned `orderBy().limit()` queries for the trimmed extremes. Each branch is a full scan
 with its own shuffle, so a table of 32 columns ran 128 of them.
+
+*Rejected:* `corr` for Spearman's ρ. It divides by a constant column's zero variance, which raises
+under Spark 4's ANSI mode. `try_divide` over `covar_pop` and two masked `var_pop` passed the 64 KB
+limit at 128 pairs a query, where the sums compile up to 160 on Spark 3.5.
 
 *Rejected:* datasketches' KLL and frequent-items sketches. `percentile_approx` gives every quantile
 and bin edge within a rank error of 1/10,000. KLL at its default `k` of 200 carries about 1.3%,

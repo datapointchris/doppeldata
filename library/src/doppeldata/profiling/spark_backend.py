@@ -868,25 +868,29 @@ class SparkBackend:
         return ranks
 
     def rank_correlations(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:
+        """Each pair's ρ from the count, sums, squares and product of its ranks where both are present, taken on the
+        driver. Twice a rank less the middle one is a whole number within ±rows, so below about 200,000 rows every sum
+        is exact in a double, and a constant column's variance is exactly zero rather than a division ANSI mode raises."""
         if not pairs:
             return []
         names = list(dict.fromkeys(name for pair in pairs for name in pair))
+        twice_middle = self.row_count(table) + 1
         ranked = self.persist(table.select(*self.average_ranks(table, names)))
+        centered = ranked.select(*((2 * sf.col(f'r{index}') - twice_middle).alias(f'r{index}') for index in range(len(names))))
         found: list[tuple[float | None, int]] = []
         for start in range(0, len(pairs), PAIRS_PER_QUERY):
-            chunk = pairs[start : start + PAIRS_PER_QUERY]
             measured = []
-            for a, b in chunk:
+            for a, b in pairs[start : start + PAIRS_PER_QUERY]:
                 first, second = sf.col(f'r{names.index(a)}'), sf.col(f'r{names.index(b)}')
                 both = first.isNotNull() & second.isNotNull()
-                # sf.corr divides by a constant column's zero variance, which raises where ANSI mode is on.
-                spread = sf.sqrt(sf.var_pop(sf.when(both, first)) * sf.var_pop(sf.when(both, second)))
-                measured += [sf.try_divide(sf.covar_pop(first, second), spread), count_where(both)]
-            row = ranked.agg(*measured).collect()[0]
-            found += [
-                (float(value) if value is not None and math.isfinite(value) else None, int(held or 0))
-                for value, held in zip(row[::2], row[1::2], strict=True)
-            ]
+                x, y = sf.when(both, first), sf.when(both, second)
+                measured += [count_where(both), sf.sum(x), sf.sum(y), sf.sum(x * x), sf.sum(y * y), sf.sum(x * y)]
+            row = [int(value or 0) for value in centered.agg(*measured).collect()[0]]
+            for at in range(0, len(row), 6):
+                held, sx, sy, sxx, syy, sxy = row[at : at + 6]
+                spread_x, spread_y = held * sxx - sx * sx, held * syy - sy * sy
+                value = (held * sxy - sx * sy) / (math.sqrt(spread_x) * math.sqrt(spread_y)) if spread_x and spread_y else None
+                found.append((value, held))
         return found
 
     def cross_counts(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
