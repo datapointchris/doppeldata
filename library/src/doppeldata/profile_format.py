@@ -151,16 +151,23 @@ ProfileConstructor.add_constructor('tag:yaml.org,2002:timestamp', ProfileConstru
 
 
 class ProfileRepresenter(RoundTripRepresenter):
-    """Writes None as `null`, where ruamel's round trip would leave the value empty."""
+    """Writes None as `null`, where ruamel's round trip would leave the value empty, and quotes text opening with `?`,
+    which ruamel writes plain inside a flow mapping and then cannot read there."""
 
     def represent_none(self, data: None) -> ScalarNode:
         return self.represent_scalar('tag:yaml.org,2002:null', 'null')
+
+    def represent_str(self, data: str) -> ScalarNode:
+        if data.startswith('?'):
+            return self.represent_scalar('tag:yaml.org,2002:str', data, style="'")
+        return super().represent_str(data)
 
     def represent_timestamp_text(self, data: TimestampText) -> ScalarNode:
         return self.represent_scalar('tag:yaml.org,2002:timestamp', str(data))
 
 
 ProfileRepresenter.add_representer(type(None), ProfileRepresenter.represent_none)
+ProfileRepresenter.add_representer(str, ProfileRepresenter.represent_str)
 ProfileRepresenter.add_representer(TimestampText, ProfileRepresenter.represent_timestamp_text)
 
 
