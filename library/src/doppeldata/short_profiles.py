@@ -102,8 +102,8 @@ def file_profile(source: str | os.PathLike[str]) -> Profile:
 
 
 def is_short(document: Any) -> bool:
-    """Whether a file's document is the short form: a `columns` key, and no `kind`."""
-    return isinstance(document, dict) and 'columns' in document and 'kind' not in document
+    """Whether a file's document is the short form: `columns` a mapping, where a full profile's is a list, and no `kind`."""
+    return isinstance(document, dict) and isinstance(document.get('columns'), dict) and 'kind' not in document
 
 
 def validated(document: dict[str, Any], source: str) -> Profile:
