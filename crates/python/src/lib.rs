@@ -1204,6 +1204,22 @@ mod _core {
         doppeldata_core::pattern_problem(pattern)
     }
 
+    /// The fewest and most characters each provider's values hold, by the provider's name, read
+    /// from the lists and templates it draws from.
+    #[pyfunction]
+    fn provider_lengths() -> BTreeMap<String, (usize, usize)> {
+        doppeldata_core::provider_lengths()
+    }
+
+    /// ``pattern`` with its repetitions bounded so every value drawn from it holds at least
+    /// ``min_length`` and at most ``max_length`` characters, either None where unbounded. None where
+    /// no bounds do. A pattern whose values already fit is returned as given.
+    #[pyfunction]
+    #[pyo3(signature = (pattern, min_length, max_length))]
+    fn pattern_within_lengths(pattern: &str, min_length: Option<usize>, max_length: Option<usize>) -> Option<String> {
+        doppeldata_core::pattern_within_lengths(pattern, min_length, max_length)
+    }
+
     /// Whether each value holds the check digit ``kind`` names, such as ``luhn``, where generation
     /// writes one: its last digit, computed from the digits before it.
     #[pyfunction]

@@ -128,7 +128,7 @@ Without `--out` the seed prints as YAML. A file names its table up to its first 
 | --- | --- |
 | number | uniformly between its bounds. A missing end lies `NUMBER_SPAN` (1,000,000) beyond the given one, and neither gives 0 to `NUMBER_SPAN`, each kept inside its type |
 | date or timestamp | uniformly inside `DATE_WINDOW` (2025-01-01 to 2025-12-31), a missing end the window's length beyond the given one. A timestamp draws whole seconds |
-| text | its values, else its pattern, else its format's type, else the fake its name hints, else letters and digits `TEXT_LENGTH` (8 to 16) long |
+| text | its values, else its pattern, else its format's type, else the fake its name hints, else letters and digits `TEXT_LENGTH` (8 to 16) long. Each but the values is held to the declared lengths |
 | sole integer key | 1, 2, 3 and on, or counting from its lower bound, bounded above or not |
 | list | between its declared item counts, else the engine's default list length |
 | any | nulls in `NULL_RATE` (5%) of rows where the schema allows them, and none where it requires a value |
@@ -140,10 +140,31 @@ Without `--out` the seed prints as YAML. A file names its table up to its first 
   no fake may be a typo, so it is refused there.
 - **A format names a general-pack type**: `email`, `uuid`, `uri` and `url`, `ipv4` and `ipv6`. A
   pattern the engine cannot draw is left out with a warning, so the column falls to the next source.
-- **A declared length bounds only the letters and digits.** Values, a pattern and a fake are drawn
-  whole, so a `country` declared 2 characters long draws country names. The engine states no
-  longest value of a fake, so the seed cannot tell which fit. Give such a column values or a
-  pattern in the seed.
+- **A declared length holds every draw but declared values.** A fake, a pattern and a format's type
+  are each kept only where every value they draw fits it. So a `country` declared 2 characters
+  long draws country codes, and a `state` up to 2 long draws abbreviations. A schema's values are
+  its own, so they are drawn as declared.
+- **A fake is kept where its shortest and longest values fit.** `_core.provider_lengths()` gives
+  them, computed from the lists and templates each fake draws from. A fake that does not fit gives
+  way to the first of `SHORTER_HINTS` that does: `state` to `state_abbr`, `country` to
+  `country_code`. `email` and `free_email` give way to a pattern of letters at `example.com`,
+  `.net` or `.org`, then one at a domain under `.test`. `.test` is reserved, as `example.com` is.
+  It reaches 8 characters, where `example.com` needs 13. Failing every one, the column draws
+  letters and digits.
+- **A pattern is held to the lengths by bounding its repetitions.**
+  `_core.pattern_within_lengths` raises each ranged repetition's least count by one shared amount
+  until the shortest value fits. Then it holds each one's most to one shared amount above its
+  least, until the longest value fits. So `^[A-Z]+-[0-9]+$` up to 10 long draws from
+  `^[A-Z]{1,4}-[0-9]{1,4}$`. A pattern no bounds can hold, such as `[0-9]{3}-[0-9]{4}` up to 5
+  long, is left out with a warning.
+- **A bounded pattern is a hint, and `string.pattern` keeps the declared one.** The bounded pattern
+  goes in `semantic.generator_hint.pattern`, which the engine draws from first. An export carries
+  the declared pattern and lengths. So it accepts `ABCDEFGH-1`, which the schema allows and the
+  bounded pattern never draws.
+- **A format no value of which fits is left out with a warning**, such as a `uuid` up to 20 long.
+  A name's hint that cannot fit falls away silently, because the schema never declared it.
+- **A hinted column records its declared lengths in `string.length`**, so an export carries them.
+  The engine reads `string.length` only where it draws letters and digits.
 - **A key bounded above passes its bound once the rows outnumber the values between its bounds.**
   It counts up so that no two rows share a value.
 

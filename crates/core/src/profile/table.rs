@@ -1051,7 +1051,7 @@ pub struct GeneratorHint {
 }
 
 /// A source of realistic values. The names are doppeldata's, so a change of faker breaks no profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     Email,
@@ -1084,6 +1084,47 @@ pub enum Provider {
     Icd10cm,
     /// A code of the HCPCS Level II list the engine ships, drawn uniformly.
     HcpcsLevel2,
+}
+
+impl Provider {
+    pub const ALL: [Self; 28] = [
+        Self::Email,
+        Self::FreeEmail,
+        Self::Username,
+        Self::Ipv4,
+        Self::Ipv6,
+        Self::MacAddress,
+        Self::UserAgent,
+        Self::Name,
+        Self::FirstName,
+        Self::LastName,
+        Self::PhoneNumber,
+        Self::CellNumber,
+        Self::Company,
+        Self::JobTitle,
+        Self::StreetAddress,
+        Self::StreetName,
+        Self::BuildingNumber,
+        Self::City,
+        Self::State,
+        Self::StateAbbr,
+        Self::ZipCode,
+        Self::PostCode,
+        Self::Country,
+        Self::CountryCode,
+        Self::CreditCard,
+        Self::Uuid,
+        Self::Icd10cm,
+        Self::HcpcsLevel2,
+    ];
+
+    /// The name a profile gives the provider, such as `state_abbr`.
+    pub fn name(self) -> String {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(name)) => name,
+            _ => unreachable!("a provider serializes as its name"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]

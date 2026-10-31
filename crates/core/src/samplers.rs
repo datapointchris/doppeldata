@@ -15,6 +15,7 @@ mod ranked_marginal;
 mod temporal;
 mod text;
 mod text_cells;
+mod text_lengths;
 mod type_mix;
 
 use std::sync::Arc;
@@ -60,6 +61,8 @@ pub(crate) use self::text::push_uuid;
 pub use self::text::shape_of;
 pub use self::text_cells::TextCell;
 use self::text_cells::TextOnlyValues;
+pub use self::text_lengths::pattern_within_lengths;
+pub use self::text_lengths::provider_lengths;
 pub use self::type_mix::TYPE_MIX_FIELD_KEY;
 use self::type_mix::TypeMix;
 pub(crate) use self::type_mix::foreign_text;

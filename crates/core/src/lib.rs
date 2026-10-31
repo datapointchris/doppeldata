@@ -54,6 +54,8 @@ pub use samplers::TextCell;
 pub use samplers::check_digit_holds;
 pub use samplers::file_rows_draws;
 pub use samplers::pattern_problem;
+pub use samplers::pattern_within_lengths;
+pub use samplers::provider_lengths;
 pub use samplers::raw_type_name;
 pub use samplers::shape_of;
 pub use values_digest::bundle_values_digest;

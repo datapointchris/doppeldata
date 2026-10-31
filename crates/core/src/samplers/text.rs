@@ -91,7 +91,7 @@ fn build_strings<O: OffsetSizeTrait>(rows: usize, nulls: Option<&NullBuffer>, mu
 }
 
 /// The faker behind each of doppeldata's provider names.
-fn push_provided(provider: Provider, rng: &mut ChaCha8Rng, out: &mut String) {
+pub(super) fn push_provided(provider: Provider, rng: &mut ChaCha8Rng, out: &mut String) {
     let value: String = match provider {
         Provider::Email => {
             push_email(rng, out);
@@ -144,17 +144,20 @@ fn push_provided(provider: Provider, rng: &mut ChaCha8Rng, out: &mut String) {
     out.push_str(&value);
 }
 
+/// An ICD-10-CM code's category is a letter and this many digits.
+pub(super) const ICD10CM_CATEGORY_DIGITS: usize = 2;
 /// The share, per mille, of ICD-10-CM's codes holding 0 to 4 characters after their three-character
 /// category.
-const ICD10CM_EXTENSION_PER_MILLE: [u32; 5] = [19, 103, 149, 205, 524];
+pub(super) const ICD10CM_EXTENSION_PER_MILLE: [u32; 5] = [19, 103, 149, 205, 524];
 /// The extension's characters are digits, but for its fourth, a code's seventh character, which is
 /// a letter.
 const ICD10CM_EXTENSION_LETTER_AT: usize = 3;
-/// An HCPCS Level II code's letter is one of A to V.
+/// An HCPCS Level II code's letter is one of A to V, and its digits follow.
 const HCPCS_LEVEL2_LETTERS: u32 = 22;
+pub(super) const HCPCS_LEVEL2_DIGITS: usize = 4;
 /// A US ZIP code's digits, and the codes they spell. fake 5.1's `ZipCode` picks three, four or
 /// five digits uniformly.
-const ZIP_CODE_DIGITS: usize = 5;
+pub(super) const ZIP_CODE_DIGITS: usize = 5;
 const ZIP_CODES: f64 = 100_000.0;
 
 fn push_upper(rng: &mut ChaCha8Rng, letters: u32, out: &mut String) {
@@ -169,9 +172,9 @@ fn push_digits(rng: &mut ChaCha8Rng, digits: usize, out: &mut String) {
 
 /// An ICD-10-CM code by its format, not from the code set: a letter and two digits, then an
 /// extension at the code set's share of each length, after a dot where `dotted`.
-fn push_icd10cm(dotted: bool, rng: &mut ChaCha8Rng, out: &mut String) {
+pub(super) fn push_icd10cm(dotted: bool, rng: &mut ChaCha8Rng, out: &mut String) {
     push_upper(rng, 26, out);
-    push_digits(rng, 2, out);
+    push_digits(rng, ICD10CM_CATEGORY_DIGITS, out);
     let (mut drawn, mut extension) = (below(rng, 1000), 0);
     while drawn >= ICD10CM_EXTENSION_PER_MILLE[extension] {
         drawn -= ICD10CM_EXTENSION_PER_MILLE[extension];
@@ -210,11 +213,11 @@ fn icd10cm_variety() -> Variety {
 /// An HCPCS Level II code by its format, not from the code set: a letter A to V and four digits.
 fn push_hcpcs_level2(rng: &mut ChaCha8Rng, out: &mut String) {
     push_upper(rng, HCPCS_LEVEL2_LETTERS, out);
-    push_digits(rng, 4, out);
+    push_digits(rng, HCPCS_LEVEL2_DIGITS, out);
 }
 
 /// The reserved domains an `email` address is at, so no generated address reaches anyone.
-const EMAIL_DOMAINS: [&str; 3] = ["example.com", "example.net", "example.org"];
+pub(super) const EMAIL_DOMAINS: [&str; 3] = ["example.com", "example.net", "example.org"];
 
 /// `first.last` at a reserved domain, in lower-case letters. A last name's apostrophe is dropped.
 fn push_email(rng: &mut ChaCha8Rng, out: &mut String) {

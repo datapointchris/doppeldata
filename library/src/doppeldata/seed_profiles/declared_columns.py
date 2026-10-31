@@ -7,7 +7,8 @@ A schema states types and constraints and no statistics. Where it is silent, a c
 - an integer key counting up from its least value, bounded or not;
 - a date or a timestamp uniformly inside `DATE_WINDOW`, a missing end a window's length beyond the given one;
 - a string from its values, else its pattern, else its format's type, else the fake its name hints, else letters and
-  digits `TEXT_LENGTH` long. Only the letters and digits are kept inside its declared lengths;
+  digits `TEXT_LENGTH` long. A pattern, a format or a fake is kept only where every value it draws holds the declared
+  lengths, its repetitions bounded to them, else a shorter hint of the same meaning from `SHORTER_HINTS`;
 - nulls at `NULL_RATE` where the schema allows them, and none where it requires a value.
 
 The window is fixed rather than counted back from today, so one seed generates the same rows on any day.
@@ -15,6 +16,7 @@ The window is fixed rather than counted back from today, so one seed generates t
 
 import dataclasses as dc
 import datetime as dt
+import functools
 import inspect
 import math
 import re
@@ -85,6 +87,16 @@ FORMAT_TYPES = {
     'ipv4': 'ipv4_address',
     'ipv6': 'ipv6_address',
 }
+# What a provider's hint gives way to, in order, where its values do not hold a column's declared lengths: a provider of
+# the same meaning, or a pattern of its format bounded to the lengths. `.test` is reserved, as `example.com` is, and an
+# address there can be as short as 8 characters, where one at `example.com` takes 13.
+EMAIL_PATTERNS = ({'pattern': r'[a-z]+@example\.(?:com|net|org)'}, {'pattern': r'[a-z]+@[a-z]+\.test'})
+SHORTER_HINTS: dict[str, tuple[dict[str, str], ...]] = {
+    'state': ({'provider': 'state_abbr'},),
+    'country': ({'provider': 'country_code'},),
+    'email': EMAIL_PATTERNS,
+    'free_email': EMAIL_PATTERNS,
+}
 
 # The facts `generated.declared` names, in the profile model's order: each one a schema can declare and an importer
 # otherwise fills with a draw default.
@@ -98,6 +110,12 @@ def logical_type_of(arrow_type: str) -> str | None:
     """The logical type of an Arrow type a seed draws, such as `number` for `decimal128(12, 2)`, else None."""
     name = ARROW_TYPE_NAME.match(arrow_type)
     return LOGICAL_TYPES.get(name[0]) if name else None
+
+
+@functools.cache
+def provider_lengths() -> dict[str, tuple[int, int]]:
+    """The fewest and most characters each provider's values hold, by the provider's name."""
+    return _core.provider_lengths()
 
 
 def warn_left_out(message: str) -> None:
@@ -180,7 +198,11 @@ class DeclaredColumn(InlineColumn):
                 f'{name}: the schema declares what no {self.logical_type} column draws from: {error}', role='schema'
             ) from error
         column |= {key: value for key, value in drawn.items() if key not in ('name', 'physical_type', 'logical_type')}
-        semantic = {**(drawn.get('semantic') or {}), **(self.semantic or {})}
+        held = dict(self.semantic or {})
+        if self.logical_type == 'string' and not self.values:
+            # `drawn_text` keeps the semantic's own hint only where it holds the declared lengths.
+            held.pop('generator_hint', None)
+        semantic = {**held, **(drawn.get('semantic') or {})}
         if self.sensitivity is not None:
             semantic['sensitivity'] = self.sensitivity
         if semantic:
@@ -224,21 +246,68 @@ class DeclaredColumn(InlineColumn):
             return choice([str(value) for value in self.values]).column(name)
         if self.pattern is not None:
             problem = _core.pattern_problem(self.pattern)
-            if problem is None:
-                return {'string': {'pattern': self.pattern}}
+            bounded = None if problem else _core.pattern_within_lengths(self.pattern, self.min_length, self.max_length)
+            if bounded == self.pattern:
+                return self.with_declared_lengths({'string': {'pattern': self.pattern}})
+            if bounded is not None:
+                # The declared pattern is what an export holds real data to, so only the hint is bounded.
+                return self.with_declared_lengths(
+                    {'string': {'pattern': self.pattern}, 'semantic': {'generator_hint': {'pattern': bounded}}}
+                )
+            problem = problem or f'it cannot be held to {self.lengths_text()}'
             warn_left_out(f'{name}: the pattern {self.pattern!r} cannot be drawn ({problem}), so it is left out')
         hinted = FORMAT_TYPES.get((self.format or '').lower())
         if hinted is not None:
-            hint = next(entry.generator_hint for entry in GENERAL if entry.type == hinted)
-            return {'semantic': {'type': hinted, 'generator_hint': dict(hint)}}
-        if self.semantic and self.semantic.get('generator_hint'):
-            return {}
-        if not self.semantic:
+            hint = self.fitted_hint(next(entry.generator_hint for entry in GENERAL if entry.type == hinted))
+            if hint is not None:
+                return self.with_declared_lengths({'semantic': {'type': hinted, 'generator_hint': hint}})
+            warn_left_out(f'{name}: no {self.format} value can be drawn {self.lengths_text()}, so the format is left out')
+        if self.semantic:
+            own = self.semantic.get('generator_hint')
+            hint = self.fitted_hint(own) if own else None
+            if hint is not None:
+                return self.with_declared_lengths({'semantic': {'generator_hint': hint}})
+        else:
             named = named_column(name)
-            if named is not None:
-                return named
+            hint = self.fitted_hint(named['semantic']['generator_hint']) if named is not None else None
+            if named is not None and hint is not None:
+                return self.with_declared_lengths({'semantic': {**named['semantic'], 'generator_hint': hint}})
         low, high = self.text_lengths()
         return {'string': {'length': {'min': low, 'max': high}}}
+
+    def fitted_hint(self, hint: Mapping[str, Any]) -> dict[str, Any] | None:
+        """`hint` where every value it draws holds the declared lengths, its pattern bounded to them, else the first of
+        its provider's `SHORTER_HINTS` that does. None where none does."""
+        if self.min_length is None and self.max_length is None:
+            return dict(hint)
+        for candidate in (hint, *SHORTER_HINTS.get(hint.get('provider', ''), ())):
+            if 'provider' in candidate:
+                shortest, longest = provider_lengths()[candidate['provider']]
+                if (self.min_length or 0) <= shortest and (self.max_length is None or longest <= self.max_length):
+                    return dict(candidate)
+            elif 'pattern' in candidate:
+                bounded = _core.pattern_within_lengths(candidate['pattern'], self.min_length, self.max_length)
+                if bounded is not None:
+                    return {**candidate, 'pattern': bounded}
+        return None
+
+    def with_declared_lengths(self, drawn: dict[str, Any]) -> dict[str, Any]:
+        """`drawn` holding the declared lengths in `string.length`, which an export carries. A hint or a pattern draws
+        without reading them."""
+        declared = {end: length for end, length in (('min', self.min_length), ('max', self.max_length)) if length is not None}
+        if declared:
+            drawn['string'] = {**drawn.get('string', {}), 'length': declared}
+        return drawn
+
+    def lengths_text(self) -> str:
+        """The declared lengths in words, such as `2 to 5 characters long`."""
+        if self.min_length == self.max_length:
+            return f'{self.max_length} characters long'
+        if self.max_length is None:
+            return f'at least {self.min_length} characters long'
+        if not self.min_length:
+            return f'at most {self.max_length} characters long'
+        return f'{self.min_length} to {self.max_length} characters long'
 
     def text_lengths(self) -> tuple[int, int]:
         """`TEXT_LENGTH`, each end moved inside the declared lengths. Where that leaves one length and the declared

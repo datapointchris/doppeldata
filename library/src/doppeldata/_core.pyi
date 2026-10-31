@@ -374,12 +374,25 @@ def pattern_problem(pattern: str) -> str |None:
     refuses it, or None when it can.
     """
 
+def pattern_within_lengths(pattern: str, min_length: SupportsIndex |None, max_length: SupportsIndex |None) -> str |None:
+    """
+    ``pattern`` with its repetitions bounded so every value drawn from it holds at least
+    ``min_length`` and at most ``max_length`` characters, either None where unbounded. None where
+    no bounds do. A pattern whose values already fit is returned as given.
+    """
+
 def perturbation_facts(scenario_json: str) -> list[tuple[str, list[str], bool, bool, bool]]:
     """
     Each of a valid scenario's perturbations, in list order: its id, the columns it writes, adds,
     drops or renames, whether it shapes the files a write makes rather than the rows, whether it
     acts across several files, so a one-file write cannot hold it, and whether it orders the whole
     table, so one process writes the dataset.
+    """
+
+def provider_lengths() -> dict[str, tuple[int, int]]:
+    """
+    The fewest and most characters each provider's values hold, by the provider's name, read
+    from the lists and templates it draws from.
     """
 
 def scenario_ids(scenario_json: str) -> tuple[list[str], tuple[int, str] |None]:
