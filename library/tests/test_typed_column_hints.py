@@ -22,7 +22,7 @@ def test_a_typed_column_naming_no_hint_takes_a_hint_that_changes_only_with_the_s
         {'name': f'typed_{semantic_type}', 'physical_type': 'string', 'logical_type': 'string', 'semantic': {'type': semantic_type}}
         for semantic_type in types
     ]
-    filled = with_type_hints({'profile_version': 1, 'kind': 'table', 'name': 'hints', 'columns': columns})
+    filled = with_type_hints({'kind': 'table', 'name': 'hints', 'columns': columns})
     digest = hashlib.sha256(json.dumps(filled['columns'], sort_keys=True).encode()).hexdigest()
     assert (_core.STREAM_VERSION, digest) == (PINNED_STREAM_VERSION, PINNED_TYPE_HINTS), (
         'a hint the library fills changed; a change to a released stream version raises STREAM_VERSION'

@@ -4,9 +4,11 @@
 # last release's while its pinned stream version is the same. A released
 # stream version's values never change, so a new hash needs a raised version.
 # A pin the release did not hold yet has nothing to compare. Where a pin's
-# fixture changed since the release at the same stream version, its hash
-# cannot be compared, so this build generates the release's own fixtures and
-# must reach the release's hash, which needs cargo.
+# fixture changed since the release at the same stream version and its hash is
+# still the release's, the determinism contract test holds this build to that
+# hash for the fixture as it now reads, so the change moved no value. Where the
+# hash moved too, this build generates the release's own fixtures and must
+# reach the release's hash, which needs cargo.
 # Needs the release tags, so the checkout fetches the full history.
 # Usage: crates/check-stream-version-raised.sh
 set -eu
@@ -78,6 +80,10 @@ compare() {
   if ! git diff --quiet "$tag" -- "$@"; then
     if [ "$version" != "$released_version" ]; then
       echo "check-stream-version-raised: a fixture of $name changed since $tag, and the stream version was raised"
+      return 0
+    fi
+    if [ "$(pinned "$name" <"$test_file")" = "$released_values" ]; then
+      echo "check-stream-version-raised: a fixture of $name changed since $tag, and its pinned hash is still $tag's"
       return 0
     fi
     echo "check-stream-version-raised: a fixture of $name changed since $tag, so this build generates $tag's own"

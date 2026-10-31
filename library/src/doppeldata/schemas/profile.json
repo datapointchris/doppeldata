@@ -1,33 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "doppeldata profile v1",
-  "description": "A profile file: one table, or a bundle of tables and their relationships.",
+  "title": "doppeldata profile",
+  "description": "A profile file: one table, or a bundle of tables and their relationships, as its `kind` names.",
   "oneOf": [
     {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "const": "table"
-        }
-      },
-      "$ref": "#/$defs/TableProfile",
-      "required": [
-        "kind"
-      ]
+      "$ref": "#/$defs/TableProfile"
     },
     {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "const": "bundle"
-        }
-      },
-      "$ref": "#/$defs/BundleProfile",
-      "required": [
-        "kind"
-      ]
+      "$ref": "#/$defs/BundleProfile"
     }
   ],
   "$defs": {
@@ -67,6 +47,7 @@
           "minimum": 0
         }
       },
+      "additionalProperties": false,
       "required": [
         "column",
         "rule"
@@ -130,7 +111,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "BundleProfile": {
       "description": "Several tables' profiles and the relationships between them.",
@@ -146,11 +128,14 @@
             }
           ]
         },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "bundle"
+          ]
+        },
         "name": {
           "type": "string"
-        },
-        "profile_version": {
-          "$ref": "#/$defs/ProfileVersion"
         },
         "relationships": {
           "type": [
@@ -169,19 +154,21 @@
           }
         }
       },
+      "additionalProperties": false,
       "required": [
-        "profile_version",
+        "kind",
         "name",
         "tables"
       ]
     },
     "BundleTable": {
+      "description": "A table of a bundle: its file's path relative to the bundle, or the table profile inline, as\nits own file would hold it.",
       "anyOf": [
         {
           "type": "string"
         },
         {
-          "$ref": "#/$defs/InlineTable"
+          "$ref": "#/$defs/TableProfile"
         }
       ]
     },
@@ -223,7 +210,8 @@
             "$ref": "#/$defs/CharClass"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "CheckDigit": {
       "oneOf": [
@@ -259,7 +247,7 @@
           ]
         },
         "derived": {
-          "description": "How the column is computed from others, in place of being drawn from its own statistics. An engine that\nignores this field draws the column from them.",
+          "description": "How the column is computed from others, in place of being drawn from its own statistics.",
           "anyOf": [
             {
               "$ref": "#/$defs/Derived"
@@ -432,6 +420,7 @@
           "additionalProperties": false
         }
       },
+      "additionalProperties": false,
       "required": [
         "name"
       ]
@@ -478,6 +467,7 @@
           }
         }
       },
+      "additionalProperties": false,
       "required": [
         "given",
         "column",
@@ -584,6 +574,7 @@
           "format": "double"
         }
       },
+      "additionalProperties": false,
       "required": [
         "a",
         "b",
@@ -622,6 +613,7 @@
           "format": "double"
         }
       },
+      "additionalProperties": false,
       "required": [
         "a",
         "b",
@@ -632,42 +624,6 @@
       "description": "A delimited source's dialect, as a writer takes it, and how it was found.",
       "type": "object",
       "properties": {
-        "bom": {
-          "description": "Whether the file starts with a UTF-8 byte order mark.",
-          "type": "boolean",
-          "default": false
-        },
-        "compression": {
-          "$ref": "#/$defs/TextCompression",
-          "default": "none"
-        },
-        "compression_level": {
-          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32",
-          "default": null
-        },
-        "date_format": {
-          "description": "A chrono format for date columns. Null writes ISO 8601.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "delimiter": {
-          "description": "Null takes the format's own: `,` for CSV, a tab for TSV.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null,
-          "maxLength": 1,
-          "minLength": 1
-        },
         "detected_encoding": {
           "description": "The encoding charset-normalizer named for the first block, such as `ascii`, `utf_8` or\n`cp1252`. `encoding` holds the nearest one a writer writes.",
           "type": [
@@ -684,29 +640,6 @@
               "type": "null"
             }
           ]
-        },
-        "encoding": {
-          "$ref": "#/$defs/TextEncoding",
-          "default": "utf8"
-        },
-        "escape": {
-          "description": "The character that escapes a quote inside a quoted field. Null doubles the quote instead.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null,
-          "maxLength": 1,
-          "minLength": 1
-        },
-        "header": {
-          "description": "Whether the first line names the columns.",
-          "type": "boolean",
-          "default": true
-        },
-        "line_terminator": {
-          "$ref": "#/$defs/LineTerminator",
-          "default": "lf"
         },
         "line_terminator_mix": {
           "description": "The share of the first block's line breaks that end in each terminator.",
@@ -734,53 +667,36 @@
             }
           ]
         },
-        "null": {
-          "description": "What a null prints where the column's profile gives no missing token for it. When it is\nempty, an empty string is quoted so the two read back apart.",
-          "type": "string",
-          "default": ""
-        },
-        "quote": {
-          "type": "string",
-          "default": "\"",
-          "maxLength": 1,
-          "minLength": 1
-        },
-        "quoting": {
-          "$ref": "#/$defs/Quoting",
-          "default": "necessary"
-        },
-        "time_format": {
-          "description": "A chrono format for time columns. Null writes ISO 8601.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "timestamp_format": {
-          "description": "A chrono format for timestamp columns without a time zone. Null writes ISO 8601.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "timestamp_tz_format": {
-          "description": "A chrono format for timestamp columns with a time zone. Null writes ISO 8601 with the offset.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
         "trailing_delimiter": {
           "description": "Whether every sampled line ends in a delimiter, which a reader takes as one more empty column.",
           "type": [
             "boolean",
             "null"
           ]
+        },
+        "writer": {
+          "description": "The dialect a writer writes the files in. A setting left out takes the writer's default.",
+          "$ref": "#/$defs/DelimitedSettings",
+          "default": {
+            "bom": false,
+            "compression": "none",
+            "compression_level": null,
+            "date_format": null,
+            "delimiter": null,
+            "encoding": "utf8",
+            "escape": null,
+            "header": true,
+            "line_terminator": "lf",
+            "null": "",
+            "quote": "\"",
+            "quoting": "necessary",
+            "time_format": null,
+            "timestamp_format": null,
+            "timestamp_tz_format": null
+          }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Dataset": {
       "description": "Facts about the table as a whole.",
@@ -870,7 +786,8 @@
           "format": "uint64",
           "minimum": 0
         }
-      }
+      },
+      "additionalProperties": false
     },
     "DatasetAuditEntry": {
       "description": "One dataset-level field a floor holds, and the rule it met.",
@@ -902,6 +819,7 @@
           "minimum": 0
         }
       },
+      "additionalProperties": false,
       "required": [
         "field",
         "rule"
@@ -962,6 +880,111 @@
         }
       ]
     },
+    "DelimitedSettings": {
+      "description": "A CSV or TSV dialect. Every character must be ASCII.",
+      "type": "object",
+      "properties": {
+        "bom": {
+          "description": "Whether the file starts with a UTF-8 byte order mark.",
+          "type": "boolean",
+          "default": false
+        },
+        "compression": {
+          "$ref": "#/$defs/TextCompression",
+          "default": "none"
+        },
+        "compression_level": {
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        },
+        "date_format": {
+          "description": "A chrono format for date columns. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "delimiter": {
+          "description": "Null takes the format's own: `,` for CSV, a tab for TSV.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "encoding": {
+          "$ref": "#/$defs/TextEncoding",
+          "default": "utf8"
+        },
+        "escape": {
+          "description": "The character that escapes a quote inside a quoted field. Null doubles the quote instead.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "header": {
+          "description": "Whether the first line names the columns.",
+          "type": "boolean",
+          "default": true
+        },
+        "line_terminator": {
+          "$ref": "#/$defs/LineTerminator",
+          "default": "lf"
+        },
+        "null": {
+          "description": "What a null prints where the column's profile gives no missing token for it. When it is\nempty, an empty string is quoted so the two read back apart.",
+          "type": "string",
+          "default": ""
+        },
+        "quote": {
+          "type": "string",
+          "default": "\"",
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "quoting": {
+          "$ref": "#/$defs/Quoting",
+          "default": "necessary"
+        },
+        "time_format": {
+          "description": "A chrono format for time columns. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timestamp_format": {
+          "description": "A chrono format for timestamp columns without a time zone. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timestamp_tz_format": {
+          "description": "A chrono format for timestamp columns with a time zone. Null writes ISO 8601 with the offset.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
     "Dependency": {
       "type": "object",
       "properties": {
@@ -999,6 +1022,7 @@
           ]
         }
       },
+      "additionalProperties": false,
       "required": [
         "kind",
         "lhs",
@@ -1165,7 +1189,8 @@
             "$ref": "#/$defs/SniffedDialect"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "DialectSniffer": {
       "oneOf": [
@@ -1195,6 +1220,7 @@
           "format": "double"
         }
       },
+      "additionalProperties": false,
       "required": [
         "epsilon",
         "delta"
@@ -1221,7 +1247,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Engine": {
       "oneOf": [
@@ -1292,7 +1319,8 @@
           ],
           "format": "double"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "FileCounts": {
       "type": "object",
@@ -1315,7 +1343,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "FileSizes": {
       "type": "object",
@@ -1348,7 +1377,8 @@
           ],
           "format": "double"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Fit": {
       "description": "A fitted distribution, named as scipy.stats names it, with its parameters.",
@@ -1407,6 +1437,7 @@
           ]
         }
       },
+      "additionalProperties": false,
       "required": [
         "family",
         "params"
@@ -1514,7 +1545,8 @@
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "GeneratorHint": {
       "type": "object",
@@ -1547,7 +1579,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Granularity": {
       "type": "string",
@@ -1597,6 +1630,7 @@
           ]
         }
       },
+      "additionalProperties": false,
       "required": [
         "kind",
         "edges",
@@ -1625,82 +1659,13 @@
           "minimum": 0
         }
       },
+      "additionalProperties": false,
       "required": [
         "below",
         "above"
       ]
     },
-    "InlineTable": {
-      "description": "A table profile written inside a bundle, as its own file would hold it.",
-      "type": "object",
-      "properties": {
-        "columns": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Column"
-          }
-        },
-        "dataset": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Dataset"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "generated": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Generated"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "kind": {
-          "$ref": "#/$defs/TableKind"
-        },
-        "name": {
-          "type": "string"
-        },
-        "privacy": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Privacy"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "profile_version": {
-          "$ref": "#/$defs/ProfileVersion"
-        },
-        "source": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Source"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "kind",
-        "profile_version",
-        "name"
-      ]
-    },
-    "JsonSource": {
-      "description": "A JSON source's writer settings and its nesting.",
+    "JsonSettings": {
       "type": "object",
       "properties": {
         "compression": {
@@ -1720,7 +1685,14 @@
           "description": "Whether a null field is written as `null` rather than left out.",
           "type": "boolean",
           "default": false
-        },
+        }
+      },
+      "additionalProperties": false
+    },
+    "JsonSource": {
+      "description": "A JSON source's writer settings and its nesting.",
+      "type": "object",
+      "properties": {
         "max_depth": {
           "description": "The deepest nesting of objects and arrays, counting the record as 1.",
           "type": [
@@ -1729,8 +1701,18 @@
           ],
           "format": "uint32",
           "minimum": 0
+        },
+        "writer": {
+          "description": "The settings a writer writes the files with. A setting left out takes the writer's default.",
+          "$ref": "#/$defs/JsonSettings",
+          "default": {
+            "compression": "none",
+            "compression_level": null,
+            "explicit_nulls": false
+          }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Key": {
       "type": "object",
@@ -1753,6 +1735,7 @@
           ]
         }
       },
+      "additionalProperties": false,
       "required": [
         "columns"
       ]
@@ -1779,7 +1762,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Lag": {
       "description": "The lag between the base column and the column, at named quantiles as [`Quantiles`] names them, between its\ntrimmed extremes. A date's lag is written in days, and a timestamp's in seconds.",
@@ -1861,7 +1845,8 @@
             "type": "string"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "LengthStats": {
       "type": "object",
@@ -1899,7 +1884,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "LineTerminator": {
       "type": "string",
@@ -1941,7 +1927,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "LogicalType": {
       "description": "The logical types of the Open Data Contract Standard v3.",
@@ -1982,7 +1969,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Monotonic": {
       "type": "string",
@@ -2019,7 +2007,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "NumericStats": {
       "type": "object",
@@ -2186,7 +2175,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "NumericTopValue": {
       "type": "object",
@@ -2199,6 +2189,7 @@
           "format": "double"
         }
       },
+      "additionalProperties": false,
       "required": [
         "value",
         "rate"
@@ -2248,8 +2239,7 @@
         }
       ]
     },
-    "ParquetSource": {
-      "description": "A Parquet source's writer settings, read from its files' footers, and what the footers say of\nthe writer. No value statistic is read from a footer.",
+    "ParquetSettings": {
       "type": "object",
       "properties": {
         "compression": {
@@ -2265,13 +2255,6 @@
           "format": "int32",
           "default": null
         },
-        "decimal_scale_drift": {
-          "description": "Whether a decimal column's scale differs between files.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "dictionary_columns": {
           "description": "The columns written with a dictionary. Null gives every column one.",
           "type": [
@@ -2282,6 +2265,50 @@
           "items": {
             "type": "string"
           }
+        },
+        "row_group_rows": {
+          "description": "The most rows a row group holds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1048576,
+          "minimum": 0
+        },
+        "statistics": {
+          "$ref": "#/$defs/ParquetStatistics",
+          "default": "page"
+        },
+        "timestamp_unit": {
+          "description": "The unit every timestamp column is cast to. Null keeps each column's own. Parquet holds no\nseconds unit, so a column at `s` is stored at `ms`, as pyarrow stores it. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimestampUnit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "ParquetSource": {
+      "description": "A Parquet source's writer settings, read from its files' footers, and what the footers say of\nthe writer. No value statistic is read from a footer.",
+      "type": "object",
+      "properties": {
+        "created_by": {
+          "description": "The `created_by` most footers name, such as `parquet-mr version 1.13.1 (build ...)`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decimal_scale_drift": {
+          "description": "Whether a decimal column's scale differs between files.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "footers_read": {
           "description": "How many files' footers were read: every file's, or a seeded sample's.",
@@ -2298,13 +2325,6 @@
             "string",
             "null"
           ]
-        },
-        "row_group_rows": {
-          "description": "The most rows a row group holds.",
-          "type": "integer",
-          "format": "uint64",
-          "default": 1048576,
-          "minimum": 0
         },
         "row_groups": {
           "anyOf": [
@@ -2323,22 +2343,6 @@
             "null"
           ]
         },
-        "statistics": {
-          "$ref": "#/$defs/ParquetStatistics",
-          "default": "page"
-        },
-        "timestamp_unit": {
-          "description": "The unit every timestamp column is cast to. Null keeps each column's own. Parquet holds no\nseconds unit, so a column at `s` is stored at `ms`, as pyarrow stores it. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TimestampUnit"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "timestamp_units": {
           "description": "Each timestamp column's unit as stored. `int96` is the legacy encoding no writer reproduces.",
           "type": [
@@ -2350,13 +2354,19 @@
           }
         },
         "writer": {
-          "description": "The `created_by` most footers name, such as `parquet-mr version 1.13.1 (build ...)`.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "The settings a writer reproduces the files' layout with. A setting left out takes the\nwriter's default.",
+          "$ref": "#/$defs/ParquetSettings",
+          "default": {
+            "compression": "zstd",
+            "compression_level": null,
+            "dictionary_columns": null,
+            "row_group_rows": 1048576,
+            "statistics": "page",
+            "timestamp_unit": null
+          }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ParquetStatistics": {
       "description": "How much of the min, max and null count each column chunk records.",
@@ -2403,6 +2413,7 @@
           ]
         }
       },
+      "additionalProperties": false,
       "required": [
         "name"
       ]
@@ -2443,10 +2454,11 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Prefixes": {
-      "description": "A column's values counted by their leading characters, each generated value a prefix followed\nby a value of `suffix`. An engine that ignores this field draws whole values from the column's\nother statistics, so it generates no value of the wrong length.",
+      "description": "A column's values counted by their leading characters, each generated value a prefix followed\nby a value of `suffix`.",
       "type": "object",
       "properties": {
         "other_rate": {
@@ -2472,6 +2484,7 @@
           }
         }
       },
+      "additionalProperties": false,
       "required": [
         "values",
         "suffix"
@@ -2540,7 +2553,8 @@
             "$ref": "#/$defs/Suppression"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "PrivacyPolicy": {
       "type": "string",
@@ -2551,10 +2565,6 @@
         "dp",
         "none"
       ]
-    },
-    "ProfileVersion": {
-      "description": "The format version, which changes only on a breaking format change.",
-      "const": 1
     },
     "Provider": {
       "description": "A source of realistic values. The names are doppeldata's, so a change of faker breaks no profile.",
@@ -2616,7 +2626,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Quantiles": {
       "description": "Values at named quantiles: p05 is the 5th percentile, p50 the median, p999 the 99.9th. The digits after p are the level's decimal digits, at least two and never ending in 0 past the second.",
@@ -2717,6 +2728,7 @@
           "pattern": "^[^.]+\\..+$"
         }
       },
+      "additionalProperties": false,
       "required": [
         "from",
         "to"
@@ -2757,7 +2769,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Sample": {
       "type": "object",
@@ -2774,6 +2787,7 @@
           "$ref": "#/$defs/SampleStrategy"
         }
       },
+      "additionalProperties": false,
       "required": [
         "strategy"
       ]
@@ -2844,7 +2858,8 @@
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Sensitivity": {
       "type": "string",
@@ -2868,6 +2883,7 @@
           "format": "int64"
         }
       },
+      "additionalProperties": false,
       "required": [
         "start",
         "step"
@@ -2884,6 +2900,7 @@
           "type": "string"
         }
       },
+      "additionalProperties": false,
       "required": [
         "shape",
         "rate"
@@ -2926,10 +2943,11 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Source": {
-      "description": "The files the data came from. `csv`, `parquet` and `json` take the keys a manifest's `writer`\ntakes for that format, so a generated dataset can be written the way its source was. Beside them\neach holds what the profiler observed of the files that no writer setting reproduces.",
+      "description": "The files the data came from. `csv`, `parquet` and `json` each hold the format's `writer`, as a\nmanifest's `writer` holds it, so a generated dataset can be written the way its source was.\nBeside it each holds what the profiler observed of the files that no writer setting reproduces.",
       "type": "object",
       "properties": {
         "compression": {
@@ -2992,7 +3010,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "SourceFormat": {
       "type": "string",
@@ -3118,7 +3137,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "StructStats": {
       "type": "object",
@@ -3142,7 +3162,8 @@
             "$ref": "#/$defs/Rate"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Suppression": {
       "description": "A column some of whose literals the policy withheld.",
@@ -3162,6 +3183,7 @@
           ]
         }
       },
+      "additionalProperties": false,
       "required": [
         "column",
         "reason"
@@ -3201,12 +3223,6 @@
         }
       ]
     },
-    "TableKind": {
-      "type": "string",
-      "enum": [
-        "table"
-      ]
-    },
     "TableProfile": {
       "description": "One table's profile. Every section is optional, and the generator falls back to defaults.",
       "type": "object",
@@ -3240,6 +3256,12 @@
             }
           ]
         },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "table"
+          ]
+        },
         "name": {
           "type": "string"
         },
@@ -3253,9 +3275,6 @@
             }
           ]
         },
-        "profile_version": {
-          "$ref": "#/$defs/ProfileVersion"
-        },
         "source": {
           "anyOf": [
             {
@@ -3267,8 +3286,9 @@
           ]
         }
       },
+      "additionalProperties": false,
       "required": [
-        "profile_version",
+        "kind",
         "name"
       ]
     },
@@ -3297,7 +3317,8 @@
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "TemporalStats": {
       "type": "object",
@@ -3372,7 +3393,8 @@
             "null"
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "TextCompression": {
       "type": "string",
@@ -3416,6 +3438,7 @@
           "type": "string"
         }
       },
+      "additionalProperties": false,
       "required": [
         "value",
         "rate"
@@ -3453,7 +3476,8 @@
             "$ref": "#/$defs/Rate"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ValueOverflow": {
       "type": "object",
@@ -3465,6 +3489,7 @@
           "minimum": 0
         }
       },
+      "additionalProperties": false,
       "required": [
         "new_value_rows"
       ]

@@ -262,8 +262,8 @@ Arrow decimal type telling a decimal from a float.
   column a late arrival adds.
 - **A diff fails on every other changed field.** That covers a changed Arrow type or kind, which
   there means the source itself changed. It also covers a column with more than `OVERFLOW_SHARE`
-  of its values outside the edges or value list frozen from A, a CSV dialect setting a writer takes
-  that changed, and a partition key B adds. The rest of `source.csv`, such as the malformed rows
+  of its values outside the edges or value list frozen from A, a CSV dialect setting under
+  `source.csv.writer` that changed, and a partition key B adds. The rest of `source.csv`, such as the malformed rows
   and the sniffers' confidence, describes the files rather than a setting a writer takes, so a diff
   does not compare it. The tool versions and packs a profile records are how it was made, so a diff
   compares none of them.

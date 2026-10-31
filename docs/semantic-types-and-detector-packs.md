@@ -174,8 +174,7 @@ acme = "acme_detectors:PACK"
   so the order a run names them in changes nothing.
 - **A pack the library ships is found without an entry point**, so an install with no package
   metadata still has it.
-- **`Detector` and `DetectorPack` are frozen dataclasses the library owns.** A field the library
-  adds takes a default, so a pack built against an earlier release still loads.
+- **`Detector` and `DetectorPack` are frozen dataclasses the library owns.**
 - **A pack is checked when it loads.** Its name must match the entry point's and be a lowercase
   snake identifier. Each type, sensitivity, method and hint must be one the profile format
   accepts, read from its published schema. Each hint pattern must be one the engine can draw from.

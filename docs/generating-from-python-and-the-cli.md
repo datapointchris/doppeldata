@@ -85,7 +85,7 @@ doppeldata data check people.yaml people.csv
   holds none of them.
 - **`rows` is the count `--rows` defaults to.** The table is named for the file, so this one is
   `people`.
-- **A file holding `profile_version` or `kind` is read as a full profile.**
+- **A file holding `kind` is read as a full profile.**
 
 ## A write to one local file writes that file alone
 

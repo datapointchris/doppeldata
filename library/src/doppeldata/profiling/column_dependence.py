@@ -14,7 +14,6 @@ from doppeldata.column_name_words import ZIP_HINTS
 from doppeldata.column_name_words import hint_runs_in
 from doppeldata.column_name_words import name_words
 from doppeldata.privacy_policy.literal_fields import listed_values
-from doppeldata.profile_format import FORMAT_VERSION
 from doppeldata.profile_format import GIVEN_LISTS
 from doppeldata.profile_format import engine_plan
 from doppeldata.profile_format import quantile_level
@@ -181,7 +180,6 @@ def draft_plan(columns: list[DependenceColumn], derived: dict[str, dict[str, Any
     """The engine's plan of a draft holding `columns`, each column `derived` names computed by its entry there, and the
     dataset's `sections`."""
     document = {
-        'profile_version': FORMAT_VERSION,
         'kind': 'table',
         'name': 'draft',
         'dataset': {name: entries for name, entries in sections.items() if entries},

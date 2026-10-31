@@ -8,13 +8,12 @@ the format settings are the engine's, in `doppeldata_core::manifest` and
 `doppeldata_core::format_settings`, because the engine owns the list of published JSON Schemas. Both
 are serde and schemars types with no I/O.
 
-- **A profile's `source.csv`, `source.parquet` and `source.json` take the keys a manifest's `writer`
-  takes, beside what the profiler saw of the files.** Each flattens the writer's settings type into a
-  profile-only struct, such as `CsvSource`, whose other keys record a detected encoding, malformed
-  rows or a footer's writer. The writers read the settings alone. The profile's copy reads past a key
-  neither takes, as every profile section does, through `recorded_settings`. A caller's settings
-  are read as the writer's own type, which refuses one. `profile.v1.json` publishes every key either
-  takes.
+- **A profile's `source.csv`, `source.parquet` and `source.json` each hold a `writer`, which takes
+  the keys a manifest's `writer` takes, beside what the profiler saw of the files.** `writer` is the
+  writer's own settings type, nested in a profile-only struct such as `CsvSource`. The struct's other
+  keys record a detected encoding, malformed rows or a footer's `created_by`. The writers read
+  `writer` alone. Both refuse a key they do not declare, and `profile.json` publishes every key
+  each takes.
 - **`WriteOptions::from_profile` turns a profile into write settings.** The format is the caller's,
   then the profile's recorded one, then Parquet. A recorded codec applies only when the format is the
   recorded one. `override_writer` lays a caller's keys over the result, and `partition_by` sets the
@@ -245,9 +244,6 @@ select count(*) from read_parquet('orders-cdc/sales/orders/**/[0-9]*.parquet', u
   write.
 - **The manifest's own `files` lists the full load alone under `cdc`.** A reader checking every
   object's SHA-256 reads `cdc.files` and `cdc.expected` too.
-- **A release reads a manifest no newer than itself.** One released before `cdc` ignores the
-  manifest's `cdc`. Its `replace` then refuses the change files as foreign and deletes nothing,
-  and its `regenerate()` refuses the scenario's `cdc` op.
 
 ## The manifest is the regeneration record
 
@@ -324,8 +320,7 @@ lists.
 | `out_of_order` | the change's `commit_ts`, its 0-based `record` in the file, and the `due_file` its commit time belongs in |
 | `duplicate_delivery` | the copy's `commit_ts`, its 0-based `record` in the file, and the `original_file` holding the first delivery |
 
-Every other kind's `detail` is empty. A later release may add a kind, so a reader passes a kind it
-does not know through rather than refusing the line.
+Every other kind's `detail` is empty.
 
 - **The records run by file.** Within one, the faults of the whole file come first, then its
   `truncated_line`, then its row faults in the order written.

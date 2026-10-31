@@ -1,26 +1,21 @@
-import dataclasses as dc
+import copy
 import json
+from pathlib import Path
 
-from doppeldata.profile_comparison.field_changes import ChangeKind
-from doppeldata.profile_comparison.field_changes import FieldChange
-from doppeldata.profile_comparison.metrics import Bound
-from doppeldata.profile_comparison.reports import DIFF_VERSION
-from doppeldata.profile_comparison.reports import MetricResult
+import jsonschema
+from doppeldata import Profile
+from doppeldata import diff
 from doppeldata.published_schemas import schema_text
 
-
-def spelled(definition: dict) -> set[str]:
-    """Every string a schema definition allows, from its `enum` and from each `const` under `oneOf`."""
-    parts = definition.get('oneOf', [definition])
-    return {value for part in parts for value in part.get('enum', [part['const']] if 'const' in part else [])}
+ORDERS = Path(__file__).parent / 'fixtures' / 'orders.profile.yaml'
 
 
-def test_a_diff_report_format_change_made_in_rust_or_python_alone_fails_here():
-    """No test validates a diff report against its schema, as the check tests do a check report."""
-    schema = json.loads(schema_text('diff'))
-    definitions = schema['$defs']
-    assert schema['properties']['diff_version']['const'] == DIFF_VERSION
-    assert {kind.value for kind in ChangeKind} == spelled(definitions['ChangeKind'])
-    assert {bound.value for bound in Bound} == spelled(definitions['Bound'])
-    assert {field.name for field in dc.fields(MetricResult)} == set(definitions['MetricResult']['properties'])
-    assert {field.name for field in dc.fields(FieldChange)} == set(definitions['FieldChange']['properties'])
+def test_a_reviewer_changing_the_csv_delimiter_gets_one_dialect_change_at_its_writer_key_in_a_report_its_schema_accepts():
+    earlier = Profile.load(ORDERS)
+    document = copy.deepcopy(earlier.to_plain())
+    document['source']['csv']['writer']['delimiter'] = '|'
+    report = json.loads(diff(earlier, Profile(document)).to_json())
+    jsonschema.Draft202012Validator(json.loads(schema_text('diff'))).validate(report)
+    assert [(change['change'], change['field']) for change in report['changes']] == [
+        ('csv_dialect_changed', '/source/csv/writer/delimiter')
+    ]

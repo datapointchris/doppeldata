@@ -1,13 +1,14 @@
-"""Profile format v1: read, validate, save and identify a profile file.
+"""The profile format: read, validate, save and identify a profile file.
 
 A profile is committed as YAML and accepted as JSON. Both validate against the JSON Schema derived
-from the engine's Rust model. A profile's identity is the SHA-256 of its RFC 8785 canonical JSON,
-which the library alone computes and hands to the generator.
+from the engine's Rust model, which refuses a key no section declares. A profile's identity is the
+SHA-256 of its RFC 8785 canonical JSON, which the library alone computes and hands to the generator.
 """
 
 import copy
 import dataclasses as dc
 import datetime as dt
+import difflib
 import hashlib
 import importlib.resources
 import io
@@ -34,7 +35,6 @@ from doppeldata.errors import DoppeldataError
 from doppeldata.example_profiles import example_resource
 from doppeldata.published_schemas import schema_text
 
-FORMAT_VERSION = _core.FORMAT_VERSION
 BUNDLE_INDEX = 'bundle.yaml'
 
 
@@ -61,13 +61,11 @@ GENERATED_FIELDS = {
     'source_fingerprint': GeneratedField(hashed=False, derived_from=True),
     'at': GeneratedField(hashed=False, derived_from=False),
     'sample': GeneratedField(hashed=True, derived_from=False),
-    # Hashed, as every release before it hashes a field it does not know. It names no directory, so a copy of the
-    # schema elsewhere keeps the seed's identity.
+    # It names no directory, so a copy of the schema elsewhere keeps the seed's identity.
     'imported_from': GeneratedField(hashed=True, derived_from=False),
-    # No draw reads it, so a seed keeps one digest whichever release, knowing it or not, computes it.
+    # No draw reads it, so the digest leaves it out.
     'declared': GeneratedField(hashed=False, derived_from=False),
 }
-# The digest keeps only these, so a field a later release adds is left out by this one.
 HASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if field.hashed)
 DERIVED_FROM = tuple(name for name, field in GENERATED_FIELDS.items() if field.derived_from)
 TOOL = f'doppeldata {_core.VERSION}'
@@ -166,14 +164,15 @@ def integer_format_checker() -> jsonschema.FormatChecker:
 
 
 @cache
-def validators() -> dict[str | None, jsonschema.Draft202012Validator]:
+def validators() -> dict[str, jsonschema.Draft202012Validator]:
     """One validator per `kind`, so an error inside a table is not reported as a bundle's."""
     schema = json.loads(schema_text('profile'))
     checker = integer_format_checker()
     root = {key: value for key, value in schema.items() if key != 'oneOf'}
-    by_kind: dict[str | None, jsonschema.Draft202012Validator] = {None: jsonschema.Draft202012Validator(schema, format_checker=checker)}
+    by_kind: dict[str, jsonschema.Draft202012Validator] = {}
     for branch in schema['oneOf']:
-        by_kind[branch['properties']['kind']['const']] = jsonschema.Draft202012Validator(root | branch, format_checker=checker)
+        (kind,) = tag_of(schema['$defs'][branch['$ref'].rsplit('/', 1)[1]]['properties']['kind'])
+        by_kind[kind] = jsonschema.Draft202012Validator(root | branch, format_checker=checker)
     return by_kind
 
 
@@ -221,7 +220,7 @@ def yaml() -> YAML:
 
 
 def read_document(path: Path) -> Any:
-    """A profile file as written: comments, key order and unknown fields kept."""
+    """A profile file as written: comments and key order kept."""
     try:
         if path.suffix == '.json':
             return json.loads(path.read_text())
@@ -248,7 +247,7 @@ def write_document(document: Any, path: Path) -> None:
 def to_plain(value: Any) -> Any:
     """The document as plain dicts, lists and scalars, with ruamel's comment-keeping types removed."""
     if isinstance(value, Mapping):
-        return {str(key): to_plain(item) for key, item in value.items()}
+        return {plain_key(key): to_plain(item) for key, item in value.items()}
     if isinstance(value, list):
         return [to_plain(item) for item in value]
     if isinstance(value, bool) or value is None:
@@ -257,6 +256,15 @@ def to_plain(value: Any) -> Any:
         if isinstance(value, plain_type):
             return plain_type(value)
     return value
+
+
+def plain_key(key: Any) -> str:
+    """A mapping key as JSON spells it, so YAML's bare `null:`, `true:` and `false:` keys are those words."""
+    if key is None:
+        return 'null'
+    if isinstance(key, bool):
+        return 'true' if key else 'false'
+    return str(key)
 
 
 def generated_section(**fields: Any) -> dict[str, Any]:
@@ -300,18 +308,16 @@ def check(plain: Any) -> list[Issue]:
     """Every reason the document is not a valid profile: numbers RFC 8785 cannot write, the schema's, then the orderings it cannot state."""
     if not isinstance(plain, dict):
         return [Issue('not-a-mapping', '', 'a profile is a mapping of sections')]
-    version = plain.get('profile_version')
-    if isinstance(version, int) and not isinstance(version, bool) and version > FORMAT_VERSION:
-        message = f'profile_version {version} is newer than {FORMAT_VERSION}, the version this doppeldata reads; upgrade doppeldata'
-        return [Issue('newer-profile-version', '/profile_version', message)]
     issues = list(unrepresentable_numbers(plain, ()))
     if issues:
         return issues
     kind = plain.get('kind')
-    validator = validators().get(kind if isinstance(kind, str) else None, validators()[None])
-    for error in validator.iter_errors(plain):
-        cause = cause_of(error)
-        issues.append(Issue(f'schema-{cause.validator}', pointer(tuple(cause.absolute_path)), cause.message))
+    if 'kind' not in plain:
+        return [Issue('schema-required', '', f"'kind' is a required property; a profile is one of {', '.join(validators())}")]
+    if not isinstance(kind, str) or kind not in validators():
+        return [tag_issue(kind, list(validators()), ('kind',))]
+    for error in validators()[kind].iter_errors(plain):
+        issues += schema_error_issues(error, ())
     if issues:
         return issues
     if kind == 'bundle':
@@ -319,15 +325,69 @@ def check(plain: Any) -> list[Issue]:
     return list(table_ordering_issues(plain, ()))
 
 
-def cause_of(error: jsonschema.exceptions.ValidationError) -> jsonschema.exceptions.ValidationError:
-    """The error inside an `anyOf` or `oneOf` that names the fault, past the `null` branch every optional field has."""
-    while error.context:
-        branches = [inner for inner in error.context if not (inner.validator == 'type' and inner.validator_value == 'null')]
-        best = jsonschema.exceptions.best_match(branches or error.context)
-        if best is None:
-            break
-        error = best
-    return error
+def schema_error_issues(error: jsonschema.exceptions.ValidationError, at: PointerParts) -> list[Issue]:
+    """Each fault one schema error names, at its path below `at`.
+
+    Inside an `anyOf` or `oneOf`, only the branch the value was meant for is read. A branch is not meant where the value
+    is not its type, such as the `null` every optional field has, or where a field does not hold its tag, such as
+    `derived`'s other `kind`. A value holding no branch's tag is that one fault. A key its section does not declare is an
+    `unknown-field` at the key's own pointer, naming the closest field the section takes.
+    """
+    if error.context:
+        branches: dict[Any, list[jsonschema.exceptions.ValidationError]] = {}
+        for inner in error.context:
+            branches.setdefault(inner.relative_schema_path[0], []).append(inner)
+        typed = [errors for errors in branches.values() if not any(map(not_its_type, errors))]
+        meant = [errors for errors in typed if not any(map(misses_tag, errors))]
+        if len(meant) == 1:
+            return [issue for inner in meant[0] for issue in schema_error_issues(inner, at)]
+        missed = [inner for errors in typed for inner in errors if misses_tag(inner)]
+        if not meant and missed:
+            return [
+                tag_issue(missed[0].instance, [tag for inner in missed for tag in tag_of(inner.schema)], (*at, *missed[0].absolute_path))
+            ]
+        best = jsonschema.exceptions.best_match([inner for errors in meant for inner in errors] or error.context)
+        if best is not None:
+            return schema_error_issues(best, at)
+    path = (*at, *error.absolute_path)
+    if error.validator == 'additionalProperties' and isinstance(error.instance, dict):
+        known = list(error.schema.get('properties') or {})
+        return [unknown_field(str(key), known, (*path, key)) for key in error.instance if key not in known]
+    return [Issue(f'schema-{error.validator}', pointer(path), error.message)]
+
+
+def not_its_type(error: jsonschema.exceptions.ValidationError) -> bool:
+    """Whether an error inside one branch of a union says the value is not the branch's type."""
+    return error.validator == 'type' and not error.relative_path
+
+
+def misses_tag(error: jsonschema.exceptions.ValidationError) -> bool:
+    """Whether an error inside one branch of a union says a field of the value does not hold the branch's tag."""
+    return error.validator in ('const', 'enum') and len(error.relative_path) == 1 and bool(tag_of(error.schema))
+
+
+def tag_of(schema: Any) -> tuple[Any, ...]:
+    """The one value a tag field takes, written as `const` or as a one-value `enum`. Empty for any other field."""
+    if not isinstance(schema, dict):
+        return ()
+    if 'const' in schema:
+        return (schema['const'],)
+    values = schema.get('enum')
+    return tuple(values) if isinstance(values, list) and len(values) == 1 else ()
+
+
+def unknown_field(key: str, known: list[str], at: PointerParts) -> Issue:
+    closest = tuple(difflib.get_close_matches(key, known, n=3))
+    hint = f'the closest is {closest[0]}, and ' if closest else ''
+    return Issue('unknown-field', pointer(at), f'{key!r} is not a field here; {hint}this section takes {", ".join(known)}', closest)
+
+
+def tag_issue(value: Any, tags: list[Any], at: PointerParts) -> Issue:
+    """A tag field holding none of the tags its branches take, naming the closest."""
+    names = [str(tag) for tag in tags]
+    closest = tuple(difflib.get_close_matches(value, names, n=1)) if isinstance(value, str) else ()
+    hint = f'the closest is {closest[0]}, and ' if closest else ''
+    return Issue('schema-enum', pointer(at), f'{value!r} is not a {at[-1]} here; {hint}this field takes {", ".join(names)}', closest)
 
 
 def unrepresentable_numbers(value: Any, at: PointerParts) -> Iterator[Issue]:
@@ -581,7 +641,7 @@ class Profile:
         return digest_of(self.canonical())
 
     def save(self, path: str | Path | None = None) -> None:
-        """Write the profile as YAML, or as JSON to a `.json` path, keeping comments, order and unknown fields."""
+        """Write the profile as YAML, or as JSON to a `.json` path, keeping comments and key order."""
         target = Path(path) if path is not None else self.path
         if target is None:
             raise ValueError('this profile has no file of its own, so save needs a path')
@@ -601,7 +661,7 @@ class Bundle:
     def of(cls, name: str, tables: dict[str, Profile], relationships: list[Any] | None = None) -> 'Bundle':
         """A bundle named `name` of `tables` and the `relationships` between them, with no file of its own, so its
         `save` needs a path."""
-        document: dict[str, Any] = {'profile_version': FORMAT_VERSION, 'kind': 'bundle', 'name': name, 'tables': {}}
+        document: dict[str, Any] = {'kind': 'bundle', 'name': name, 'tables': {}}
         if relationships:
             document['relationships'] = relationships
         return cls(document, None, tables)

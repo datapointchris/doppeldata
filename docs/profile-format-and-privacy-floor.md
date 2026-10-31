@@ -6,25 +6,22 @@ The profile is the file between a real dataset and every synthetic copy, and it 
 the committed form, because a reviewer reads it, diffs it and comments on it in a pull request. JSON
 is accepted on input. One JSON Schema validates both.
 
-- **An older engine ignores a key it does not know, so an added field must leave its reading valid.**
-  Every section of a profile accepts an unknown key, so a job pinned to an earlier library still
-  loads a profile a later release wrote. A field that reading can skip keeps `profile_version`. A
-  field that changes how an existing field reads raises it. So a ZIP column's three-digit prefixes
-  are a field of their own, `string.prefixes`: written as `top_values`, they would be read as whole
-  values. A breaking change must ship with `profile upgrade`, which rewrites an older file in place.
-  A profile newer than the installed library refuses to load and names its version. The tool
-  records its own version separately, under `generated.tool`. The settings a caller hands a writer
-  are not a profile, and refuse an unknown key.
+- **Every section refuses a key it does not declare.** A reviewer hand-edits the file, so a
+  misspelled key must fail rather than be read as absent. serde's `deny_unknown_fields` refuses it
+  in the engine, listing the fields its section takes. The schema's `additionalProperties: false`
+  refuses it in the library, as an `unknown-field` at the key's JSON Pointer naming the closest
+  field its section takes. The tool that wrote the profile records its version under
+  `generated.tool`.
 - **Every section is optional.** A profile imported from a data catalog or a data contract has types
   and no statistics, and the generator falls back to defaults for what is missing.
-- **Unknown fields survive a read and a rewrite.** An older tool never strips what a newer one wrote.
-  The file is written back through ruamel.yaml, which also keeps a reviewer's comments and key order.
+- **A rewrite keeps a reviewer's comments and key order.** The file is written back through
+  ruamel.yaml.
 
 ## The schema is derived from the Rust model, so Python and Rust cannot disagree
 
 The generator deserializes a profile into Rust structs with serde, and schemars derives the JSON
 Schema (Draft 2020-12) from the same structs. The schema is committed at
-`library/src/doppeldata/schemas/profile.v1.json`, and a cargo test fails when it differs from what
+`library/src/doppeldata/schemas/profile.json`, and a cargo test fails when it differs from what
 the model derives. The Python profiler validates against that committed file.
 
 JSON Schema cannot express ordering, such as quantiles rising or rates summing to 1. A second Python
@@ -44,8 +41,7 @@ The determinism contract keys on the profile's SHA-256, so formatting, comments 
 not change it. The hash is taken over the RFC 8785 canonical JSON form of the profile.
 Of the `generated` fields, only those `GENERATED_FIELDS` in `doppeldata.profile_format` marks
 hashed are kept, such as `engine`. So `at`, `tool` and `source_fingerprint` are left out, and
-re-profiling unchanged data gives the same identity, wherever the copy that was read sits. A field
-the reading release does not know is left out too.
+re-profiling unchanged data gives the same identity, wherever the copy that was read sits.
 
 The library alone computes the digest, and the generator takes it as an argument. Every way into
 the generator passes through the library, so one implementation leaves nothing to disagree with.
@@ -72,9 +68,9 @@ the `doppeldata.*` constants in the core crate's `profile::provenance`, where ea
 holds. So the next profiler can tell synthetic data from real, and any one file names the whole
 dataset it belongs to.
 
-The keys carry the profile's name and format version, and the dataset's whole identity: the five
-values `determinism-contract.md` names, and their digest as a quick equality check. The row key
-names the dataset, because every file of it carries the same schema. One part file reading
+The keys carry the profile's name and the dataset's whole identity: the values
+`determinism-contract.md` names as that identity, and their digest as a quick equality check. The
+row key names the dataset, because every file of it carries the same schema. One part file reading
 `rows: 10000000` would mislead.
 
 A write asked to embed the profile adds `doppeldata.profile`, the whole profile as canonical JSON,
@@ -163,9 +159,6 @@ dependency. A lag's entry is in `audit`, at `/derived/lag` in its column. `value
 it holds, and `min_count` is the fewest rows any of them or any cell of it rests on. A
 suppression's `reason` is one of the `SuppressionReason` values `doppeldata schemas show profile`
 prints.
-
-The dataset's entries are a list of their own because an earlier `profile check` reads every
-`audit` field as a pointer into its column. It would report a root pointer there as a stale entry.
 
 Each kind of field is admitted by one rule:
 

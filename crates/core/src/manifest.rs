@@ -17,9 +17,6 @@ use crate::profile::PartitionStyle;
 use crate::profile::Quantiles;
 use crate::scenario::ListedFault;
 
-/// The manifest format version this engine writes and reads.
-pub const MANIFEST_VERSION: u64 = 1;
-
 /// The file name a complete dataset's manifest is written under, beside the data, once every object
 /// is whole. Spark, Hive and Glue skip a file whose name starts with `_`, so it never reads as data.
 pub const MANIFEST_FILE_NAME: &str = "_manifest.json";
@@ -40,9 +37,6 @@ pub const FAULTS_FILE_NAME: &str = "_faults.jsonl";
 pub fn one_file_faults_name(file_name: &str) -> String {
     format!("_{file_name}.faults.jsonl")
 }
-
-/// The version of a fault list's record, which `faults.v1.json` describes.
-pub const FAULTS_VERSION: u64 = 1;
 
 /// One fault `malformed_rows` placed, as a line of `_faults.jsonl`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -70,7 +64,7 @@ pub struct FaultRecord {
 /// The JSON Schema (Draft 2020-12) of one line of a fault list, as the library ships it.
 pub fn faults_json_schema() -> String {
     let mut schema = schemars::schema_for!(FaultRecord);
-    schema.insert("title".into(), format!("doppeldata fault record v{FAULTS_VERSION}").into());
+    schema.insert("title".into(), "doppeldata fault record".into());
     let mut text = serde_json::to_string_pretty(&schema).expect("a derived schema always serializes");
     text.push('\n');
     text
@@ -82,7 +76,6 @@ pub const DEFAULT_FILE_ROWS: u64 = 1_000_000;
 /// The record of a generated dataset, which with its profile and scenario regenerates every file byte for byte.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Manifest {
-    pub manifest_version: ManifestVersion,
     /// The tool that wrote the files, as `doppeldata <version>`. The files' bytes are a function of
     /// the identity and this version.
     pub tool: String,
@@ -106,7 +99,7 @@ pub struct Manifest {
     #[serde(default)]
     pub faults: Option<BTreeMap<ListedFault, u64>>,
     /// The change stream and the expected table a `cdc` write adds beside its full load, which
-    /// `files` lists. Null for any other write. A release reads a manifest no newer than itself.
+    /// `files` lists. Null for any other write.
     #[serde(default)]
     pub cdc: Option<ManifestCdc>,
     /// True when the run stopped early, so `files` lists only the objects that completed. Such a
@@ -166,7 +159,6 @@ impl Manifest {
     /// are copied, never recomputed.
     pub fn new(identity: &DatasetIdentity, profile: ManifestProfile, output: Output, layout: LayoutSettings, destination: String) -> Self {
         Self {
-            manifest_version: ManifestVersion,
             tool: format!("doppeldata {}", crate::VERSION),
             dataset_digest: identity.digest(),
             identity: ManifestIdentity::from(identity),
@@ -191,8 +183,6 @@ impl Manifest {
 pub struct ManifestProfile {
     /// The profile's `name`.
     pub name: String,
-    /// The profile format version it was read as.
-    pub version: u64,
     /// The profile's path as the caller gave it, or null when it came from memory.
     pub path: Option<String>,
     /// Whether each file `files` and `cdc.expected` list holds the whole profile's canonical JSON,
@@ -322,44 +312,6 @@ pub enum FileRows {
     Drawn(Quantiles),
 }
 
-/// `manifest_version`, which must equal [`MANIFEST_VERSION`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "u64", into = "u64")]
-pub struct ManifestVersion;
-
-impl TryFrom<u64> for ManifestVersion {
-    type Error = String;
-
-    fn try_from(version: u64) -> Result<Self, Self::Error> {
-        if version == MANIFEST_VERSION {
-            Ok(Self)
-        } else {
-            Err(format!(
-                "manifest_version {version} is not {MANIFEST_VERSION}, the version this engine reads"
-            ))
-        }
-    }
-}
-
-impl From<ManifestVersion> for u64 {
-    fn from(_: ManifestVersion) -> u64 {
-        MANIFEST_VERSION
-    }
-}
-
-impl JsonSchema for ManifestVersion {
-    fn schema_name() -> Cow<'static, str> {
-        "ManifestVersion".into()
-    }
-
-    fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        json_schema!({
-            "description": "The manifest format version, which changes only on a breaking format change.",
-            "const": MANIFEST_VERSION,
-        })
-    }
-}
-
 /// A 64-bit unsigned integer written in decimal, because a JSON number is exact only to 2^53.
 struct Decimal;
 
@@ -396,7 +348,7 @@ mod decimal {
 /// The manifest's JSON Schema (Draft 2020-12), as the library ships it.
 pub fn json_schema() -> String {
     let mut schema = schemars::schema_for!(Manifest);
-    schema.insert("title".into(), format!("doppeldata manifest v{MANIFEST_VERSION}").into());
+    schema.insert("title".into(), "doppeldata manifest".into());
     let mut text = serde_json::to_string_pretty(&schema).expect("a derived schema always serializes");
     text.push('\n');
     text

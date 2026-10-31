@@ -1,4 +1,4 @@
-"""Scenario format v1: read, validate, compose and identify a scenario file, and apply its patch to a profile.
+"""The scenario format: read, validate, compose and identify a scenario file, and apply its patch to a profile.
 
 A scenario is committed as YAML and accepted as JSON, and validates against the JSON Schema derived from the engine's Rust
 model. Its identity is the SHA-256 of its RFC 8785 canonical JSON, with each perturbation's id resolved, and the description
@@ -31,11 +31,11 @@ from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Issue
 from doppeldata.profile_format import PointerParts
 from doppeldata.profile_format import Profile
-from doppeldata.profile_format import cause_of
 from doppeldata.profile_format import digest_of
 from doppeldata.profile_format import integer_format_checker
 from doppeldata.profile_format import pointer
 from doppeldata.profile_format import read_document
+from doppeldata.profile_format import schema_error_issues
 from doppeldata.profile_format import to_plain
 from doppeldata.profile_format import unrepresentable_numbers
 from doppeldata.profile_format import yaml
@@ -102,10 +102,7 @@ def validators() -> dict[str, jsonschema.Draft202012Validator]:
 
 
 def schema_issues(validator: jsonschema.Draft202012Validator, value: Any, at: PointerParts) -> list[Issue]:
-    return [
-        Issue(f'schema-{cause.validator}', pointer((*at, *cause.absolute_path)), cause.message)
-        for cause in map(cause_of, validator.iter_errors(value))
-    ]
+    return [issue for error in validator.iter_errors(value) for issue in schema_error_issues(error, at)]
 
 
 def check(plain: Any) -> list[Issue]:

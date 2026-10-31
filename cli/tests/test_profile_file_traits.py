@@ -35,7 +35,7 @@ def profiled(tmp_path, name, text):
 def test_a_messy_csv_records_clevercsvs_dialect_where_duckdb_disagrees_and_its_malformed_rows_by_type(tmp_path):
     csv = profiled(tmp_path, 'messy.csv', MESSY_CSV).to_plain()['source']['csv']
 
-    assert csv['delimiter'] == '|'
+    assert csv['writer']['delimiter'] == '|'
     assert csv['detector']['agreed'] is False
     assert csv['detector']['chosen'] == 'clevercsv'
     assert set(csv['malformed']['by_type']) == {'cast', 'missing_columns', 'too_many_columns', 'unquoted_value'}

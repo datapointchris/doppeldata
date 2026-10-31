@@ -7,17 +7,10 @@ use serde::Serialize;
 
 use crate::profile::CorrelationMethod;
 
-/// The check report format version this engine publishes.
-pub const CHECK_VERSION: u64 = 1;
-/// The diff report format version this engine publishes.
-pub const DIFF_VERSION: u64 = 1;
-
 /// Generated data measured against the profile it was generated from, by profiling the data with
 /// that profile's histogram edges and value lists frozen.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CheckReport {
-    #[schemars(extend("const" = CHECK_VERSION))]
-    pub check_version: u64,
     /// The profile the data was generated from.
     pub profile: ReportedProfile,
     /// The scenario applied to the profile, or null for none.
@@ -45,8 +38,6 @@ pub struct CheckReport {
 /// drifted from the first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DiffReport {
-    #[schemars(extend("const" = DIFF_VERSION))]
-    pub diff_version: u64,
     /// The earlier profile, which each metric measures the other against.
     pub a: ReportedProfile,
     pub b: ReportedProfile,
@@ -218,18 +209,12 @@ pub struct ExpectationResult {
 
 /// The check report's JSON Schema (Draft 2020-12), as the library ships it.
 pub fn check_json_schema() -> String {
-    titled(
-        schemars::schema_for!(CheckReport),
-        &format!("doppeldata check report v{CHECK_VERSION}"),
-    )
+    titled(schemars::schema_for!(CheckReport), "doppeldata check report")
 }
 
 /// The diff report's JSON Schema (Draft 2020-12), as the library ships it.
 pub fn diff_json_schema() -> String {
-    titled(
-        schemars::schema_for!(DiffReport),
-        &format!("doppeldata diff report v{DIFF_VERSION}"),
-    )
+    titled(schemars::schema_for!(DiffReport), "doppeldata diff report")
 }
 
 fn titled(mut schema: schemars::Schema, title: &str) -> String {

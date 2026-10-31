@@ -1,4 +1,4 @@
-//! Scenario format v1: a layer over a profile that bends the generated data on purpose.
+//! The scenario format: a layer over a profile that bends the generated data on purpose.
 //!
 //! A merge patch changes what a profile can express as a value. An ordered list of perturbations
 //! applies faults a profile cannot express. `expect` declares what the scenario promises, which a
@@ -23,9 +23,6 @@ use crate::perturbations::pointer_token;
 use crate::plan::PlanError;
 pub use crate::profile::Duration;
 use crate::profile::Rate;
-
-/// The scenario format version the engine reads, which names the published schema's file.
-pub const SCENARIO_VERSION: u64 = 1;
 
 /// A scenario file: a layer over a profile that bends the generated data on purpose.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
@@ -1005,7 +1002,7 @@ impl Scenario {
 /// The scenario's JSON Schema (Draft 2020-12), as the library ships it.
 pub fn json_schema() -> String {
     let mut schema = schemars::schema_for!(Scenario);
-    schema.insert("title".into(), format!("doppeldata scenario v{SCENARIO_VERSION}").into());
+    schema.insert("title".into(), "doppeldata scenario".into());
     let mut text = serde_json::to_string_pretty(&schema).expect("a derived schema always serializes");
     text.push('\n');
     text

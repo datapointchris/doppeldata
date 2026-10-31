@@ -110,7 +110,7 @@ def schema_table(schema: Any, name: str, named: str) -> DeclaredTable:
     if unread:
         warn_left_out(f'{named}: fields of types the engine draws nothing of are left out: {", ".join(unread)}')
     missing = [entry.get('value') if isinstance(entry, Mapping) else entry for entry in schema.get('missingValues', DEFAULT_MISSING_VALUES)]
-    source = {'csv': {'null': str(missing[0])}} if missing and missing[0] != '' else {}
+    source = {'csv': {'writer': {'null': str(missing[0])}}} if missing and missing[0] != '' else {}
     return DeclaredTable(
         name=name,
         columns=tuple(columns),

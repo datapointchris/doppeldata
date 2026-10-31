@@ -268,7 +268,7 @@ def source_of(parameters: Mapping[str, str], serde: Mapping[str, Any]) -> dict[s
         null = serde_parameters.get('serialization.null.format', parameters.get('serialization.null.format'))
         if null is not None:
             dialect['null'] = null
-        source['csv'] = dialect
+        source['csv'] = {'writer': dialect}
     return source
 
 

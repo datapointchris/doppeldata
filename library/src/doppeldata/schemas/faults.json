@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "doppeldata fault record v1",
+  "title": "doppeldata fault record",
   "description": "One fault `malformed_rows` placed, as a line of `_faults.jsonl`.",
   "type": "object",
   "properties": {

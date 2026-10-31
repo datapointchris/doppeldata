@@ -1,7 +1,6 @@
 # Hand-written: a clickstream export as newline-delimited JSON, nested the way an event collector writes it.
 # A quarter of the producers write `user_id` as a string, and a quarter of the events carry a referrer.
 # No data was read, so it has no `generated` block.
-profile_version: 1
 kind: table
 name: events-json
 privacy:
@@ -35,8 +34,7 @@ source:
           type: date32[day]
           values: {count: 24}
   json:
-    explicit_nulls: false
-    compression: gzip
+    writer: {explicit_nulls: false, compression: gzip}
     max_depth: 3
 dataset:
   row_count: 240000

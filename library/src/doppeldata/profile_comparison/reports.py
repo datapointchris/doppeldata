@@ -7,8 +7,6 @@ from typing import Any
 from doppeldata.profile_comparison.field_changes import FieldChange
 from doppeldata.profile_comparison.metrics import Bound
 
-CHECK_VERSION = 1
-DIFF_VERSION = 1
 BOUND_SIGNS = {Bound.AT_MOST: '≤', Bound.AT_LEAST: '≥'}
 
 
@@ -204,7 +202,6 @@ class CheckReport:
 
     def to_plain(self) -> dict[str, Any]:
         return {
-            'check_version': CHECK_VERSION,
             'profile': dc.asdict(self.profile),
             'scenario': dc.asdict(self.scenario) if self.scenario is not None else None,
             'data': dc.asdict(self.data),
@@ -254,7 +251,6 @@ class DiffReport:
 
     def to_plain(self) -> dict[str, Any]:
         return {
-            'diff_version': DIFF_VERSION,
             'a': dc.asdict(self.a),
             'b': dc.asdict(self.b),
             'drifted': self.drifted,

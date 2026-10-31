@@ -301,7 +301,7 @@ The null rate comes from the raw text, so an unparsed value counts as a value ra
 
 A delimited source's null tokens are null before any column is typed. Each column's empty fields and
 its fields holding one of `NULL_TOKENS` are counted. The token the file writes most across all its
-columns becomes `csv.null`. Each column's other tokens become its `missing_tokens`, each a share of
+columns becomes `csv.writer.null`. Each column's other tokens become its `missing_tokens`, each a share of
 all rows, and one is kept only where `k_min` rows hold it.
 
 A JSON value is typed by its JSON type rather than its text. `json_type` makes a number an integer or
@@ -396,13 +396,13 @@ statistic is taken from the rows, under the floor below.
   last `TAIL_BYTES` holds most footers, and a longer one takes a second. So the listing's
   timeouts, retries and region redirects apply, and a failure exits as a listing's does, with 4
   where no answer came.
-- **`source.parquet` holds the settings that reproduce the files**: the commonest codec, the
+- **`source.parquet.writer` holds the settings that reproduce the files**: the commonest codec, the
   largest row group as `row_group_rows`, page or chunk `statistics`, and `dictionary_columns`. The
   last is null where every column carries a dictionary.
-- **It records the writer beside them**: `writer` from `created_by`, `spark_version` from Spark's
+- **It records the writer that made them beside it**: `created_by`, `spark_version` from Spark's
   `org.apache.spark.version` key, `format_version`, and quantiles of row groups per file, rows per
   group and bytes per group.
-- **`timestamp_units` gives each timestamp column's stored unit.** `timestamp_unit` is set only where
+- **`timestamp_units` gives each timestamp column's stored unit.** `writer.timestamp_unit` is set only where
   they agree and none is INT96. The writers cannot write INT96.
 - **`decimal_scale_drift` is true where one decimal column's scale differs between files.**
 - **Files holding different schemas are read as the union of their footers.** The reader gives
@@ -601,8 +601,8 @@ which `--sample` makes its sample.
   kept, the strongest `CORRELATIONS_KEPT` of both lists. `a` and `b` follow the columns' order, so
   a correlation ratio's kinds tell which column is the category.
 
-  η is a list of its own because `method` is a closed enum. A value an earlier reader does not
-  know fails its whole profile, where a field it does not know is skipped.
+  η is a list of its own because it is asymmetric, and a different statistic from Spearman's ρ and
+  Cramér's V.
 - **A pair is measured only where `PAIR_ROWS` sampled rows hold both its values**, or `k_min` rows
   where that is more. A value at `CORRELATION_FLOOR` then lies three standard errors from none.
   Cochran's rule for a chi-squared test sets two more floors. Cramér's V needs `ROWS_PER_CELL`
@@ -798,8 +798,8 @@ table of their own, profiled as a table is.
   `nullable`, because Arrow holds it as null.
 - **A nested field's `type_mix` is recorded as the files hold it.** No write reproduces it, because
   `malformed_rows` reads only top-level columns' shares.
-- **`source.json` records `max_depth` and `explicit_nulls`**, which is true where any path holds a
-  JSON null.
+- **`source.json` records `max_depth` and `writer.explicit_nulls`**, which is true where any path
+  holds a JSON null.
 - **An array's element keeps no literal under a checked policy.** Its values are counted by element,
   so one record's eleven tags would pass a floor of rows. Its length and distinct count stay. A
   struct field's literals are held to the rows of its parent's objects holding its key.

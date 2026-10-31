@@ -54,7 +54,7 @@ def main() -> None:
     faker.Faker.seed(42)
     faker_en = faker.Faker('en_US')
     person = mimesis.Person(Locale.EN, seed=42)
-    profile = sd.Profile({'profile_version': 1, 'kind': 'table', 'name': 'names', 'columns': [NAME_COLUMN]})
+    profile = sd.Profile({'kind': 'table', 'name': 'names', 'columns': [NAME_COLUMN]})
     generators: list[tuple[str, Callable[[int], object]]] = [
         (f'Faker {faker.VERSION}, `name()`', lambda n: [faker_en.name() for _ in range(n)]),
         (f'Mimesis {mimesis.__version__}, `full_name()`', lambda n: [person.full_name() for _ in range(n)]),

@@ -27,13 +27,13 @@ from doppeldata.inline_columns import decimals
 from doppeldata.inline_columns import integers
 from doppeldata.name_hinted_types import GENERAL
 from doppeldata.name_hinted_types import type_named_by
-from doppeldata.profile_format import FORMAT_VERSION
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import pointer
 from doppeldata.profile_format import read_document
 from doppeldata.profile_format import to_plain
+from doppeldata.profile_format import unknown_field
 
 # The table a profile expanded from columns given in Python or on the command line is named.
 INLINE_TABLE = 'table'
@@ -102,8 +102,8 @@ def file_profile(source: str | os.PathLike[str]) -> Profile:
 
 
 def is_short(document: Any) -> bool:
-    """Whether a file's document is the short form: a `columns` key, and neither `profile_version` nor `kind`."""
-    return isinstance(document, dict) and 'columns' in document and not {'profile_version', 'kind'} & document.keys()
+    """Whether a file's document is the short form: `columns` a mapping, where a full profile's is a list, and no `kind`."""
+    return isinstance(document, dict) and isinstance(document.get('columns'), dict) and 'kind' not in document
 
 
 def validated(document: dict[str, Any], source: str) -> Profile:
@@ -116,11 +116,7 @@ def validated(document: dict[str, Any], source: str) -> Profile:
 
 def short_expanded(document: dict[str, Any], path: Path) -> dict[str, Any]:
     """A short YAML's profile, named for its file. Each column's value is a fake, a `low..high` range, a list, or empty."""
-    issues = [
-        Issue('unknown-field', pointer((key,)), f'a short profile holds {" and ".join(SHORT_KEYS)}, not {key}')
-        for key in document
-        if key not in SHORT_KEYS
-    ]
+    issues = [unknown_field(str(key), list(SHORT_KEYS), (key,)) for key in document if key not in SHORT_KEYS]
     rows = document.get('rows')
     if rows is not None and (isinstance(rows, bool) or not isinstance(rows, int) or rows < 0):
         issues.append(Issue('invalid-rows', '/rows', f'rows is a count of rows, 0 or more, not {rows!r}'))
@@ -194,7 +190,7 @@ def expanded(specs: dict[str, InlineColumn | None], rows: int | None, table: str
         columns.append(column)
     if issues:
         raise InvalidProfile(source, issues)
-    document: dict[str, Any] = {'profile_version': FORMAT_VERSION, 'kind': 'table', 'name': table}
+    document: dict[str, Any] = {'kind': 'table', 'name': table}
     if rows is not None:
         document['dataset'] = {'row_count': rows}
     document['columns'] = columns

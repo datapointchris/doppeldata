@@ -288,7 +288,6 @@ class ContractTable:
     source_format: str | None
     csv_null: str | None
     digest: str
-    profile_version: int
     primary_key: Key | None = None
     unique_keys: tuple[Key, ...] = ()
     partition_keys: tuple[str, ...] = ()
@@ -337,7 +336,6 @@ class ContractDocument:
 
     name: str
     digest: str
-    profile_version: int
     tables: tuple[ContractTable, ...]
     bundle: bool
 
@@ -347,14 +345,14 @@ def contract_document(profile: Profile | Bundle) -> ContractDocument:
     plain = profile.to_plain()
     digest = profile.digest.removeprefix('sha256:')
     if isinstance(profile, Profile):
-        return ContractDocument(str(plain['name']), digest, int(plain['profile_version']), (contract_table(profile),), False)
+        return ContractDocument(str(plain['name']), digest, (contract_table(profile),), False)
     relationships = plain.get('relationships') or []
     tables = []
     for name, table in profile.tables.items():
         found = contract_table(table)
         keys = tuple(foreign_key(relationship, found) for relationship in relationships if relationship['from'].split('.')[0] == name)
         tables.append(dc.replace(found, foreign_keys=keys))
-    return ContractDocument(str(plain['name']), digest, int(plain['profile_version']), tuple(tables), True)
+    return ContractDocument(str(plain['name']), digest, tuple(tables), True)
 
 
 def contract_table(profile: Profile) -> ContractTable:
@@ -388,9 +386,8 @@ def contract_table(profile: Profile) -> ContractTable:
         rows=rows,
         k_min=privacy.get('k_min'),
         source_format=source.get('format'),
-        csv_null=(source.get('csv') or {}).get('null'),
+        csv_null=((source.get('csv') or {}).get('writer') or {}).get('null'),
         digest=profile.digest.removeprefix('sha256:'),
-        profile_version=int(document['profile_version']),
         primary_key=table_key(keys['primary'], facts) if keys.get('primary') else None,
         unique_keys=tuple(table_key(key, facts) for key in keys.get('candidates') or []),
         partition_keys=tuple(key['name'] for key in partitioning.get('keys') or []),

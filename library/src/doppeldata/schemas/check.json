@@ -1,46 +1,76 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "doppeldata diff report v1",
-  "description": "Two profiles of one table, such as last month's and this month's, and how far the second\ndrifted from the first.",
+  "title": "doppeldata check report",
+  "description": "Generated data measured against the profile it was generated from, by profiling the data with\nthat profile's histogram edges and value lists frozen.",
   "type": "object",
   "properties": {
-    "a": {
-      "description": "The earlier profile, which each metric measures the other against.",
-      "$ref": "#/$defs/ReportedProfile"
-    },
-    "b": {
-      "$ref": "#/$defs/ReportedProfile"
+    "against": {
+      "description": "The real data the data was scored against, or null when none was named.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RealData"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "changes": {
+      "description": "Columns the data adds or drops, or holds as another kind or semantic type. A change a writer\nalone causes is listed and passes: an Arrow type, which a writer may store at another width\nor unit, and a decimal read back from text as a float. So does a semantic type no detector\npack both profiles ran declares.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/FieldChange"
       }
     },
-    "diff_version": {
-      "type": "integer",
-      "format": "uint64",
-      "const": 1,
-      "minimum": 0
+    "data": {
+      "$ref": "#/$defs/CheckedData"
     },
-    "drifted": {
-      "description": "Whether any metric failed or any field changed. A metric B cannot supply is listed and\npasses, because a diff reports what changed between two profiles, and B binned afresh\ncarries no overflow.",
-      "type": "boolean"
+    "expectations": {
+      "description": "The scenario's declared expectations, empty when no scenario applies.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ExpectationResult"
+      }
     },
     "metrics": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/MetricResult"
       }
+    },
+    "passed": {
+      "description": "Whether every metric that decides and every column change passed. A metric the profile\nstates and the data cannot supply fails, because a check vouches for the data.",
+      "type": "boolean"
+    },
+    "profile": {
+      "description": "The profile the data was generated from.",
+      "$ref": "#/$defs/ReportedProfile"
+    },
+    "scenario": {
+      "description": "The scenario applied to the profile, or null for none.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReportedScenario"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "verified": {
+      "description": "Whether every declared expectation held. True when no scenario declares any.",
+      "type": "boolean"
     }
   },
   "required": [
-    "diff_version",
-    "a",
-    "b",
-    "drifted",
+    "profile",
+    "data",
+    "passed",
+    "verified",
     "metrics",
-    "changes"
+    "changes",
+    "expectations"
   ],
   "$defs": {
     "Bound": {
@@ -84,6 +114,103 @@
           "type": "string",
           "const": "overflow"
         }
+      ]
+    },
+    "CheckedData": {
+      "description": "The data that was profiled and measured.",
+      "type": "object",
+      "properties": {
+        "fingerprint": {
+          "description": "The profile's `source_fingerprint` of the files read, or null for an in-memory table.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "The data as the caller named it, such as `s3://bucket/orders/`.",
+          "type": "string"
+        },
+        "rows": {
+          "description": "The rows profiled.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "rows"
+      ]
+    },
+    "CorrelationMethod": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "pearson",
+            "spearman",
+            "kendall"
+          ]
+        },
+        {
+          "description": "Bias-corrected Cramér's V between two categorical columns.",
+          "type": "string",
+          "const": "cramers_v"
+        }
+      ]
+    },
+    "ExpectationResult": {
+      "description": "A scenario's declared expectation and the value the data holds.",
+      "type": "object",
+      "properties": {
+        "at_least": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "at_most": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "column": {
+          "description": "The column measured, or null for a metric of the whole table, such as `malformed.rate`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metric": {
+          "description": "The statistic expected, such as `hot_keys.share`.",
+          "type": "string"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "unmeasured": {
+          "description": "Why the data holds no value, such as a column it lacks. The expectation then fails.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "The value the data holds, or null where `unmeasured` says why.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "metric",
+        "passed"
       ]
     },
     "FieldChange": {
@@ -217,6 +344,45 @@
         "decides"
       ]
     },
+    "RealData": {
+      "description": "The real data a check scored the data against. The report holds its scores and none of its\nrows.",
+      "type": "object",
+      "properties": {
+        "correlation": {
+          "description": "The coefficient `CorrelationSimilarity` compares, spelled as a profile's correlations spell it.",
+          "$ref": "#/$defs/CorrelationMethod"
+        },
+        "fingerprint": {
+          "description": "The `source_fingerprint` of the real data's files, or null for an in-memory table.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "The real data as the caller named it.",
+          "type": "string"
+        },
+        "rows": {
+          "description": "The rows the real data holds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "scored_rows": {
+          "description": "The rows of each side's seeded sample that the scores read.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "path",
+        "rows",
+        "scored_rows",
+        "correlation"
+      ]
+    },
     "ReportedProfile": {
       "type": "object",
       "properties": {
@@ -234,6 +400,22 @@
             "string",
             "null"
           ]
+        }
+      },
+      "required": [
+        "name",
+        "digest"
+      ]
+    },
+    "ReportedScenario": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "description": "The scenario's digest, taken as a manifest's `identity.scenario_digest` is: the SHA-256 of\nits RFC 8785 canonical JSON with each perturbation's `id` resolved, and with `description`\nand `expect` left out.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
         }
       },
       "required": [
