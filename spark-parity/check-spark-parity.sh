@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Checks doppeldata.spark against doppeldata run locally, in each Spark image named, one container at a time. Each generates
 # 10M rows of the eight-columns example through generate and write, with 7 and with 40 partitions, checks spark_holds
-# against how the image carries every column of every-column-kind.profile.yaml, and generates and writes the
-# orders-customers bundle.
+# against how the image carries every column of every-column-kind.profile.yaml, generates and writes the
+# orders-customers bundle, and builds DataFrames on the driver through to_spark.
 #
 #   spark-parity/check-spark-parity.sh [--scenario FILE] WHEEL [IMAGE...]
 #

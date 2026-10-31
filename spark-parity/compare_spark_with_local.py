@@ -5,8 +5,10 @@ compared value for value with `doppeldata.stream`, each float by its bits. `writ
 manifest of a `doppeldata data generate` with the same arguments, and its `_faults.jsonl` byte for byte with the one beside
 that manifest. Each column of the every-column-kind fixture then goes through
 `mapInArrow` alone, and whether Spark gave every value back is compared with `spark_holds`. The orders-customers bundle then
-goes through `generate` and `write`, each table compared as the example is, with a local bundle write's table manifests. It
-prints one JSON object per check, and exits 1 when any differs.
+goes through `generate` and `write`, each table compared as the example is, with a local bundle write's table manifests. Last,
+`to_spark` builds DataFrames on the driver from the example's local table and from the fixture's columns Spark holds, each
+collected and compared by bits, and must refuse a table past `DRIVER_ROWS_AT_MOST` rows. It prints one JSON object per check,
+and exits 1 when any differs.
 
 Given a scenario, `write` and the local run apply all of it, and `generate` and the stream its ops that write rows, because
 `generate` writes no files. Each op draws from its own stream, so the rest generate the same values without them.
@@ -34,6 +36,8 @@ PARTITIONS = (7, 40)
 BUNDLE = 'orders-customers'
 BUNDLE_PARTITIONS = 3
 BUNDLE_FILE_ROWS = 100_000
+# The rows of each table to_spark builds on the driver.
+TO_SPARK_ROWS = 100_000
 # A float compares by its bits, so a NaN equals itself and -0.0 differs from 0.0.
 FLOAT_BITS = {pa.float32(): pa.int32(), pa.float64(): pa.int64()}
 
@@ -138,6 +142,37 @@ def bundle_identical(spark: SparkSession, bundle_manifest_path: str, out: str) -
     return identical
 
 
+def to_spark_identical(spark: SparkSession, fixture: str) -> bool:
+    """Whether `to_spark` gives back every value of `TO_SPARK_ROWS` rows of the eight-columns example, under its own schema and
+    under `struct_type`'s, of each fixture column `spark_holds` admits, and of a 50-row sample of the example with a column
+    pinned. Each is collected as Arrow and compared by bits, a large_string as the string Spark returns. A table one row past
+    `DRIVER_ROWS_AT_MOST` must be refused naming `doppeldata.spark.generate`."""
+    example = pa.table(sd.generate('eight-columns', rows=TO_SPARK_ROWS, seed=SEED))
+    generated = pa.table(sd.generate(sd.Profile.load(fixture), rows=TO_SPARK_ROWS, seed=SEED))
+    held = generated.select([field.name for field in generated.schema if spark_holds(field.type)])
+    pinned = pa.table(sd.sample('eight-columns', rows=50, seed=SEED, overrides={'category': 'pinned'}))
+    cases = [
+        ('eight-columns', example, None),
+        ('eight-columns', example, sd.spark.struct_type('eight-columns')),
+        (pathlib.Path(fixture).name, held, None),
+        ('eight-columns sample', pinned, sd.spark.struct_type('eight-columns')),
+    ]
+    identical = True
+    for name, table, schema in cases:
+        collected = arrow_of(sd.spark.to_spark(spark, table, schema=schema)).cast(table.schema)
+        difference = first_difference(collected, table.to_batches())
+        check = {'check': 'to_spark', 'table': name, 'schema': 'struct_type' if schema else 'own', 'columns': table.num_columns}
+        identical &= report(check | {'rows': collected.num_rows, 'identical': difference is None, 'difference': difference})
+    oversized = sd.generate({'flag': sd.choice([True, False])}, rows=sd.spark.DRIVER_ROWS_AT_MOST + 1)
+    try:
+        sd.spark.to_spark(spark, oversized)
+        refused = ''
+    except ValueError as error:
+        refused = str(error)
+    check = {'check': 'to_spark refuses', 'rows': sd.spark.DRIVER_ROWS_AT_MOST + 1, 'refusal': refused}
+    return identical & report(check | {'identical': 'doppeldata.spark.generate' in refused})
+
+
 def main(local_manifest_path: str, out: str, fixture: str, bundle_manifest_path: str, scenario_path: str = '') -> int:
     spark = SparkSession.builder.getOrCreate()
     profile = sd.Profile.example('eight-columns')
@@ -180,6 +215,7 @@ def main(local_manifest_path: str, out: str, fixture: str, bundle_manifest_path:
     disagree = type_disagreements(spark, fixture)
     identical &= report({'check': 'types', 'fixture': pathlib.Path(fixture).name, 'identical': not disagree, 'disagree': disagree})
     identical &= bundle_identical(spark, bundle_manifest_path, out)
+    identical &= to_spark_identical(spark, fixture)
     spark.stop()
     return 0 if identical else 1
 
