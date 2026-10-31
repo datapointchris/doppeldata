@@ -78,6 +78,8 @@ SPARK_HOLDS = (
     pa.types.is_date32,
     pa.types.is_decimal128,
 )
+# pyarrow 16 added string_view, so an older pyarrow holds none.
+STRING_VIEW = pa.string_view() if hasattr(pa, 'string_view') else None
 
 # A write task's StoppedWrite reaches the driver inside the error Spark raises there, as this marker, its code and kind as JSON,
 # and its message.
@@ -242,6 +244,35 @@ def arrow_struct_type(schema: pa.Schema) -> Any:
     return from_arrow_schema(schema, prefer_timestamp_ntz=True)
 
 
+def spark_readable(data_type: Any) -> Any:
+    """`data_type` with each type Spark reads no Arrow of replaced by one holding the same values that it reads: a string_view
+    by a large_string, and a large_list by a list, inside a list or struct too. Polars hands a table over in both."""
+    if STRING_VIEW is not None and data_type == STRING_VIEW:
+        return pa.large_string()
+    if pa.types.is_list(data_type) or pa.types.is_large_list(data_type):
+        return pa.list_(data_type.value_field.with_type(spark_readable(data_type.value_type)))
+    if pa.types.is_struct(data_type):
+        return pa.struct(
+            [data_type.field(index).with_type(spark_readable(data_type.field(index).type)) for index in range(data_type.num_fields)]
+        )
+    return data_type
+
+
+def readable_table(arrow: pa.Table) -> pa.Table:
+    """`arrow` with each column `spark_readable` retypes cast to that type. pyarrow before 18 casts no string_view, so there a
+    column holding one is rebuilt from its Python values."""
+    readable = pa.schema([field.with_type(spark_readable(field.type)) for field in arrow.schema], metadata=arrow.schema.metadata)
+    if readable == arrow.schema:
+        return arrow
+    columns = []
+    for column, field in zip(arrow.columns, readable, strict=True):
+        try:
+            columns.append(column.cast(field.type))
+        except pa.ArrowNotImplementedError:
+            columns.append(pa.chunked_array([pa.array(chunk.to_pylist(), type=field.type) for chunk in column.chunks], type=field.type))
+    return pa.Table.from_arrays(columns, schema=readable)
+
+
 def spark_holds(data_type: Any) -> bool:
     if pa.types.is_timestamp(data_type):
         return bool(data_type.unit == 'us')
@@ -290,7 +321,9 @@ def to_spark(spark: SparkSession, table: Any, *, schema: 'st.StructType | None' 
     """`table` as a DataFrame built on the driver: any Arrow table, such as `doppeldata.sample` or `doppeldata.generate` returns.
 
     `schema` is the DataFrame's Spark schema, such as `struct_type(profile)` gives. Left None, it is the table's own Arrow schema
-    as `struct_type` maps it. So no type is inferred, and a column Spark cannot hold exactly raises ValueError naming it.
+    as `struct_type` maps it. So no type is inferred, and a column Spark cannot hold exactly raises ValueError naming it. A
+    string_view column is read as a large_string, and a large_list as a list, which hold the same values, so a Polars
+    DataFrame goes through.
     PySpark 4, and a Spark Connect session, build the DataFrame from the Arrow table. A classic PySpark 3.5 session takes no
     Arrow table, so its batches go to the JVM the way PySpark 4's do, and both give the same DataFrame.
 
@@ -303,6 +336,7 @@ def to_spark(spark: SparkSession, table: Any, *, schema: 'st.StructType | None' 
             f'the table holds {arrow.num_rows:,} rows, past the {DRIVER_ROWS_AT_MOST:,} to_spark builds on the driver; '
             "generate it with doppeldata.spark.generate, whose rows Spark's executors make"
         )
+    arrow = readable_table(arrow)
     if schema is None:
         schema = arrow_struct_type(arrow.schema)
     connect = type(spark).__module__.startswith('pyspark.sql.connect')
@@ -317,11 +351,13 @@ def classic_arrow_frame(spark: SparkSession, arrow: pa.Table, schema: 'st.Struct
 
     PySpark 3.5 makes the same calls for a pandas DataFrame, after building its Arrow batches from the pandas columns. Built
     from Arrow-backed columns, those batches hold chunked arrays, which 3.5's serializer refuses. So the table's own batches
-    are sent instead, cast to the Arrow schema Spark reads `schema` as. A build lacking one of these calls is refused with
-    RuntimeError naming it, rather than sent through pandas, which turns a nullable integer into a float and a NaN into a null.
+    are sent instead, cast to the Arrow schema Spark reads `schema` as. A build lacking one of these calls, or taking other
+    arguments to one, is refused with RuntimeError naming the PySpark version, rather than sent through pandas, which turns a
+    nullable integer into a float and a NaN into a null. A JVM error, or a lost connection to the JVM, is raised as it came.
     """
     from py4j.protocol import Py4JError
     from py4j.protocol import Py4JJavaError
+    from py4j.protocol import Py4JNetworkError
     from pyspark.sql.pandas.serializers import ArrowStreamSerializer
     from pyspark.sql.pandas.types import to_arrow_schema
 
@@ -343,8 +379,13 @@ def classic_arrow_frame(spark: SparkSession, arrow: pa.Table, schema: 'st.Struct
             lambda: jvm.ArrowIteratorServer(),
         )
         frame = jvm.PythonSQLUtils.toDataFrame(rows, schema.json(), session)
-    except Py4JJavaError:
+    except (Py4JJavaError, Py4JNetworkError, pa.ArrowException):
         raise
+    except TypeError as error:
+        raise RuntimeError(
+            f'PySpark {pyspark.__version__} takes other arguments to a call to_spark builds a classic 3.5 DataFrame from Arrow '
+            f'with: {error}'
+        ) from error
     except Py4JError as error:
         raise lacking(f'JVM call it needs: {str(error).splitlines()[0]}') from error
     return DataFrame(frame, spark)

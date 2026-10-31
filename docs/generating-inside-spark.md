@@ -115,7 +115,8 @@ frame = sd.spark.to_spark(spark, rows, schema=sd.spark.struct_type('eight-column
 
 `to_spark` takes any Arrow table, such as `sd.sample` or `sd.generate` returns, for a test or a small lookup table. Without
 `schema`, the Spark schema is the table's own Arrow schema as `struct_type` maps it. So no type is inferred, and a column
-Spark cannot hold exactly is refused, naming it.
+Spark cannot hold exactly is refused, naming it. A `string_view` column is read as a `large_string`, and a `large_list` as
+a `list`, which hold the same values. Polars hands a table over in both, so a Polars DataFrame goes through.
 
 | Session | Route |
 | --- | --- |
@@ -124,15 +125,19 @@ Spark cannot hold exactly is refused, naming it.
 | Classic PySpark 3.5, Glue 5.0 and 5.1 among them | the table's batches, cast to the Arrow schema Spark reads `schema` as, streamed to `PythonSQLUtils.toDataFrame` through `SparkContext._serialize_to_jvm` |
 
 - **Classic 3.5's route makes the calls PySpark 4's `createDataFrame(pyarrow.Table)` makes.** They are PySpark internals:
-  `SparkSession._sc`, `_jvm`, `_jsparkSession` and `_jconf`. 3.5's own pandas path ends in the same calls. A build lacking
-  one raises RuntimeError naming the PySpark version and the call.
-- **A table over 10M rows is refused**, naming `doppeldata.spark.generate`, whose executors make the rows. That is
-  `DRIVER_ROWS_AT_MOST`.
-- **Each image gave back every value.** The parity check's `to_spark` stage builds 100k rows of `eight-columns` under its
-  own schema and under `struct_type`'s, the fixture's 92 columns `spark_holds` admits, and a 50-row sample with an
-  override. Each is collected as Arrow and compared with the local table by bits. On `apache/spark:3.5.9-python3`,
-  `apache/spark:4.1.3-python3`, `apache/spark:4.2.0-python3` and `public.ecr.aws/glue/aws-glue-libs:5`, all were
-  identical, and the 10M-row refusal held.
+  `SparkSession._sc`, `_jvm`, `_jsparkSession` and `_jconf`, `SparkContext._serialize_to_jvm`, `ArrowStreamSerializer`,
+  and the JVM's `PythonSQLUtils` and `ArrowIteratorServer`. 3.5's own pandas path ends in the same calls. A build lacking
+  one, or taking other arguments to one, raises RuntimeError naming the PySpark version. A JVM error, or a lost
+  connection to the JVM, is raised as it came. [aws-glue-support.md](aws-glue-support.md) lists the Glue versions it ran
+  on.
+- **A table over `DRIVER_ROWS_AT_MOST` rows is refused**, naming `doppeldata.spark.generate`, whose executors make the
+  rows.
+- **Each image gave back every value.** The parity check's `to_spark` stage builds `TO_SPARK_ROWS` rows of `eight-columns`
+  under its own schema and under `struct_type`'s, and every fixture column `spark_holds` admits. It builds those columns
+  again recast as Polars hands them over, each string a `string_view` and each list a `large_list`. Each is collected as
+  Arrow and compared with the local table by bits. On `apache/spark:3.5.9-python3`, `apache/spark:4.1.3-python3`,
+  `apache/spark:4.2.0-python3` and `public.ecr.aws/glue/aws-glue-libs:5`, all were identical, and the refusal one row
+  past `DRIVER_ROWS_AT_MOST` held.
 - *Rejected:* `createDataFrame(table.to_pandas(types_mapper=pd.ArrowDtype))` on 3.5. Its serializer turns each Arrow-backed
   column into a `ChunkedArray`, and `RecordBatch.from_arrays` refuses one: `TypeError: Cannot convert
   pyarrow.lib.ChunkedArray to pyarrow.lib.Array`, on 3.5.9 with pyarrow 26 and pandas 3.1.
