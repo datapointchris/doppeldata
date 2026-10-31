@@ -24,6 +24,10 @@ malformed-file-readers/
 - **The dependency runs one way: the CLI imports the library, never the reverse.** Typer and rich
   are imported only under `cli/`. Code that imports the library, including inside AWS Glue jobs,
   must never pull them in.
+- **pytest is imported only by `library/src/_doppeldata_pytest_plugin.py`.** pytest loads it through
+  the `pytest11` entry point, and no other module imports it. So the library never declares pytest.
+  It sits outside the package and imports doppeldata only inside the fixture, because pytest
+  imports every plugin at startup. maturin ships it through `include` in `library/pyproject.toml`.
 - **`crates/core` knows nothing of Python.** `crates/python` is the only crate that imports pyo3,
   and it builds as `doppeldata._core`. `task generate` writes its stub,
   `library/src/doppeldata/_core.pyi`, from the crate's pyo3 introspection. mypy reads the stub in

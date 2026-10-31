@@ -91,6 +91,20 @@ frame = sd.spark.generate(spark, profile, rows=1_000_000_000, seed=7)   # a Data
 sd.spark.write(spark, profile, 's3://bucket/orders/', rows=1_000_000_000, seed=7)
 ```
 
+For a test, `sd.sample` pins a column to given values, and every column drawn from it reads them.
+The `synthetic` pytest fixture generates a table from each test's own seed, and
+`sd.spark.to_spark` turns a driver-side table into a DataFrame:
+
+```python
+refunds = sd.sample(profile, rows=50, overrides={'status': 'refunded'})
+
+def test_refunds(synthetic, spark):
+    orders = synthetic('orders', rows=5_000, overrides={'status': 'refunded'}, as_='spark')
+```
+
+[Generating test data in pytest](docs/generating-test-data-in-pytest.md) says how the fixture finds a
+profile and which seed each test takes.
+
 `profile create` reads Parquet and Arrow locally or from S3, with the credentials and endpoint the
 AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files.
 

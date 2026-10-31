@@ -17,6 +17,11 @@ dependencies = [
     "ruamel-yaml>=0.19.1",
 ]
 
+# pytest loads the `synthetic` fixture from here, and nothing else reads it, so importing doppeldata never imports pytest.
+# The plugin sits outside the package, so pytest's startup imports no doppeldata module.
+[project.entry-points.pytest11]
+doppeldata = "_doppeldata_pytest_plugin"
+
 [project.urls]
 Repository = "https://github.com/datapointchris/doppeldata"
 
@@ -42,3 +47,8 @@ manifest-path = "../crates/python/Cargo.toml"
 python-source = "src"
 module-name = "doppeldata._core"
 features = ["pyo3/extension-module", "pyo3/abi3-py311"]
+# maturin packages only the doppeldata directory of src. A wheel's include is relative to src, and an sdist's to this directory.
+include = [
+    { path = "_doppeldata_pytest_plugin.py", format = "wheel" },
+    { path = "src/_doppeldata_pytest_plugin.py", format = "sdist" },
+]
