@@ -72,7 +72,7 @@ def schema(table: ContractTable, notes: list[str], bundle: bool) -> str:
 
 def column_source(column: ContractColumn, flags: dict[str, bool], alias: str | None) -> str | None:
     """The column's dataframely column, such as `dy.Int64(nullable=False, min=1)`, else None for a type it has none of."""
-    arguments = [f'nullable={not column.completeness.whole}']
+    arguments = [f'nullable={not column.required}']
     arguments += [f'{flag}=True' for flag, held in flags.items() if held]
     held = column.held_range()
     if held is not None:
