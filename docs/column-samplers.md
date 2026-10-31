@@ -275,7 +275,7 @@ column keeps its type, and a nested field follows the same rule.
 - **Every other share is text parsing as its type, and as nothing else.** The profile states
   nothing of these values, so they are drawn plainly. A string share holds no vowel, so it never
   spells `null`, `true` or `false`, which a JSON or CSV reader takes for another type.
-- **Each share profiles back as itself.** `library/tests/test_type_mix_round_trip.py` writes a
+- **Each share profiles back as itself.** `cli/tests/test_type_mix_round_trip.py` writes a
   column of each own type as CSV and NDJSON, and profiles the files back to their shares.
 - **The own draw holds the column's distinct values in its own rows.** A text source's distinct
   count is taken over the values parsing as the column's type, so the other shares add none to it.
