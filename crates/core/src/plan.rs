@@ -14,6 +14,9 @@ use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
 use arrow_select::filter::filter_record_batch;
 
+use crate::column_overrides;
+use crate::column_overrides::ColumnOverride;
+use crate::column_overrides::PinnedColumn;
 use crate::identity::DatasetIdentity;
 use crate::identity::is_sha256_digest;
 use crate::perturbations;
@@ -36,6 +39,7 @@ use crate::profile::RawValueType;
 use crate::profile::TableProfile;
 use crate::profile::provenance;
 use crate::related_tables;
+use crate::related_tables::GivenColumn;
 use crate::related_tables::RelatedColumns;
 use crate::related_tables::RelationshipFault;
 use crate::related_tables::TableRelations;
@@ -84,6 +88,10 @@ pub enum PlanError {
         field: String,
         message: String,
     },
+    /// An override naming a column the table lacks, or giving a value its column cannot hold.
+    /// `field` is the column's JSON pointer, empty for a column the table lacks.
+    #[error("{message} [invalid-override]")]
+    Override { field: String, message: String },
 }
 
 /// Why a column cannot be generated, as a code a caller can branch on.
@@ -145,6 +153,7 @@ impl PlanError {
             Self::Scenario { code, .. } => code.code(),
             Self::ScenarioDigest { .. } => "invalid-scenario-digest",
             Self::Relationship { code, .. } => code.code(),
+            Self::Override { .. } => "invalid-override",
         }
     }
 
@@ -167,7 +176,9 @@ impl PlanError {
             Self::Bundle { .. } => "/kind",
             Self::NoColumns { .. } | Self::DuplicateColumn { .. } => "/columns",
             Self::ProfileDigest { .. } | Self::ScenarioDigest { .. } => "",
-            Self::Column { field, .. } | Self::Scenario { field, .. } | Self::Relationship { field, .. } => field,
+            Self::Column { field, .. } | Self::Scenario { field, .. } | Self::Relationship { field, .. } | Self::Override { field, .. } => {
+                field
+            }
         }
     }
 
@@ -231,6 +242,8 @@ pub struct Plan {
     writes: Vec<(String, Vec<String>)>,
     /// What a bundle's relationships draw, and how its children read its keys.
     related: Option<RelatedColumns>,
+    /// Each column a caller pinned, which takes its pinned values in place of its draw.
+    pinned: Vec<PinnedColumn>,
 }
 
 /// One perturbation applied to every block, and the schema its rows carry after it.
@@ -331,22 +344,29 @@ const _: () = {
     shared_across_threads::<Plan>();
 };
 
+/// What a plan takes beside its profile, digest, seed and rows, each left out by default.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlanInputs<'a> {
+    /// The scenario whose perturbations apply to every block. The profile planned is the one
+    /// [`Scenario::patched_profile`] made, and the profile digest is the one before the patch,
+    /// because the scenario's digest covers the patch.
+    pub scenario: Option<AppliedScenario<'a>>,
+    /// The columns pinned to given values. A pinned column takes its place in the draw order, so
+    /// each column drawn from it reads the pinned values, and every column reading none draws as
+    /// it does unpinned. A scenario's perturbations apply after. The identity names the overrides
+    /// by their digest.
+    pub overrides: &'a [ColumnOverride],
+}
+
 /// Resolves a table profile into a plan for `rows` rows from `seed`. The library computes the
 /// profile's digest, `sha256:` and the hex SHA-256 of its RFC 8785 canonical JSON.
 pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Result<Plan, PlanError> {
-    plan_with_scenario(profile, profile_digest, None, seed, rows)
+    plan_with(profile, profile_digest, seed, rows, PlanInputs::default())
 }
 
-/// As [`plan`], with `scenario`'s perturbations applied to every block. `profile` is the one
-/// [`Scenario::patched_profile`] made. `profile_digest` is the digest of the profile before the
-/// patch, because the scenario's digest covers the patch.
-pub fn plan_with_scenario(
-    profile: &Profile,
-    profile_digest: &str,
-    scenario: Option<AppliedScenario<'_>>,
-    seed: u64,
-    rows: u64,
-) -> Result<Plan, PlanError> {
+/// As [`plan`], with what `inputs` holds.
+pub fn plan_with(profile: &Profile, profile_digest: &str, seed: u64, rows: u64, inputs: PlanInputs<'_>) -> Result<Plan, PlanError> {
+    let PlanInputs { scenario, overrides } = inputs;
     let table = match profile {
         Profile::Table(table) => table,
         Profile::Bundle(bundle) => {
@@ -367,17 +387,30 @@ pub fn plan_with_scenario(
         }
         identity = identity.with_scenario(applied.digest);
     }
-    plan_table(table, identity, scenario.map(|applied| applied.scenario), None)
+    let inputs = TableInputs {
+        scenario: scenario.map(|applied| applied.scenario),
+        relations: None,
+        overrides,
+    };
+    plan_table(table, identity, inputs)
 }
 
-/// Plans `table` for the dataset `identity` names, under `scenario`, with what a bundle's
-/// `relations` draw where the table is one of a bundle's.
-pub(crate) fn plan_table(
-    table: &TableProfile,
-    identity: DatasetIdentity,
-    scenario: Option<&Scenario>,
-    relations: Option<TableRelations<'_>>,
-) -> Result<Plan, PlanError> {
+/// What [`plan_table`] takes beside the table and its identity, each left out by default.
+#[derive(Default)]
+pub(crate) struct TableInputs<'a> {
+    pub(crate) scenario: Option<&'a Scenario>,
+    /// What a bundle's relationships draw, where the table is one of a bundle's.
+    pub(crate) relations: Option<TableRelations<'a>>,
+    pub(crate) overrides: &'a [ColumnOverride],
+}
+
+/// Plans `table` for the dataset `identity` names, under what `inputs` holds.
+pub(crate) fn plan_table(table: &TableProfile, identity: DatasetIdentity, inputs: TableInputs<'_>) -> Result<Plan, PlanError> {
+    let TableInputs {
+        scenario,
+        relations,
+        overrides,
+    } = inputs;
     let (seed, rows) = (identity.seed(), identity.rows());
     let columns = table.columns.as_deref().unwrap_or_default();
     if columns.is_empty() {
@@ -402,6 +435,16 @@ pub(crate) fn plan_table(
         None => (None, BTreeMap::new()),
     };
     let dependent = DependentColumns::plan(&context, table, &mut planned, &fixed)?;
+    let pinned = {
+        let fields: Vec<&arrow_schema::Field> = planned.iter().map(|column| column.field.as_ref()).collect();
+        let type_mix: Vec<bool> = planned.iter().map(ColumnPlan::draws_type_mix).collect();
+        column_overrides::pinned_columns(&fields, &type_mix, overrides, rows)?
+    };
+    let identity = if pinned.is_empty() {
+        identity
+    } else {
+        identity.with_overrides(column_overrides::overrides_digest(overrides))
+    };
     let mut metadata = HashMap::from([
         (provenance::PROFILE_NAME.to_string(), table.name.clone()),
         (provenance::PROFILE_DIGEST.to_string(), identity.profile_digest().to_string()),
@@ -410,6 +453,13 @@ pub(crate) fn plan_table(
         (provenance::DATASET_ROWS.to_string(), rows.to_string()),
         (provenance::DATASET_DIGEST.to_string(), identity.digest()),
     ]);
+    if let Some(digest) = identity.overrides_digest() {
+        let mut names: Vec<&str> = pinned.iter().map(|pin| planned[pin.index].field.name().as_str()).collect();
+        names.sort_unstable();
+        let names = serde_json::to_string(&names).expect("a list of strings serializes");
+        metadata.insert(provenance::OVERRIDES_DIGEST.to_string(), digest.to_string());
+        metadata.insert(provenance::OVERRIDDEN_COLUMNS.to_string(), names);
+    }
     if let Some(digest) = identity.scenario_digest() {
         metadata.insert(provenance::SCENARIO_DIGEST.to_string(), digest.to_string());
     }
@@ -436,6 +486,7 @@ pub(crate) fn plan_table(
         one_process: None,
         writes: Vec::new(),
         related,
+        pinned,
     };
     if let Some(scenario) = scenario {
         plan.apply_scenario(table, scenario)?;
@@ -795,7 +846,16 @@ impl Plan {
     /// `rows` rows drawn at `position`, every perturbation up to `through` applied.
     fn staged(&self, position: &BlockPosition, rows: usize, through: usize, cells: bool) -> Block {
         let options = RecordBatchOptions::new().with_row_count(Some(rows));
-        let given = self.related.as_ref().map(|related| related.generate(&self.columns, position, rows));
+        let mut given = self.related.as_ref().map(|related| related.generate(&self.columns, position, rows));
+        if !self.pinned.is_empty() {
+            let laid = given.get_or_insert_with(|| (0..self.columns.len()).map(|_| None).collect());
+            for pin in &self.pinned {
+                laid[pin.index] = Some(GivenColumn {
+                    array: pin.block(position.first_row, rows),
+                    nulls: None,
+                });
+            }
+        }
         let (arrays, cells) = match (self.dependent.is_empty(), given) {
             (true, None) => {
                 let arrays = self.columns.iter().map(|column| column.generate(position, rows)).collect();

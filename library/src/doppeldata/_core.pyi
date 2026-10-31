@@ -151,9 +151,11 @@ class Plan:
     A table profile resolved for generation: ``rows`` rows from ``seed``. ``source`` names the
     profile in an error. ``scenario``, where given, is the scenario applied: its JSON with each
     perturbation's id resolved, its digest, and the name an error gives it. The profile is the
-    one given, and the engine applies the scenario's patch to it.
+    one given, and the engine applies the scenario's patch to it. ``overrides``, where given, is
+    a JSON list of each pinned column and its values, as ``column_overrides::ColumnOverride``
+    reads it, and a value its column cannot hold raises ValueError.
     """
-    def __new__(cls, /, profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, source: str, scenario: tuple[str, str, str] |None = None) -> Plan: ...
+    def __new__(cls, /, profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, source: str, scenario: tuple[str, str, str] |None = None, overrides: str |None = None) -> Plan: ...
     @property
     def block_count(self, /) -> int: ...
     def claim(self, /, options: WriteOptions, destination: str, *, replace: bool, s3_store: dict |None = None) -> None:

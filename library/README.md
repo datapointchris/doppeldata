@@ -27,6 +27,12 @@ manifest, or one file such as `people.csv`, and
 `sd.spark.generate()` and `sd.spark.write()` do the same inside Spark's executors, with the values
 and files a local run gives. They need PySpark 3.5 or later, with pyarrow 15 or later and the pandas
 PySpark asks for, and doppeldata installed on every executor.
+`sd.spark.to_spark(spark, table)` builds a DataFrame from a table on the driver, of up to
+`sd.spark.DRIVER_ROWS_AT_MOST` rows.
+
+`sd.sample(profile, rows=50, overrides={'status': 'refunded'})` pins a column to given values, and
+every column drawn from it reads them. Under pytest, the `synthetic` fixture generates a table for
+each test from a seed of its own. A failed test's report names the seed that reruns it.
 
 A schema class is read by its attributes, so none of pandera, dataframely and pyspark is needed
 beside it. `sd.Profile.from_odcs()`, `from_json_schema()`, `from_table_schema()` and

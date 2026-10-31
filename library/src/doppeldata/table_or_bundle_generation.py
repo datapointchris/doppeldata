@@ -1,5 +1,5 @@
-"""The public `generate`, `stream`, `plan` and `write`, each taking one table's profile or a Bundle, above the modules that
-generate each."""
+"""The public `generate`, `sample`, `stream`, `plan` and `write`, each taking one table's profile or a Bundle, above the modules
+that generate each."""
 
 import os
 from collections.abc import Sequence
@@ -12,6 +12,7 @@ from doppeldata.bundle_generation import generate_bundle
 from doppeldata.bundle_generation import plan_bundle
 from doppeldata.bundle_generation import run_of
 from doppeldata.bundle_generation import write_bundle
+from doppeldata.column_overrides import Overrides
 from doppeldata.dataset_generation import ArrowStreamExportable
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.dataset_generation import WritePlan
@@ -82,6 +83,39 @@ def generate(
     if isinstance(run, BundleRun):
         return generate_bundle(run, threads=threads, scenario=scenario)
     table: ArrowStreamExportable = rows_plan(run.profile, run.rows, run.seed, scenario, 'generate').generate(threads=threads)
+    return table
+
+
+def sample(
+    profile: ProfileSource,
+    *,
+    rows: int | None = None,
+    seed: int | None = None,
+    threads: int = 0,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+    overrides: Overrides | None = None,
+) -> ArrowStreamExportable:
+    """Rows of one table with some columns pinned, as one Arrow table in memory, such as a unit test arranges its input.
+
+    `overrides` maps a column's name to one value for every row, or to an iterable other than a str or bytes holding one
+    value per row. Each value is the column's own type: a str, int, float, Decimal, bool, date, datetime, time, or None for
+    a null, and any other Python type raises TypeError. A value the column does not take or cannot hold raises
+    UngenerableProfile, a ValueError whose issue is `invalid-override` at the column's pointer. So does a list not holding
+    exactly `rows` values, and a list, struct or type-mix column, which no value pins.
+
+    A pinned column takes its place in the draw order. So a conditional child, a lookup or a derived column of it reads the
+    pinned values, and every column reading none holds the values `generate` gives. A copula member's group keeps the rest
+    of its draws, so the pinned column's correlation with it is not held. A scenario's ops apply after the pins, so an op
+    writing a pinned column moves it.
+
+    The identity names the pins by their digest, so the table's `doppeldata.dataset_digest` is its own. Its schema carries
+    that digest under `doppeldata.overrides_digest`, and the pinned columns under `doppeldata.overridden_columns`. Without
+    overrides, it is what `generate` returns. `profile`,
+    `rows`, `seed`, `threads` and `scenario` are taken as `generate` takes them. A Bundle is refused.
+    """
+    if isinstance(profile, Bundle):
+        raise TypeError("sample takes one table's profile, and a bundle holds several; generate the bundle")
+    table: ArrowStreamExportable = rows_plan(profile, rows, seed, scenario, 'sample', overrides).generate(threads=threads)
     return table
 
 

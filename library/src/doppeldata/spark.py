@@ -20,6 +20,7 @@ from typing import overload
 
 try:
     import pyarrow as pa
+    import pyspark
     import pyspark.sql.types as st
     from pyspark.sql import DataFrame
     from pyspark.sql import SparkSession
@@ -61,6 +62,9 @@ from doppeldata.scenario_format import perturbation_facts
 # The engine blocks each Spark task generates in turn. The chunk is a unit of work and never of values, so its size moves no value.
 CHUNK_BLOCKS = 16
 
+# The most rows to_spark builds a DataFrame of on the driver. Past it, generate makes the rows on the executors.
+DRIVER_ROWS_AT_MOST = 10_000_000
+
 # Arrow types whose arrays Spark reads through mapInArrow with every value kept, besides a timestamp in microseconds, a list and a
 # struct of them, on the Spark releases docs/generating-inside-spark.md names. A large_string comes back as a string. The parity
 # check fails in an image that carries any column of every-column-kind.profile.yaml otherwise than this says.
@@ -74,6 +78,8 @@ SPARK_HOLDS = (
     pa.types.is_date32,
     pa.types.is_decimal128,
 )
+# pyarrow 16 added string_view, so an older pyarrow holds none.
+STRING_VIEW = pa.string_view() if hasattr(pa, 'string_view') else None
 
 # A write task's StoppedWrite reaches the driver inside the error Spark raises there, as this marker, its code and kind as JSON,
 # and its message.
@@ -221,9 +227,13 @@ def checked_partitions(partitions: int | None, units: int) -> int:
     return partitions or max(units, 1)
 
 
-def arrow_struct_type(engine: '_core.Plan') -> Any:
-    """The Spark schema of the engine's batches. A column whose values Spark would not hold exactly is refused, naming it."""
-    schema = pa.RecordBatchReader.from_stream(engine.stream_blocks(0, 0, threads=1)).schema
+def engine_schema(engine: '_core.Plan') -> pa.Schema:
+    """The Arrow schema of the engine's batches."""
+    return pa.RecordBatchReader.from_stream(engine.stream_blocks(0, 0, threads=1)).schema
+
+
+def arrow_struct_type(schema: pa.Schema) -> Any:
+    """The Spark schema of batches holding `schema`. A column whose values Spark would not hold exactly is refused, naming it."""
     for field in schema:
         if not spark_holds(field.type):
             raise ValueError(
@@ -232,6 +242,35 @@ def arrow_struct_type(engine: '_core.Plan') -> Any:
                 'list for a large_list'
             )
     return from_arrow_schema(schema, prefer_timestamp_ntz=True)
+
+
+def spark_readable(data_type: Any) -> Any:
+    """`data_type` with each type Spark reads no Arrow of replaced by one holding the same values that it reads: a string_view
+    by a large_string, and a large_list by a list, inside a list or struct too. Polars hands a table over in both."""
+    if STRING_VIEW is not None and data_type == STRING_VIEW:
+        return pa.large_string()
+    if pa.types.is_list(data_type) or pa.types.is_large_list(data_type):
+        return pa.list_(data_type.value_field.with_type(spark_readable(data_type.value_type)))
+    if pa.types.is_struct(data_type):
+        return pa.struct(
+            [data_type.field(index).with_type(spark_readable(data_type.field(index).type)) for index in range(data_type.num_fields)]
+        )
+    return data_type
+
+
+def readable_table(arrow: pa.Table) -> pa.Table:
+    """`arrow` with each column `spark_readable` retypes cast to that type. pyarrow before 18 casts no string_view, so there a
+    column holding one is rebuilt from its Python values."""
+    readable = pa.schema([field.with_type(spark_readable(field.type)) for field in arrow.schema], metadata=arrow.schema.metadata)
+    if readable == arrow.schema:
+        return arrow
+    columns = []
+    for column, field in zip(arrow.columns, readable, strict=True):
+        try:
+            columns.append(column.cast(field.type))
+        except pa.ArrowNotImplementedError:
+            columns.append(pa.chunked_array([pa.array(chunk.to_pylist(), type=field.type) for chunk in column.chunks], type=field.type))
+    return pa.Table.from_arrays(columns, schema=readable)
 
 
 def spark_holds(data_type: Any) -> bool:
@@ -275,12 +314,86 @@ def struct_type(profile: ProfileSource, *, scenario: Scenario | Sequence[Scenari
         raise TypeError('a schema describes one table, and a bundle holds several; generate the bundle, whose DataFrames each hold one')
     applied = one_process_scenario(scenario)
     _, engine = executor_plan(profile, 0, 0, rows_only(applied, 'spark.generate', 'doppeldata.spark.write'))
-    return arrow_struct_type(engine)
+    return arrow_struct_type(engine_schema(engine))
+
+
+def to_spark(spark: SparkSession, table: Any, *, schema: 'st.StructType | None' = None) -> DataFrame:
+    """`table` as a DataFrame built on the driver: any Arrow table, such as `doppeldata.sample` or `doppeldata.generate` returns.
+
+    `schema` is the DataFrame's Spark schema, such as `struct_type(profile)` gives. Left None, it is the table's own Arrow schema
+    as `struct_type` maps it. So no type is inferred, and a column Spark cannot hold exactly raises ValueError naming it. A
+    string_view column is read as a large_string, and a large_list as a list, which hold the same values, so a Polars
+    DataFrame goes through.
+    PySpark 4, and a Spark Connect session, build the DataFrame from the Arrow table. A classic PySpark 3.5 session takes no
+    Arrow table, so its batches go to the JVM the way PySpark 4's do, and both give the same DataFrame.
+
+    A table over `DRIVER_ROWS_AT_MOST` rows raises ValueError naming `doppeldata.spark.generate`, which makes the rows on the
+    executors, because a DataFrame that large should never pass through the driver.
+    """
+    arrow = pa.table(table)
+    if arrow.num_rows > DRIVER_ROWS_AT_MOST:
+        raise ValueError(
+            f'the table holds {arrow.num_rows:,} rows, past the {DRIVER_ROWS_AT_MOST:,} to_spark builds on the driver; '
+            "generate it with doppeldata.spark.generate, whose rows Spark's executors make"
+        )
+    arrow = readable_table(arrow)
+    if schema is None:
+        schema = arrow_struct_type(arrow.schema)
+    connect = type(spark).__module__.startswith('pyspark.sql.connect')
+    if connect or int(pyspark.__version__.split('.')[0]) >= 4:
+        return spark.createDataFrame(arrow, schema=schema)
+    return classic_arrow_frame(spark, arrow, schema)
+
+
+def classic_arrow_frame(spark: SparkSession, arrow: pa.Table, schema: 'st.StructType') -> DataFrame:
+    """`arrow` as a DataFrame of `schema` on a classic PySpark 3.5 session, by the calls PySpark 4's
+    `createDataFrame(pyarrow.Table)` makes. Each batch streams to the JVM, which reads it into rows of `schema`.
+
+    PySpark 3.5 makes the same calls for a pandas DataFrame, after building its Arrow batches from the pandas columns. Built
+    from Arrow-backed columns, those batches hold chunked arrays, which 3.5's serializer refuses. So the table's own batches
+    are sent instead, cast to the Arrow schema Spark reads `schema` as. A build lacking one of these calls, or taking other
+    arguments to one, is refused with RuntimeError naming the PySpark version, rather than sent through pandas, which turns a
+    nullable integer into a float and a NaN into a null. A JVM error, or a lost connection to the JVM, is raised as it came.
+    """
+    from py4j.protocol import Py4JError
+    from py4j.protocol import Py4JJavaError
+    from py4j.protocol import Py4JNetworkError
+    from pyspark.sql.pandas.serializers import ArrowStreamSerializer
+    from pyspark.sql.pandas.types import to_arrow_schema
+
+    def lacking(call: str) -> RuntimeError:
+        return RuntimeError(f'PySpark {pyspark.__version__} has no {call}, which to_spark builds a classic 3.5 DataFrame from Arrow with')
+
+    for name in ('_sc', '_jvm', '_jsparkSession', '_jconf'):
+        if getattr(spark, name, None) is None:
+            raise lacking(f'SparkSession.{name}')
+    if not hasattr(spark._sc, '_serialize_to_jvm'):
+        raise lacking('SparkContext._serialize_to_jvm')
+    jvm, session = spark._jvm, spark._jsparkSession
+    try:
+        batches = arrow.cast(to_arrow_schema(schema)).to_batches(max_chunksize=spark._jconf.arrowMaxRecordsPerBatch())
+        rows = spark._sc._serialize_to_jvm(
+            batches,
+            ArrowStreamSerializer(),
+            lambda path: jvm.PythonSQLUtils.readArrowStreamFromFile(path),
+            lambda: jvm.ArrowIteratorServer(),
+        )
+        frame = jvm.PythonSQLUtils.toDataFrame(rows, schema.json(), session)
+    except (Py4JJavaError, Py4JNetworkError, pa.ArrowException):
+        raise
+    except TypeError as error:
+        raise RuntimeError(
+            f'PySpark {pyspark.__version__} takes other arguments to a call to_spark builds a classic 3.5 DataFrame from Arrow '
+            f'with: {error}'
+        ) from error
+    except Py4JError as error:
+        raise lacking(f'JVM call it needs: {str(error).splitlines()[0]}') from error
+    return DataFrame(frame, spark)
 
 
 def chunk_frame(spark: SparkSession, planned: ExecutorPlan, engine: '_core.Plan', partitions: int | None) -> DataFrame:
     """The DataFrame whose tasks generate `engine`'s blocks, `CHUNK_BLOCKS` at a time, from the arguments `planned` holds."""
-    schema = arrow_struct_type(engine)
+    schema = arrow_struct_type(engine_schema(engine))
     chunks = -(-engine.block_count // CHUNK_BLOCKS)
     numbers = spark.range(chunks, numPartitions=checked_partitions(partitions, chunks))
     return numbers.mapInArrow(ChunkBatches(planned), schema)

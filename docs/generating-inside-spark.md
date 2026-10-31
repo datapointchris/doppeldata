@@ -106,6 +106,45 @@ manifest = sd.spark.write(spark, bundle, 's3://bucket/shop/', scale=0.1, seed=7)
   `apache/spark:4.1.3-python3`, both tables held a local `sd.generate`'s values. The customers
   table's 1 file and the orders table's 6 matched a local bundle write's SHA-256.
 
+## `to_spark` builds a DataFrame on the driver from a local table, and every Spark version gives back the same values
+
+```python
+rows = sd.sample('eight-columns', rows=50, seed=1, overrides={'category': 'A'})
+frame = sd.spark.to_spark(spark, rows, schema=sd.spark.struct_type('eight-columns'))
+```
+
+`to_spark` takes any Arrow table, such as `sd.sample` or `sd.generate` returns, for a test or a small lookup table. Without
+`schema`, the Spark schema is the table's own Arrow schema as `struct_type` maps it. So no type is inferred, and a column
+Spark cannot hold exactly is refused, naming it. A `string_view` column is read as a `large_string`, and a `large_list` as
+a `list`, which hold the same values. Polars hands a table over in both, so a Polars DataFrame goes through.
+
+| Session | Route |
+| --- | --- |
+| PySpark 4 | `createDataFrame(pyarrow.Table, schema)` |
+| Spark Connect, 3.5 or later | `createDataFrame(pyarrow.Table, schema)`, which its client takes |
+| Classic PySpark 3.5, Glue 5.0 and 5.1 among them | the table's batches, cast to the Arrow schema Spark reads `schema` as, streamed to `PythonSQLUtils.toDataFrame` through `SparkContext._serialize_to_jvm` |
+
+- **Classic 3.5's route makes the calls PySpark 4's `createDataFrame(pyarrow.Table)` makes.** They are PySpark internals:
+  `SparkSession._sc`, `_jvm`, `_jsparkSession` and `_jconf`, `SparkContext._serialize_to_jvm`, `ArrowStreamSerializer`,
+  and the JVM's `PythonSQLUtils` and `ArrowIteratorServer`. 3.5's own pandas path ends in the same calls. A build lacking
+  one, or taking other arguments to one, raises RuntimeError naming the PySpark version. A JVM error, or a lost
+  connection to the JVM, is raised as it came. [aws-glue-support.md](aws-glue-support.md) lists the Glue versions it ran
+  on.
+- **A table over `DRIVER_ROWS_AT_MOST` rows is refused**, naming `doppeldata.spark.generate`, whose executors make the
+  rows.
+- **Each image gave back every value.** The parity check's `to_spark` stage builds `TO_SPARK_ROWS` rows of `eight-columns`
+  under its own schema and under `struct_type`'s, and every fixture column `spark_holds` admits. It builds those columns
+  again recast as Polars hands them over, each string a `string_view` and each list a `large_list`. Each is collected as
+  Arrow and compared with the local table by bits. On `apache/spark:3.5.9-python3`, `apache/spark:4.1.3-python3`,
+  `apache/spark:4.2.0-python3` and `public.ecr.aws/glue/aws-glue-libs:5`, all were identical, and the refusal one row
+  past `DRIVER_ROWS_AT_MOST` held.
+- *Rejected:* `createDataFrame(table.to_pandas(types_mapper=pd.ArrowDtype))` on 3.5. Its serializer turns each Arrow-backed
+  column into a `ChunkedArray`, and `RecordBatch.from_arrays` refuses one: `TypeError: Cannot convert
+  pyarrow.lib.ChunkedArray to pyarrow.lib.Array`, on 3.5.9 with pyarrow 26 and pandas 3.1.
+- *Rejected:* a plain `to_pandas()` on 3.5. pandas holds a nullable integer as a float, and a NaN and a null alike as
+  NaN, so the values Spark reads back are not the table's.
+- *Rejected:* `mapInArrow` over the table's batches. The batches would be pickled into the task itself.
+
 ## Spark refuses unsigned integers, `date64`, times, timestamps not in microseconds, and `large_list`
 
 `struct_type(profile)` gives the DataFrame's schema, and refuses a column Spark cannot carry with
@@ -138,8 +177,9 @@ Arrow, and compares every value with `sd.stream`, each float by its bits. It the
 `write` with each partition count, and compares every file's SHA-256 with a `doppeldata data
 generate` of the same arguments run on the host. Under `malformed_rows` it compares `_faults.jsonl`
 byte for byte too. It then checks `spark_holds` against how the image
-carries each fixture column. Last, it generates and writes the `orders-customers` bundle, each
-table compared the same way. Build the wheel, then run it over the images it names by default:
+carries each fixture column. It then generates and writes the `orders-customers` bundle, each
+table compared the same way. Last, it runs the `to_spark` stage above. Build the wheel, then run it over the images it
+names by default:
 
 ```bash
 cd library && uv run --with ziglang maturin build --release --zig --compatibility manylinux2014 --out ../dist && cd ..

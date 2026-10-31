@@ -1,6 +1,7 @@
 //! doppeldata's generation engine. It knows nothing of Python, and leaves where
 //! output goes to its caller.
 
+pub mod column_overrides;
 pub mod format_settings;
 pub mod generalized_pattern;
 mod identity;
@@ -38,8 +39,9 @@ pub use plan::ColumnSampler;
 pub use plan::PlacedBlock;
 pub use plan::Plan;
 pub use plan::PlanError;
+pub use plan::PlanInputs;
 pub use plan::plan;
-pub use plan::plan_with_scenario;
+pub use plan::plan_with;
 pub use related_tables::BundlePlan;
 pub use related_tables::BundleScenarios;
 pub use related_tables::PlannedRelationship;

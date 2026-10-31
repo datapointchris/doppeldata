@@ -14,6 +14,11 @@ Glue 4.0 is out for two reasons:
 - its Python 3.10 sits below the library's 3.11 floor;
 - its pyarrow 10 predates the Arrow PyCapsule import, which needs pyarrow 14 or later.
 
+`doppeldata.spark.to_spark` builds a DataFrame on Glue 5.0 and 5.1 through PySpark 3.5's internals, because 3.5 takes no
+Arrow table. It ran on `public.ecr.aws/glue/aws-glue-libs:5` and on Apache's Spark 3.5.9 image. Glue 6.0 takes the Arrow
+table through `createDataFrame`, which ran on Apache's Spark 4.1.3 and 4.2.0 images.
+[generating-inside-spark.md](generating-inside-spark.md) names the internals and what a release lacking one raises.
+
 ## A Glue job adds only the wheel, because Glue installs the pandas and pyarrow `doppeldata.spark` needs
 
 PySpark's `mapInArrow` needs pandas and pyarrow beside Spark, and every supported Glue preinstalls

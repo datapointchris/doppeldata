@@ -247,6 +247,10 @@ would draw a column from itself:
 numeric, a lag on or from a column that is not a date or timestamp, and a lookup or table value
 its column's type cannot hold.
 
+**A column `sample` pins takes the given values in place of every draw above.** It sits at its own
+place in the order, so a derived, lookup or conditional child reads the pinned values. A copula
+group's other members keep their draws. So the pinned column's correlation with them is not held.
+
 ## A `cdc` update redraws a changed column from its own statistics
 
 A scenario's `cdc` op updates rows of the full load. Each column an update changes is drawn alone,

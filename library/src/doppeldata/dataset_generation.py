@@ -18,6 +18,8 @@ from typing import Protocol
 import rfc8785
 
 from doppeldata import _core
+from doppeldata.column_overrides import Overrides
+from doppeldata.column_overrides import overrides_json
 from doppeldata.embedded_profiles import WrittenDataFile
 from doppeldata.embedded_profiles import data_file_metadata
 from doppeldata.embedded_profiles import written_data_file
@@ -338,7 +340,7 @@ class EngineArguments:
     """Everything the engine's plan is built from, so a process holding only these, such as a Spark executor, builds the same plan.
 
     `profile_json` is the profile as given, and the engine applies the scenario's patch to it. `scenario` is the scenario's
-    JSON, digest and source, or None.
+    JSON, digest and source, or None. `overrides` is the JSON of each column `sample` pins and its values, or None.
     """
 
     profile_json: str
@@ -347,14 +349,20 @@ class EngineArguments:
     rows: int
     source: str
     scenario: tuple[str, str, str] | None = None
+    overrides: str | None = None
 
     def plan(self) -> '_core.Plan':
-        return _core.Plan(self.profile_json, self.profile_digest, self.seed, self.rows, self.source, scenario=self.scenario)
+        return _core.Plan(
+            self.profile_json, self.profile_digest, self.seed, self.rows, self.source, scenario=self.scenario, overrides=self.overrides
+        )
 
 
-def engine_arguments(source_profile: ProfileSource, rows: int | None, seed: int, scenario: Scenario | None = None) -> EngineArguments:
-    """The engine's arguments for `rows` rows of a profile under `scenario` from `seed`, refusing a patch the profile cannot
-    take. No `rows` takes the row count the profile records, as the scenario's patch leaves it.
+def engine_arguments(
+    source_profile: ProfileSource, rows: int | None, seed: int, scenario: Scenario | None = None, overrides: Overrides | None = None
+) -> EngineArguments:
+    """The engine's arguments for `rows` rows of a profile under `scenario` from `seed`, with each column `overrides` names
+    pinned, refusing a patch the profile cannot take. No `rows` takes the row count the profile records, as the scenario's
+    patch leaves it.
 
     The engine reads the profile with each typed text column that has no format of its own given its type's generator hint.
     The digest is the profile's as given.
@@ -373,12 +381,14 @@ def engine_arguments(source_profile: ProfileSource, rows: int | None, seed: int,
         raise ValueError(f'seed must be between 0 and 2^64 - 1, not {seed}')
     applied = (json.dumps(scenario.to_plain(), allow_nan=False), scenario.digest, scenario.source) if scenario is not None else None
     profile_json = json.dumps(with_type_hints(profile.to_plain()), allow_nan=False)
-    return EngineArguments(profile_json, profile.digest, seed, rows, source, applied)
+    return EngineArguments(profile_json, profile.digest, seed, rows, source, applied, overrides_json(overrides))
 
 
-def engine_plan(profile: ProfileSource, rows: int | None, seed: int, scenario: Scenario | None = None) -> '_core.Plan':
-    """The engine's plan for `rows` rows of `profile` under `scenario` from `seed`."""
-    return engine_arguments(profile, rows, seed, scenario).plan()
+def engine_plan(
+    profile: ProfileSource, rows: int | None, seed: int, scenario: Scenario | None = None, overrides: Overrides | None = None
+) -> '_core.Plan':
+    """The engine's plan for `rows` rows of `profile` under `scenario` from `seed`, each column `overrides` names pinned."""
+    return engine_arguments(profile, rows, seed, scenario, overrides).plan()
 
 
 def rows_only(scenario: Scenario | Sequence[Scenario] | None, run: str, write_with: str) -> Scenario | None:
@@ -395,11 +405,12 @@ def rows_plan(
     seed: int | None,
     scenario: Scenario | Sequence[Scenario] | None,
     run: str,
+    overrides: Overrides | None = None,
 ) -> '_core.Plan':
-    """The plan `run`, which returns rows and writes no file, generates from."""
+    """The plan `run`, which returns rows and writes no file, generates from, each column `overrides` names pinned."""
     generation = generation_source(profile, rows, seed, scenario)
     applied = rows_only(generation.scenario, run, 'doppeldata.write')
-    return generation.checked(engine_plan(generation.profile, generation.rows, generation.seed, applied))
+    return generation.checked(engine_plan(generation.profile, generation.rows, generation.seed, applied, overrides))
 
 
 @dc.dataclass(frozen=True)
