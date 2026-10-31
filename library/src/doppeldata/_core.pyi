@@ -112,12 +112,13 @@ class BundlePlan:
         takes back. ``profile_json`` and ``scenario_json`` are the manifest's ``profile`` and
         ``scenario`` records. Each table is then written to ``<destination>/<table>``.
         """
-    def commit(self, /, destination: str, claim_json: str, written: SupportsGetItem[int, str], *, s3_store: dict |None = None) -> str:
+    def commit(self, /, destination: str, claim_json: str, written: SupportsGetItem[int, str], *, elapsed_ms: SupportsIndex, s3_store: dict |None = None) -> str:
         """
         Stores the bundle's manifest and returns it as JSON: whole as ``_manifest.json`` once
         every table is, else partial under the claim's name. ``claim_json`` is what ``claim``
-        returned, its ``threads``, ``tasks`` and ``elapsed_ms`` set to how the tables were
-        written, and ``written`` each table's manifest JSON as its write returned it.
+        returned, ``written`` each table's manifest JSON as its write returned it, and
+        ``elapsed_ms`` the time from the claim. The manifest takes the most threads and tasks
+        any table used.
         """
     @property
     def dataset_digest(self, /) -> str: ...
@@ -126,11 +127,13 @@ class BundlePlan:
         """
         The bundle's own identity as RFC 8785 canonical JSON: no table, and every table's rows summed.
         """
-    def relationships(self, /) -> list[tuple[str, str, str |None, list[tuple[str, str]]]]:
+    @property
+    def relationships_json(self, /) -> str:
         """
-        Each relationship: its name, its pointer in the bundle, what draws its columns instead
-        where another relationship does, and each ``inherited`` entry and ``ordinal`` set aside
-        with why.
+        Each relationship as JSON, in the bundle's order: its name, pointer, child and parent
+        tables and columns, what draws its columns instead where another relationship does, each
+        ``inherited`` entry and ``ordinal`` set aside with why, and the columns it copies and
+        numbers where it is drawn.
         """
     def set_aside(self, /) -> list[str]:
         """
@@ -201,6 +204,11 @@ class Plan:
         """
         The dataset identity's RFC 8785 canonical JSON: the five values its rows are a pure
         function of.
+        """
+    def perturbation_writes(self, /) -> list[tuple[str, list[str]]]:
+        """
+        Each perturbation's id and the columns it writes as planned, in the scenario's order.
+        A ``hot_keys`` on a foreign key writes every column its relationship draws or copies.
         """
     def ranges_json(self, /, options: WriteOptions) -> str:
         """
@@ -382,4 +390,10 @@ def shape_of(value: str) -> str:
     """
     The value's shape, as a profile stores it: each ASCII upper-case letter as A, lower-case
     letter as a and digit as 9, and every other character as itself.
+    """
+
+def top_share_ranks() -> list[tuple[str, int]]:
+    """
+    Each ``fanout.top_share`` field's name and the rank, at scale 1, its share is held at,
+    busiest first.
     """

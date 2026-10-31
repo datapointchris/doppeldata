@@ -1,6 +1,6 @@
 # The determinism contract
 
-## A dataset is identified by seven values
+## A dataset is identified by the values below
 
 A generated dataset is a pure function of:
 
@@ -12,16 +12,16 @@ A generated dataset is a pure function of:
 6. the scale a bundle is generated at;
 7. the bundle table the rows are of.
 
-The last two are null outside a bundle. The manifest written beside the output must record all
-seven, plus a SHA-256 over them. Three committed files — profile, scenario and seed — reproduce a
-dataset anywhere.
+The last two are null outside a bundle. The manifest written beside the output must record every
+one, plus a SHA-256 over them. The profile or bundle, the scenario, the seed and a bundle's scale
+reproduce a dataset anywhere, and the manifest records each.
 
 ## The engine owns the identity: RFC 8785 JSON keyed like the file metadata
 
-The SHA-256 is taken over the RFC 8785 canonical JSON of one object with seven keys:
+The SHA-256 is taken over the RFC 8785 canonical JSON of one object with a key for each value:
 
 ```json
-{"dataset_rows":"10000000","profile_digest":"sha256:…","scale":null,"scenario_digest":null,"seed":"18446744073709551615","stream_version":11,"table":null}
+{"dataset_rows":"10000000","profile_digest":"sha256:…","scale":null,"scenario_digest":null,"seed":"18446744073709551615","stream_version":…,"table":null}
 ```
 
 - **The engine builds the canonical JSON and its digest, in `DatasetIdentity`.** The library and its
@@ -29,7 +29,7 @@ The SHA-256 is taken over the RFC 8785 canonical JSON of one object with seven k
   form, so it computes the profile and scenario digests and passes them in.
 - **Each key is a file metadata key without its `doppeldata.` prefix.** Both derive from the
   constants in `profile::provenance`. So a reader holding a file's metadata rebuilds the identity
-  with no mapping, and a sixth value needs no hand ordering, because the map sorts its keys.
+  with no mapping, and a new value needs no hand ordering, because the map sorts its keys.
 - **The seed, the row count and the scale are decimal strings.** The first two are 64-bit unsigned
   integers. RFC 8785 writes a number as an IEEE 754 double, which holds every integer only up to
   2^53, so a seed written as a number would lose digits. A string keeps the seed's whole range with
@@ -60,18 +60,24 @@ table, and its rows are the sum of its tables'.
   row to a slot. The slot's rank comes from the closed-form cumulative fan-out, and a second keyed
   permutation takes the rank to a parent row. So the parent a row holds is the same at any thread
   count and in any block order, and every block mixes parents from across the whole table.
-- **A rank is the first whose cumulative count passes the slot.** Up to 2^22 parents, the counts
-  are tabulated at plan time and a rank is a search over them. Past that, the curve is inverted
-  and the rank settled against the same rounded counts. Both give the same rank.
+- **A rank is the first whose cumulative count passes the slot.** Up to `TABULATED_PARENTS`
+  parents, the counts are tabulated at plan time and a rank is a search over them. Past that, the
+  curve is inverted and the rank settled against the same rounded counts. Both give the same rank.
+- **A child copying a parent column with listed values takes its busy parents by that value.** The
+  ranks are dealt busiest first. Each goes to the value whose matched rows fall furthest short of
+  the child's stated share, per parent row it has left. Each value's ranks then go to its parent
+  rows in the parent permutation's order. So the parent column's generated values decide every
+  placement, and a change to how that column draws moves every child row's parent. Past
+  `PLACED_PARENTS` parents, or for a sorted draw, the parent permutation alone places them.
 - **Each `top_share` pin sits at its rank times the scale.** At scale 0.1, `top10` pins the busiest
   parent. A pin under one parent, or on every parent, is left out. So the
   counts a parent holds move with the scale, which the identity carries.
 - **A bridge's second draw takes its positions from the first's.** A bridge is a child whose
   primary key is exactly two relationships' columns. The first's position times a multiplier,
   modulo the child's rows, is the second's. The multiplier is coprime with the rows, so each draw
-  still holds its own counts. It is the first of 1,024 tried from the rows' golden fraction, then
-  1,024 from the second's longest run, that puts one key's rows that far apart. So a change to
-  either draw's counts can change it, and with it every row's pair.
+  still holds its own counts. It is the first of `MULTIPLIER_TRIES` tried from the rows' golden
+  fraction, then as many from the second's longest run, that puts one key's rows that far apart. So
+  a change to either draw's counts can change it, and with it every row's pair.
 - **An ordinal is its row's place in its key's run, from 1.** It is read from the position the
   foreign key's slot is, so it draws from no stream of its own.
 - **A parent key is addressed at its row, never read back.** A `sequence` key is its formula, and a

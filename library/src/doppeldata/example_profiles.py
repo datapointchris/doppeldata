@@ -18,7 +18,7 @@ def example_names() -> list[str]:
 
 
 def bundle_example_names() -> list[str]:
-    """The example bundles' names, as `Bundle.example` and every call that generates take them."""
+    """The example bundles' names, as `Bundle.example` and the command line's PROFILE take them."""
     return shipped(BUNDLE_SUFFIX)
 
 

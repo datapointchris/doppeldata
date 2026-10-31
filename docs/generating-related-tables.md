@@ -27,7 +27,7 @@ relationships:
 ```
 
 - **A column is a foreign key where its name refers to another table's key, and that key holds at
-  least 0.95 of its values.** [profiler-statistics-and-readers.md](profiler-statistics-and-readers.md)
+  least `CONTAINMENT_FLOOR` of its values.** [profiler-statistics-and-readers.md](profiler-statistics-and-readers.md)
   holds the three name rules and the alias prefixes, such as `ps_` on every column of `partsupp`.
 - **A key of two columns is found as one of one.** `lineitem (l_partkey, l_suppkey)` refers to
   `partsupp (ps_partkey, ps_suppkey)`, and `from` and `to` list the columns in order.
@@ -81,17 +81,27 @@ doppeldata data generate orders-customers --scale 0.1 --out shop/
       - {child: region, parent: region, agreement: 0.995}
 ```
 
-The profiler writes an entry where at least 0.99 of the joined rows hold their parent row's value.
-The generator copies the parent's value on a share of the matched rows, and draws the rest from the
-child's own profile. Where that draw agrees by chance, the copied share is lowered to make up for it.
-On `orders-customers` at scale 1, 0.99508 of 548,351 joined orders hold their customer's `region`.
+The profiler writes an entry where at least `AGREEMENT_FLOOR` of the joined rows hold their parent
+row's value. The generator copies the parent's value on a share of the matched rows, and draws the
+rest from the child's own profile. Where that draw agrees by chance, the copied share is lowered to
+make up for it. On `orders-customers`, the generated orders agree on `region` within a thousandth of
+its stated 0.995.
+
+- **A copied column keeps the child's own mix, even where busy parents hold other values than idle
+  ones.** A shop's northern customers may order three times as often as its southern ones. So
+  `orders.region` is mostly north while `customers.region` is half north. The plan generates the
+  parent's column first, then deals the busiest ranks to the values furthest short of the child's
+  stated shares. The child's `top_values` are those shares.
+- **`data plan --json` names the column a draw's ranks are `placed by`.** A child copying several
+  columns is placed by the first listing `top_values`. A sorted draw, or a parent past
+  `PLACED_PARENTS` rows, is placed by its permutation alone.
 
 ## An ordinal numbers each parent's child rows from 1, so a key of a foreign key and a line number holds
 
 `ordinal` names a child column numbering the rows of each parent's key from 1 to their count. The
 profiler writes it where an integer column runs 1 to n under every key, with no number repeated.
 The generator writes each row's place in its parent's run, so the pair is unique. TPC-H's `lineitem`
-at scale 0.1 numbers all 150,000 orders' lines from 1 with no gap.
+numbers every order's lines from 1 with no gap.
 
 The plan sets an `ordinal` aside where its column is another relationship's foreign key, a key a
 child refers to, or copied by an `inherited` entry. The column is then drawn from its own profile.
@@ -108,7 +118,7 @@ one part's four suppliers would sometimes be the same one. The plan pairs the tw
   parent's rows far enough apart to land on different parents of the second.
 - **A bridge too dense for any multiplier is drawn unpaired.** That is where the busiest parent of
   one, times the busiest of the other, passes the child's rows. The second column's sampler in
-  `data plan --json` ends `placed by` the first's where the pair is placed.
+  `data plan --json` names the draw it is `placed by` where the pair is placed.
 
 ## A composite key's single-column part is set aside, and the plan names what draws it
 
@@ -149,7 +159,7 @@ doppeldata data check orders-customers shop/
 
 Each table is checked against its own profile first.
 [checking-generated-data-and-profile-drift.md](checking-generated-data-and-profile-drift.md) holds
-each metric's rules, and which column metrics a drawn key skips. The New York taxi trips of March
-2024 and their zones, profiled and generated, pass all six on the pickup and drop-off relationships.
-Their 3,582,628 generated trips hold 28,765 distinct pickup and drop-off pairs, where the real ones
-hold 30,076.
+each metric's rules, and which column metrics a drawn key skips, each naming its relationship as
+`drawn_by`. The New York taxi trips of March 2024 and their zones, profiled and generated, pass all
+six on the pickup and drop-off relationships. Their generated trips hold within a twentieth of the
+distinct pickup and drop-off pairs the real ones hold.

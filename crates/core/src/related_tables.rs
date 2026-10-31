@@ -13,16 +13,19 @@ mod parent_blocks;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::Array;
 use arrow_array::ArrayRef;
+use arrow_array::cast::AsArray;
 use arrow_buffer::BooleanBuffer;
 use arrow_cast::can_cast_types;
 use arrow_cast::cast;
 use arrow_schema::DataType;
 use arrow_select::interleave::interleave;
+use serde::Serialize;
 
 use self::fanout_counts::RankedCounts;
 use self::keyed_permutation::KeyedPermutation;
@@ -34,6 +37,7 @@ use crate::plan::plan_table;
 use crate::profile::BundleProfile;
 use crate::profile::BundleTable;
 use crate::profile::Column;
+use crate::profile::ColumnRef;
 use crate::profile::Relationship;
 use crate::profile::TableProfile;
 use crate::rng::BLOCK_ROWS;
@@ -112,17 +116,27 @@ pub struct BundleScenarios<'a> {
 }
 
 /// One relationship as the plan holds it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PlannedRelationship {
     /// `orders.customer_id → customers.customer_id`.
     pub name: String,
     /// Its JSON Pointer in the bundle.
     pub pointer: String,
+    /// The table holding the foreign key, and its columns, in `from`'s order.
+    pub child: String,
+    pub child_columns: Vec<String>,
+    /// The table referred to, and the key's columns, in `to`'s order.
+    pub parent: String,
+    pub parent_columns: Vec<String>,
     /// What draws its columns instead, where another relationship does.
     pub set_aside: Option<String>,
     /// The pointer of each `inherited` entry the plan does not copy, and of an `ordinal` it does not
     /// number, and why.
     pub entries_set_aside: Vec<(String, String)>,
+    /// Each child column the plan copies from the parent row, where it draws the relationship.
+    pub copied: Vec<String>,
+    /// The child column the plan numbers, where it draws the relationship.
+    pub ordinal: Option<String>,
 }
 
 /// A bundle resolved for generation: a plan for each table, every parent before its children.
@@ -183,19 +197,12 @@ fn ends<'a>(tables: &BTreeMap<&'a str, &'a TableProfile>, index: usize, relation
             "from and to name as many columns as each other, at least one",
         ));
     }
-    let side = |names: &[String], side: &str| -> Result<(&'a str, Vec<usize>), PlanError> {
+    let side = |names: &[ColumnRef], side: &str| -> Result<(&'a str, Vec<usize>), PlanError> {
         let mut table_name: Option<&'a str> = None;
         let mut columns = Vec::with_capacity(names.len());
-        for (place, reference) in names.iter().enumerate() {
+        for (place, ColumnRef { table, column }) in names.iter().enumerate() {
             let field = format!("{at}/{side}/{place}");
-            let Some((table, column)) = reference.split_once('.') else {
-                return Err(refuse(
-                    RelationshipFault::UnknownColumn,
-                    field,
-                    format!("{reference:?} is not table.column"),
-                ));
-            };
-            let Some((&name, profile)) = tables.get_key_value(table) else {
+            let Some((&name, profile)) = tables.get_key_value(table.as_str()) else {
                 return Err(refuse(
                     RelationshipFault::UnknownColumn,
                     field,
@@ -210,7 +217,7 @@ fn ends<'a>(tables: &BTreeMap<&'a str, &'a TableProfile>, index: usize, relation
                 ));
             }
             table_name = Some(name);
-            let found = profile.columns.iter().flatten().position(|held| held.name == column);
+            let found = profile.columns.iter().flatten().position(|held| held.name == *column);
             let Some(found) = found else {
                 return Err(refuse(
                     RelationshipFault::UnknownColumn,
@@ -364,11 +371,20 @@ pub fn plan_bundle(
     let mut planned: Vec<PlannedRelationship> = stated
         .iter()
         .enumerate()
-        .map(|(index, relationship)| PlannedRelationship {
-            name: relationship.display_name(),
-            pointer: format!("/relationships/{index}"),
-            set_aside: None,
-            entries_set_aside: Vec::new(),
+        .map(|(index, relationship)| {
+            let columns = |side: &[ColumnRef]| side.iter().map(|reference| reference.column.clone()).collect();
+            PlannedRelationship {
+                name: relationship.display_name(),
+                pointer: format!("/relationships/{index}"),
+                child: resolved[index].child.to_string(),
+                child_columns: columns(&relationship.from),
+                parent: resolved[index].parent.to_string(),
+                parent_columns: columns(&relationship.to),
+                set_aside: None,
+                entries_set_aside: Vec::new(),
+                copied: Vec::new(),
+                ordinal: None,
+            }
         })
         .collect();
     let mut by_width: Vec<usize> = (0..resolved.len()).collect();
@@ -511,6 +527,25 @@ pub fn plan_bundle(
             .map_err(|error| error.in_bundle_table(name))?;
         plans.insert(name, Arc::new(plan));
     }
+    for (planned, relationship) in planned.iter_mut().zip(stated) {
+        if planned.set_aside.is_some() {
+            continue;
+        }
+        let aside = |pointer: String| planned.entries_set_aside.iter().any(|(held, _)| *held == pointer);
+        let copied: Vec<String> = relationship
+            .inherited
+            .iter()
+            .flatten()
+            .enumerate()
+            .filter(|(place, _)| !aside(format!("{}/inherited/{place}", planned.pointer)))
+            .map(|(_, entry)| entry.child.clone())
+            .collect();
+        let ordinal = relationship
+            .ordinal
+            .clone()
+            .filter(|_| !aside(format!("{}/ordinal", planned.pointer)));
+        (planned.copied, planned.ordinal) = (copied, ordinal);
+    }
     let total = rows.values().sum();
     Ok(BundlePlan {
         identity: identity_of(None, total),
@@ -627,6 +662,43 @@ pub(crate) struct KeyDraw {
     orphan_streams: Vec<u64>,
     child_rows: u64,
     pairing: Option<Pairing>,
+    /// Each rank's parent row, from rank 1, where the ranks are placed by a copied column's value.
+    placed: Option<Vec<u32>>,
+    /// The parent column the ranks are placed by, and the child column it keeps the mix of.
+    placed_by: Option<String>,
+}
+
+/// The most parents whose ranks are placed by a copied column's value, one `u32` row each. Placing
+/// reads every parent row's value at plan time, so past this the parent permutation alone places them.
+const PLACED_PARENTS: u64 = 1 << 22;
+
+/// A value's matched rows still short of its stated share, per parent row it has left, the
+/// furthest short popped first. A value with few parents and many rows to reach takes the busy ranks.
+struct Short {
+    per_parent: f64,
+    value: usize,
+}
+
+impl PartialEq for Short {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for Short {}
+
+impl PartialOrd for Short {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Short {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.per_parent
+            .total_cmp(&other.per_parent)
+            .then_with(|| other.value.cmp(&self.value))
+    }
 }
 
 /// How one draw of a bridge takes its positions from the other's, so no two rows repeat their pair.
@@ -696,7 +768,114 @@ impl KeyDraw {
             parent_keys,
             child_rows,
             pairing: None,
+            placed: None,
+            placed_by: None,
         })
+    }
+
+    /// Deals the ranks, busiest first, among the values `parent`'s column `column` holds, each to the
+    /// value whose matched rows fall furthest short of the share `child`'s profile states. Each
+    /// value's ranks then go to its parent rows in the parent permutation's order. So `child`, which
+    /// copies `column`, keeps its own profiled mix where busy parents hold other values than idle
+    /// ones. Left unplaced where `child` lists no values or the parents pass `PLACED_PARENTS`.
+    fn place_by_value(&mut self, parent: &Plan, column: usize, child: &Column, by: String) {
+        let parents = self.parent_rows;
+        let listed = child.string.as_ref().and_then(|string| string.top_values.as_ref());
+        let Some(listed) = listed.filter(|listed| !listed.is_empty()) else {
+            return;
+        };
+        if parents == 0 || parents > PLACED_PARENTS || self.matched == 0 {
+            return;
+        }
+        let mut values: HashMap<String, u32> = HashMap::new();
+        let mut names: Vec<Option<String>> = vec![None];
+        let mut held: Vec<u32> = Vec::with_capacity(parents as usize);
+        for block in 0..parents.div_ceil(BLOCK_ROWS) {
+            let batch = parent.block_through(block, 0, false).batch;
+            let Ok(text) = cast(batch.column(column), &DataType::Utf8) else {
+                return;
+            };
+            let text = text.as_string::<i32>();
+            for row in 0..text.len() {
+                if text.is_null(row) {
+                    held.push(0);
+                    continue;
+                }
+                let value = text.value(row);
+                let at = match values.get(value) {
+                    Some(&at) => at,
+                    None => {
+                        let at = names.len() as u32;
+                        values.insert(value.to_string(), at);
+                        names.push(Some(value.to_string()));
+                        at
+                    }
+                };
+                held.push(at);
+            }
+        }
+        let mut room = vec![0u64; names.len()];
+        for &value in &held {
+            room[value as usize] += 1;
+        }
+        if room.iter().filter(|&&rows| rows > 0).count() < 2 {
+            return;
+        }
+        let stated: HashMap<&str, f64> = listed.iter().map(|top| (top.value.as_str(), top.rate.0)).collect();
+        let null_rate = child.null_rate.map_or(0.0, |rate| rate.0);
+        let rest = (1.0 - stated.values().sum::<f64>() - null_rate).max(0.0);
+        let is_unlisted = |name: &Option<String>| name.as_deref().is_some_and(|value| !stated.contains_key(value));
+        let unlisted: u64 = names
+            .iter()
+            .zip(&room)
+            .filter(|(name, _)| is_unlisted(name))
+            .map(|(_, &rows)| rows)
+            .sum();
+        let shares: Vec<f64> = names
+            .iter()
+            .zip(&room)
+            .map(|(name, &rows)| match name.as_deref() {
+                None => null_rate,
+                Some(value) => stated
+                    .get(value)
+                    .copied()
+                    .unwrap_or_else(|| rest * rows as f64 / unlisted.max(1) as f64),
+            })
+            .collect();
+        let total: f64 = shares.iter().sum();
+        if total.is_nan() || total <= 0.0 {
+            return;
+        }
+        let mut wanted: Vec<f64> = shares.iter().map(|share| self.matched as f64 * share / total).collect();
+        let mut short: BinaryHeap<Short> = (0..names.len())
+            .filter(|&value| room[value] > 0)
+            .map(|value| Short {
+                per_parent: wanted[value] / room[value] as f64,
+                value,
+            })
+            .collect();
+        let mut rows_of: Vec<Vec<u32>> = room.iter().map(|&rows| Vec::with_capacity(rows as usize)).collect();
+        for at in 0..parents {
+            let row = self.parents.inverse(at);
+            rows_of[held[row as usize] as usize].push(row as u32);
+        }
+        let mut next = vec![0usize; names.len()];
+        let mut placed = Vec::with_capacity(parents as usize);
+        for rank in 1..=parents {
+            let value = short.pop().expect("the values hold a parent for every rank").value;
+            placed.push(rows_of[value][next[value]]);
+            next[value] += 1;
+            room[value] -= 1;
+            wanted[value] -= (self.counts.cumulative(rank) - self.counts.cumulative(rank - 1)) as f64;
+            if room[value] > 0 {
+                short.push(Short {
+                    per_parent: wanted[value] / room[value] as f64,
+                    value,
+                });
+            }
+        }
+        self.placed = Some(placed);
+        self.placed_by = Some(by);
     }
 
     /// The most child rows one key holds: the busiest parent's, or one orphan key's. A rounded count
@@ -765,8 +944,7 @@ impl KeyDraw {
         }
         let matched = position - self.nulls;
         if matched < self.matched {
-            let rank = self.counts.rank_of(matched);
-            return Slot::Matched(self.parents.inverse(rank - 1));
+            return Slot::Matched(self.parent_of_rank(self.counts.rank_of(matched)));
         }
         let orphan = matched - self.matched;
         Slot::Orphan((u128::from(orphan) * u128::from(self.orphan_keys) / u128::from(self.orphans)) as u64)
@@ -774,7 +952,10 @@ impl KeyDraw {
 
     /// The parent row of rank `rank`, from 1.
     fn parent_of_rank(&self, rank: u64) -> u64 {
-        self.parents.inverse(rank - 1)
+        match &self.placed {
+            Some(placed) => u64::from(placed[(rank - 1) as usize]),
+            None => self.parents.inverse(rank - 1),
+        }
     }
 
     fn value(&self, member: usize, slot: Slot) -> KeyValue {
@@ -808,8 +989,12 @@ impl KeyDraw {
             Some(pairing) => format!(", placed by {}'s so no two rows repeat the pair", pairing.with),
             None => String::new(),
         };
+        let placed = match &self.placed_by {
+            Some(by) => format!(", its busiest parents placed by {by}"),
+            None => String::new(),
+        };
         format!(
-            "the relationship {}: {} matched rows over {} parents, {} orphan rows over {} keys, {} null{paired}",
+            "the relationship {}: {} matched rows over {} parents, {} orphan rows over {} keys, {} null{paired}{placed}",
             self.name,
             self.matched,
             self.counts.held_parents(),
@@ -993,6 +1178,17 @@ pub(crate) fn relate(
         };
         paired.pair_with(driver);
     }
+    for (index, (spec, draw)) in relations.draws.iter().zip(&mut draws).enumerate() {
+        let listed = |child: usize| profile[child].string.as_ref().is_some_and(|string| string.top_values.is_some());
+        let copied = relations.inherited.iter().find(|entry| entry.draw == index && listed(entry.child));
+        if let Some(entry) = copied.filter(|_| !spec.sorted) {
+            let by = format!(
+                "{}.{}'s value, as {} holds it",
+                entry.parent_name, entry.parent_column, profile[entry.child].name
+            );
+            draw.place_by_value(&spec.parent, entry.parent, &profile[entry.child], by);
+        }
+    }
     for (spec, draw) in relations.draws.iter().zip(&draws) {
         for &column in &spec.columns {
             columns[column].sampler = draw.describe();
@@ -1165,6 +1361,18 @@ impl RelatedColumns {
     /// Whether a relationship draws `column`.
     pub(crate) fn draws_column(&self, column: usize) -> bool {
         self.keys.iter().any(|key| key.0 == column)
+    }
+
+    /// Every column the relationship drawing `column` writes: each column of its key, and each it
+    /// copies from the parent row. None where no relationship draws `column`.
+    pub(crate) fn drawn_with(&self, column: usize) -> Option<Vec<usize>> {
+        let &(_, draw, _, _) = self.keys.iter().find(|key| key.0 == column)?;
+        let keys = self.keys.iter().filter(|key| key.1 == draw).map(|key| key.0);
+        let copied = self.inherited.iter().filter(|group| group.draw == draw);
+        Some(
+            keys.chain(copied.flat_map(|group| group.children.iter().map(|child| child.column)))
+                .collect(),
+        )
     }
 
     /// The parents of the `count` busiest ranks of the relationship drawing `column`, refused where

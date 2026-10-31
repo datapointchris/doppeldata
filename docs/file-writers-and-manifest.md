@@ -257,7 +257,8 @@ so they never read it as data. Its schema is `doppeldata schemas show manifest`.
 select count(*) from read_json_auto('out/part-*.json')
 ```
 
-- **`identity` holds the dataset identity's seven values, keyed as its canonical JSON.**
+- **`kind` is `table`.** A bundle's root manifest has the same file name and says `bundle`.
+- **`identity` holds every value of the dataset identity, keyed as its canonical JSON.**
   `dataset_digest` is their SHA-256. The seed, the row count and the scale are decimal strings,
   because JSON numbers are exact only to 2^53. A file's row and byte counts are JSON numbers, which
   no single object nears that bound.
@@ -301,7 +302,12 @@ bundle manifest, `doppeldata schemas show bundle-manifest`.
 
 - **The root manifest is the bundle's claim.** It is stored as `_manifest.partial.json` before the
   first table, with every table partial, and as `_manifest.json` once every table is whole. A run
-  that stops leaves the partial one, naming each table it finished.
+  that stops leaves the partial one, naming each table it finished. `data check` refuses a root
+  holding it, as it refuses a table's.
+- **Every refusal a table's write can raise runs before the claim.** So a bundle refused for its
+  second table leaves nothing behind for its first.
+- **`kind` is `bundle`.** `threads` and `tasks` are the most any table's write used, and
+  `elapsed_ms` runs from the claim to the commit.
 - **The root names each table's manifest by path and `dataset_digest`, never by embedding it.** A
   table's manifest lists every file it wrote, so embedding it would hold every file list twice.
 - **`set_aside` names each relationship and `inherited` entry the bundle states and does not

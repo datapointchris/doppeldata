@@ -21,6 +21,7 @@ use crate::format_settings::Output;
 use crate::perturbations::ScenarioFault;
 use crate::perturbations::pointer_token;
 use crate::plan::PlanError;
+use crate::profile::ColumnRef;
 pub use crate::profile::Duration;
 use crate::profile::Rate;
 
@@ -1002,14 +1003,23 @@ pub fn patched_bundle(bundle: &Value, scenarios: &BTreeMap<String, Scenario>) ->
     Ok(patched)
 }
 
-/// The key a scenario's patch names a relationship by: its `from` columns without their table,
-/// joined by `,`.
-pub fn relationship_patch_key(from: &[String]) -> String {
-    let columns: Vec<&str> = from
-        .iter()
-        .map(|reference| reference.split_once('.').map_or(reference.as_str(), |(_, column)| column))
-        .collect();
-    columns.join(",")
+/// The keys a scenario's patch may name a relationship by, from its JSON: its `from` columns
+/// without their table, joined by `,`, and its name as every report prints it, such as
+/// `orders.customer_id → customers.customer_id`. With the child table, or None where an end is not
+/// `table.column`.
+fn relationship_patch_keys(relationship: &Value) -> Option<(String, [String; 2])> {
+    let side = |name: &str| -> Option<Vec<ColumnRef>> {
+        let references = relationship.get(name)?.as_array()?;
+        references
+            .iter()
+            .map(|reference| ColumnRef::try_from(reference.as_str()?.to_string()).ok())
+            .collect()
+    };
+    let (from, to) = (side("from")?, side("to")?);
+    let joined = |side: &[ColumnRef]| side.iter().map(ColumnRef::to_string).collect::<Vec<_>>().join(", ");
+    let columns: Vec<&str> = from.iter().map(|reference| reference.column.as_str()).collect();
+    let table = from.first()?.table.clone();
+    Some((table, [columns.join(","), format!("{} → {}", joined(&from), joined(&to))]))
 }
 
 impl Scenario {
@@ -1037,33 +1047,37 @@ impl Scenario {
     }
 
     /// `relationships`, a bundle's as JSON, with the patch's `relationships` merged into each
-    /// relationship that draws a column of the scenario's table, matched by
-    /// [`relationship_patch_key`]. A key matching none of them is refused.
+    /// relationship that draws a column of the scenario's table, matched by either key
+    /// [`relationship_patch_keys`] gives it. A key matching none of them is refused, naming the keys
+    /// the table's relationships take.
     pub fn patched_relationships(&self, relationships: &[Value]) -> Result<Vec<Value>, PlanError> {
         let mut patched = relationships.to_vec();
         let Some(Value::Object(changes)) = self.patch.as_ref().and_then(|patch| patch.0.get(RELATIONSHIPS)) else {
             return Ok(patched);
         };
         let table = self.table.as_deref().unwrap_or_default();
+        let keys: Vec<Option<[String; 2]>> = patched
+            .iter()
+            .map(|relationship| {
+                relationship_patch_keys(relationship)
+                    .filter(|(child, _)| child == table)
+                    .map(|(_, keys)| keys)
+            })
+            .collect();
         for (key, change) in changes {
-            let drawn = patched.iter_mut().find(|relationship| {
-                let from: Vec<String> = relationship
-                    .get("from")
-                    .and_then(Value::as_array)
-                    .map(|from| from.iter().filter_map(Value::as_str).map(String::from).collect())
-                    .unwrap_or_default();
-                from.first()
-                    .is_some_and(|first| first.split_once('.').map(|(t, _)| t) == Some(table))
-                    && relationship_patch_key(&from) == *key
-            });
-            let Some(relationship) = drawn else {
+            let Some(at) = keys.iter().position(|keys| keys.as_ref().is_some_and(|keys| keys.contains(key))) else {
+                let taken: Vec<String> = keys.iter().flatten().map(|[short, name]| format!("{short} or {name}")).collect();
+                let takes = match taken.is_empty() {
+                    true => format!("the table {table} draws no relationship"),
+                    false => format!("give one of {}", taken.join("; ")),
+                };
                 return Err(PlanError::Scenario {
                     code: ScenarioFault::UnknownRelationship,
                     field: format!("/patch/{RELATIONSHIPS}/{}", pointer_token(key)),
-                    message: format!("no relationship draws {key} in the table {table}"),
+                    message: format!("no relationship draws {key} in the table {table}; {takes}"),
                 });
             };
-            merge_patch(relationship, change);
+            merge_patch(&mut patched[at], change);
         }
         Ok(patched)
     }

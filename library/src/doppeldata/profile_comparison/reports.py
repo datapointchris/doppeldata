@@ -10,7 +10,16 @@ from doppeldata.profile_comparison.metrics import Bound
 BOUND_SIGNS = {Bound.AT_MOST: '≤', Bound.AT_LEAST: '≥'}
 
 
-OPTIONAL_METRIC_FIELDS = ('expected', 'observed', 'unmeasured', 'skipped_by', 'paired_with', 'worst_given_value', 'relationship')
+OPTIONAL_METRIC_FIELDS = (
+    'expected',
+    'observed',
+    'unmeasured',
+    'skipped_by',
+    'drawn_by',
+    'paired_with',
+    'worst_given_value',
+    'relationship',
+)
 
 
 @dc.dataclass(frozen=True)
@@ -19,8 +28,8 @@ class MetricResult:
     a column given another names the value of `paired_with` it is worst within in `worst_given_value`, and one of a
     bundle's relationship names it in `relationship`, as `orders.customer_id → customers.customer_id`.
 
-    `value` is None where `unmeasured` says why it has none, or where `skipped_by` names the scenario's perturbation that
-    moves what it compares, or in a bundle check the relationship drawing the column. A row whose `decides` is False is
+    `value` is None where `unmeasured` says why it has none, where `skipped_by` names the scenario's perturbation that
+    moves what it compares, or where `drawn_by` names the bundle's relationship drawing the column. A row whose `decides` is False is
     one the report's verdict leaves out, such as a score against the real data no thresholds file sets, and it passes.
     """
 
@@ -34,6 +43,7 @@ class MetricResult:
     observed: float | None = None
     unmeasured: str | None = None
     skipped_by: str | None = None
+    drawn_by: str | None = None
     paired_with: str | None = None
     worst_given_value: str | None = None
     relationship: str | None = None
@@ -373,13 +383,22 @@ def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: 
         if not result.decides and result.value is None:
             named = result.relationship or result.column
             on = f' on `{named}`' if named else ''
-            lines += [f'`{result.metric}`{on} decides nothing, unmeasured: {result.unmeasured}.', '']
+            lines += [f'`{result.metric}`{on} decides nothing, {unvalued(result)}.', '']
     if changes:
         lines += ['| Change | Column | Passed | Detail |', '| --- | --- | --- | --- |']
         for change in sorted(changes, key=lambda change: change.passed):
             lines.append(f'| {change.change.value} | {change.column or ""} | {verdict(change.passed)} | {change.message} |')
         lines.append('')
     return lines
+
+
+def unvalued(result: MetricResult) -> str:
+    """Why `result` holds no value: the perturbation or relationship it is skipped by, or what left it unmeasured."""
+    if result.skipped_by is not None:
+        return f'skipped by {result.skipped_by}'
+    if result.drawn_by is not None:
+        return f'drawn by {result.drawn_by}'
+    return f'unmeasured: {result.unmeasured}'
 
 
 def metric_table(metrics: list[MetricResult], *, against_reference: bool = False) -> list[str]:
@@ -395,10 +414,7 @@ def metric_table(metrics: list[MetricResult], *, against_reference: bool = False
     lines = [f'| Metric | {where} | Value | Threshold | Expected | Observed | {heading} |', '| --- | --- | --- | --- | --- | --- | --- |']
     for result in sorted(metrics, key=judged):
         threshold = f'{BOUND_SIGNS[result.bound]} {result.threshold:g}'
-        if result.skipped_by is not None:
-            shown = f'skipped by {result.skipped_by}'
-        else:
-            shown = f'{result.value:.6g}' if result.value is not None else f'unmeasured: {result.unmeasured}'
+        shown = f'{result.value:.6g}' if result.value is not None else unvalued(result)
         expected, observed = (f'{value:.6g}' if value is not None else '' for value in (result.expected, result.observed))
         column = result.relationship or ', '.join(name for name in (result.column, result.paired_with) if name)
         lines.append(f'| {result.metric} | {column} | {shown} | {threshold} | {expected} | {observed} | {verdict(judged(result))} |')

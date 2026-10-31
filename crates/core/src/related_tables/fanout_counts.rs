@@ -7,10 +7,8 @@
 //! so the quantiles stay as stated, and is scaled only past that.
 
 use crate::profile::Fanout;
+use crate::profile::TopShare;
 use crate::samplers::quantile_knots;
-
-/// The busiest ranks at scale 1 whose cumulative share `top_share` states, by the field naming each.
-const PINS: [(&str, u64); 3] = [("top1", 1), ("top10", 10), ("top100", 100)];
 /// The steepest power law fitted above the top quantile.
 const STEEPEST: f64 = 20.0;
 const FIT_STEPS: usize = 64;
@@ -19,7 +17,7 @@ const MOST_BEND: f64 = 64.0;
 const SEEK_STEPS: usize = 12;
 /// Rows short of a slot that end the search for its rank, which `rank_of` then settles exactly.
 const CLOSE_ENOUGH: f64 = 0.01;
-/// The most parents whose counts are held per rank, 32 MB of them, so a row's rank is a search
+/// The most parents whose counts are held per rank, one `u64` each, so a row's rank is a search
 /// over integers rather than a curve's inverse. A bent piece's inverse takes up to `SEEK_STEPS`
 /// powers.
 const TABULATED_PARENTS: u64 = 1 << 22;
@@ -246,12 +244,9 @@ impl RankedCounts {
         if points.windows(2).any(|pair| pair[1].1 > pair[0].1) {
             return Err("the fan-out quantiles fall".into());
         }
-        let shares = fanout.and_then(|f| f.top_share.as_ref());
+        let shares = fanout.and_then(|f| f.top_share.as_ref()).map(TopShare::pins).unwrap_or_default();
         let mut pins: Vec<(f64, f64)> = Vec::new();
-        for (name, rank) in PINS {
-            let Some(share) = shares.and_then(|shares| shares.get(name)) else {
-                continue;
-            };
+        for (name, rank, share) in shares {
             let at = rank as f64 * scale;
             if at < 1.0 || at >= total {
                 continue;

@@ -433,11 +433,21 @@ def refuse_file_shaping(
 
 
 def refuse_other_scenario(scenario: Scenario | None, written: 'Manifest', data: str) -> None:
-    """Raise InvalidScenario when `scenario` is not the one the manifest of `data` records, or is None where it records one."""
-    digest = written.identity.get('scenario_digest')
-    if (scenario.digest if scenario is not None else None) == digest:
-        return
+    """Raise InvalidScenario when `scenario` is not the one the manifest of `data` records, or is None where it records one.
+
+    A bundle's table records the bundle's map of each table to its scenario, so the table is held to its own entry there.
+    """
     recorded = written.document.get('scenario') or {}
+    table = written.identity.get('table')
+    if table is not None:
+        applied = (recorded.get('document') or {}).get(table)
+        if (json.loads(scenario.canonical()) if scenario is not None else None) == applied:
+            return
+        digest = digest_of(rfc8785.dumps(applied)) if applied is not None else None
+    else:
+        digest = written.identity.get('scenario_digest')
+        if (scenario.digest if scenario is not None else None) == digest:
+            return
     wrote = f'scenario {recorded.get("name")} ({digest})' if digest is not None else 'no scenario'
     if scenario is None:
         issue = Issue('data-has-scenario', '', f'{data} was written under {wrote}; check it under that scenario')

@@ -123,6 +123,13 @@ mod _core {
             .collect()
     }
 
+    /// Each ``fanout.top_share`` field's name and the rank, at scale 1, its share is held at,
+    /// busiest first.
+    #[pyfunction]
+    fn top_share_ranks() -> Vec<(&'static str, u64)> {
+        doppeldata_core::profile::TopShare::PINS.to_vec()
+    }
+
     type PerturbationFacts = (String, Vec<String>, bool, bool, bool);
 
     /// Each of a valid scenario's perturbations, in list order: its id, the columns it writes, adds,
@@ -391,6 +398,12 @@ mod _core {
         /// each child's sampler naming why.
         fn set_aside(&self) -> Vec<String> {
             self.plan.set_aside()
+        }
+
+        /// Each perturbation's id and the columns it writes as planned, in the scenario's order.
+        /// A ``hot_keys`` on a foreign key writes every column its relationship draws or copies.
+        fn perturbation_writes(&self) -> Vec<(String, Vec<String>)> {
+            self.plan.perturbation_writes().to_vec()
         }
 
         /// Every row, as one table holding a batch per block, generated on ``threads`` threads,
@@ -756,22 +769,13 @@ mod _core {
             self.tables.iter().map(|(name, plan)| (name.clone(), plan.clone_ref(py))).collect()
         }
 
-        /// Each relationship: its name, its pointer in the bundle, what draws its columns instead
-        /// where another relationship does, and each ``inherited`` entry and ``ordinal`` set aside
-        /// with why.
-        fn relationships(&self) -> Vec<PlannedRelationshipRow> {
-            self.plan
-                .relationships()
-                .iter()
-                .map(|planned| {
-                    (
-                        planned.name.clone(),
-                        planned.pointer.clone(),
-                        planned.set_aside.clone(),
-                        planned.entries_set_aside.clone(),
-                    )
-                })
-                .collect()
+        /// Each relationship as JSON, in the bundle's order: its name, pointer, child and parent
+        /// tables and columns, what draws its columns instead where another relationship does, each
+        /// ``inherited`` entry and ``ordinal`` set aside with why, and the columns it copies and
+        /// numbers where it is drawn.
+        #[getter]
+        fn relationships_json(&self) -> PyResult<String> {
+            serde_json::to_string(self.plan.relationships()).map_err(|error| PyValueError::new_err(error.to_string()))
         }
 
         /// The pointer of each relationship, ``inherited`` entry and ``ordinal`` the bundle states and
@@ -808,19 +812,22 @@ mod _core {
 
         /// Stores the bundle's manifest and returns it as JSON: whole as ``_manifest.json`` once
         /// every table is, else partial under the claim's name. ``claim_json`` is what ``claim``
-        /// returned, its ``threads``, ``tasks`` and ``elapsed_ms`` set to how the tables were
-        /// written, and ``written`` each table's manifest JSON as its write returned it.
-        #[pyo3(signature = (destination, claim_json, written, *, s3_store=None))]
+        /// returned, ``written`` each table's manifest JSON as its write returned it, and
+        /// ``elapsed_ms`` the time from the claim. The manifest takes the most threads and tasks
+        /// any table used.
+        #[pyo3(signature = (destination, claim_json, written, *, elapsed_ms, s3_store=None))]
         fn commit(
             &self,
             py: Python<'_>,
             destination: &str,
             claim_json: &str,
             written: Vec<String>,
+            elapsed_ms: u64,
             s3_store: Option<Bound<'_, PyDict>>,
         ) -> PyResult<String> {
             let unreadable = |error: serde_json::Error| PyValueError::new_err(format!("not a manifest commit takes: {error}"));
-            let claim = serde_json::from_str(claim_json).map_err(unreadable)?;
+            let mut claim: doppeldata_core::manifest::BundleManifest = serde_json::from_str(claim_json).map_err(unreadable)?;
+            claim.elapsed_ms = elapsed_ms;
             let written: Vec<doppeldata_core::manifest::Manifest> = written
                 .iter()
                 .map(|json| serde_json::from_str(json))
@@ -837,10 +844,6 @@ mod _core {
             }
         }
     }
-
-    /// A relationship's name, pointer, what draws its columns instead, and its ``inherited``
-    /// entries set aside, each with why.
-    type PlannedRelationshipRow = (String, String, Option<String>, Vec<(String, String)>);
 
     /// The determinism contract's SHA-256 over every table a bundle generates at ``scale``, each
     /// table's blocks made on ``threads`` threads, the tables parent first.

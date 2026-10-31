@@ -20,6 +20,7 @@ from doppeldata.profile_exports.type_names import decimal_of
 from doppeldata.profile_exports.type_names import timestamp_of
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import Profile
+from doppeldata.profile_format import StatedRelationship
 from doppeldata.profile_format import described_rows
 from doppeldata.profile_format import listed_section
 from doppeldata.profiling.recorded_counts import RATE_DIGITS
@@ -352,11 +353,11 @@ def contract_document(profile: Profile | Bundle) -> ContractDocument:
     digest = profile.digest.removeprefix('sha256:')
     if isinstance(profile, Profile):
         return ContractDocument(str(plain['name']), digest, (contract_table(profile),), False)
-    relationships = plain.get('relationships') or []
+    relationships = profile.relationships()
     tables = []
     for name, table in profile.tables.items():
         found = contract_table(table)
-        keys = tuple(foreign_key(relationship, found) for relationship in relationships if relationship['from'][0].split('.')[0] == name)
+        keys = tuple(foreign_key(relationship, found) for relationship in relationships if relationship.child == name)
         tables.append(dc.replace(found, foreign_keys=keys))
     return ContractDocument(str(plain['name']), digest, tuple(tables), True)
 
@@ -448,15 +449,13 @@ def table_key(key: Mapping[str, Any], facts: 'TableFacts') -> Key:
     return Key(tuple(key['columns']), floored_share(uniqueness, facts.rows, rounding, facts.floor, facts.sample, 'sharing a value'))
 
 
-def foreign_key(relationship: Mapping[str, Any], child: ContractTable) -> ForeignKey:
+def foreign_key(relationship: StatedRelationship, child: ContractTable) -> ForeignKey:
     """The relationship from columns of `child`. Its share is `1 − orphan_rate`, at the rows holding a value in each.
     Without one, a seed's relationship is declared whole, and a profile's distinct-value `containment` states no share of
     rows."""
-    columns = tuple(reference.split('.', 1)[1] for reference in relationship['from'])
-    to_table = relationship['to'][0].split('.', 1)[0]
-    to_columns = tuple(reference.split('.', 1)[1] for reference in relationship['to'])
+    columns = relationship.child_columns
     found = [child.column(column) for column in columns]
-    orphans = relationship.get('orphan_rate')
+    orphans = relationship.document.get('orphan_rate')
     if orphans is not None:
         held = None if child.rows is None or None in found else min(column.completeness.value for column in found if column)
         held_rows = None if held is None or child.rows is None else round(child.rows * held)
@@ -464,7 +463,7 @@ def foreign_key(relationship: Mapping[str, Any], child: ContractTable) -> Foreig
         share: Share | None = floored_share(1 - orphans, held_rows, rounding, child.floor, child.sample, 'orphaned')
     else:
         share = Share(1.0, None) if child.seed else None
-    return ForeignKey(columns, to_table, to_columns, share)
+    return ForeignKey(columns, relationship.parent, relationship.parent_columns, share)
 
 
 def contract_column(column: Mapping[str, Any], facts: TableFacts, presence: float | None = None) -> ContractColumn:

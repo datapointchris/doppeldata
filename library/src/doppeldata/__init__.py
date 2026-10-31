@@ -9,10 +9,6 @@ from doppeldata.bundle_generation import BundleWritePlan
 from doppeldata.dataset_generation import ColumnSampler
 from doppeldata.dataset_generation import PlannedRange
 from doppeldata.dataset_generation import WritePlan
-from doppeldata.dataset_generation import generate
-from doppeldata.dataset_generation import plan
-from doppeldata.dataset_generation import stream
-from doppeldata.dataset_generation import write
 from doppeldata.errors import CheckFailed
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import DetectorPackError
@@ -53,6 +49,10 @@ from doppeldata.profiling import profile
 from doppeldata.profiling import profile_tables
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
+from doppeldata.table_or_bundle_generation import generate
+from doppeldata.table_or_bundle_generation import plan
+from doppeldata.table_or_bundle_generation import stream
+from doppeldata.table_or_bundle_generation import write
 
 __all__ = [
     'Bundle',

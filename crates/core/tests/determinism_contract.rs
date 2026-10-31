@@ -43,7 +43,7 @@ const PINNED_STREAM_VERSION: u32 = 11;
 const PINNED_VALUES: &str = "e94b2a09dea184e612515d8cf3af10c945ce269a87457ff7652aec2e7806edb4";
 const PINNED_SCENARIO_VALUES: &str = "a5ab8058ba012f2dafbf9a493347d8a11cb30f5a35e1bd6f19d78b81f47f00c5";
 const PINNED_CDC_VALUES: &str = "06c550d0a6294e9c0b73314914aaca66057d1bae1c72aa9133e712fc9d4a5063";
-const PINNED_BUNDLE_VALUES: &str = "351c096c22d75bf49e757e15b55ab4b16c2f7cfe208f13bfdae074ffaaee6bd8";
+const PINNED_BUNDLE_VALUES: &str = "292014c7e68bfe05bb8e5bb4777f0d0d8e0b934eed6f98d33c8cc7e82790c5a9";
 
 fn document(path: &Path) -> serde_json::Value {
     let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));

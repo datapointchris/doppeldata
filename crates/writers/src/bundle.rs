@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 
 use doppeldata_core::BundlePlan;
 use doppeldata_core::manifest::BundleManifest;
+use doppeldata_core::manifest::BundleManifestKind;
 use doppeldata_core::manifest::BundleTable;
 use doppeldata_core::manifest::MANIFEST_FILE_NAME;
 use doppeldata_core::manifest::Manifest;
@@ -42,6 +43,7 @@ pub fn bundle_manifest(
         })
         .collect();
     BundleManifest {
+        kind: BundleManifestKind::Bundle,
         tool: format!("doppeldata {}", doppeldata_core::VERSION),
         dataset_digest: plan.identity().digest(),
         identity: ManifestIdentity::from(plan.identity()),
@@ -112,7 +114,7 @@ async fn prepare(destination: &Destination, replace: bool, claim: &BundleManifes
 /// Stores the bundle's manifest, each table `written` names marked whole once its manifest is the
 /// one the plan makes. With every table whole it is stored as `_manifest.json`, replacing the claim.
 /// Otherwise it is stored partial under the claim's name. Either way it is returned. `claim` holds
-/// the threads, tasks and time the tables were written in.
+/// the time the tables were written in, and takes the most threads and tasks any table used.
 pub fn commit_bundle(
     mut claim: BundleManifest,
     written: &[Manifest],
@@ -137,6 +139,8 @@ pub fn commit_bundle(
         table.partial = manifest.partial;
     }
     claim.partial = claim.tables.iter().any(|table| table.partial);
+    claim.threads = written.iter().map(|manifest| manifest.threads).max().unwrap_or(0);
+    claim.tasks = written.iter().filter_map(|manifest| manifest.tasks).max();
     claim.written_at = now_rfc3339();
     on_upload_runtime(run, |runtime| {
         if claim.partial {

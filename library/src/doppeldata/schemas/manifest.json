@@ -52,6 +52,10 @@
     "identity": {
       "$ref": "#/$defs/ManifestIdentity"
     },
+    "kind": {
+      "description": "Always `table`: the manifest of one table's files.",
+      "$ref": "#/$defs/TableManifestKind"
+    },
     "layout": {
       "$ref": "#/$defs/LayoutSettings"
     },
@@ -199,6 +203,7 @@
     }
   ],
   "required": [
+    "kind",
     "tool",
     "dataset_digest",
     "identity",
@@ -985,6 +990,13 @@
         "rows",
         "bytes",
         "sha256"
+      ]
+    },
+    "TableManifestKind": {
+      "description": "The `kind` of a [`Manifest`], which tells it from a [`BundleManifest`] under the same file name.",
+      "type": "string",
+      "enum": [
+        "table"
       ]
     },
     "TextCompression": {

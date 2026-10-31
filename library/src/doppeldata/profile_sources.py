@@ -9,11 +9,16 @@ import copy
 import os
 from collections.abc import Mapping
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 from typing import Protocol
 
+from doppeldata.example_profiles import bundle_example_names
 from doppeldata.inline_columns import InlineColumn
+from doppeldata.profile_format import BUNDLE_INDEX
+from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import Profile
+from doppeldata.profile_format import read_document
 from doppeldata.seed_profiles.schema_classes import LIBRARIES
 from doppeldata.seed_profiles.schema_classes import schema_class_profile
 from doppeldata.short_profiles import DICT_SOURCE
@@ -65,6 +70,28 @@ ProfileSource = (
     | FieldsSchema
     | ColumnsSchema
 )
+
+DOCUMENT_SUFFIXES = ('.yaml', '.yml', '.json')
+
+
+def bundle_from(source: Any) -> Bundle | None:
+    """The bundle `source` names: a Bundle, a bundle file, a directory holding `bundle.yaml`, or an example bundle's name.
+    None for any other source, which names one table."""
+    if isinstance(source, Bundle):
+        return source
+    if not isinstance(source, str | os.PathLike):
+        return None
+    path = Path(source)
+    if path.is_dir():
+        return Bundle.load(path) if (path / BUNDLE_INDEX).is_file() else None
+    if path.is_file():
+        if path.suffix.lower() not in DOCUMENT_SUFFIXES:
+            return None
+        document = read_document(path)
+        return Bundle.load(path) if isinstance(document, dict) and document.get('kind') == 'bundle' else None
+    if isinstance(source, str) and source in bundle_example_names():
+        return Bundle.example(source)
+    return None
 
 
 def profile_from(source: ProfileSource) -> Profile:

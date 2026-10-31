@@ -8,6 +8,7 @@ import math
 import re
 from typing import Any
 
+from doppeldata import _core
 from doppeldata.profiling.backend import Backend
 from doppeldata.profiling.backend import ColumnSpec
 from doppeldata.profiling.backend import Table
@@ -28,8 +29,8 @@ LONGEST_ALIAS = 3
 # A key's squeezed name that names a thing and its id or key, which a column may name after a role, as `PULocationID`
 # names `LocationID` as the pickup's.
 ROLED_KEY = re.compile(r'[a-z]{2,}(?:id|key)')
-# The busiest parents whose share of the child rows is stated, by the field naming it.
-TOP_SHARES = {'top1': 1, 'top10': 10, 'top100': 100}
+# The busiest parents whose share of the child rows is stated, by the field naming it, as the engine pins them.
+TOP_SHARES = dict(_core.top_share_ranks())
 # The ranks a Zipf law's normalizing sums are added up over term by term, the rest taken by an integral.
 SUMMED_RANKS = 1000
 FIT_STEPS = 80
@@ -204,7 +205,7 @@ def singular(name: str) -> str:
 
 
 def unaliased(column: str, table: str) -> str:
-    """`column` without the table alias its name begins with: up to three letters and a `_`, the first the table's
+    """`column` without the table alias its name begins with: up to `LONGEST_ALIAS` letters and a `_`, the first the table's
     first letter and each in order in its name, as `ps_partkey` is of `partsupp` and `l_orderkey` of `lineitem`."""
     alias, separator, rest = column.partition('_')
     lowered, named = alias.lower(), table.lower()

@@ -309,13 +309,18 @@ orders.customer_id → customers.customer_id
 ```python
 import doppeldata as sd
 
-tables = sd.generate('orders-customers', scale=0.1, seed=7)
+tables = sd.generate(sd.Bundle.example('orders-customers'), scale=0.1, seed=7)
 tables['orders']  # an Arrow table of 55,000 rows, each customer_id one of tables['customers']'
 ```
 
 `PROFILE` may be a bundle file, a bundle directory or a bundled example's name, on `data plan`,
 `data generate` and `data check`. `profile list` lists the example bundles beside the profiles,
 and `profile show` prints one.
+
+**Python takes a bundle only as a `Bundle`**, which `Bundle.load` reads from a file or directory
+and `Bundle.example` from an example's name. So a string or path given to `generate`, `plan` or
+`write` always names one table, and each call's return type follows from its argument. `check`
+takes a `Profile` or a `Bundle`.
 
 - **`--scale` multiplies every table's row count**, 1 where left out. Each table generates
   `round(row_count × scale)` rows, so the fan-out's shape holds at any scale. Each `top_share`

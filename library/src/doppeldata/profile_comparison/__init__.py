@@ -134,6 +134,8 @@ def check(
     under the scenarios naming it, and each relationship is measured by `RELATIONSHIP_METRICS`. The report is a
     `BundleCheckReport`, and a bundle takes no `against`.
     """
+    if not isinstance(profile, Profile | Bundle):
+        raise TypeError(f'check takes a Profile or a Bundle, as Profile.load and Bundle.load read them, not {type(profile).__name__}')
     if isinstance(profile, Bundle):
         from doppeldata.profile_comparison import bundle_checks
 

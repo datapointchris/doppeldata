@@ -32,20 +32,17 @@ except ImportError as error:
 
 from doppeldata import _core
 from doppeldata.bundle_generation import BundleArguments
+from doppeldata.bundle_generation import BundleRun
 from doppeldata.bundle_generation import bundle_arguments
-from doppeldata.bundle_generation import bundle_from
+from doppeldata.bundle_generation import bundle_written
 from doppeldata.bundle_generation import prepared_bundle_write
-from doppeldata.bundle_generation import refuse_rows
-from doppeldata.bundle_generation import scenarios_record
-from doppeldata.bundle_generation import table_destination
+from doppeldata.bundle_generation import run_of
 from doppeldata.bundle_generation import table_scenarios
-from doppeldata.bundle_generation import table_source
 from doppeldata.dataset_generation import EngineArguments
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.dataset_generation import engine_arguments
 from doppeldata.dataset_generation import generation_source
 from doppeldata.dataset_generation import prepared_write
-from doppeldata.dataset_generation import refuse_scale
 from doppeldata.dataset_generation import rows_only
 from doppeldata.dataset_generation import s3_store_of
 from doppeldata.errors import StoppedWrite
@@ -274,7 +271,7 @@ def struct_type(profile: ProfileSource, *, scenario: Scenario | Sequence[Scenari
     A timestamp with no time zone is a TimestampNTZType, and one with a zone a TimestampType. A column of a type `spark_holds`
     refuses, which Spark cannot carry with every value kept, raises ValueError naming it.
     """
-    if bundle_from(profile) is not None:
+    if isinstance(profile, Bundle):
         raise TypeError('a schema describes one table, and a bundle holds several; generate the bundle, whose DataFrames each hold one')
     applied = one_process_scenario(scenario)
     _, engine = executor_plan(profile, 0, 0, rows_only(applied, 'spark.generate', 'doppeldata.spark.write'))
@@ -336,21 +333,19 @@ def generate(
     Each table's tasks plan the whole bundle once per executor, and draw each foreign key from its parent's keys by formula,
     so no table reads another.
     """
-    bundle = bundle_from(profile)
-    if bundle is not None:
-        refuse_rows(rows)
-        scenarios = table_scenarios(scenario, bundle)
+    run = run_of(profile, rows, seed, scale)
+    if isinstance(run, BundleRun):
+        scenarios = table_scenarios(scenario, run.bundle)
         for each in scenarios.values():
             rows_only(one_process_scenario(each), 'spark.generate', 'doppeldata.spark.write')
-        arguments = bundle_arguments(bundle, seed or 0, 1.0 if scale is None else scale, scenarios)
+        arguments = bundle_arguments(run.bundle, run.seed, run.scale, scenarios)
         return {
             name: chunk_frame(
                 spark, ExecutorPlan(BundleTableArguments(arguments, name), _core.VERSION, _core.STREAM_VERSION), engine, partitions
             )
             for name, engine in arguments.plan().tables()
         }
-    refuse_scale(scale)
-    generation = generation_source(table_source(profile), rows, seed, scenario)
+    generation = generation_source(run.profile, run.rows, run.seed, scenario)
     applied = rows_only(one_process_scenario(generation.scenario), 'spark.generate', 'doppeldata.spark.write')
     planned, engine = executor_plan(generation.profile, generation.rows, generation.seed, applied)
     generation.checked(engine)
@@ -431,13 +426,11 @@ def write(
     manifest and the bundle's, naming each table already whole.
     """
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer)
-    bundle = bundle_from(profile)
-    if bundle is not None:
-        refuse_rows(rows)
-        return bundle_from_executors(spark, bundle, out, seed or 0, 1.0 if scale is None else scale, choices, replace, partitions, scenario)
-    refuse_scale(scale)
+    run = run_of(profile, rows, seed, scale)
+    if isinstance(run, BundleRun):
+        return bundle_from_executors(spark, run, out, choices, replace, partitions, scenario)
     started = time.monotonic()
-    prepared = prepared_write(table_source(profile), out, rows, seed, choices, one_process_scenario(scenario))
+    prepared = prepared_write(run.profile, out, run.rows, run.seed, choices, one_process_scenario(scenario))
     if prepared.one_file is not None:
         message = f'{os.fspath(out)} names one file, which doppeldata.write writes; the executors write a directory, so end the path with /'
         raise WriteFailed('one-file-from-executors', message, kind='refused')
@@ -484,53 +477,25 @@ def ranges_from_executors(
 
 def bundle_from_executors(
     spark: SparkSession,
-    bundle: Bundle,
+    run: BundleRun,
     out: str | os.PathLike[str],
-    seed: int,
-    scale: float,
     choices: WriteChoices,
     replace: bool,
     partitions: int | None,
     scenario: Scenario | Sequence[Scenario] | None,
 ) -> BundleManifest:
     """`write` of a bundle: the root claimed, each table written by its own Spark job, and the bundle's manifest stored."""
-    started = time.monotonic()
-    for applied in table_scenarios(scenario, bundle).values():
+    for applied in table_scenarios(scenario, run.bundle).values():
         one_process_scenario(applied)
-    prepared = prepared_bundle_write(bundle, out, seed, scale, choices, scenario)
+    prepared = prepared_bundle_write(run, out, choices, scenario)
     root = executors_destination(spark, prepared.scheme, prepared.destination)
     store = s3_store_of(root, prepared.bucket)
-    record = scenarios_record(prepared.scenarios)
-    profile_record = {'name': bundle.name, 'path': str(bundle.path) if bundle.path is not None else None}
-    claimed = prepared.engine.claim(
-        root, json.dumps(profile_record), json.dumps(record) if record is not None else None, replace=replace, s3_store=store
-    )
-    claim = json.loads(claimed)
-    written: list[str] = []
 
-    def committed() -> str:
-        held = [json.loads(each) for each in written]
-        claim.update(
-            threads=held[0]['threads'] if held else 0,
-            tasks=max((each['tasks'] for each in held if each['tasks'] is not None), default=None),
-            elapsed_ms=round((time.monotonic() - started) * 1000),
-        )
-        stored: str = prepared.engine.commit(root, json.dumps(claim), written, s3_store=store)
-        return stored
-
-    for name, table, options, _ in prepared.tables:
-        destination = table_destination(root, name)
+    def write_table(name: str, table: _core.Plan, options: _core.WriteOptions, destination: str) -> str:
         table.claim(options, destination, replace=False, s3_store=store)
         planned = ExecutorPlan(BundleTableArguments(prepared.arguments, name), _core.VERSION, _core.STREAM_VERSION)
-        try:
-            written.append(
-                ranges_from_executors(
-                    spark, planned, table, options, prepared.choices_json, destination, prepared.bucket, partitions, time.monotonic()
-                )
-            )
-        except WriteFailed:
-            committed()
-            raise
-    return BundleManifest(
-        json.loads(committed()), {name: Manifest.from_json(each) for (name, *_), each in zip(prepared.tables, written, strict=True)}
-    )
+        return ranges_from_executors(
+            spark, planned, table, options, prepared.choices_json, destination, prepared.bucket, partitions, time.monotonic()
+        )
+
+    return bundle_written(prepared, root, replace, store, write_table, (WriteFailed,))

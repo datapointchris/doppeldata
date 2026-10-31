@@ -251,24 +251,28 @@ tables, by the join the profiler runs. `check()` takes a `Bundle` and returns a
   quantiles. The generated side is exact, counting a parent no child names at 0.
 - **`orphan_rate_delta` is the generated orphan rate's distance from `orphan_rate`.** The share is
   of child rows, and a relationship stating none states 0.
-- **`top_share_delta` is the furthest of `top1`, `top10` and `top100` from its stated share.** The
-  share is of child rows that name a parent. A bundle at scale 0.5 compares the top 5 parents with
-  the stated `top10`, so the same fraction of parents is held. A rank falling on a fraction of a
-  parent takes that fraction of the next parent's rows. One falling below one parent is not
-  compared.
+- **`top_share_delta` is the furthest of each stated `top_share` from its share.** The share is of
+  child rows that name a parent. A bundle at scale 0.5 compares the top 5 parents with the stated
+  `top10`, so the same fraction of parents is held. The scale is the one the root manifest records.
+  A rank falling on a fraction of a parent takes that fraction of the next parent's rows. One
+  falling below one parent is not compared.
 - **The three are set under `defaults` in a thresholds file, never under `columns`.** Each
   measures a relationship between tables, so no column names it.
 - **A column a relationship draws skips every metric comparing which values it holds.** That is
   `ks`, `tvd`, `zero_rate_delta`, `boundary_adherence`, `correlation_max_abs_diff` and
-  `conditional_kl`. Its row passes with `skipped_by` naming the relationship. The relationship
+  `conditional_kl`. Its row passes with `drawn_by` naming the relationship. The relationship
   deals out its parent's keys, so the values follow the parent's table rather than the child's
   profile. Its null rate and distinct values are still checked.
 - **A relationship the plan sets aside decides nothing.** Its rows say why, as a composite key's
   single-column part that the composite draws.
-- **A scenario writing a foreign-key column skips the relationship's metrics**, with `skipped_by`
-  naming the perturbation.
+- **A scenario writing a foreign-key column, or the parent's key column, skips the relationship's
+  metrics**, with `skipped_by` naming the perturbation.
 - **A bundle's data written under other scenarios is refused.** The root manifest's
   `scenario_digest` must equal the digest of the scenarios given.
+- **A root holding `_manifest.partial.json` is refused**, as a table's is, because its write
+  stopped or is still running.
+- **One table of a bundle checks on its own, under the scenario naming it.** Its manifest's
+  scenario is the bundle's map, and the check compares that table's entry with the scenario given.
 - **A bundle takes no `--against`, `--against-sample` or `--html`.** Each scores or draws one
   table.
 

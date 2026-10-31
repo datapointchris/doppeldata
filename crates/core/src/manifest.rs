@@ -73,9 +73,27 @@ pub fn faults_json_schema() -> String {
 /// The rows a file holds when neither the call nor the profile sets a size.
 pub const DEFAULT_FILE_ROWS: u64 = 1_000_000;
 
+/// The `kind` of a [`Manifest`], which tells it from a [`BundleManifest`] under the same file name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TableManifestKind {
+    #[default]
+    Table,
+}
+
+/// The `kind` of a [`BundleManifest`], which tells it from a [`Manifest`] under the same file name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum BundleManifestKind {
+    #[default]
+    Bundle,
+}
+
 /// The record of a generated dataset, which with its profile and scenario regenerates every file byte for byte.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Manifest {
+    /// Always `table`: the manifest of one table's files.
+    pub kind: TableManifestKind,
     /// The tool that wrote the files, as `doppeldata <version>`. The files' bytes are a function of
     /// the identity and this version.
     pub tool: String,
@@ -166,6 +184,8 @@ impl From<&DatasetIdentity> for ManifestIdentity {
 /// under `<table>/` with a manifest of its own, which this names rather than holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BundleManifest {
+    /// Always `bundle`: the manifest naming each table's own.
+    pub kind: BundleManifestKind,
     /// The tool that wrote the files, as `doppeldata <version>`.
     pub tool: String,
     /// `sha256:` and the hex SHA-256 of `identity`'s RFC 8785 canonical JSON.
@@ -216,6 +236,7 @@ impl Manifest {
     /// are copied, never recomputed.
     pub fn new(identity: &DatasetIdentity, profile: ManifestProfile, output: Output, layout: LayoutSettings, destination: String) -> Self {
         Self {
+            kind: TableManifestKind::Table,
             tool: format!("doppeldata {}", crate::VERSION),
             dataset_digest: identity.digest(),
             identity: ManifestIdentity::from(identity),

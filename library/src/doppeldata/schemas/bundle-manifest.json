@@ -21,6 +21,10 @@
       "description": "The bundle's own identity: no table, and `dataset_rows` every table's rows summed.",
       "$ref": "#/$defs/ManifestIdentity"
     },
+    "kind": {
+      "description": "Always `bundle`: the manifest naming each table's own.",
+      "$ref": "#/$defs/BundleManifestKind"
+    },
     "partial": {
       "description": "True until every table is whole. Such a manifest is stored as `_manifest.partial.json`.",
       "type": "boolean"
@@ -79,6 +83,7 @@
     }
   },
   "required": [
+    "kind",
     "tool",
     "dataset_digest",
     "identity",
@@ -92,6 +97,13 @@
     "written_at"
   ],
   "$defs": {
+    "BundleManifestKind": {
+      "description": "The `kind` of a [`BundleManifest`], which tells it from a [`Manifest`] under the same file name.",
+      "type": "string",
+      "enum": [
+        "bundle"
+      ]
+    },
     "BundleTable": {
       "description": "One table of a bundle's write.",
       "type": "object",

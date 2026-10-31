@@ -226,6 +226,8 @@ pub struct Plan {
     across_files: Vec<(String, u64)>,
     /// The first perturbation ordering the whole table: its pointer and its op.
     one_process: Option<(String, &'static str)>,
+    /// Each perturbation's id and the columns it writes as planned, in the scenario's order.
+    writes: Vec<(String, Vec<String>)>,
     /// What a bundle's relationships draw, and how its children read its keys.
     related: Option<RelatedColumns>,
 }
@@ -431,6 +433,7 @@ pub(crate) fn plan_table(
         cdc: None,
         across_files: Vec::new(),
         one_process: None,
+        writes: Vec::new(),
         related,
     };
     if let Some(scenario) = scenario {
@@ -535,6 +538,15 @@ impl Plan {
             if perturbation.needs_one_process() && self.one_process.is_none() {
                 self.one_process = Some((format!("/perturbations/{index}"), perturbation.op_name()));
             }
+            let mut written: Vec<String> = perturbation.written_columns().into_iter().map(String::from).collect();
+            if let (Perturbation::HotKeys(op), Some(related)) = (perturbation, self.related.as_ref())
+                && let Ok(column) = schema.index_of(&op.column)
+                && let Some(drawn) = related.drawn_with(column)
+            {
+                let names = drawn.into_iter().map(|at| schema.field(at).name().clone());
+                written.extend(names.filter(|name| *name != op.column));
+            }
+            self.writes.push((ids[index].clone(), written));
             let one_only = || {
                 planning.refuse(
                     ScenarioFault::InvalidParameter,
@@ -641,6 +653,12 @@ impl Plan {
     /// The change stream a scenario's `cdc` writes beside the full load, where it has one.
     pub fn cdc(&self) -> Option<&CdcPlan> {
         self.cdc.as_ref()
+    }
+
+    /// Each perturbation's id and the columns it writes as planned, in the scenario's order. A
+    /// `hot_keys` on a foreign key writes every column its relationship draws or copies.
+    pub fn perturbation_writes(&self) -> &[(String, Vec<String>)] {
+        &self.writes
     }
 
     /// The pointer to the first perturbation ordering the whole table, and its op, where one does.

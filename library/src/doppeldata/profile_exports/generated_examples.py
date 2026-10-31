@@ -18,7 +18,7 @@ EXAMPLE_ROWS = 64
 
 def generated_examples(profile: Profile) -> dict[str, list[Any]]:
     """Up to EXAMPLES distinct values of each column, in the order the rows generated with EXAMPLE_SEED hold them."""
-    from doppeldata.dataset_generation import write
+    from doppeldata.table_or_bundle_generation import write
 
     with tempfile.TemporaryDirectory(prefix='doppeldata-examples-') as directory:
         target = Path(directory) / 'examples.ndjson'

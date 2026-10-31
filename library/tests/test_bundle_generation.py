@@ -14,7 +14,7 @@ def table_rows(root, table):
 
 
 def test_the_orders_customers_bundle_draws_each_order_s_customer_at_its_orphan_rate_and_fanout(tmp_path):
-    sd.write('orders-customers', tmp_path, scale=0.1, seed=0, format='csv')
+    sd.write(sd.Bundle.example('orders-customers'), tmp_path, scale=0.1, seed=0, format='csv')
     customers = {row['customer_id'] for row in table_rows(tmp_path, 'customers')}
     named = [row['customer_id'] for row in table_rows(tmp_path, 'orders') if row['customer_id'] != '']
     matched = [customer for customer in named if customer in customers]

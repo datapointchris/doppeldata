@@ -7,9 +7,9 @@ manifest naming each.
 
 import dataclasses as dc
 import json
-import math
 import os
 import time
+from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -27,48 +27,46 @@ from doppeldata.dataset_generation import s3_store_of
 from doppeldata.dataset_generation import write_plan_of
 from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
-from doppeldata.example_profiles import bundle_example_names
 from doppeldata.manifest import BundleManifest
 from doppeldata.manifest import Manifest
 from doppeldata.name_hinted_types import with_type_hints
-from doppeldata.profile_format import BUNDLE_INDEX
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import Issue
 from doppeldata.profile_format import digest_of
-from doppeldata.profile_format import read_document
 from doppeldata.profile_sources import ProfileSource
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import refuse_file_shaping
 
-DOCUMENT_SUFFIXES = ('.yaml', '.yml', '.json')
+
+@dc.dataclass(frozen=True)
+class BundleRun:
+    """A bundle to generate, from `seed` at `scale` times each table's row count."""
+
+    bundle: Bundle
+    seed: int
+    scale: float
 
 
-def bundle_from(source: Any) -> Bundle | None:
-    """The bundle `source` names: a Bundle, a bundle file, a directory holding `bundle.yaml`, or an example bundle's name.
-    None for any other source, which names one table."""
-    if isinstance(source, Bundle):
-        return source
-    if not isinstance(source, str | os.PathLike):
-        return None
-    path = Path(source)
-    if path.is_dir():
-        return Bundle.load(path) if (path / BUNDLE_INDEX).is_file() else None
-    if path.is_file():
-        if path.suffix.lower() not in DOCUMENT_SUFFIXES:
-            return None
-        document = read_document(path)
-        return Bundle.load(path) if isinstance(document, dict) and document.get('kind') == 'bundle' else None
-    if isinstance(source, str) and source in bundle_example_names():
-        return Bundle.example(source)
-    return None
+@dc.dataclass(frozen=True)
+class TableRun:
+    """One table to generate, as `generate` takes its profile, rows and seed."""
+
+    profile: ProfileSource
+    rows: int | None
+    seed: int | None
 
 
-def table_source(profile: ProfileSource | Bundle) -> ProfileSource:
-    """`profile`, which `bundle_from` found names one table."""
-    if isinstance(profile, Bundle):
-        raise TypeError('a Bundle holds several tables, which generate, plan and write take')
-    return profile
+def run_of(profile: ProfileSource | Bundle, rows: int | None, seed: int | None, scale: float | None) -> BundleRun | TableRun:
+    """What a call generating `profile` generates. A Bundle is generated whole, from seed 0 and at scale 1 where left None,
+    and refuses `rows`, which sizes one table. Anything else is one table, which refuses `scale`, which sizes a bundle."""
+    if not isinstance(profile, Bundle):
+        if scale is not None:
+            raise ValueError("scale sizes a bundle, a multiple of each table's row count; give rows for one table")
+        return TableRun(profile, rows, seed)
+    if rows is not None:
+        raise ValueError("rows sizes one table, and a bundle is sized by scale, a multiple of each table's row count")
+    return BundleRun(profile, 0 if seed is None else seed, 1.0 if scale is None else scale)
 
 
 def table_scenarios(scenario: Scenario | Sequence[Scenario] | None, bundle: Bundle) -> dict[str, Scenario]:
@@ -136,8 +134,6 @@ def bundle_arguments(bundle: Bundle, seed: int, scale: float, scenarios: dict[st
     """The engine's arguments for `bundle` at `scale` times each table's row count, from `seed`, under `scenarios`."""
     if not 0 <= seed <= LARGEST_SEED:
         raise ValueError(f'seed must be between 0 and 2^64 - 1, not {seed}')
-    if isinstance(scale, bool) or not isinstance(scale, int | float) or not math.isfinite(scale) or scale <= 0:
-        raise ValueError(f'scale must be a number above zero, not {scale!r}')
     plain = bundle.to_plain()
     plain['tables'] = {name: with_type_hints(table) for name, table in plain['tables'].items()}
     source = str(bundle.path) if bundle.path is not None else f'bundle {bundle.name!r}'
@@ -148,19 +144,12 @@ def bundle_arguments(bundle: Bundle, seed: int, scale: float, scenarios: dict[st
     return BundleArguments(json.dumps(plain, allow_nan=False), bundle.digest, seed, float(scale), source, applied)
 
 
-def refuse_rows(rows: int | None) -> None:
-    if rows is not None:
-        raise ValueError("rows sizes one table, and a bundle is sized by scale, a multiple of each table's row count")
-
-
-def generate_bundle(
-    bundle: Bundle, *, seed: int, scale: float, threads: int, scenario: Scenario | Sequence[Scenario] | None
-) -> dict[str, ArrowStreamExportable]:
-    """Every table of `bundle`, each one Arrow table in memory, parents first."""
-    scenarios = table_scenarios(scenario, bundle)
+def generate_bundle(run: BundleRun, *, threads: int, scenario: Scenario | Sequence[Scenario] | None) -> dict[str, ArrowStreamExportable]:
+    """Every table of the bundle, each one Arrow table in memory, parents first."""
+    scenarios = table_scenarios(scenario, run.bundle)
     for applied in scenarios.values():
         refuse_file_shaping(applied, 'generate', write_with='doppeldata.write')
-    plan = bundle_arguments(bundle, seed, scale, scenarios).plan()
+    plan = bundle_arguments(run.bundle, run.seed, run.scale, scenarios).plan()
     return {name: table.generate(threads=threads) for name, table in plan.tables()}
 
 
@@ -207,14 +196,10 @@ def table_destination(destination: str, table: str) -> str:
 
 
 def prepared_bundle_write(
-    bundle: Bundle,
-    out: str | os.PathLike[str],
-    seed: int,
-    scale: float,
-    choices: WriteChoices,
-    scenario: Scenario | Sequence[Scenario] | None,
+    run: BundleRun, out: str | os.PathLike[str], choices: WriteChoices, scenario: Scenario | Sequence[Scenario] | None
 ) -> PreparedBundleWrite:
     """What a bundle's write to `out` runs on, refusing what the engine would refuse."""
+    bundle = run.bundle
     if one_file_of(out) is not None:
         message = f'{os.fspath(out)} names one file, and a bundle writes a directory of tables; write it to a directory'
         raise WriteFailed('bundle-writes-a-directory', message, kind='refused')
@@ -228,7 +213,7 @@ def prepared_bundle_write(
         raise WriteFailed('bundle-embeds-no-profile', message, kind='refused')
     destination, scheme, bucket = destination_of(out)
     scenarios = table_scenarios(scenario, bundle)
-    arguments = bundle_arguments(bundle, seed, scale, scenarios)
+    arguments = bundle_arguments(bundle, run.seed, run.scale, scenarios)
     engine = arguments.plan()
     record = scenarios_record(scenarios)
     chosen = {key: value for key, value in dc.asdict(choices).items() if value is not None and key != 'embed_profile'}
@@ -240,69 +225,67 @@ def prepared_bundle_write(
     tables = []
     for name, table in engine.tables():
         options = table.write_options(choices_json)
+        # Every range is planned here, so what a table's write would refuse is refused before the root is claimed.
+        table.ranges_json(options)
         tables.append((name, table, options, table_destination(destination, name)))
     return PreparedBundleWrite(destination, scheme, bucket, bundle, arguments, engine, scenarios, choices_json, tables)
 
 
-def plan_bundle(
-    bundle: Bundle, out: str | os.PathLike[str], *, seed: int, scale: float, choices: WriteChoices, scenario: Any
-) -> BundleWritePlan:
-    prepared = prepared_bundle_write(bundle, out, seed, scale, choices, scenario)
-    relationships = [
-        {'name': name, 'pointer': pointer, 'drawn_by': drawn_by, 'entries_set_aside': [list(pair) for pair in entries]}
-        for name, pointer, drawn_by, entries in prepared.engine.relationships()
-    ]
+def plan_bundle(run: BundleRun, out: str | os.PathLike[str], *, choices: WriteChoices, scenario: Any) -> BundleWritePlan:
+    prepared = prepared_bundle_write(run, out, choices, scenario)
     return BundleWritePlan(
         destination=prepared.destination,
         identity=json.loads(prepared.engine.identity_json),
         dataset_digest=prepared.engine.dataset_digest,
         tables={name: write_plan_of(table, options, destination) for name, table, options, destination in prepared.tables},
-        relationships=relationships,
+        relationships=json.loads(prepared.engine.relationships_json),
         set_aside=prepared.engine.set_aside(),
     )
 
 
 def write_bundle(
-    bundle: Bundle,
-    out: str | os.PathLike[str],
-    *,
-    seed: int,
-    scale: float,
-    choices: WriteChoices,
-    threads: int,
-    replace: bool,
-    scenario: Any,
+    run: BundleRun, out: str | os.PathLike[str], *, choices: WriteChoices, threads: int, replace: bool, scenario: Any
 ) -> BundleManifest:
-    """Write every table of `bundle` under `out`, and the bundle's manifest at `out`, returning it with each table's."""
-    prepared = prepared_bundle_write(bundle, out, seed, scale, choices, scenario)
-    s3_store = s3_store_of(prepared.destination, prepared.bucket)
+    """Write every table of the bundle under `out`, and the bundle's manifest at `out`, returning it with each table's."""
+    prepared = prepared_bundle_write(run, out, choices, scenario)
+    store = s3_store_of(prepared.destination, prepared.bucket)
+
+    def write_table(name: str, table: '_core.Plan', options: '_core.WriteOptions', destination: str) -> str:
+        written: str = table.write(options, destination, threads=threads, replace=False, s3_store=store)
+        return written
+
+    return bundle_written(prepared, prepared.destination, replace, store, write_table, (StoppedWrite,))
+
+
+def bundle_written(
+    prepared: PreparedBundleWrite,
+    root: str,
+    replace: bool,
+    store: dict[str, Any] | None,
+    write_table: Callable[[str, '_core.Plan', '_core.WriteOptions', str], str],
+    stops: tuple[type[BaseException], ...],
+) -> BundleManifest:
+    """Claims `root` for the bundle, writes each table to `<root>/<table>` through `write_table`, parents first, and stores
+    the bundle's manifest, returning it with each table's. A table whose write raises one of `stops` leaves the root's
+    partial manifest, naming each table already whole, and the error is raised."""
+    bundle = prepared.bundle
     profile_record = {'name': bundle.name, 'path': str(bundle.path) if bundle.path is not None else None}
     record = scenarios_record(prepared.scenarios)
-    engine = prepared.engine
-    claim = json.loads(
-        engine.claim(
-            prepared.destination,
-            json.dumps(profile_record),
-            json.dumps(record) if record is not None else None,
-            replace=replace,
-            s3_store=s3_store,
-        )
-    )
+    scenario_json = json.dumps(record) if record is not None else None
+    claim = prepared.engine.claim(root, json.dumps(profile_record), scenario_json, replace=replace, s3_store=store)
     started = time.monotonic()
     written: list[str] = []
 
     def committed() -> str:
-        held = [json.loads(each) for each in written]
-        claim.update(threads=held[0]['threads'] if held else 0, elapsed_ms=round((time.monotonic() - started) * 1000))
-        stored: str = engine.commit(prepared.destination, json.dumps(claim), written, s3_store=s3_store)
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        stored: str = prepared.engine.commit(root, claim, written, elapsed_ms=elapsed_ms, s3_store=store)
         return stored
 
     try:
-        for _, table, options, destination in prepared.tables:
-            written.append(table.write(options, destination, threads=threads, replace=False, s3_store=s3_store))
-    except StoppedWrite:
+        for name, table, options, _ in prepared.tables:
+            written.append(write_table(name, table, options, table_destination(root, name)))
+    except stops:
         committed()
         raise
-    return BundleManifest(
-        json.loads(committed()), {name: Manifest.from_json(each) for (name, *_), each in zip(prepared.tables, written, strict=True)}
-    )
+    tables = {name: Manifest.from_json(each) for (name, *_), each in zip(prepared.tables, written, strict=True)}
+    return BundleManifest(json.loads(committed()), tables)

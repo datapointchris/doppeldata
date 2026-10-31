@@ -51,14 +51,15 @@ top 100 hold 0.3. `data check` measures `top_share_delta` against the patched sh
 - **Several scenarios bend several tables, one each.** Scenarios naming one table compose as they
   do on a lone profile. One composition naming two tables is refused.
 - **`patch.relationships` is keyed by a relationship's `from` columns, without their table**,
-  joined by `,`, so a composite key is `product_code,supplier_id`. It patches a relationship
+  joined by `,`, so a composite key is `product_code,supplier_id`. The name every output prints,
+  such as `orders.customer_id → customers.customer_id`, is the same key. It patches a relationship
   drawing a column of the scenario's table. Any other key is refused as `unknown-relationship`,
-  and so is the key on a lone profile.
+  which lists the keys the table takes, and so is the key on a lone profile.
 - **`hot_keys` on a foreign-key column takes its `keys` busiest parents.** `share` of the rows
   take one of them, every column of the key with it. Each inherited column copies the hot
   parent's, at the relationship's agreement. On `orders-customers`, `keys: 5` and `share: 0.6` put
-  0.60059 of 550,000 orders on 5 customers the parent table holds, with `region` agreeing at
-  0.99516. `data check` skips every metric on the key's columns and its inherited columns.
+  the stated share of orders on 5 customers the parent table holds, to within a thousandth.
+  `data check` skips every metric on the key's columns and its inherited columns.
 - **The bundle's scenario digest covers the map of each table to its scenario.**
   [determinism-contract.md](determinism-contract.md) says why one table's scenario renames every
   table.

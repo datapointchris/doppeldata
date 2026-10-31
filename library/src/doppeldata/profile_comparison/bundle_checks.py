@@ -16,7 +16,10 @@ from doppeldata.bundle_generation import scenarios_document
 from doppeldata.bundle_generation import scenarios_record
 from doppeldata.bundle_generation import table_destination
 from doppeldata.bundle_generation import table_scenarios
+from doppeldata.errors import SourceError
 from doppeldata.manifest import BundleManifest
+from doppeldata.manifest import holds_unfinished_write
+from doppeldata.manifest import unfinished
 from doppeldata.manifest import written_bundle_manifest
 from doppeldata.manifest import written_manifest
 from doppeldata.profile_comparison import checked_table
@@ -47,21 +50,9 @@ from doppeldata.profiling.backend import CsvDialect
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 
-Ends = tuple[str, list[str], str, list[str]]
 # The metrics comparing which values a column holds, which a relationship drawing the column decides by its parent's
 # keys, dealing each count to a parent at random. Its null share and distinct values it keeps.
 DRAWN_KEY_METRICS = registered('ks', 'tvd', 'zero_rate_delta', 'boundary_adherence', 'correlation_max_abs_diff', 'conditional_kl')
-
-
-@dc.dataclass(frozen=True)
-class DrawnRelationship:
-    """A relationship the plan draws: its name, its child table, the child columns it draws, and those it copies from the
-    parent row."""
-
-    name: str
-    child: str
-    columns: list[str]
-    copied: list[str]
 
 
 def check_bundle(
@@ -72,16 +63,18 @@ def check_bundle(
     record = scenarios_record(scenarios)
     digest = digest_of(rfc8785.dumps(scenarios_document(scenarios))) if scenarios else None
     named, held = bundle_data(bundle, data)
+    if not isinstance(data, Mapping) and holds_unfinished_write(data):
+        raise SourceError(unfinished(named))
     written = written_bundle_manifest(data) if not isinstance(data, Mapping) else None
     if written is not None:
         refuse_other_scenarios(record, digest, written, named)
     thresholds = thresholds or Thresholds()
     thresholds.check_columns([table.to_plain() for table in bundle.tables.values()])
     plan = bundle_arguments(bundle, 0, 1.0, scenarios).plan()
-    relationships = drawn_relationships(plan)
+    relationships: list[dict[str, Any]] = json.loads(plan.relationships_json)
     drawn = drawn_columns(relationships)
     checked, dialects = [], {}
-    for name, _ in plan.tables():
+    for name, table_plan in plan.tables():
         profile, applied = bundle.tables[name], scenarios.get(name)
         table_written = written_manifest(held[name])
         report = checked_table(
@@ -94,7 +87,7 @@ def check_bundle(
             against_sample=None,
             html=None,
         )
-        widened = hot_parent_moves(applied, name, relationships)
+        widened = planned_moves(applied, table_plan)
         if widened:
             report = dc.replace(report, metrics=skipped(report.metrics, widened), changes=attributed(report.changes, widened))
         checked.append(CheckedTable(name, keys_skipped(report, drawn.get(name, {}))))
@@ -102,11 +95,12 @@ def check_bundle(
         if dialect is not None:
             dialects[name] = dialect
     reported = ReportedScenario(record['name'], digest) if record is not None and digest is not None else None
+    scale = written.identity.get('scale') if written is not None else None
     return BundleCheckReport(
         profile=ReportedProfile(bundle.name, bundle.digest, str(bundle.path) if bundle.path is not None else None),
         data=CheckedData(named, sum(table.report.data.rows for table in checked), None),
         tables=checked,
-        relationships=relationship_rows(plan, scenarios, held, dialects, thresholds),
+        relationships=relationship_rows(plan, relationships, scenarios, held, dialects, thresholds, scale),
         scenario=reported,
     )
 
@@ -140,46 +134,30 @@ def refuse_other_scenarios(record: dict[str, Any] | None, digest: str | None, wr
     raise InvalidScenario(record.get('path') or record['name'], [issue], refusal=f'is not the scenario {data} was written under')
 
 
-def drawn_relationships(plan: '_core.BundlePlan') -> list[DrawnRelationship]:
-    """Each relationship the plan draws, leaving out those it sets aside and each `inherited` entry it sets aside."""
-    stated = json.loads(plan.bundle_json).get('relationships') or []
-    drawn = []
-    for relationship, (name, pointer, set_aside, entries_aside) in zip(stated, plan.relationships(), strict=True):
-        if set_aside is None:
-            child, columns, _, _ = ends_of(relationship)
-            aside = {at for at, _ in entries_aside}
-            entries = enumerate(relationship.get('inherited') or [])
-            copied = [entry['child'] for place, entry in entries if f'{pointer}/inherited/{place}' not in aside]
-            drawn.append(DrawnRelationship(name, child, columns, copied))
-    return drawn
-
-
-def drawn_columns(relationships: list[DrawnRelationship]) -> dict[str, dict[str, str]]:
-    """Each child column a relationship draws, by table, beside the relationship's name."""
+def drawn_columns(relationships: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """Each child column a relationship the plan draws writes, by table, beside the relationship's name."""
     drawn: dict[str, dict[str, str]] = {}
     for relationship in relationships:
-        drawn.setdefault(relationship.child, {}).update(dict.fromkeys(relationship.columns, relationship.name))
+        if relationship['set_aside'] is None:
+            drawn.setdefault(relationship['child'], {}).update(dict.fromkeys(relationship['child_columns'], relationship['name']))
     return drawn
 
 
-def hot_parent_moves(applied: Scenario | None, table: str, relationships: list[DrawnRelationship]) -> list[Move]:
-    """Each `hot_keys` on a column a relationship draws, as moving every column the relationship draws or copies. The op
-    gives a row a hot parent's whole key and copies that parent's inherited columns, as the relationship would."""
+def planned_moves(applied: Scenario | None, plan: '_core.Plan') -> list[Move]:
+    """Each perturbation the plan writes more columns for than its scenario names, as moving every one of them. A `hot_keys`
+    on a foreign key gives a row a hot parent's whole key and copies that parent's inherited columns, as the relationship
+    would."""
     if applied is None:
         return []
-    entries = applied.to_plain().get('perturbations') or []
-    widened = []
-    for entry, move in zip(entries, moves(applied), strict=True):
-        if entry['op'] != 'hot_keys':
-            continue
-        for relationship in relationships:
-            if relationship.child == table and entry['column'] in relationship.columns:
-                widened.append(Move(move.id, frozenset(relationship.columns) | frozenset(relationship.copied), frozenset()))
-    return widened
+    return [
+        Move(move.id, frozenset(columns), frozenset())
+        for move, (_, columns) in zip(moves(applied), plan.perturbation_writes(), strict=True)
+        if not set(columns) <= move.columns
+    ]
 
 
 def keys_skipped(report: CheckReport, drawn: dict[str, str]) -> CheckReport:
-    """`report` with each of `DRAWN_KEY_METRICS` on a column a relationship draws, on either column of a pair, skipped by
+    """`report` with each of `DRAWN_KEY_METRICS` on a column a relationship draws, on either column of a pair, drawn by
     the relationship, with no value, passing."""
     if not drawn:
         return report
@@ -187,43 +165,44 @@ def keys_skipped(report: CheckReport, drawn: dict[str, str]) -> CheckReport:
     for result in report.metrics:
         by = next((drawn[column] for column in (result.column, result.paired_with) if column in drawn), None)
         if by is not None and result.metric in DRAWN_KEY_METRICS:
-            result = dc.replace(result, value=None, passed=True, expected=None, observed=None, unmeasured=None, skipped_by=by)
+            result = dc.replace(result, value=None, passed=True, expected=None, observed=None, unmeasured=None, drawn_by=by)
         kept.append(result)
     return dc.replace(report, metrics=kept)
 
 
-def ends_of(relationship: dict[str, Any]) -> Ends:
-    """The child table, its columns, the parent table and its key columns, of a relationship's `table.column` lists."""
-    child = [reference.split('.', 1) for reference in relationship['from']]
-    parent = [reference.split('.', 1) for reference in relationship['to']]
-    return child[0][0], [column for _, column in child], parent[0][0], [column for _, column in parent]
-
-
 def relationship_rows(
     plan: '_core.BundlePlan',
+    planned: list[dict[str, Any]],
     scenarios: dict[str, Scenario],
     held: dict[str, Any],
     dialects: dict[str, CsvDialect],
     thresholds: Thresholds,
+    scale: str | None,
 ) -> list[MetricResult]:
     """Each relationship metric's row on each relationship, against the bundle as the plan draws it. One the plan sets
-    aside decides nothing, and one whose child columns a perturbation writes is skipped by it. Each is measured at the
-    scale its parent's keys were generated at, against the parent table's stated rows."""
+    aside decides nothing. One whose child columns, or whose parent's key columns, a perturbation writes is skipped by it.
+    Each is measured at `scale`, the one the root manifest records, or where the tables come with none, at the scale the
+    parent's keys show against its stated rows."""
     drawn_bundle = json.loads(plan.bundle_json)
     stated = drawn_bundle.get('relationships') or []
-    planned = plan.relationships()
-    drawn = [index for index, (_, _, set_aside, _) in enumerate(planned) if set_aside is None]
-    counted = dict(zip(drawn, relationship_counts(held, dialects, [ends_of(stated[index]) for index in drawn]), strict=True))
+    ends = {
+        index: (relationship['child'], relationship['child_columns'], relationship['parent'], relationship['parent_columns'])
+        for index, relationship in enumerate(planned)
+        if relationship['set_aside'] is None
+    }
+    counted = dict(zip(ends, relationship_counts(held, dialects, list(ends.values())), strict=True))
     moved = {table: moves(applied) for table, applied in scenarios.items()}
     rows = []
-    for index, (name, _, set_aside, _) in enumerate(planned):
-        child, columns, parent, _ = ends_of(stated[index])
-        move = writing(moved.get(child, []), columns)
+    for index, relationship in enumerate(planned):
+        name, set_aside = relationship['name'], relationship['set_aside']
+        child_move = writing(moved.get(relationship['child'], []), relationship['child_columns'])
+        move = child_move or writing(moved.get(relationship['parent'], []), relationship['parent_columns'])
         values = {}
         if set_aside is None:
             keys = sum(held_keys for in_parent, _, held_keys in counted[index] if in_parent)
-            stated_rows = drawn_bundle['tables'][parent]['dataset']['row_count']
-            values = measured(stated[index], counted[index], keys / stated_rows if stated_rows else 1.0)
+            stated_rows = drawn_bundle['tables'][relationship['parent']]['dataset']['row_count']
+            at = float(scale) if scale is not None else keys / stated_rows if stated_rows else 1.0
+            values = measured(stated[index], counted[index], at)
         for metric in RELATIONSHIP_METRICS:
             threshold = thresholds.threshold(metric, None)
             if set_aside is not None:
@@ -241,5 +220,5 @@ def relationship_rows(
 
 
 def writing(moved: list[Move], columns: list[str]) -> Move | None:
-    """The first perturbation writing one of a relationship's child columns, which moves every metric of it."""
+    """The first perturbation writing one of a relationship's columns, which moves every metric of it."""
     return next((move for move in moved if move.columns & set(columns)), None)

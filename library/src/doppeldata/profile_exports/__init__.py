@@ -84,7 +84,7 @@ def loaded(source: Profile | Bundle | str | os.PathLike[str]) -> Profile | Bundl
     """The profile or bundle `source` names: itself, a file or directory holding one, or an example's name."""
     if isinstance(source, Profile | Bundle):
         return source
-    from doppeldata.bundle_generation import bundle_from
+    from doppeldata.profile_sources import bundle_from
     from doppeldata.short_profiles import file_profile
 
     bundle = bundle_from(source)

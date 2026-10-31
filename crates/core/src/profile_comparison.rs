@@ -145,7 +145,8 @@ pub struct MetricResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relationship: Option<String>,
     /// The metric's value. It is null where `unmeasured` says why the other profile cannot supply
-    /// it, and where `skipped_by` names the perturbation that moves it.
+    /// it, where `skipped_by` names the perturbation that moves it, and where `drawn_by` names the
+    /// relationship that decides it.
     pub value: Option<f64>,
     pub threshold: f64,
     /// Whether `value` passes at or below `threshold`, or at or above it.
@@ -172,11 +173,15 @@ pub struct MetricResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmeasured: Option<String>,
     /// The id of the scenario's perturbation that moves what the metric compares, so the metric
-    /// is not measured and passes. In a bundle check, it is the relationship drawing a foreign-key
-    /// column, as `orders.customer_id → customers.customer_id`, for a metric comparing which values
-    /// that column holds, which the relationship deals out from its parent's keys.
+    /// is not measured and passes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped_by: Option<String>,
+    /// In a bundle check, the relationship drawing a foreign-key column, as
+    /// `orders.customer_id → customers.customer_id`, for a metric comparing which values that column
+    /// holds, which the relationship deals out from its parent's keys. The metric is not measured
+    /// and passes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawn_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

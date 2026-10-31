@@ -37,7 +37,7 @@ ORPHAN_RATE_DELTA = Thresholded(
 )
 TOP_SHARE_DELTA = Thresholded(
     'top_share_delta',
-    "the largest difference in the busiest parents' share of the child rows that name a parent, across top1, top10 and top100",
+    "the largest difference in the busiest parents' share of the child rows that name a parent, across each top_share it states",
     Bound.AT_MOST,
     0.001,
 )

@@ -100,8 +100,8 @@ class BundleManifest:
 
 
 def is_bundle_manifest(document: Any) -> bool:
-    """Whether a manifest's document is a bundle's, which lists tables where a table's lists files."""
-    return isinstance(document, dict) and 'tables' in document and 'files' not in document
+    """Whether a manifest's document is a bundle's, as its `kind` says."""
+    return isinstance(document, dict) and document.get('kind') == 'bundle'
 
 
 def written_manifest(data: Any) -> Manifest | None:
@@ -125,6 +125,28 @@ def written_bundle_manifest(data: Any) -> BundleManifest | None:
         if table is not None:
             tables[listed['name']] = Manifest(table)
     return BundleManifest(document, tables)
+
+
+def unfinished(root: str) -> str:
+    return (
+        f'{root} holds {PARTIAL_MANIFEST_FILE_NAME}, so the doppeldata write there stopped or is still running and its files are '
+        'incomplete; once no write is running there, generate the dataset again, replacing what it left'
+    )
+
+
+def holds_unfinished_write(data: Any) -> bool:
+    """Whether the directory or `s3://` prefix `data` names holds the claim a doppeldata write keeps there until it finishes."""
+    if not isinstance(data, str | os.PathLike):
+        return False
+    item = os.fspath(data)
+    if not item.startswith('s3://'):
+        return (Path(item) / PARTIAL_MANIFEST_FILE_NAME).is_file()
+    # Without boto3 nothing reads S3, and reading the tables refuses it next, naming boto3.
+    if importlib.util.find_spec('boto3') is None:
+        return False
+    from doppeldata.profiling import sources
+
+    return sources.s3_holds(item, PARTIAL_MANIFEST_FILE_NAME)
 
 
 def written_document(data: Any) -> dict[str, Any] | None:

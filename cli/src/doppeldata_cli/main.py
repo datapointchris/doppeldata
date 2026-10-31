@@ -37,7 +37,6 @@ from doppeldata import example_scenarios
 from doppeldata import profile
 from doppeldata import profile_tables
 from doppeldata.bundle_generation import BundleWritePlan
-from doppeldata.bundle_generation import bundle_from
 from doppeldata.dataset_generation import GenerationSource
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.dataset_generation import generation_source
@@ -65,6 +64,7 @@ from doppeldata.profile_comparison.relationship_metrics import RELATIONSHIP_METR
 from doppeldata.profile_comparison.side_by_side_html import unwritable
 from doppeldata.profile_exports import EXPORT_FORMATS
 from doppeldata.profile_exports import export
+from doppeldata.profile_sources import bundle_from
 from doppeldata.profiling import ENGINES
 from doppeldata.profiling import applied_policy
 from doppeldata.published_schemas import enum_values
@@ -273,13 +273,14 @@ def profile_list(as_json: JsonOption = False) -> None:
     """List the hand-written example profiles and bundles doppeldata ships, by the name profile show takes."""
     examples = [Profile.example(name).document for name in example_names()]
     rows: list[dict[str, Any]] = [
-        {'name': doc['name'], 'row_count': doc['dataset']['row_count'], 'columns': len(doc['columns'])} for doc in examples
+        {'name': doc['name'], 'kind': 'table', 'row_count': doc['dataset']['row_count'], 'columns': len(doc['columns'])} for doc in examples
     ]
     for name in bundle_example_names():
         bundle = Bundle.example(name)
         rows.append(
             {
                 'name': name,
+                'kind': 'bundle',
                 'row_count': sum(table.document['dataset']['row_count'] for table in bundle.tables.values()),
                 'tables': len(bundle.tables),
                 'relationships': len(bundle.document.get('relationships') or []),
@@ -290,7 +291,7 @@ def profile_list(as_json: JsonOption = False) -> None:
         return
     width = max(len(row['name']) for row in rows)
     for row in rows:
-        if 'tables' in row:
+        if row['kind'] == 'bundle':
             held = f'bundle of {counted(row["tables"], "table")} and {counted(row["relationships"], "relationship")}'
         else:
             held = f'{row["columns"]} columns'
@@ -548,8 +549,6 @@ def bundle_named(profile_name: str | None, columns: str | None, rows: int | None
     if rows is not None:
         message = "--rows sizes one table, and PROFILE names a bundle; size it with --scale, a multiple of each table's row count"
         raise typer.BadParameter(message, param_hint='--rows')
-    if scale is not None and not (math.isfinite(scale) and scale > 0):
-        raise typer.BadParameter(f'{scale:g} is not above zero', param_hint='--scale')
     return bundle
 
 
@@ -798,7 +797,7 @@ def profile_import(
             help=(
                 "Import the one table NAME from a source holding several: an ODCS contract's schema object, or a Data Package's "
                 'resource. Without it a Data Package imports as a bundle of every resource and its foreign keys, as '
-                'profile create --tables profiles every table. data generate reads one table, so it reads no bundle.'
+                'profile create --tables profiles every table.'
             ),
         ),
     ] = None,
@@ -1189,7 +1188,7 @@ def bundle_plan_text(planned: BundleWritePlan) -> str:
         )
     lines.append('')
     for relationship in planned.relationships:
-        aside = f', set aside, as {relationship["drawn_by"]}' if relationship['drawn_by'] is not None else ''
+        aside = f', set aside, as {relationship["set_aside"]}' if relationship['set_aside'] is not None else ''
         lines.append(f'{relationship["name"]}{aside}')
         lines += [f'  {pointer} set aside: {why}' for pointer, why in relationship['entries_set_aside']]
     return '\n'.join(lines)

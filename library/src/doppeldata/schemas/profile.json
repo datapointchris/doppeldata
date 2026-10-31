@@ -1302,14 +1302,14 @@
           ]
         },
         "top_share": {
-          "description": "The share of child rows the busiest parents hold: `top1`, `top10`, `top100`.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TopShare"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "zipf_s": {
           "description": "The exponent of a Zipf law fitted by maximum likelihood to the parents' child counts, busiest first.",
@@ -2744,6 +2744,7 @@
           "description": "Each `table.column` holding the reference, all in one table. A composite key names each of its\ncolumns, in the order `to` names the columns each refers to.",
           "type": "array",
           "items": {
+            "description": "A column of one of the bundle's tables, as table.column. The table runs to the first dot.",
             "type": "string",
             "pattern": "^[^.]+\\..+$"
           },
@@ -2781,6 +2782,7 @@
           "description": "Each `table.column` referred to, all in one table, one for each of `from`.",
           "type": "array",
           "items": {
+            "description": "A column of one of the bundle's tables, as table.column. The table runs to the first dot.",
             "type": "string",
             "pattern": "^[^.]+\\..+$"
           },
@@ -3486,6 +3488,46 @@
         "us",
         "ns"
       ]
+    },
+    "TopShare": {
+      "description": "The share of matched child rows the busiest parents hold together, at the rank each field names.",
+      "type": "object",
+      "properties": {
+        "top1": {
+          "description": "The busiest parent's.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "top10": {
+          "description": "The busiest 10 parents'.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "top100": {
+          "description": "The busiest 100 parents'.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "TopValue": {
       "type": "object",
