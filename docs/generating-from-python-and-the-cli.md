@@ -202,6 +202,56 @@ pa.RecordBatchReader.from_stream(sd.stream(profile, rows=10**9, seed=7))   # pya
 - *Rejected:* arro3-core. pyo3-arrow's classes already carry the capsule interface, so arro3 would
   add a package and no reader.
 
+## `sample` pins columns to given values, and every column drawn from a pinned one reads them
+
+```python
+import datetime as dt
+
+import doppeldata as sd
+
+profile = sd.Profile.load('crates/core/tests/every-column-kind.profile.yaml')
+rows = sd.sample(profile, rows=50, seed=1, overrides={'channel': 'store', 'order_date': dt.date(2025, 3, 1)})
+```
+
+```text
+channel  paid_amount  order_date  ship_date
+store    13.295413    2025-03-01  2025-03-01
+store    4.389998     2025-03-01  2025-03-02
+store    0.0          2025-03-01  2025-03-02
+store    0.0          2025-03-01  2025-03-05
+```
+
+`paid_amount` draws through its quantiles given `channel`, so all 50 rows are store-shaped: their median is 3.74 where
+`generate`'s is 9.32. `ship_date` is `order_date` plus its lag, so it counts from the pinned date.
+
+- **A value pins every row, and any other iterable but a str holds one value per row.** A list must hold exactly `rows`
+  values.
+- **Each value is the column's own type**: a str, int, float, Decimal, bool, date, datetime, time, or None for a null. A
+  float column takes an int, and a decimal column an int or a float with no more places than its scale. Anything else
+  raises ValueError naming the column and its type. So does a list, struct or type-mix column, which no value pins:
+
+  ```text
+  column "quantity" holds int64 values, and the override gives it a string "five"
+  the override of column "quantity" holds 3 values, and the sample is 50 rows
+  column "tags" holds list<element: string> values, which no override pins
+  ```
+
+- **A pinned column takes its place in the draw order.** The engine lays it in where its draw would be, so a conditional
+  table, quantiles, zero and null rates, a lookup, a lag and an expression each read the pinned values. A column reading
+  no pinned column holds exactly the values `generate` gives.
+- **A pinned copula member leaves its group's other members as drawn.** The group draws every member's level together, and
+  the pinned member's goes unused. So its correlation with the group is not held.
+- **A scenario's ops apply after the pins**, so an op writing a pinned column moves it.
+- **Without overrides, `sample` returns what `generate` returns.** A Bundle is refused, because overrides name one table's
+  columns.
+- **The table carries no `doppeldata.dataset_digest`.** Pinned values are not the dataset its identity names. Its schema
+  names the pinned columns under `doppeldata.overridden_columns` instead.
+- *Rejected:* `overrides=` on `generate`. Every table `generate` returns is a dataset its identity regenerates.
+- *Rejected:* replacing a column after the engine returns. A conditional child would keep the values it drew from the
+  parent's own draws.
+- *Rejected:* drawing a copula group's other members given the pinned value. They would move although they read no pinned
+  column, and a list of values has no one level to condition on.
+
 ## `generate` and `write` run with the GIL released, and Ctrl-C stops them between blocks
 
 `generate`, `write` and the size estimate leave Python with `Python::detach`, and run the engine on

@@ -19,6 +19,7 @@ mod _core {
     use arrow_schema::SchemaRef;
     use doppeldata_core::AppliedScenario;
     use doppeldata_core::PlanError;
+    use doppeldata_core::column_overrides::ColumnOverride;
     use doppeldata_core::profile::Profile;
     use doppeldata_core::scenario::Scenario;
     use doppeldata_writers::Destination;
@@ -38,6 +39,7 @@ mod _core {
     use pyo3::exceptions::PyValueError;
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
+    use pyo3::types::PyString;
     use pyo3_arrow::PyRecordBatchReader;
     use pyo3_arrow::PyTable;
     use pyo3_object_store::PyS3Store;
@@ -273,7 +275,15 @@ mod _core {
         scenario: Option<(String, String)>,
     ) -> PyResult<String> {
         let scenario = scenario.map(|(json, digest)| (json, digest, "the scenario".to_string()));
-        let plan = Plan::new(py, profile_json, profile_digest, seed, rows, "the profile", scenario)?;
+        let plan = Plan::new(
+            &PyString::new(py, profile_json),
+            profile_digest,
+            seed,
+            rows,
+            "the profile",
+            scenario,
+            None,
+        )?;
         let plan = &*plan.plan;
         let cancel = AtomicBool::new(false);
         let (blocks, signal) = detached(py, &cancel, || {
@@ -293,7 +303,9 @@ mod _core {
     /// A table profile resolved for generation: ``rows`` rows from ``seed``. ``source`` names the
     /// profile in an error. ``scenario``, where given, is the scenario applied: its JSON with each
     /// perturbation's id resolved, its digest, and the name an error gives it. The profile is the
-    /// one given, and the engine applies the scenario's patch to it.
+    /// one given, and the engine applies the scenario's patch to it. ``overrides``, where given, is
+    /// a JSON list of each pinned column and its values, as ``column_overrides::ColumnOverride``
+    /// reads it, and a value its column cannot hold raises ValueError.
     #[pyclass(frozen)]
     struct Plan {
         profile: Arc<Profile>,
@@ -304,16 +316,23 @@ mod _core {
     #[pymethods]
     impl Plan {
         #[new]
-        #[pyo3(signature = (profile_json, profile_digest, seed, rows, source, scenario=None))]
+        #[pyo3(signature = (profile_json, profile_digest, seed, rows, source, scenario=None, overrides=None))]
         fn new(
-            py: Python<'_>,
-            profile_json: &str,
+            profile_json: &Bound<'_, PyString>,
             profile_digest: &str,
             seed: u64,
             rows: u64,
             source: &str,
             scenario: Option<(String, String, String)>,
+            overrides: Option<&str>,
         ) -> PyResult<Self> {
+            let py = profile_json.py();
+            let profile_json = profile_json.to_str()?;
+            let overrides: Vec<ColumnOverride> = match overrides {
+                Some(json) => serde_json::from_str(json)
+                    .map_err(|error| PyValueError::new_err(format!("the overrides do not match the engine's model: {error}")))?,
+                None => Vec::new(),
+            };
             let read: Option<(Scenario, String, String)> = scenario
                 .map(|(json, digest, scenario_source)| {
                     serde_json::from_str(&json)
@@ -335,12 +354,13 @@ mod _core {
             let profile: Profile = serde_json::from_value(document).map_err(not_the_model)?;
             let applied = read.as_ref().map(|(scenario, digest, _)| AppliedScenario { scenario, digest });
             let scenario_source = read.as_ref().map(|(_, _, scenario_source)| scenario_source.clone());
-            match py.detach(|| doppeldata_core::plan_with_scenario(&profile, profile_digest, applied, seed, rows)) {
+            match py.detach(|| doppeldata_core::plan_with_overrides(&profile, profile_digest, applied, seed, rows, &overrides)) {
                 Ok(plan) => Ok(Self {
                     profile: Arc::new(profile),
                     plan: Arc::new(plan),
                     scenario_source,
                 }),
+                Err(PlanError::Override { message, .. }) => Err(PyValueError::new_err(message)),
                 Err(error) if error.in_scenario() => Err(scenario_refused(
                     py,
                     scenario_source.as_deref().unwrap_or("the scenario"),

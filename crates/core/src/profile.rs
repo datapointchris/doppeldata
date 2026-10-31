@@ -60,6 +60,9 @@ pub mod provenance {
     pub const SCALE: &str = "doppeldata.scale";
     /// The digest of the dataset's identity, a quick equality check beside the values it is taken over.
     pub const DATASET_DIGEST: &str = "doppeldata.dataset_digest";
+    /// The columns a caller pinned, as a sorted JSON list of names, in place of `DATASET_DIGEST`.
+    /// Pinned values are not the dataset the identity names.
+    pub const OVERRIDDEN_COLUMNS: &str = "doppeldata.overridden_columns";
     /// The whole profile as RFC 8785 canonical JSON. `PROFILE_DIGEST` is taken over it without the
     /// generated fields the digest leaves out. Only a write that embeds the profile writes it, and
     /// only into Parquet and Arrow IPC files.

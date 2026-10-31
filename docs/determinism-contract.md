@@ -16,6 +16,11 @@ The last two are null outside a bundle. The manifest written beside the output m
 one, plus a SHA-256 over them. The profile or bundle, the scenario, the seed and a bundle's scale
 reproduce a dataset anywhere, and the manifest records each.
 
+A sample with a column pinned by `sample`'s overrides is not such a dataset. Its metadata carries no
+`doppeldata.dataset_digest`. It names the pinned columns, sorted, under
+`doppeldata.overridden_columns`. Each column reading no pinned column keeps the values the identity
+names, because each draws from its own stream.
+
 ## The engine owns the identity: RFC 8785 JSON keyed like the file metadata
 
 The SHA-256 is taken over the RFC 8785 canonical JSON of one object with a key for each value:

@@ -523,7 +523,7 @@ pub fn plan_bundle(
             inherited,
         };
         let scenario = scenarios.and_then(|scenarios| scenarios.tables.get(name));
-        let plan = plan_table(table, identity_of(Some(name), rows[name]), scenario, Some(relations))
+        let plan = plan_table(table, identity_of(Some(name), rows[name]), scenario, Some(relations), &[])
             .map_err(|error| error.in_bundle_table(name))?;
         plans.insert(name, Arc::new(plan));
     }
