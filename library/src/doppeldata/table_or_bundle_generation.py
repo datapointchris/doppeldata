@@ -97,18 +97,20 @@ def sample(
 ) -> ArrowStreamExportable:
     """Rows of one table with some columns pinned, as one Arrow table in memory, such as a unit test arranges its input.
 
-    `overrides` maps a column's name to one value for every row, or to an iterable holding one value per row. Each value is
-    the column's own type: a str, int, float, Decimal, bool, date, datetime, time, or None for a null. A value the column
-    cannot hold raises ValueError naming the column and its type, and so does a list not holding exactly `rows` values. A
-    list, struct or type-mix column is refused, because no value pins it.
+    `overrides` maps a column's name to one value for every row, or to an iterable other than a str or bytes holding one
+    value per row. Each value is the column's own type: a str, int, float, Decimal, bool, date, datetime, time, or None for
+    a null, and any other Python type raises TypeError. A value the column does not take or cannot hold raises
+    UngenerableProfile, a ValueError whose issue is `invalid-override` at the column's pointer. So does a list not holding
+    exactly `rows` values, and a list, struct or type-mix column, which no value pins.
 
     A pinned column takes its place in the draw order. So a conditional child, a lookup or a derived column of it reads the
     pinned values, and every column reading none holds the values `generate` gives. A copula member's group keeps the rest
     of its draws, so the pinned column's correlation with it is not held. A scenario's ops apply after the pins, so an op
     writing a pinned column moves it.
 
-    The table carries no dataset digest, because pinned values are not the dataset its identity names. It names the pinned
-    columns under `doppeldata.overridden_columns` instead. Without overrides, it is what `generate` returns. `profile`,
+    The identity names the pins by their digest, so the table's `doppeldata.dataset_digest` is its own. Its schema carries
+    that digest under `doppeldata.overrides_digest`, and the pinned columns under `doppeldata.overridden_columns`. Without
+    overrides, it is what `generate` returns. `profile`,
     `rows`, `seed`, `threads` and `scenario` are taken as `generate` takes them. A Bundle is refused.
     """
     if isinstance(profile, Bundle):

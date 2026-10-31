@@ -60,8 +60,10 @@ pub mod provenance {
     pub const SCALE: &str = "doppeldata.scale";
     /// The digest of the dataset's identity, a quick equality check beside the values it is taken over.
     pub const DATASET_DIGEST: &str = "doppeldata.dataset_digest";
-    /// The columns a caller pinned, as a sorted JSON list of names, in place of `DATASET_DIGEST`.
-    /// Pinned values are not the dataset the identity names.
+    /// The digest of the columns a sample pins and their values, absent where none is pinned. An
+    /// identity key, which an unpinned identity leaves out rather than writing as null.
+    pub const OVERRIDES_DIGEST: &str = "doppeldata.overrides_digest";
+    /// The columns a sample pins, as a sorted JSON list of names, beside `OVERRIDES_DIGEST`.
     pub const OVERRIDDEN_COLUMNS: &str = "doppeldata.overridden_columns";
     /// The whole profile as RFC 8785 canonical JSON. `PROFILE_DIGEST` is taken over it without the
     /// generated fields the digest leaves out. Only a write that embeds the profile writes it, and

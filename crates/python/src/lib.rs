@@ -19,6 +19,7 @@ mod _core {
     use arrow_schema::SchemaRef;
     use doppeldata_core::AppliedScenario;
     use doppeldata_core::PlanError;
+    use doppeldata_core::PlanInputs;
     use doppeldata_core::column_overrides::ColumnOverride;
     use doppeldata_core::profile::Profile;
     use doppeldata_core::scenario::Scenario;
@@ -354,13 +355,16 @@ mod _core {
             let profile: Profile = serde_json::from_value(document).map_err(not_the_model)?;
             let applied = read.as_ref().map(|(scenario, digest, _)| AppliedScenario { scenario, digest });
             let scenario_source = read.as_ref().map(|(_, _, scenario_source)| scenario_source.clone());
-            match py.detach(|| doppeldata_core::plan_with_overrides(&profile, profile_digest, applied, seed, rows, &overrides)) {
+            let inputs = PlanInputs {
+                scenario: applied,
+                overrides: &overrides,
+            };
+            match py.detach(|| doppeldata_core::plan_with(&profile, profile_digest, seed, rows, inputs)) {
                 Ok(plan) => Ok(Self {
                     profile: Arc::new(profile),
                     plan: Arc::new(plan),
                     scenario_source,
                 }),
-                Err(PlanError::Override { message, .. }) => Err(PyValueError::new_err(message)),
                 Err(error) if error.in_scenario() => Err(scenario_refused(
                     py,
                     scenario_source.as_deref().unwrap_or("the scenario"),
@@ -1101,9 +1105,10 @@ mod _core {
     /// What a refusal says, without the pointer and code its display wraps it in.
     fn plan_message(error: &PlanError) -> String {
         match error {
-            PlanError::Column { message, .. } | PlanError::Scenario { message, .. } | PlanError::Relationship { message, .. } => {
-                message.clone()
-            }
+            PlanError::Column { message, .. }
+            | PlanError::Scenario { message, .. }
+            | PlanError::Relationship { message, .. }
+            | PlanError::Override { message, .. } => message.clone(),
             _ => error.to_string(),
         }
     }

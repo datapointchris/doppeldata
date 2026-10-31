@@ -224,11 +224,13 @@ store    0.0          2025-03-01  2025-03-05
 `paid_amount` draws through its quantiles given `channel`, so all 50 rows are store-shaped: their median is 3.74 where
 `generate`'s is 9.32. `ship_date` is `order_date` plus its lag, so it counts from the pinned date.
 
-- **A value pins every row, and any other iterable but a str holds one value per row.** A list must hold exactly `rows`
+- **A value pins every row. Any other iterable except a str or bytes holds one value per row.** It must hold exactly `rows`
   values.
 - **Each value is the column's own type**: a str, int, float, Decimal, bool, date, datetime, time, or None for a null. A
-  float column takes an int, and a decimal column an int or a float with no more places than its scale. Anything else
-  raises ValueError naming the column and its type. So does a list, struct or type-mix column, which no value pins:
+  float column takes an int, and a decimal column an int or a float with no more places than its scale. A Python type
+  outside this list raises TypeError. A value whose kind the column does not take, or that the column cannot hold, raises
+  `UngenerableProfile`, a ValueError whose issue is `invalid-override` at the column's pointer. So does a list, struct or
+  type-mix column, which no value pins:
 
   ```text
   column "quantity" holds int64 values, and the override gives it a string "five"
@@ -244,9 +246,11 @@ store    0.0          2025-03-01  2025-03-05
 - **A scenario's ops apply after the pins**, so an op writing a pinned column moves it.
 - **Without overrides, `sample` returns what `generate` returns.** A Bundle is refused, because overrides name one table's
   columns.
-- **The table carries no `doppeldata.dataset_digest`.** Pinned values are not the dataset its identity names. Its schema
-  names the pinned columns under `doppeldata.overridden_columns` instead.
-- *Rejected:* `overrides=` on `generate`. Every table `generate` returns is a dataset its identity regenerates.
+- **The identity names the pins by their digest**, so the table's `doppeldata.dataset_digest` is its own. Its schema
+  carries that digest under `doppeldata.overrides_digest`, and the pinned columns under `doppeldata.overridden_columns`.
+  The digest is taken over the overrides sorted by column, so listing them in another order moves nothing.
+- *Rejected:* `overrides=` on `generate`. Every table `generate` returns is a dataset its manifest regenerates, and a
+  manifest records no overrides, only their digest.
 - *Rejected:* replacing a column after the engine returns. A conditional child would keep the values it drew from the
   parent's own draws.
 - *Rejected:* drawing a copula group's other members given the pinned value. They would move although they read no pinned

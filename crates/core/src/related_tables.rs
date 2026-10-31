@@ -33,6 +33,7 @@ use crate::identity::DatasetIdentity;
 use crate::identity::is_sha256_digest;
 use crate::plan::Plan;
 use crate::plan::PlanError;
+use crate::plan::TableInputs;
 use crate::plan::plan_table;
 use crate::profile::BundleProfile;
 use crate::profile::BundleTable;
@@ -523,8 +524,12 @@ pub fn plan_bundle(
             inherited,
         };
         let scenario = scenarios.and_then(|scenarios| scenarios.tables.get(name));
-        let plan = plan_table(table, identity_of(Some(name), rows[name]), scenario, Some(relations), &[])
-            .map_err(|error| error.in_bundle_table(name))?;
+        let inputs = TableInputs {
+            scenario,
+            relations: Some(relations),
+            ..TableInputs::default()
+        };
+        let plan = plan_table(table, identity_of(Some(name), rows[name]), inputs).map_err(|error| error.in_bundle_table(name))?;
         plans.insert(name, Arc::new(plan));
     }
     for (planned, relationship) in planned.iter_mut().zip(stated) {

@@ -13,12 +13,14 @@ use crate::rng::STREAM_VERSION;
 /// A dataset's identity. The library computes the profile digest and the scenario digest and passes
 /// them in, each as `sha256:` and 64 lowercase hex digits. The scenario digest is null where no
 /// scenario applies. In a bundle the profile digest is the bundle's, and `scale` and `table` name
-/// what of it the rows are; both are null outside one.
+/// what of it the rows are; both are null outside one. The overrides digest names the columns a
+/// sample pins and their values, and is absent where none is pinned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatasetIdentity {
     stream_version: u32,
     profile_digest: String,
     scenario_digest: Option<String>,
+    overrides_digest: Option<String>,
     seed: u64,
     rows: u64,
     scale: Option<String>,
@@ -40,6 +42,7 @@ impl DatasetIdentity {
             stream_version: STREAM_VERSION,
             profile_digest: profile_digest.into(),
             scenario_digest: None,
+            overrides_digest: None,
             seed,
             rows,
             scale: None,
@@ -51,6 +54,15 @@ impl DatasetIdentity {
     pub fn with_scenario(self, scenario_digest: impl Into<String>) -> Self {
         Self {
             scenario_digest: Some(scenario_digest.into()),
+            ..self
+        }
+    }
+
+    /// The identity of the same dataset with columns pinned by the overrides whose digest is
+    /// `overrides_digest`.
+    pub fn with_overrides(self, overrides_digest: impl Into<String>) -> Self {
+        Self {
+            overrides_digest: Some(overrides_digest.into()),
             ..self
         }
     }
@@ -88,6 +100,10 @@ impl DatasetIdentity {
         self.scenario_digest.as_deref()
     }
 
+    pub fn overrides_digest(&self) -> Option<&str> {
+        self.overrides_digest.as_deref()
+    }
+
     pub fn seed(&self) -> u64 {
         self.seed
     }
@@ -98,9 +114,11 @@ impl DatasetIdentity {
 
     /// The values as RFC 8785 canonical JSON, the bytes [`Self::digest`] hashes. The map sorts its
     /// keys. The 64-bit integers and the scale are decimal strings, because RFC 8785 writes a number
-    /// as an IEEE 754 double in a form only ECMAScript fixes. An absent value is written as null.
+    /// as an IEEE 754 double in a form only ECMAScript fixes. An absent value is written as null,
+    /// except the overrides digest, which is left out where nothing is pinned. So an unpinned
+    /// dataset's identity holds no key for overrides.
     pub fn canonical_json(&self) -> String {
-        let canonical = BTreeMap::from([
+        let mut canonical = BTreeMap::from([
             (key(provenance::DATASET_ROWS), Value::from(self.rows.to_string())),
             (key(provenance::PROFILE_DIGEST), Value::from(self.profile_digest.as_str())),
             (key(provenance::SCALE), Value::from(self.scale.as_deref())),
@@ -109,19 +127,26 @@ impl DatasetIdentity {
             (key(provenance::STREAM_VERSION), Value::from(self.stream_version)),
             (key(provenance::TABLE), Value::from(self.table.as_deref())),
         ]);
+        if let Some(digest) = &self.overrides_digest {
+            canonical.insert(key(provenance::OVERRIDES_DIGEST), Value::from(digest.as_str()));
+        }
         serde_json::to_string(&canonical).expect("strings, null and an integer always serialize")
     }
 
     /// `sha256:` and the hex SHA-256 of [`Self::canonical_json`].
     pub fn digest(&self) -> String {
-        let hash = Sha256::digest(self.canonical_json().as_bytes());
-        let mut text = String::with_capacity(7 + 64);
-        text.push_str("sha256:");
-        for byte in hash {
-            text.push_str(&format!("{byte:02x}"));
-        }
-        text
+        sha256_digest(self.canonical_json().as_bytes())
     }
+}
+
+/// `sha256:` and the lowercase hex SHA-256 of `bytes`.
+pub(crate) fn sha256_digest(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(7 + 64);
+    text.push_str("sha256:");
+    for byte in Sha256::digest(bytes) {
+        text.push_str(&format!("{byte:02x}"));
+    }
+    text
 }
 
 /// `scale` as the identity writes it: Rust's shortest decimal that reads back as the same double.

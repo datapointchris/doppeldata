@@ -83,7 +83,11 @@ fn planned(document: &serde_json::Value, scenario: Option<&Scenario>, seed: u64,
         scenario,
         digest: SCENARIO_DIGEST,
     });
-    doppeldata_core::plan_with_scenario(&profile, PROFILE_DIGEST, applied, seed, rows).unwrap()
+    let inputs = doppeldata_core::PlanInputs {
+        scenario: applied,
+        ..Default::default()
+    };
+    doppeldata_core::plan_with(&profile, PROFILE_DIGEST, seed, rows, inputs).unwrap()
 }
 
 fn blocks(plan: &Plan, threads: usize) -> Vec<Block> {

@@ -10,16 +10,20 @@ A generated dataset is a pure function of:
 4. the seed;
 5. the row count;
 6. the scale a bundle is generated at;
-7. the bundle table the rows are of.
+7. the bundle table the rows are of;
+8. the SHA-256 of the columns `sample` pins and their values.
 
-The last two are null outside a bundle. The manifest written beside the output must record every
+Six and seven are null outside a bundle. The manifest written beside the output must record every
 one, plus a SHA-256 over them. The profile or bundle, the scenario, the seed and a bundle's scale
 reproduce a dataset anywhere, and the manifest records each.
 
-A sample with a column pinned by `sample`'s overrides is not such a dataset. Its metadata carries no
-`doppeldata.dataset_digest`. It names the pinned columns, sorted, under
-`doppeldata.overridden_columns`. Each column reading no pinned column keeps the values the identity
-names, because each draws from its own stream.
+The eighth exists only for a sample with a column pinned. An unpinned identity leaves its key out
+rather than writing it as null, so an unpinned dataset's digest is the first seven values'. A pinned
+sample's metadata carries the digest under `doppeldata.overrides_digest`, and the pinned columns,
+sorted, under `doppeldata.overridden_columns`. The digest is the SHA-256 of the overrides' JSON
+sorted by column. Each column reading no pinned column keeps the values the unpinned dataset holds,
+because each draws from its own stream. No call writes a pinned sample to files, so no manifest
+records one.
 
 ## The engine owns the identity: RFC 8785 JSON keyed like the file metadata
 
