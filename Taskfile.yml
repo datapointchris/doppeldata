@@ -57,6 +57,7 @@ tasks:
       - echo '| --- | --- | --- | --- | --- | --- |'
       - uv run benchmarks/engine_throughput.py
       - uv run benchmarks/dependent_columns.py
+      - uv run benchmarks/type_mix_columns.py
       - uv run benchmarks/related_tables.py
       - uv run benchmarks/numpy_throughput.py
       - uv run benchmarks/name_generators.py
