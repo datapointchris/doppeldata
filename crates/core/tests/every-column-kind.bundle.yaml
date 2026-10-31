@@ -1,5 +1,6 @@
 # A bundle drawing every kind of key a child refers to: a sequence, a uuid, an integer drawn by
-# quantiles, text drawn by a pattern, and a key that is itself a foreign key. It holds fan-out, an
+# quantiles, text drawn by a pattern, a key that is itself a foreign key, and an integer key a text
+# source held values of other types in, with a column copied from a parent held so too. It holds fan-out, an
 # orphan rate, an inherited column, a composite key, a bridge whose primary key is its two foreign
 # keys, a column numbering each parent's rows and a child with two parents. The determinism contract
 # test pins a hash over every table this generates.
@@ -85,6 +86,41 @@ tables:
       - name: quantity
         physical_type: int32
         numeric: {integral: true, quantiles: {p25: 1.0, p50: 2.0, p95: 9.0}, extremes: {low: 1.0, high: 40.0}}
+  stores:
+    kind: table
+    name: stores
+    source: {format: csv}
+    dataset: {row_count: 500, keys: {primary: {columns: [store_id], uniqueness: 1.0}}}
+    columns:
+      - name: store_id
+        physical_type: int64
+        type_mix: {integer: 0.95, string: 0.03, decimal: 0.02}
+        numeric: {sequence: {start: 1, step: 1}}
+      - name: size_code
+        physical_type: int32
+        type_mix: {integer: 0.9, string: 0.1}
+        numeric: {integral: true, quantiles: {p50: 3.0}, extremes: {low: 1.0, high: 5.0}}
+  visits:
+    kind: table
+    name: visits
+    source: {format: csv}
+    dataset: {row_count: 8000, keys: {primary: {columns: [store_id, visit_number], uniqueness: 1.0}}}
+    columns:
+      - name: store_id
+        physical_type: int64
+        type_mix: {integer: 0.97, string: 0.03}
+        numeric: {integral: true, quantiles: {p50: 250.0}, extremes: {low: 1.0, high: 500.0}}
+      - name: visit_number
+        physical_type: int32
+        type_mix: {integer: 0.99, string: 0.01}
+        numeric: {integral: true, quantiles: {p50: 8.0}, extremes: {low: 1.0, high: 60.0}}
+      - name: size_code
+        physical_type: int32
+        numeric: {integral: true, quantiles: {p50: 3.0}, extremes: {low: 1.0, high: 5.0}}
+      - name: spend
+        physical_type: double
+        type_mix: {decimal: 0.98, string: 0.02}
+        numeric: {scale: 2, quantiles: {p50: 20.0}, extremes: {low: 0.0, high: 400.0}}
 relationships:
   - from: [orders.customer_id]
     to: [customers.customer_id]
@@ -114,3 +150,11 @@ relationships:
     fanout: {quantiles: {p25: 40.0, p50: 80.0, p75: 120.0}, zipf_s: 1.2}
   - from: [order_lines.product_code]
     to: [products.product_code]
+  - from: [visits.store_id]
+    to: [stores.store_id]
+    containment: 0.98
+    orphan_rate: 0.01
+    fanout: {quantiles: {p05: 4.0, p50: 16.0, p95: 30.0}}
+    ordinal: visit_number
+    inherited:
+      - {child: size_code, parent: size_code, agreement: 0.97}

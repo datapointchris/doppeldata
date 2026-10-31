@@ -134,7 +134,9 @@ thread only waits for them.
 own writer, takes both, and the writers drive it field by field. A thin adapter formats each Arrow
 value with `arrow-cast`. Where `Plan::text_cells` holds a cell, CSV prints its text in place of the
 null. JSON prints a cell that parses as a number, `true`, `false` or `null` as itself, and any other
-cell as a string.
+cell as a string. A string field whose Arrow metadata carries `doppeldata.type_mix` prints each
+value by the same rule, at any depth. That field is a column its type mix drew as text, so its
+integers go back to the file as JSON numbers, which is how the profiler counted them.
 
 - **An empty string is quoted where a null is bare.** The default null token is empty, and DuckDB
   and Spark read a bare empty field as null. So an empty string prints as `""`. DuckDB reads the two

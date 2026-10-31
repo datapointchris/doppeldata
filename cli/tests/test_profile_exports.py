@@ -19,15 +19,21 @@ ODCS_SCHEMA = Path(__file__).parent / 'fixtures' / 'odcs-json-schema-v3.2.0.json
 ROWS = 500
 # Past 20,000 rows, two breaking rows' share rounds to 1 at four significant digits.
 SOURCE_ROWS = 50_000
+# Its nested columns have no CSV, so a Table Schema has nothing to read.
+EVENTS = 'the events-json example, whose source held text among its integers, against rows generated from it'
 
 
 @pytest.fixture(scope='module')
 def described(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Profile, Path]]:
-    """Each case's profile, and the directory holding the rows it describes as CSV, NDJSON and Parquet."""
-    generated = tmp_path_factory.mktemp('orders')
-    for suffix in ('csv', 'ndjson', 'parquet'):
-        writer = {} if suffix == 'parquet' else {'compression': 'none'}
-        sd.write(Profile.example('orders'), generated / f'rows.{suffix}', rows=ROWS, format=suffix, partition_by=[], writer=writer)
+    """Each case's profile, and the directory holding the rows it describes as CSV, NDJSON and Parquet. events-json's
+    nested columns have no CSV."""
+    generated = {'orders': ('csv', 'ndjson', 'parquet'), 'events-json': ('ndjson', 'parquet')}
+    directories = {name: tmp_path_factory.mktemp(name) for name in generated}
+    for name, suffixes in generated.items():
+        for suffix in suffixes:
+            writer = {} if suffix == 'parquet' else {'compression': 'none'}
+            path = directories[name] / f'rows.{suffix}'
+            sd.write(Profile.example(name), path, rows=ROWS, format=suffix, partition_by=[], writer=writer)
     # Fewer than k_min rows break the key, the type, the shape and the listed values, so the profile states each as held.
     source = tmp_path_factory.mktemp('source')
     ids = list(range(SOURCE_ROWS))
@@ -44,7 +50,8 @@ def described(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Profi
     frame.write_ndjson(source / 'rows.ndjson')
     frame.write_parquet(source / 'rows.parquet')
     return {
-        'the orders example, against rows generated from it': (Profile.example('orders'), generated),
+        'the orders example, against rows generated from it': (Profile.example('orders'), directories['orders']),
+        EVENTS: (Profile.example('events-json'), directories['events-json']),
         'a profile of rows fewer than k_min of which break a fact, against those rows': (sd.profile(source / 'rows.csv'), source),
         'a profile of a sample, against every row': (sd.profile(source / 'rows.parquet', sample=1000), source),
     }
@@ -101,13 +108,14 @@ CHECKS: dict[str, Callable[[str, Path], None]] = {
 }
 CASES = (
     'the orders example, against rows generated from it',
+    EVENTS,
     'a profile of rows fewer than k_min of which break a fact, against those rows',
     'a profile of a sample, against every row',
 )
+CHECKED = [(case, export_format) for case in CASES for export_format in CHECKS if (case, export_format) != (EVENTS, 'table-schema')]
 
 
-@pytest.mark.parametrize('export_format', CHECKS)
-@pytest.mark.parametrize('case', CASES)
+@pytest.mark.parametrize(('case', 'export_format'), CHECKED)
 def test_each_export_accepts_the_rows_its_profile_describes(case, export_format, described):
     # A team validating real data reaches the profiled cases: rare breaks a profile writes as none, and a --sample profile.
     profile, data = described[case]

@@ -103,6 +103,11 @@ a value for every row, a null row's included. So a column's values do not move w
 its error rate or its tokens change. A nested
 field's streams are named by its dotted path, so it draws the same whatever its siblings are.
 
+A column generating as text from its `type_mix` draws each row's share from its `type_mix` stream,
+one word a row, and each value of another type from `type_mix_text`. Its own share renders what its
+sampler draws typed, so the text changes no other stream. A stated key's values of other types are
+derived from the row, and its own draws at a row are those the typed key holds there.
+
 A column drawn by index takes each value from its `indexed_values` stream, positioned at the index
 rather than the block. A string column draws the string there, and a numeric column its level's
 offset inside the index's band. So the value at an index is the same in every block that draws it.
@@ -161,14 +166,16 @@ manifest, and names any whose bytes moved.
 A test pins SHA-256 hashes beside the stream version, each named `PINNED_*VALUES`:
 
 - `PINNED_VALUES` covers the values and text cells of a fixture holding one column of every kind,
-  fitted family and provider, and of every profile field the engine reads.
+  fitted family and provider, and of every profile field the engine reads. It holds a column of
+  each type generating as text, a nested one and a candidate key among them.
 - `PINNED_SCENARIO_VALUES` covers the same fixture under a scenario fixture holding a patch and
   every op that writes rows.
 - `PINNED_CDC_VALUES` covers it under `every-column-kind.cdc.scenario.yaml`, a `cdc` beside a row
   op and a `schema_drift`. It covers the full load, every change file and the expected table.
 - `PINNED_BUNDLE_VALUES` covers `every-column-kind.bundle.yaml`, a bundle holding a composite key,
   an inherited column, a key that is itself a foreign key, a bridge, an ordinal and a
-  relationship the plan sets aside.
+  relationship the plan sets aside. A key generating as text has a foreign key, an ordinal and a
+  copied column beside it.
   It is generated at 1 and 16 threads and in reverse block order, which must all match.
 
 A change that moves a value fails a pin until it is updated with the others. The fixtures are the

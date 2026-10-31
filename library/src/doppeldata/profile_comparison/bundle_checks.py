@@ -86,6 +86,7 @@ def check_bundle(
             against=None,
             against_sample=None,
             html=None,
+            planned=table_plan,
         )
         widened = planned_moves(applied, table_plan)
         if widened:

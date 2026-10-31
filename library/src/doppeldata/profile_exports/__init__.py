@@ -7,6 +7,7 @@ from pathlib import Path
 from doppeldata.embedded_profiles import data_file_metadata
 from doppeldata.privacy_policy.file_check import refuse_failed_check
 from doppeldata.profile_exports.contract_columns import ContractDocument
+from doppeldata.profile_exports.contract_columns import bundle_type_mix_pointers
 from doppeldata.profile_exports.contract_columns import contract_document
 from doppeldata.profile_exports.dataframely_schemas import dataframely_module
 from doppeldata.profile_exports.dqdl_rulesets import dqdl_rulesets
@@ -63,8 +64,9 @@ def export(profile: Profile | Bundle | str | os.PathLike[str], format: str, *, t
     pandera, dataframely, Table Schema, the record schema and ODCS's `logicalTypeOptions` carry a range, listed values,
     lengths or a pattern only where the profile states it of every value, and name in their own description what they left
     out. DQDL, and ODCS's quality checks, carry a share as a floor some standard errors below the profile's. A seed exports
-    only what its schema declared. Data generated from the profile passes each export, except a column whose `type_mix`
-    holds several types: the engine draws it as one, and a strict format types it string.
+    only what its schema declared. Data generated from the profile passes each export. A text source's column holding
+    values of other types generates as text, and every format types it as a string, reading which columns those are from
+    the engine's plan. A sampled profile's types are the sample's.
 
     Raises CheckFailed where a profile made from data fails its schema or privacy policy, because an export never carries a
     literal the policy did not pass. SourceError names a data file holding no profile, and ValueError an unknown format or
@@ -74,10 +76,14 @@ def export(profile: Profile | Bundle | str | os.PathLike[str], format: str, *, t
     if exporter is None:
         raise ValueError(f'{format!r} is not an export format; choose from {", ".join(EXPORT_FORMATS)}')
     found = loaded(profile)
+    type_mix = None
     if table is not None:
+        # A foreign key is text where its parent's key is, which only the bundle's plan says.
+        planned = bundle_type_mix_pointers(found) if isinstance(found, Bundle) else None
+        type_mix = planned.get(table) if planned is not None else None
         found = one_table(found, table)
     refuse_failed_check(found)
-    return exporter(contract_document(found))
+    return exporter(contract_document(found, type_mix))
 
 
 def loaded(source: Profile | Bundle | str | os.PathLike[str]) -> Profile | Bundle:

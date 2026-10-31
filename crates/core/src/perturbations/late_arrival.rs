@@ -18,8 +18,8 @@ use super::ScenarioFault;
 use super::Stage;
 use super::Z_99;
 use super::array_edits;
+use super::held_type;
 use super::open_unit;
-use crate::physical_type::physical_type_name;
 use crate::plan::PlanError;
 use crate::samplers::normal_quantile;
 use crate::scenario::LateArrival;
@@ -58,7 +58,7 @@ pub(super) fn plan(op: &LateArrival, planning: &Planning<'_>) -> Result<Planned,
             format!(
                 "{:?} is {}, and late_arrival moves a timestamp or date",
                 op.column,
-                physical_type_name(field.data_type())
+                held_type(&field)
             ),
         ));
     }
@@ -90,10 +90,7 @@ pub(super) fn plan(op: &LateArrival, planning: &Planning<'_>) -> Result<Planned,
                     return Err(planning.refuse(
                         ScenarioFault::OpNotForColumn,
                         "/ingest",
-                        format!(
-                            "{name:?} is {}, and ingest holds a timestamp or date",
-                            physical_type_name(ingest_field.data_type())
-                        ),
+                        format!("{name:?} is {}, and ingest holds a timestamp or date", held_type(ingest_field)),
                     ));
                 }
                 let widened = ingest_field

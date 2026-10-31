@@ -627,6 +627,14 @@ impl KeyAddress {
         }
     }
 
+    /// Whether the key is written as text from a type mix, so the child's key holding it is text too.
+    fn draws_type_mix(&self) -> bool {
+        match self {
+            Self::Row(key) => key.draws_type_mix(),
+            Self::Foreign { draw, member } => draw.parent_keys[*member].draws_type_mix(),
+        }
+    }
+
     fn largest(&self, rows: u64) -> Option<i64> {
         match self {
             Self::Row(key) => key.largest(rows),
@@ -639,6 +647,7 @@ impl KeyAddress {
             Self::Row(RowKey::Sequence { .. }) => "a sequence",
             Self::Row(RowKey::Uuid { .. }) => "a uuid",
             Self::Row(RowKey::TextAtRow { .. }) => "each row's own value",
+            Self::Row(RowKey::TypeMix { .. }) => "a sequence written as text, else text only its row holds",
             Self::Foreign { .. } => "its own relationship",
         }
     }
@@ -963,20 +972,17 @@ impl KeyDraw {
         match slot {
             Slot::Null => KeyValue::Null,
             Slot::Matched(row) => self.parent_keys[member].value_at(row),
-            Slot::Orphan(orphan) => match self.parent_keys[member].is_text() {
-                true => {
+            // A key holding integers, a type mix's own share included, takes orphans past its largest.
+            Slot::Orphan(orphan) => match self.parent_keys[member].largest(self.parent_rows) {
+                None => {
                     let mut rng = rng_for(self.seed, self.orphan_streams[member], orphan);
                     let mut out = String::with_capacity(36);
                     crate::samplers::push_uuid(&mut rng, &mut out);
                     KeyValue::Text(out)
                 }
-                false => KeyValue::Integer(self.largest_parent(member).saturating_add(1).saturating_add(orphan as i64)),
+                Some(largest) => KeyValue::Integer(largest.saturating_add(1).saturating_add(orphan as i64)),
             },
         }
-    }
-
-    fn largest_parent(&self, member: usize) -> i64 {
-        self.parent_keys[member].largest(self.parent_rows).unwrap_or(0)
     }
 
     /// The largest integer the member holds, its orphans past every parent's key.
@@ -1130,6 +1136,11 @@ pub(crate) fn relate(
         let mut stored = Vec::with_capacity(spec.columns.len());
         for (member, &column) in spec.columns.iter().enumerate() {
             let field = format!("{}/from/{member}", spec.pointer);
+            // A foreign key holds its parent's keys, so it is text exactly where they are drawn from a type mix.
+            columns[column].drop_type_mix();
+            if parent_keys[member].draws_type_mix() {
+                columns[column].render_as_text(&profile[column], &format!("/columns/{column}"));
+            }
             let stores = columns[column].key_column();
             let stored_as = match (stores, parent_keys[member].is_text()) {
                 (Some(KeyColumn::Integer(_)), true) | (None, _) => {
@@ -1153,6 +1164,7 @@ pub(crate) fn relate(
             columns[column].null_share = if rows == 0 { 0.0 } else { draw.nulls as f64 / rows as f64 };
         }
         if let Some(column) = spec.ordinal {
+            columns[column].drop_type_mix();
             let Some(stored @ KeyColumn::Integer(_)) = columns[column].key_column() else {
                 return Err(refuse(
                     RelationshipFault::IncompatibleTypes,
@@ -1229,6 +1241,13 @@ pub(crate) fn relate(
     let mut inherited: Vec<InheritedGroup> = Vec::new();
     for spec in &relations.inherited {
         let parent = relations.draws[spec.draw].parent.clone();
+        // A copied column holds its parent's values, so it is text exactly where its parent is drawn from a type mix.
+        match parent.draws_type_mix(spec.parent) {
+            true => {
+                columns[spec.child].render_as_text(&profile[spec.child], &format!("/columns/{}", spec.child));
+            }
+            false => columns[spec.child].drop_type_mix(),
+        }
         let parent_type = parent.generated_schema().field(spec.parent).data_type().clone();
         let child_type = columns[spec.child].field.data_type().clone();
         if !can_cast_types(&parent_type, &child_type) {

@@ -3,6 +3,8 @@
 kind: table
 name: every_column_kind
 privacy: {k_min: 11}
+# A text source, so a column holding values of several types generates as text.
+source: {format: csv}
 columns:
   - name: sequence
     physical_type: int64
@@ -237,6 +239,31 @@ columns:
   - name: string_with_numeric_raw_values
     type_mix: {string: 0.7, integer: 0.3}
     string: {shapes: [{shape: AA9, rate: 0.7}, {shape: "99999", rate: 0.3}]}
+  - name: float_with_foreign_text
+    physical_type: double
+    null_rate: 0.05
+    type_mix: {decimal: 0.95, string: 0.03, boolean: 0.02}
+    numeric: {scale: 2, quantiles: {p50: 12.5}, extremes: {low: 0.0, high: 99.0}}
+  - name: decimal128_with_foreign_text
+    physical_type: "decimal128(10, 3)"
+    type_mix: {decimal: 0.98, timestamp: 0.02}
+    numeric: {quantiles: {p50: 1.25}, extremes: {low: -4.0, high: 8.0}}
+  - name: boolean_with_foreign_text
+    physical_type: bool
+    type_mix: {boolean: 0.97, integer: 0.03}
+    boolean: {true_rate: 0.4}
+  - name: date_with_foreign_text
+    physical_type: date32
+    type_mix: {date: 0.92, string: 0.05, integer: 0.03}
+    temporal: {format: "%m/%d/%Y", extremes: {low: "2023-01-01", high: "2023-12-31"}}
+  - name: timestamp_with_foreign_text
+    physical_type: "timestamp[us, tz=UTC]"
+    type_mix: {timestamp: 0.9, date: 0.06, string: 0.04}
+    temporal: {format: "%Y-%m-%d %H:%M:%S%.f%#z", extremes: {low: "2023-01-01T00:00:00", high: "2023-12-31T23:59:59", granularity: millisecond}}
+  - name: key_with_foreign_text
+    physical_type: int64
+    type_mix: {integer: 0.9, string: 0.04, decimal: 0.03, boolean: 0.02, timestamp: 0.01}
+    numeric: {sequence: {start: 1, step: 1}}
   - name: tags
     logical_type: array
     list:
@@ -260,6 +287,7 @@ columns:
         - {name: zip, string: {pattern: '\d{5}'}}
         - {name: city, semantic: {generator_hint: {provider: city}}}
         - {name: lines, logical_type: array, list: {element: {name: element, string: {length: {min: 3, max: 6}}}}}
+        - {name: floor, physical_type: int32, type_mix: {integer: 0.8, string: 0.2}, numeric: {extremes: {low: 0, high: 40}}}
   - {name: provider_email, semantic: {generator_hint: {provider: email}}}
   - {name: provider_free_email, semantic: {generator_hint: {provider: free_email}}}
   - {name: provider_username, semantic: {generator_hint: {provider: username}}}
@@ -347,12 +375,17 @@ columns:
     numeric: {integral: true, quantiles: {p01: 1, p50: 2, p99: 9}, extremes: {low: 1, high: 12}}
   - name: unit_price
     physical_type: "decimal128(10, 2)"
+    # An operand of an expression: `total` reads its own draws, and its text is written last.
+    type_mix: {decimal: 0.97, string: 0.03}
     numeric: {quantiles: {p05: 1.0, p50: 9.99, p95: 80.0}, extremes: {low: 0.5, high: 150.0}}
   - name: total
     physical_type: "decimal128(12, 2)"
     numeric: {quantiles: {p05: 2.0, p50: 20.0, p95: 400.0}, extremes: {low: 0.5, high: 1800.0}}
     derived: {kind: expression, expr: "round(quantity * unit_price, 2)", violation_rate: 0.01}
 dataset:
+  keys:
+    candidates:
+      - {columns: [key_with_foreign_text]}
   correlations:
     - {a: copula_amount, b: copula_items, method: spearman, value: 0.7}
     - {a: copula_amount, b: copula_weight, method: spearman, value: 0.4}

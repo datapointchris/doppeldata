@@ -400,6 +400,18 @@ mod _core {
             self.plan.set_aside()
         }
 
+        /// The JSON Pointer into the profile of each column, nested fields included, that the plan
+        /// generates as text, with the ``type_mix`` type its own draws are written as, in profile
+        /// order. A column is text where its type mix holds values of other types, or where a bundle
+        /// copies its values from a parent's text.
+        fn type_mix_pointers(&self) -> Vec<(String, &'static str)> {
+            self.plan
+                .type_mix_pointers()
+                .into_iter()
+                .map(|(pointer, own)| (pointer, doppeldata_core::raw_type_name(own)))
+                .collect()
+        }
+
         /// Each perturbation's id and the columns it writes as planned, in the scenario's order.
         /// A ``hot_keys`` on a foreign key writes every column its relationship draws or copies.
         fn perturbation_writes(&self) -> Vec<(String, Vec<String>)> {

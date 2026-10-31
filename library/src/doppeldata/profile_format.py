@@ -293,12 +293,12 @@ def digest_of(canonical: bytes) -> str:
     return 'sha256:' + hashlib.sha256(canonical).hexdigest()
 
 
-def engine_plan(document: dict[str, Any], source: str) -> _core.Plan:
-    """The engine's plan of one row of `document`, read as `source`: how it draws each column, which columns each
+def engine_plan(document: dict[str, Any], source: str, rows: int = 1) -> _core.Plan:
+    """The engine's plan of `rows` rows of `document`, read as `source`: how it draws each column, which columns each
     Gaussian copula draws together, and which dependence entries it sets aside. Raises UngenerableProfile where the
     engine refuses the document."""
     canonical = rfc8785.dumps(without_unhashed_fields(document))
-    return _core.Plan(json.dumps(document), digest_of(canonical), 0, 1, source)
+    return _core.Plan(json.dumps(document), digest_of(canonical), 0, rows, source)
 
 
 def pointer(path: PointerParts) -> str:

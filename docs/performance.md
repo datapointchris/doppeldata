@@ -161,6 +161,24 @@ files. It printed:
 - **The runs shared the machine at a load average of 15.3 to 28.2**, against 2.9 to 6.5 for the
   sections above. So a range here is wide, and only rows run beside each other compare.
 
+## One of nine columns drawn as text slows a table 4% to 23% on one thread, and 15% to 38% on sixteen
+
+`benchmarks/type_mix_columns.py`, which `task bench` runs, adds an `int64` `user_id` of 25,000
+distinct values to `eight-columns`. It times `sd.generate` with the column typed, then with
+`type_mix: {integer: 0.75, string: 0.25}`, which draws it as text. It printed:
+
+| Arm | Threads | Work | Per second, range of 5 runs | Load average, before and after |
+| --- | --- | --- | --- | --- |
+| engine, `sd.generate` | 1 | eight columns and `user_id`, as `int64`, 10M rows | 6.51M to 7.9M | 6.5 to 6.2 |
+| engine, `sd.generate` | 1 | the same, `user_id` drawn as text holding 25% strings, 10M rows | 6.09M to 6.27M | 6.2 to 5.9 |
+| engine, `sd.generate` | 16 | eight columns and `user_id`, as `int64`, 10M rows | 48.7M to 54M | 5.9 to 5.9 |
+| engine, `sd.generate` | 16 | the same, `user_id` drawn as text holding 25% strings, 10M rows | 33.6M to 41.6M | 5.9 to 5.9 |
+
+- **A text row does three things where a typed row does one.** It draws the same own value, then a
+  uniform picks its share, then it writes the value's digits or a string into a string array.
+- **A table pays this only on its text columns.** A column whose type mix is all its own type draws
+  at the typed rate.
+
 ## The dependence passes take a sixth of a Polars profile of the taxi trips, and a fifth of the claims
 
 `profile create` under cProfile gives each pass's share of one profile:

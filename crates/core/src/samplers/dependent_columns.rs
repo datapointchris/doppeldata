@@ -1044,10 +1044,20 @@ impl DependentColumns {
             arrays[index] = Some(array);
             masks[index] = drawn_nulls;
         }
+        // Every dependence read its parents' own typed draws, so a column generating as text is written so last.
+        let given_at = |index: usize| matches!(given.get(index), Some(Some(_)));
         DrawnColumns {
             arrays: arrays
                 .into_iter()
-                .map(|array| array.expect("the order holds every column"))
+                .enumerate()
+                .map(|(index, array)| {
+                    let array = array.expect("the order holds every column");
+                    if given_at(index) {
+                        array
+                    } else {
+                        columns[index].rendered(at, array)
+                    }
+                })
                 .collect(),
             nulls: masks,
         }
@@ -1477,18 +1487,18 @@ impl FollowingColumns {
         self.columns.iter().any(|(column, _)| *column == index)
     }
 
+    /// Each following column with the columns it reads.
+    pub(crate) fn reads(&self) -> impl Iterator<Item = (usize, Vec<usize>)> + '_ {
+        self.columns.iter().filter_map(|(index, draw)| Some((*index, read_columns(draw)?)))
+    }
+
     /// Recomputes each following column of `image` on the rows where a column it reads changed. `image` holds rows
     /// of `base`, the `i`th at `base_rows[i]`. `changed[column][i]` holds where the image's value is not the base
     /// row's, and it gains every row recomputed. A lag keeps its base row's length.
     pub(crate) fn refresh(&self, image: &mut [ArrayRef], base: &[ArrayRef], base_rows: &[usize], changed: &mut [Vec<bool>]) {
         let rows = base_rows.len();
         for (index, draw) in &self.columns {
-            let reads: Vec<usize> = match draw {
-                ValueDraw::Lookup(lookup) => vec![lookup.lhs],
-                ValueDraw::Timedelta(timedelta) => vec![timedelta.base],
-                ValueDraw::Formula(formula) => formula.refs.clone(),
-                ValueDraw::Ranked(_) | ValueDraw::Table(_) => continue,
-            };
+            let Some(reads) = read_columns(draw) else { continue };
             let mut recompute: Vec<bool> = (0..rows).map(|row| reads.iter().any(|&read| changed[read][row])).collect();
             if !recompute.contains(&true) {
                 continue;
@@ -1528,6 +1538,16 @@ impl FollowingColumns {
                 *changed |= recomputed;
             }
         }
+    }
+}
+
+/// The columns a following column's `draw` reads, None for a draw that follows none.
+fn read_columns(draw: &ValueDraw) -> Option<Vec<usize>> {
+    match draw {
+        ValueDraw::Lookup(lookup) => Some(vec![lookup.lhs]),
+        ValueDraw::Timedelta(timedelta) => Some(vec![timedelta.base]),
+        ValueDraw::Formula(formula) => Some(formula.refs.clone()),
+        ValueDraw::Ranked(_) | ValueDraw::Table(_) => None,
     }
 }
 

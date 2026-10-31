@@ -59,6 +59,7 @@ use crate::rng::unit;
 use crate::samplers::DEFAULT_NUMERIC_RANGE as DEFAULT_RANGE;
 use crate::samplers::NumericOutput;
 use crate::samplers::PlanContext;
+use crate::samplers::TYPE_MIX_FIELD_KEY;
 use crate::samplers::TextCell;
 use crate::samplers::quantile_knots;
 use crate::scenario::Perturbation;
@@ -201,7 +202,7 @@ pub(crate) struct Planning<'a> {
     pub(crate) related: Option<&'a RelatedColumns>,
 }
 
-impl Planning<'_> {
+impl<'a> Planning<'a> {
     /// The stream for the op's draw named `draw`.
     pub(crate) fn key(&self, draw: &str) -> u64 {
         stream_key(&self.table.name, self.id, &format!("perturbation.{draw}"))
@@ -214,7 +215,10 @@ impl Planning<'_> {
 
     /// What a column sampler the op runs is planned against: the table's own context, with its
     /// streams named for `sampler_table`.
-    pub(crate) fn sampler_context<'b>(&self, sampler_table: &'b str) -> PlanContext<'b> {
+    pub(crate) fn sampler_context<'b>(&self, sampler_table: &'b str) -> PlanContext<'b>
+    where
+        'a: 'b,
+    {
         crate::plan::plan_context(self.table, sampler_table, self.seed, self.rows)
     }
 
@@ -272,7 +276,7 @@ impl Planning<'_> {
             None => Err(self.refuse(
                 ScenarioFault::OpNotForColumn,
                 field,
-                format!("{name:?} is {}, and {op} acts on a number", physical_type_name(column.data_type())),
+                format!("{name:?} is {}, and {op} acts on a number", held_type(&column)),
             )),
         }
     }
@@ -286,6 +290,16 @@ impl Planning<'_> {
         let low = extremes.and_then(|e| e.low).or(knots.first().map(|&(_, value)| value));
         let high = extremes.and_then(|e| e.high).or(knots.last().map(|&(_, value)| value));
         (low.unwrap_or(DEFAULT_RANGE.0), high.unwrap_or(DEFAULT_RANGE.1))
+    }
+}
+
+/// What `field` holds, as a refusal names it. A column drawn as text from its type mix names the
+/// type its profile states as well, because the profile alone calls it that type.
+pub(crate) fn held_type(field: &Field) -> String {
+    let named = physical_type_name(field.data_type());
+    match field.metadata().get(TYPE_MIX_FIELD_KEY) {
+        Some(own) => format!("{named}, its {own} values drawn as text among values of other types"),
+        None => named,
     }
 }
 

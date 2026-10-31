@@ -257,6 +257,39 @@ place.
   the null rate are refused.
 - **A nested field's `missing_tokens` are refused.** A text cell names a row of a top-level column,
   so it has nowhere to put a value inside a list or struct.
-- **`type_mix` shapes no plain write.** A value of another type is a row a strict reader rejects,
-  so only `malformed_rows` writes one, as a `type_invalid` fault.
-  [scenario-overlays.md](scenario-overlays.md) says how it reproduces a profile's shares.
+
+## A text source's column holding values of other types generates as text
+
+A column generates as a string column where its `physical_type` is an integer, float, decimal,
+boolean, date or timestamp, and its `type_mix` share of that type is under 1. Only a source read as
+text records such a share. A reader of the profile's type turns the other values into nulls, so the
+generated column holds text, as its source did, and the exports type it as a string. The rule reads
+the column alone, so a scenario changing `source.format` changes no column's type. Every other
+column keeps its type, and a nested field follows the same rule.
+
+- **Each row draws one `type_mix` share.** The draw is one word a row from the column's
+  `type_mix` stream, taken on null rows too, so the shares never move with the null mask.
+- **The column's own share is its sampler's draw, written in the source's layout.** A date or
+  timestamp takes its `temporal.format`. A whole float keeps its `.0`, so a reader counts it as the
+  column's type rather than as an integer.
+- **Every other share is text parsing as its type, and as nothing else.** The profile states
+  nothing of these values, so they are drawn plainly. A string share holds no vowel, so it never
+  spells `null`, `true` or `false`, which a JSON or CSV reader takes for another type.
+- **Each share profiles back as itself.** `cli/tests/test_type_mix_round_trip.py` writes a
+  column of each own type as CSV and NDJSON, and profiles the files back to their shares.
+- **The own draw holds the column's distinct values in its own rows.** A text source's distinct
+  count is taken over the values parsing as the column's type, so the other shares add none to it.
+- **A stated key repeats no value.** Where `dataset.keys` names the column, each value of another
+  type is derived from its row rather than drawn.
+- **A dependence reads the own draw typed.** A copula, conditional table, lookup or expression reads
+  its parent's own values. The text is written after every dependence has drawn.
+- **A `cdc` update recomputes a derived column from the text, read back as its type.** A row holding
+  another type reads as null there, as it does to any reader of the type.
+- **A JSON writer prints each value as the JSON its text parses as.** The field carries
+  `doppeldata.type_mix` metadata naming the own type. So an NDJSON file holds `48213` as a number
+  and `abc` as a string, which the profiler counts as its source's shares. A CSV writer quotes by
+  bytes, so it needs no such field.
+- **A relationship's column takes its parent's form.**
+  [generating-related-tables.md](generating-related-tables.md) says which.
+- **`malformed_rows` adds no value of another type to a text column.**
+  [scenario-overlays.md](scenario-overlays.md) says what it reproduces instead.

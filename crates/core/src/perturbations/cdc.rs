@@ -13,6 +13,7 @@ use std::sync::atomic::Ordering as AtomicOrdering;
 
 use arrow_array::Array;
 use arrow_array::ArrayRef;
+use arrow_array::BooleanArray;
 use arrow_array::RecordBatch;
 use arrow_array::RecordBatchOptions;
 use arrow_array::StringArray;
@@ -23,6 +24,7 @@ use arrow_schema::FieldRef;
 use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
 use arrow_select::interleave::interleave;
+use arrow_select::zip::zip;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Timelike;
@@ -74,6 +76,9 @@ pub struct CdcPlan {
     updatable: Vec<(usize, ColumnPlan)>,
     /// The columns derived or looked up from others, recomputed where an update changes what they read.
     following: FollowingColumns,
+    /// Each column drawn as text that a following column is or reads, by its place in the rows.
+    /// The recomputation reads it as its own type, and its recomputed rows are written as text.
+    text_drawn: Vec<(usize, ColumnPlan)>,
     full_load_rows: u64,
     block_count: u64,
     insert_rows: u64,
@@ -181,6 +186,19 @@ pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan], fo
             "every column is a key column, so an update has nothing to change".into(),
         ));
     }
+    let involved: BTreeSet<usize> = following
+        .reads()
+        .flat_map(|(child, reads)| std::iter::once(child).chain(reads))
+        .collect();
+    let text_drawn: Vec<(usize, ColumnPlan)> = involved
+        .into_iter()
+        .filter_map(|index| {
+            columns
+                .get(index)
+                .filter(|column| column.draws_type_mix())
+                .map(|column| (index, column.clone()))
+        })
+        .collect();
     let mean_updates = op.updates_per_row.as_ref().map_or(1.0, |spread| spread.mean);
     if !(mean_updates.is_finite() && mean_updates >= 1.0) {
         return Err(invalid(
@@ -203,6 +221,7 @@ pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan], fo
         fixed,
         updatable,
         following,
+        text_drawn,
         full_load_rows: planning.rows,
         block_count: planning.block_count,
         insert_rows: libm::round(inserts * planning.rows as f64) as u64,
@@ -464,7 +483,26 @@ impl CdcPlan {
             .map(|sources| sources.iter().map(|(array, _)| *array == 1).collect())
             .collect();
         let base_rows: Vec<usize> = changes.iter().map(|change| (change.row - first_row) as usize).collect();
-        self.following.refresh(&mut arrays, base.columns(), &base_rows, &mut changed);
+        let mut typed_base = base.columns().to_vec();
+        let mut texts = Vec::with_capacity(self.text_drawn.len());
+        for (index, column) in &self.text_drawn {
+            typed_base[*index] = column.read_typed(&typed_base[*index]);
+            texts.push((arrays[*index].clone(), changed[*index].clone()));
+            arrays[*index] = column.read_typed(&arrays[*index]);
+        }
+        self.following.refresh(&mut arrays, &typed_base, &base_rows, &mut changed);
+        for ((index, column), (text, was_changed)) in self.text_drawn.iter().zip(texts) {
+            let recomputed: BooleanArray = changed[*index]
+                .iter()
+                .zip(&was_changed)
+                .map(|(now, before)| Some(*now && !*before))
+                .collect();
+            arrays[*index] = match recomputed.true_count() {
+                0 => text,
+                _ => zip(&recomputed, &column.rendered(position, arrays[*index].clone()), &text)
+                    .expect("both arrays hold the column's text and the image's rows"),
+            };
+        }
         batch(base.schema(), arrays, changes.len())
     }
 }
