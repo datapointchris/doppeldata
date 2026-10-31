@@ -171,7 +171,7 @@ def validators() -> dict[str, jsonschema.Draft202012Validator]:
     root = {key: value for key, value in schema.items() if key != 'oneOf'}
     by_kind: dict[str, jsonschema.Draft202012Validator] = {}
     for branch in schema['oneOf']:
-        (kind,) = schema['$defs'][branch['$ref'].rsplit('/', 1)[1]]['properties']['kind']['enum']
+        (kind,) = tag_of(schema['$defs'][branch['$ref'].rsplit('/', 1)[1]]['properties']['kind'])
         by_kind[kind] = jsonschema.Draft202012Validator(root | branch, format_checker=checker)
     return by_kind
 
@@ -247,7 +247,7 @@ def write_document(document: Any, path: Path) -> None:
 def to_plain(value: Any) -> Any:
     """The document as plain dicts, lists and scalars, with ruamel's comment-keeping types removed."""
     if isinstance(value, Mapping):
-        return {str(key): to_plain(item) for key, item in value.items()}
+        return {plain_key(key): to_plain(item) for key, item in value.items()}
     if isinstance(value, list):
         return [to_plain(item) for item in value]
     if isinstance(value, bool) or value is None:
@@ -256,6 +256,15 @@ def to_plain(value: Any) -> Any:
         if isinstance(value, plain_type):
             return plain_type(value)
     return value
+
+
+def plain_key(key: Any) -> str:
+    """A mapping key as JSON spells it, so YAML's bare `null:`, `true:` and `false:` keys are those words."""
+    if key is None:
+        return 'null'
+    if isinstance(key, bool):
+        return 'true' if key else 'false'
+    return str(key)
 
 
 def generated_section(**fields: Any) -> dict[str, Any]:
@@ -303,8 +312,10 @@ def check(plain: Any) -> list[Issue]:
     if issues:
         return issues
     kind = plain.get('kind')
+    if 'kind' not in plain:
+        return [Issue('schema-required', '', f"'kind' is a required property; a profile is one of {', '.join(validators())}")]
     if not isinstance(kind, str) or kind not in validators():
-        return [kind_issue(plain, list(validators()))]
+        return [tag_issue(kind, list(validators()), ('kind',))]
     for error in validators()[kind].iter_errors(plain):
         issues += schema_error_issues(error, ())
     if issues:
@@ -315,17 +326,54 @@ def check(plain: Any) -> list[Issue]:
 
 
 def schema_error_issues(error: jsonschema.exceptions.ValidationError, at: PointerParts) -> list[Issue]:
-    """Each fault one schema error names, at its path below `at`. A key its section does not declare is an
-    `unknown-field` at the key's own pointer, naming the closest field the section takes."""
-    issues = []
-    for cause in causes_of(error):
-        path = (*at, *cause.absolute_path)
-        if cause.validator == 'additionalProperties' and isinstance(cause.instance, dict):
-            known = list(cause.schema.get('properties') or {})
-            issues += [unknown_field(str(key), known, (*path, key)) for key in cause.instance if key not in known]
-        else:
-            issues.append(Issue(f'schema-{cause.validator}', pointer(path), cause.message))
-    return issues
+    """Each fault one schema error names, at its path below `at`.
+
+    Inside an `anyOf` or `oneOf`, only the branch the value was meant for is read. A branch is not meant where the value
+    is not its type, such as the `null` every optional field has, or where a field does not hold its tag, such as
+    `derived`'s other `kind`. A value holding no branch's tag is that one fault. A key its section does not declare is an
+    `unknown-field` at the key's own pointer, naming the closest field the section takes.
+    """
+    if error.context:
+        branches: dict[Any, list[jsonschema.exceptions.ValidationError]] = {}
+        for inner in error.context:
+            branches.setdefault(inner.relative_schema_path[0], []).append(inner)
+        typed = [errors for errors in branches.values() if not any(map(not_its_type, errors))]
+        meant = [errors for errors in typed if not any(map(misses_tag, errors))]
+        if len(meant) == 1:
+            return [issue for inner in meant[0] for issue in schema_error_issues(inner, at)]
+        missed = [inner for errors in typed for inner in errors if misses_tag(inner)]
+        if not meant and missed:
+            return [
+                tag_issue(missed[0].instance, [tag for inner in missed for tag in tag_of(inner.schema)], (*at, *missed[0].absolute_path))
+            ]
+        best = jsonschema.exceptions.best_match([inner for errors in meant for inner in errors] or error.context)
+        if best is not None:
+            return schema_error_issues(best, at)
+    path = (*at, *error.absolute_path)
+    if error.validator == 'additionalProperties' and isinstance(error.instance, dict):
+        known = list(error.schema.get('properties') or {})
+        return [unknown_field(str(key), known, (*path, key)) for key in error.instance if key not in known]
+    return [Issue(f'schema-{error.validator}', pointer(path), error.message)]
+
+
+def not_its_type(error: jsonschema.exceptions.ValidationError) -> bool:
+    """Whether an error inside one branch of a union says the value is not the branch's type."""
+    return error.validator == 'type' and not error.relative_path
+
+
+def misses_tag(error: jsonschema.exceptions.ValidationError) -> bool:
+    """Whether an error inside one branch of a union says a field of the value does not hold the branch's tag."""
+    return error.validator in ('const', 'enum') and len(error.relative_path) == 1 and bool(tag_of(error.schema))
+
+
+def tag_of(schema: Any) -> tuple[Any, ...]:
+    """The one value a tag field takes, written as `const` or as a one-value `enum`. Empty for any other field."""
+    if not isinstance(schema, dict):
+        return ()
+    if 'const' in schema:
+        return (schema['const'],)
+    values = schema.get('enum')
+    return tuple(values) if isinstance(values, list) and len(values) == 1 else ()
 
 
 def unknown_field(key: str, known: list[str], at: PointerParts) -> Issue:
@@ -334,39 +382,12 @@ def unknown_field(key: str, known: list[str], at: PointerParts) -> Issue:
     return Issue('unknown-field', pointer(at), f'{key!r} is not a field here; {hint}this section takes {", ".join(known)}', closest)
 
 
-def kind_issue(plain: dict[str, Any], kinds: list[str]) -> Issue:
-    """A missing `kind`, or one no profile has. The kind picks the schema, so no other field is checked."""
-    if 'kind' not in plain:
-        return Issue('schema-required', '', f"'kind' is a required property; a profile is one of {', '.join(kinds)}")
-    kind = plain['kind']
-    closest = tuple(difflib.get_close_matches(kind, kinds, n=1)) if isinstance(kind, str) else ()
+def tag_issue(value: Any, tags: list[Any], at: PointerParts) -> Issue:
+    """A tag field holding none of the tags its branches take, naming the closest."""
+    names = [str(tag) for tag in tags]
+    closest = tuple(difflib.get_close_matches(value, names, n=1)) if isinstance(value, str) else ()
     hint = f'the closest is {closest[0]}, and ' if closest else ''
-    return Issue('schema-enum', '/kind', f'{kind!r} is not a kind of profile; {hint}a profile is one of {", ".join(kinds)}', closest)
-
-
-def causes_of(error: jsonschema.exceptions.ValidationError) -> list[jsonschema.exceptions.ValidationError]:
-    """The errors naming the faults inside an `anyOf` or `oneOf`, each in the one branch the value was meant for.
-
-    A branch the value is not the type of is not meant, such as the `null` every optional field has, and nor is one whose
-    tag it does not hold, such as `derived`'s other `kind`. Where no one branch is meant, the error that best names the
-    fault.
-    """
-    if not error.context:
-        return [error]
-    branches: dict[Any, list[jsonschema.exceptions.ValidationError]] = {}
-    for inner in error.context:
-        branches.setdefault(inner.relative_schema_path[0], []).append(inner)
-    meant = [errors for errors in branches.values() if not any(map(another_branch, errors))]
-    if len(meant) == 1:
-        return [cause for inner in meant[0] for cause in causes_of(inner)]
-    best = jsonschema.exceptions.best_match([inner for errors in meant for inner in errors] or error.context)
-    return [error] if best is None else causes_of(best)
-
-
-def another_branch(error: jsonschema.exceptions.ValidationError) -> bool:
-    """Whether an error inside one branch of an `anyOf` or `oneOf` says the value is another branch's: the value is not
-    the branch's type, or a field of it does not hold the branch's tag."""
-    return (error.validator == 'type' and not error.relative_path) or (error.validator == 'const' and len(error.relative_path) == 1)
+    return Issue('schema-enum', pointer(at), f'{value!r} is not a {at[-1]} here; {hint}this field takes {", ".join(names)}', closest)
 
 
 def unrepresentable_numbers(value: Any, at: PointerParts) -> Iterator[Issue]:
