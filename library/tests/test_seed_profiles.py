@@ -22,9 +22,11 @@ def test_a_json_schema_seed_draws_inside_every_declared_constraint_and_a_default
     assert {row.get('priority') for row in rows} <= {1, 2, 3, None}
     assert all('@' in row['customer_email'] for row in rows)
     assert all(re.fullmatch(r'[A-Z]{3}-[0-9]{4}', row['sku']) for row in rows)
-    # A hint or a pattern is held to the declared lengths, while an export keeps the declared pattern.
+    # A hint or a pattern is held to the declared lengths, while an export keeps the declared pattern and lengths.
     assert all(re.fullmatch(r'[A-Z]+-[0-9]+', row['lot']) and len(row['lot']) <= 10 for row in rows if 'lot' in row)
-    assert json.loads(sd.export(seed, 'json-schema'))['properties']['lot']['pattern'] == '^[A-Z]+-[0-9]+$'
+    exported = json.loads(sd.export(seed, 'json-schema'))['properties']
+    assert exported['lot']['pattern'] == '^[A-Z]+-[0-9]+$'
+    assert (exported['note']['minLength'], exported['note']['maxLength']) == (3, 100)
     assert all(re.fullmatch(r'[A-Z]{2}', row['country']) for row in rows if 'country' in row)
     assert all(re.fullmatch(r'[A-Z]{2}', row['state']) for row in rows if 'state' in row)
     assert all('@' in row['contact'] and len(row['contact']) <= 12 for row in rows if 'contact' in row)

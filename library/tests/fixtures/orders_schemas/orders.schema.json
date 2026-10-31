@@ -17,7 +17,7 @@
     "amount": {"type": "number", "minimum": 0, "maximum": 10000, "multipleOf": 0.01},
     "order_date": {"type": "string", "format": "date"},
     "shipped_at": {"type": "string", "format": "date-time"},
-    "note": {"type": "string"},
+    "note": {"type": "string", "minLength": 3, "maxLength": 100},
     "batch_ref": {"type": "string"},
     "shipping": {"$ref": "#/$defs/address"},
     "tags": {"type": "array", "items": {"type": "string", "maxLength": 12}, "maxItems": 3}

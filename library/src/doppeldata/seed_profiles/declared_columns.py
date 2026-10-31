@@ -44,6 +44,8 @@ NULL_RATE = 0.05
 NUMBER_SPAN = 1_000_000
 DATE_WINDOW = (dt.date(2025, 1, 1), dt.date(2025, 12, 31))
 TEXT_LENGTH = (8, 16)
+# A text column with no hint draws these from a hint pattern, so `string.length` is left to hold the declared lengths.
+TEXT_CHARACTERS = '[A-Za-z0-9]'
 # The outermost quantiles a list's declared item counts are written at, which the engine draws as its least and most.
 LIST_LENGTH_LEVELS = ('p01', 'p99')
 INTEGER_RANGES = {
@@ -273,7 +275,7 @@ class DeclaredColumn(InlineColumn):
             if named is not None and hint is not None:
                 return self.with_declared_lengths({'semantic': {**named['semantic'], 'generator_hint': hint}})
         low, high = self.text_lengths()
-        return {'string': {'length': {'min': low, 'max': high}}}
+        return self.with_declared_lengths({'semantic': {'generator_hint': {'pattern': f'{TEXT_CHARACTERS}{{{low},{high}}}'}}})
 
     def fitted_hint(self, hint: Mapping[str, Any]) -> dict[str, Any] | None:
         """`hint` where every value it draws holds the declared lengths, its pattern bounded to them, else the first of
@@ -292,8 +294,8 @@ class DeclaredColumn(InlineColumn):
         return None
 
     def with_declared_lengths(self, drawn: dict[str, Any]) -> dict[str, Any]:
-        """`drawn` holding the declared lengths in `string.length`, which an export carries. A hint or a pattern draws
-        without reading them."""
+        """`drawn` holding the declared lengths in `string.length`, and no others, which an export carries. `drawn`
+        draws from a hint or a pattern, so no draw reads them."""
         declared = {end: length for end, length in (('min', self.min_length), ('max', self.max_length)) if length is not None}
         if declared:
             drawn['string'] = {**drawn.get('string', {}), 'length': declared}

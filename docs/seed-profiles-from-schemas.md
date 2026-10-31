@@ -128,7 +128,7 @@ Without `--out` the seed prints as YAML. A file names its table up to its first 
 | --- | --- |
 | number | uniformly between its bounds. A missing end lies `NUMBER_SPAN` (1,000,000) beyond the given one, and neither gives 0 to `NUMBER_SPAN`, each kept inside its type |
 | date or timestamp | uniformly inside `DATE_WINDOW` (2025-01-01 to 2025-12-31), a missing end the window's length beyond the given one. A timestamp draws whole seconds |
-| text | its values, else its pattern, else its format's type, else the fake its name hints, else letters and digits `TEXT_LENGTH` (8 to 16) long. Each but the values is held to the declared lengths |
+| text | its values, else its pattern, else its format's type, else the fake its name hints, else letters and digits `TEXT_LENGTH` (8 to 16) long, from a hint pattern. Each but the values is held to the declared lengths |
 | sole integer key | 1, 2, 3 and on, or counting from its lower bound, bounded above or not |
 | list | between its declared item counts, else the engine's default list length |
 | any | nulls in `NULL_RATE` (5%) of rows where the schema allows them, and none where it requires a value |
@@ -163,8 +163,12 @@ Without `--out` the seed prints as YAML. A file names its table up to its first 
   bounded pattern never draws.
 - **A format no value of which fits is left out with a warning**, such as a `uuid` up to 20 long.
   A name's hint that cannot fit falls away silently, because the schema never declared it.
-- **A hinted column records its declared lengths in `string.length`**, so an export carries them.
-  The engine reads `string.length` only where it draws letters and digits.
+- **`string.length` holds only the lengths the schema declared**, so an export carries those and
+  no draw default. A column declaring neither end writes none. So a column declared 3 to 100 long
+  exports 3 and 100, though it draws 8 to 16.
+- **Letters and digits draw from a hint pattern**, `[A-Za-z0-9]{8,16}`, with `TEXT_LENGTH` moved
+  inside the declared lengths. The engine draws a hint before it reads `string.length`, so the
+  draw's lengths and the declared ones never share a field.
 - **A key bounded above passes its bound once the rows outnumber the values between its bounds.**
   It counts up so that no two rows share a value.
 
