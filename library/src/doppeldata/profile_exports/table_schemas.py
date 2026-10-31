@@ -37,7 +37,7 @@ def table_schema(document: ContractDocument) -> str:
     for table in document.tables:
         schema = schema_of(table)
         keys = [
-            {'fields': [key.column], 'reference': {'resource': key.to_table, 'fields': [key.to_column]}}
+            {'fields': list(key.columns), 'reference': {'resource': key.to_table, 'fields': list(key.to_columns)}}
             for key in table.foreign_keys
             if key.share is not None and key.share.whole
         ]

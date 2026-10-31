@@ -4,7 +4,9 @@
 //! [`layout`] says which rows each file holds before anything is generated. [`write`] generates and
 //! writes them on worker threads, and [`regenerate`] writes a manifest's files again. [`claim`],
 //! [`write_ranges`] and [`commit`] split one write across processes, such as Spark executors.
+//! [`claim_bundle`] and [`commit_bundle`] bracket a bundle's tables, each written as one dataset.
 
+mod bundle;
 mod byte_sink;
 mod cdc;
 mod destination;
@@ -21,6 +23,9 @@ use arrow_schema::ArrowError;
 use arrow_schema::DataType;
 use doppeldata_core::BlockOutOfRange;
 
+pub use bundle::bundle_manifest;
+pub use bundle::claim_bundle;
+pub use bundle::commit_bundle;
 pub use byte_sink::ByteSink;
 pub use byte_sink::WrittenObject;
 pub use destination::Destination;

@@ -221,6 +221,60 @@ at most 0.20.
 its rows as `unquoted_value`, reproduced at seeds 1 to 6, scored up to 0.23 and failed seed 5.
 Relative to the whole rate, the same six scored at most 0.04.
 
+## A bundle is checked table by table, then each relationship by its fan-out, orphans and busiest parents
+
+```bash
+doppeldata data generate orders-customers --scale 0.1 --out shop/
+doppeldata data check orders-customers shop/
+```
+
+```text
+# doppeldata bundle check passed
+
+`shop/`, 59,000 rows in 2 tables, against bundle `orders-customers` (sha256:e8dda4ed…).
+
+0 of 3 relationship metrics failed.
+
+| Metric | Relationship | Value | Threshold | Expected | Observed | Passed |
+| --- | --- | --- | --- | --- | --- | --- |
+| fanout_ks | orders.customer_id → customers.customer_id | 0 | ≤ 0.05 |  |  | yes |
+| orphan_rate_delta | orders.customer_id → customers.customer_id | 2.002e-06 | ≤ 0.005 | 0.002 | 0.002002 | yes |
+| top_share_delta | orders.customer_id → customers.customer_id | 9.02708e-06 | ≤ 0.001 | 0.003 | 0.00300903 | yes |
+```
+
+Each table under `<data>/<table>/` is checked against its own profile, as one table is, parents
+first. The report then counts each relationship's child rows per parent key over the generated
+tables, by the join the profiler runs. `check()` takes a `Bundle` and returns a
+`BundleCheckReport`, `doppeldata schemas show bundle-check`.
+
+- **`fanout_ks` is `ks` read over child rows per parent key.** The stated points are the fan-out's
+  quantiles. The generated side is exact, counting a parent no child names at 0.
+- **`orphan_rate_delta` is the generated orphan rate's distance from `orphan_rate`.** The share is
+  of child rows, and a relationship stating none states 0.
+- **`top_share_delta` is the furthest of `top1`, `top10` and `top100` from its stated share.** The
+  share is of child rows that name a parent. A bundle at scale 0.5 compares the top 5 parents with
+  the stated `top10`, so the same fraction of parents is held. A rank falling on a fraction of a
+  parent takes that fraction of the next parent's rows. One falling below one parent is not
+  compared.
+- **The three are set under `defaults` in a thresholds file, never under `columns`.** Each
+  measures a relationship between tables, so no column names it.
+- **A column a relationship draws skips every metric comparing which values it holds.** That is
+  `ks`, `tvd`, `zero_rate_delta`, `boundary_adherence`, `correlation_max_abs_diff` and
+  `conditional_kl`. Its row passes with `skipped_by` naming the relationship. The relationship
+  deals out its parent's keys, so the values follow the parent's table rather than the child's
+  profile. Its null rate and distinct values are still checked.
+- **A relationship the plan sets aside decides nothing.** Its rows say why, as a composite key's
+  single-column part that the composite draws.
+- **A scenario writing a foreign-key column skips the relationship's metrics**, with `skipped_by`
+  naming the perturbation.
+- **A bundle's data written under other scenarios is refused.** The root manifest's
+  `scenario_digest` must equal the digest of the scenarios given.
+- **A bundle takes no `--against`, `--against-sample` or `--html`.** Each scores or draws one
+  table.
+
+*Rejected:* measuring a drawn key column's values against its child profile. Every correct bundle
+would fail it, because its values are its parent's keys.
+
 ## A metric the other profile cannot supply is a row with no value
 
 Where the source states what a metric compares and the other profile holds nothing to compare it

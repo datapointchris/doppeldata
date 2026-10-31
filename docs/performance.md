@@ -119,6 +119,46 @@ adds a three-value `tier`, drawn given each of the 50 categories. It printed:
   from the column's own, so the row adds a lookup of the parent's value.
 - **The runs shared the machine with other work**, at the load averages each row records.
 
+## Drawing its foreign keys holds a narrow table to a third to a half of its rate alone, and a wide one loses less
+
+`benchmarks/related_tables.py`, which `task bench` runs, generates one table of a bundle three ways
+through `sd.generate`. The first arm generates it from its own profile alone. The second generates
+it with every table it draws from, parents first, each foreign key drawn by its relationship. The
+third copies its inherited columns too. A bundle arm's rate is the table's rows over the whole
+run, its parents' generation included.
+
+```bash
+uv run benchmarks/related_tables.py                                              # orders-customers' orders at scale 10
+uv run benchmarks/related_tables.py --bundle tpch.bundle.yaml --table orders --scale 4
+```
+
+The first is the bundled example's 5.5M orders over 400,000 customers. The second is TPC-H's 6M
+orders over 600,000 customers, from a bundle `profile create --tables` wrote of its scale factor 1
+files. It printed:
+
+| Bundle | Threads | Arm | Per second, range of 5 runs | Load average, before and after |
+| --- | --- | --- | --- | --- |
+| `orders-customers` | 1 | `orders` alone | 8.16M to 9.05M | 15.3 to 15.3 |
+| `orders-customers` | 1 | with `customers`, each foreign key drawn | 1.84M to 2.94M | 15.3 to 13.8 |
+| `orders-customers` | 1 | the same, copying 1 inherited column | 1.86M to 2.23M | 13.8 to 18.0 |
+| `orders-customers` | 16 | `orders` alone | 54.6M to 59.6M | 18.0 to 18.1 |
+| `orders-customers` | 16 | with `customers`, each foreign key drawn | 18.8M to 26.2M | 18.1 to 18.1 |
+| `orders-customers` | 16 | the same, copying 1 inherited column | 11.1M to 17M | 18.1 to 18.1 |
+| TPC-H | 1 | `orders` alone | 1.31M to 1.38M | 18.1 to 15.9 |
+| TPC-H | 1 | with `customer` and `nation`, each foreign key drawn | 0.822M to 0.998M | 15.9 to 18.5 |
+| TPC-H | 16 | `orders` alone | 6.84M to 8.56M | 18.5 to 18.8 |
+| TPC-H | 16 | with `customer` and `nation`, each foreign key drawn | 4.79M to 6.62M | 18.8 to 19.4 |
+
+- **A foreign key walks two keyed permutations per row.** One takes the row to its slot, the other
+  takes the slot's rank to a parent row. Under 2^22 parents, the rank is a search of counts
+  tabulated at plan time.
+- **TPC-H's `orders` alone generates six to seven times slower than the example's.** So the same
+  draw is a smaller share of each row.
+- **An inherited column generates the parent blocks its rows touch**, cached per thread, and copies
+  each row's value from them.
+- **The runs shared the machine at a load average of 13.8 to 19.4**, against 2.9 to 6.5 for the
+  sections above.
+
 ## The dependence passes take a sixth of a Polars profile of the taxi trips, and a fifth of the claims
 
 `profile create` under cProfile gives each pass's share of one profile:

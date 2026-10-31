@@ -302,8 +302,15 @@
           "description": "Whether the row counts against the report: false only on a row that decides and whose\nvalue misses `threshold` or is unmeasured.",
           "type": "boolean"
         },
+        "relationship": {
+          "description": "The relationship, as `orders.customer_id → customers.customer_id`, for a metric of one\nin a bundle check. `column` is then null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "skipped_by": {
-          "description": "The id of the scenario's perturbation that moves what the metric compares, so the metric\nis not measured and passes.",
+          "description": "The id of the scenario's perturbation that moves what the metric compares, so the metric\nis not measured and passes. In a bundle check, it is the relationship drawing a foreign-key\ncolumn, as `orders.customer_id → customers.customer_id`, for a metric comparing which values\nthat column holds, which the relationship deals out from its parent's keys.",
           "type": [
             "string",
             "null"

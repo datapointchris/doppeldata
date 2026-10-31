@@ -290,6 +290,45 @@ commands and requires the manifest's identity and ranges to equal the plan's.
 - *Rejected:* `data generate --dry-run`. A flag that turns a write into a read makes one command do
   two things. A rehearsal is its own verb, which cannot write.
 
+## A bundle generates every table parents first, sized by `--scale`
+
+```bash
+doppeldata data plan orders-customers --scale 0.1 --out shop/
+```
+
+```text
+dataset    sha256:9e59a6a8…
+identity   59,000 rows at scale 0.1 from seed 0, bundle sha256:e8dda4ed…, stream version 11
+
+customers  4,000 rows as parquet, up to 1 file to shop/customers, estimate 48.1 KB
+orders     55,000 rows as parquet, up to 1 file to shop/orders, estimate 896.4 KB
+
+orders.customer_id → customers.customer_id
+```
+
+```python
+import doppeldata as sd
+
+tables = sd.generate('orders-customers', scale=0.1, seed=7)
+tables['orders']  # an Arrow table of 55,000 rows, each customer_id one of tables['customers']'
+```
+
+`PROFILE` may be a bundle file, a bundle directory or a bundled example's name, on `data plan`,
+`data generate` and `data check`. `profile list` lists the example bundles beside the profiles,
+and `profile show` prints one.
+
+- **`--scale` multiplies every table's row count**, 1 where left out. Each table generates
+  `round(row_count × scale)` rows, so the fan-out's shape holds at any scale. Each `top_share`
+  holds over the same fraction of the parents, so `top10` of 40,000 is the busiest one of 4,000
+  at scale 0.1.
+- **`--rows`, `--columns`, `--manifest` and any partition flag are refused with a bundle.** `--rows`
+  sizes one table, and each table is partitioned as its own profile records.
+- **`generate()` returns a dict of each table's name to its table, parents first.** `write()`
+  returns a `BundleManifest`, and `plan()` a `BundleWritePlan`. `stream()` refuses a bundle,
+  because a stream holds one table.
+- **A plan lists each relationship, and what draws it instead where another does.** A composite
+  key's single-column part is drawn by the composite, and the plan names it set aside.
+
 ## A scenario is one more input to every verb that generates or checks
 
 ```bash

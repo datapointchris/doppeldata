@@ -1,24 +1,27 @@
 # The determinism contract
 
-## A dataset is identified by five values
+## A dataset is identified by seven values
 
 A generated dataset is a pure function of:
 
 1. the engine's stream version;
-2. the canonical SHA-256 of the profile;
+2. the canonical SHA-256 of the profile, or of the bundle;
 3. the canonical SHA-256 of the scenario;
 4. the seed;
-5. the row count.
+5. the row count;
+6. the scale a bundle is generated at;
+7. the bundle table the rows are of.
 
-The manifest written beside the output must record all five, plus a SHA-256 over them. Three committed
-files — profile, scenario and seed — reproduce a dataset anywhere.
+The last two are null outside a bundle. The manifest written beside the output must record all
+seven, plus a SHA-256 over them. Three committed files — profile, scenario and seed — reproduce a
+dataset anywhere.
 
 ## The engine owns the identity: RFC 8785 JSON keyed like the file metadata
 
-The SHA-256 is taken over the RFC 8785 canonical JSON of one object with five keys:
+The SHA-256 is taken over the RFC 8785 canonical JSON of one object with seven keys:
 
 ```json
-{"dataset_rows":"10000000","profile_digest":"sha256:…","scenario_digest":null,"seed":"18446744073709551615","stream_version":1}
+{"dataset_rows":"10000000","profile_digest":"sha256:…","scale":null,"scenario_digest":null,"seed":"18446744073709551615","stream_version":11,"table":null}
 ```
 
 - **The engine builds the canonical JSON and its digest, in `DatasetIdentity`.** The library and its
@@ -27,9 +30,10 @@ The SHA-256 is taken over the RFC 8785 canonical JSON of one object with five ke
 - **Each key is a file metadata key without its `doppeldata.` prefix.** Both derive from the
   constants in `profile::provenance`. So a reader holding a file's metadata rebuilds the identity
   with no mapping, and a sixth value needs no hand ordering, because the map sorts its keys.
-- **The seed and the row count are decimal strings.** Both are 64-bit unsigned integers. RFC 8785
-  writes a number as an IEEE 754 double, which holds every integer only up to 2^53, so a seed
-  written as a number would lose digits. A string keeps the seed's whole range with no cap.
+- **The seed, the row count and the scale are decimal strings.** The first two are 64-bit unsigned
+  integers. RFC 8785 writes a number as an IEEE 754 double, which holds every integer only up to
+  2^53, so a seed written as a number would lose digits. A string keeps the seed's whole range with
+  no cap. The scale is Rust's shortest decimal reading back as the same double, so `0.1` is `"0.1"`.
 - **Each digest is `sha256:` and 64 lowercase hex digits**, the form the library's profile digest
   takes. The identity's own digest is written the same way.
 - **An absent scenario is `null` in the identity and a missing key in the metadata.** No scenario is
@@ -39,6 +43,48 @@ The SHA-256 is taken over the RFC 8785 canonical JSON of one object with five ke
   `description` and `expect`. So rewording it or moving a bound keeps the dataset's identity.
 
 A test pins the digest of one fixed identity, which the library's `rfc8785` package reproduces.
+
+## Every table of a bundle is named by the bundle, so its own manifest regenerates it alone
+
+A bundle's tables share its profile digest, seed, scale and scenario digest. Each table's identity
+adds its own name and its own rows, `round(row_count × scale)`. The bundle's own identity names no
+table, and its rows are the sum of its tables'.
+
+- **A bundle's scenario digest is taken over the map of each table to its scenario.** Each entry is
+  the scenario's canonical document, sorted by table. So one table's scenario changing renames
+  every table, because a child's foreign keys and inherited columns read its parent's values.
+- **A table's own manifest regenerates that table, with its foreign keys.** `regenerate()` takes
+  the table's plan from `plan_bundle` and writes that table's files alone. A foreign key is drawn
+  from its parent's keys by formula, never by reading the parent's rows.
+- **A child row's parent comes from its row index alone.** A keyed bijective permutation takes the
+  row to a slot. The slot's rank comes from the closed-form cumulative fan-out, and a second keyed
+  permutation takes the rank to a parent row. So the parent a row holds is the same at any thread
+  count and in any block order, and every block mixes parents from across the whole table.
+- **A rank is the first whose cumulative count passes the slot.** Up to 2^22 parents, the counts
+  are tabulated at plan time and a rank is a search over them. Past that, the curve is inverted
+  and the rank settled against the same rounded counts. Both give the same rank.
+- **Each `top_share` pin sits at its rank times the scale.** At scale 0.1, `top10` pins the busiest
+  parent. A pin under one parent, or on every parent, is left out. So the
+  counts a parent holds move with the scale, which the identity carries.
+- **A bridge's second draw takes its positions from the first's.** A bridge is a child whose
+  primary key is exactly two relationships' columns. The first's position times a multiplier,
+  modulo the child's rows, is the second's. The multiplier is coprime with the rows, so each draw
+  still holds its own counts. It is the first of 1,024 tried from the rows' golden fraction, then
+  1,024 from the second's longest run, that puts one key's rows that far apart. So a change to
+  either draw's counts can change it, and with it every row's pair.
+- **An ordinal is its row's place in its key's run, from 1.** It is read from the position the
+  foreign key's slot is, so it draws from no stream of its own.
+- **A parent key is addressed at its row, never read back.** A `sequence` key is its formula, and a
+  uuid key seeks its stream to the row. A key that is itself a foreign key takes its own
+  relationship's draw. Any other integer key is a sequence across its profiled extremes, and any
+  other string key draws from its `indexed_values` stream at the row. Any other key is refused as
+  `parent-key-unaddressable`.
+- **An inherited column copies its parent row's value.** The child block generates the parent
+  blocks its rows touch, cached per thread, so the copy is the value the parent's table writes.
+
+*Rejected:* dealing each block a contiguous run of parents. Each file's key range would be narrow,
+so Parquet's row-group statistics would skip more than real data lets them. It would also pair a
+child with fewer distinct parents across two foreign keys than real data does.
 
 ## Each column draws from a stream named for it, never numbered
 
@@ -114,6 +160,10 @@ A test pins SHA-256 hashes beside the stream version, each named `PINNED_*VALUES
   every op that writes rows.
 - `PINNED_CDC_VALUES` covers it under `every-column-kind.cdc.scenario.yaml`, a `cdc` beside a row
   op and a `schema_drift`. It covers the full load, every change file and the expected table.
+- `PINNED_BUNDLE_VALUES` covers `every-column-kind.bundle.yaml`, a bundle holding a composite key,
+  an inherited column, a key that is itself a foreign key, a bridge, an ordinal and a
+  relationship the plan sets aside.
+  It is generated at 1 and 16 threads and in reverse block order, which must all match.
 
 A change that moves a value fails a pin until it is updated with the others. The fixtures are the
 test's own, so editing a bundled example moves no pin. Both pin scripts refuse a `PINNED_*VALUES`

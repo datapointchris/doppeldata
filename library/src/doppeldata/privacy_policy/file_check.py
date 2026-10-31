@@ -18,6 +18,7 @@ from doppeldata.privacy_policy.column_treatment import Policy
 from doppeldata.privacy_policy.column_treatment import Treatment
 from doppeldata.privacy_policy.column_treatment import column_treatment
 from doppeldata.privacy_policy.column_treatment import oldest_birth_year
+from doppeldata.privacy_policy.literal_fields import ROWS_AT_LEAST_K_MIN
 from doppeldata.privacy_policy.literal_fields import FieldKind
 from doppeldata.privacy_policy.literal_fields import LiteralField
 from doppeldata.privacy_policy.literal_fields import column_literals
@@ -228,6 +229,11 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
         if index not in dataset_seen:
             detail = f'the file holds no dependence between columns at {entry.get("field")}; expected the pointer of one it holds'
             violations.append(Violation('stale-audit-entry', pointer((*at, 'privacy', 'dataset_audit', index)), None, None, detail))
+    dataset = table.get('dataset') or {}
+    rows = dataset.get('row_count') or 0
+    if dataset.get('keys') and rows < k_min:
+        detail = f'the table holds {rows} rows, and a key is stated only over {k_min}; expected no keys'
+        violations.append(Violation('keys-under-k-min', pointer((*at, 'dataset', 'keys')), ROWS_AT_LEAST_K_MIN, None, detail))
     return TableCheck(name, policy.value, k_min, fields, violations)
 
 

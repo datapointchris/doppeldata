@@ -12,8 +12,10 @@ import re
 import shutil
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import Protocol
+from typing import overload
 
 import rfc8785
 
@@ -31,6 +33,7 @@ from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import Manifest
 from doppeldata.name_hinted_types import with_type_hints
 from doppeldata.privacy_policy.file_check import refuse_failed_check
+from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import UngenerableProfile
@@ -41,6 +44,10 @@ from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
 from doppeldata.scenario_format import manifest_record
 from doppeldata.scenario_format import refuse_file_shaping
+
+if TYPE_CHECKING:
+    from doppeldata.bundle_generation import BundleWritePlan
+    from doppeldata.manifest import BundleManifest
 
 LARGEST_SEED = 2**64 - 1
 
@@ -457,6 +464,19 @@ def s3_store_of(destination: str, bucket: str | None) -> dict[str, Any] | None:
     return s3_store_settings(destination, bucket)
 
 
+@overload
+def generate(
+    profile: Bundle,
+    *,
+    rows: None = None,
+    seed: int | None = None,
+    threads: int = 0,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+    scale: float | None = None,
+) -> dict[str, ArrowStreamExportable]: ...
+
+
+@overload
 def generate(
     profile: ProfileSource,
     *,
@@ -464,7 +484,19 @@ def generate(
     seed: int | None = None,
     threads: int = 0,
     scenario: Scenario | Sequence[Scenario] | None = None,
-) -> ArrowStreamExportable:
+    scale: None = None,
+) -> ArrowStreamExportable: ...
+
+
+def generate(
+    profile: ProfileSource | Bundle,
+    *,
+    rows: int | None = None,
+    seed: int | None = None,
+    threads: int = 0,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+    scale: float | None = None,
+) -> ArrowStreamExportable | dict[str, ArrowStreamExportable]:
     """Every row of the dataset, as one Arrow table in memory. `threads` of zero takes one per core.
 
     `profile` is a Profile, or anything `Profile.expand` takes: a list of column names, a dict of columns such as
@@ -477,9 +509,25 @@ def generate(
     Scenario or a list composed in order. One that shapes files, as schema_drift, small_files and malformed_rows do, is
     refused as InvalidScenario, because nothing here writes files. `rows` counts the rows generated, so a scenario's
     `duplicates` returns more.
+
+    A Bundle, a bundle file or directory, or an example bundle's name returns a dict of each table's name to its table,
+    parents first, every foreign key drawn from its parent's keys. `scale` multiplies each table's row count, 1 where left
+    None, and `rows` is refused. Each scenario names the table it bends, and a table's scenarios compose in order.
     """
-    table: ArrowStreamExportable = rows_plan(profile, rows, seed, scenario, 'generate').generate(threads=threads)
+    from doppeldata import bundle_generation as bundles
+
+    bundle = bundles.bundle_from(profile)
+    if bundle is not None:
+        bundles.refuse_rows(rows)
+        return bundles.generate_bundle(bundle, seed=seed or 0, scale=1.0 if scale is None else scale, threads=threads, scenario=scenario)
+    refuse_scale(scale)
+    table: ArrowStreamExportable = rows_plan(bundles.table_source(profile), rows, seed, scenario, 'generate').generate(threads=threads)
     return table
+
+
+def refuse_scale(scale: float | None) -> None:
+    if scale is not None:
+        raise ValueError("scale sizes a bundle, a multiple of each table's row count; give rows for one table")
 
 
 def stream(
@@ -495,12 +543,35 @@ def stream(
 
     It reads once. pyarrow 15 or later takes it as `pa.RecordBatchReader.from_stream(reader)`. Its threads check for no signal,
     so Ctrl-C reaches it only when its consumer returns to Python between batches. `profile`, `rows`, `seed` and `scenario`
-    are taken as `generate` takes them.
+    are taken as `generate` takes them. A bundle is refused, because a stream holds one table.
     """
+    from doppeldata import bundle_generation as bundles
+
+    if bundles.bundle_from(profile) is not None:
+        raise TypeError('a stream holds one table, and a bundle holds several; generate or write the bundle')
     reader: ArrowStreamExportable = rows_plan(profile, rows, seed, scenario, 'stream').stream(threads=threads)
     return reader
 
 
+@overload
+def plan(
+    profile: Bundle,
+    out: str | os.PathLike[str],
+    *,
+    rows: None = None,
+    seed: int | None = None,
+    format: str | None = None,
+    file_rows: int | None = None,
+    partition_by: None = None,
+    partition_style: None = None,
+    writer: dict[str, Any] | None = None,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+    embed_profile: bool = False,
+    scale: float | None = None,
+) -> 'BundleWritePlan': ...
+
+
+@overload
 def plan(
     profile: ProfileSource,
     out: str | os.PathLike[str],
@@ -514,14 +585,44 @@ def plan(
     writer: dict[str, Any] | None = None,
     scenario: Scenario | Sequence[Scenario] | None = None,
     embed_profile: bool = False,
-) -> WritePlan:
+    scale: None = None,
+) -> WritePlan: ...
+
+
+def plan(
+    profile: ProfileSource | Bundle,
+    out: str | os.PathLike[str],
+    *,
+    rows: int | None = None,
+    seed: int | None = None,
+    format: str | None = None,
+    file_rows: int | None = None,
+    partition_by: list[str] | None = None,
+    partition_style: str | None = None,
+    writer: dict[str, Any] | None = None,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+    embed_profile: bool = False,
+    scale: float | None = None,
+) -> 'WritePlan | BundleWritePlan':
     """What `write` would write with the same arguments: the identity, the format and settings, every range and each column's sampler.
 
-    It reads nothing at `out`, and refuses what `write` would refuse from its arguments alone.
+    It reads nothing at `out`, and refuses what `write` would refuse from its arguments alone. A bundle gives a
+    BundleWritePlan, holding each table's WritePlan.
     """
+    from doppeldata import bundle_generation as bundles
+
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer, embed_profile)
-    prepared = prepared_write(profile, out, rows, seed, choices, scenario)
-    engine, options, target = prepared.engine, prepared.options, prepared.one_file
+    bundle = bundles.bundle_from(profile)
+    if bundle is not None:
+        bundles.refuse_rows(rows)
+        return bundles.plan_bundle(bundle, out, seed=seed or 0, scale=1.0 if scale is None else scale, choices=choices, scenario=scenario)
+    refuse_scale(scale)
+    prepared = prepared_write(bundles.table_source(profile), out, rows, seed, choices, scenario)
+    return write_plan_of(prepared.engine, prepared.options, prepared.destination, prepared.one_file)
+
+
+def write_plan_of(engine: '_core.Plan', options: '_core.WriteOptions', destination: str, target: Path | None = None) -> WritePlan:
+    """What writing `engine`'s dataset with `options` to `destination` would do, as the one file `target` where given."""
     settings = json.loads(engine.written_settings_json(options))
     ranges = [PlannedRange(**planned) for planned in json.loads(engine.ranges_json(options))]
     if target is not None:
@@ -530,7 +631,7 @@ def plan(
     stream = json.loads(stream_json) if stream_json is not None else None
     stream_files = stream['change_files_at_most'] + stream['expected_parts'] if stream is not None else 0
     return WritePlan(
-        destination=prepared.destination,
+        destination=destination,
         identity=json.loads(engine.identity_json),
         dataset_digest=engine.dataset_digest,
         format=settings['format'],
@@ -545,6 +646,28 @@ def plan(
     )
 
 
+@overload
+def write(
+    profile: Bundle,
+    out: str | os.PathLike[str],
+    *,
+    rows: None = None,
+    seed: int | None = None,
+    format: str | None = None,
+    file_rows: int | None = None,
+    partition_by: None = None,
+    partition_style: None = None,
+    writer: dict[str, Any] | None = None,
+    threads: int = 0,
+    replace: bool = False,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+    manifest: bool = False,
+    embed_profile: bool = False,
+    scale: float | None = None,
+) -> 'BundleManifest': ...
+
+
+@overload
 def write(
     profile: ProfileSource,
     out: str | os.PathLike[str],
@@ -561,7 +684,28 @@ def write(
     scenario: Scenario | Sequence[Scenario] | None = None,
     manifest: bool = False,
     embed_profile: bool = False,
-) -> Manifest:
+    scale: None = None,
+) -> Manifest: ...
+
+
+def write(
+    profile: ProfileSource | Bundle,
+    out: str | os.PathLike[str],
+    *,
+    rows: int | None = None,
+    seed: int | None = None,
+    format: str | None = None,
+    file_rows: int | None = None,
+    partition_by: list[str] | None = None,
+    partition_style: str | None = None,
+    writer: dict[str, Any] | None = None,
+    threads: int = 0,
+    replace: bool = False,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+    manifest: bool = False,
+    embed_profile: bool = False,
+    scale: float | None = None,
+) -> 'Manifest | BundleManifest':
     """Write the dataset to `out` and return its manifest. `profile` is taken as `generate` takes it.
 
     `out` is a local directory, an `s3://` or `s3a://` URL, or `memory://`, which keeps nothing but the manifest. Each holds
@@ -588,9 +732,26 @@ def write(
     The scenario's document goes under `doppeldata.scenario`, so the file alone regenerates the dataset as `profile`. Any
     other format raises WriteFailed. A profile made from data that fails `profile check` raises CheckFailed before a byte is
     written, as `export` refuses it, because the file carries every literal the profile holds.
+
+    A bundle writes each table under `out/<table>/` with its manifest, and at `out` the bundle's manifest naming each,
+    returned as a BundleManifest. `scale` and `scenario` are taken as `generate` takes them for a bundle. Each table is
+    partitioned as its profile records, so `partition_by` and `partition_style` are refused, and so are `embed_profile`, a
+    one-file `out` and `manifest`, which a bundle always writes.
     """
+    from doppeldata import bundle_generation as bundles
+
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer, embed_profile)
-    prepared = prepared_write(profile, out, rows, seed, choices, scenario)
+    bundle = bundles.bundle_from(profile)
+    if bundle is not None:
+        bundles.refuse_rows(rows)
+        if manifest:
+            raise ValueError('a bundle always writes its manifests, and manifest asks for one beside a single file')
+        scale = 1.0 if scale is None else scale
+        return bundles.write_bundle(
+            bundle, out, seed=seed or 0, scale=scale, choices=choices, threads=threads, replace=replace, scenario=scenario
+        )
+    refuse_scale(scale)
+    prepared = prepared_write(bundles.table_source(profile), out, rows, seed, choices, scenario)
     if prepared.one_file is not None:
         return write_one_file(prepared, prepared.one_file, threads=threads, replace=replace, manifest=manifest)
     s3_store = s3_store_of(prepared.destination, prepared.bucket)

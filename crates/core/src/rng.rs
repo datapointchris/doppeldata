@@ -8,12 +8,12 @@ use rand_chacha::ChaCha8Rng;
 
 /// The version of every sampler's draw order. It is part of a dataset's identity, and any change
 /// that alters a generated value for the same inputs raises it.
-pub const STREAM_VERSION: u32 = 10;
+pub const STREAM_VERSION: u32 = 11;
 
 /// The rows one block holds. A block's streams start fresh, so any thread can produce any block.
 pub const BLOCK_ROWS: u64 = 65_536;
 
-fn splitmix(mut x: u64) -> u64 {
+pub(crate) fn splitmix(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = x;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);

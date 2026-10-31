@@ -257,10 +257,10 @@ so they never read it as data. Its schema is `doppeldata schemas show manifest`.
 select count(*) from read_json_auto('out/part-*.json')
 ```
 
-- **`identity` holds the dataset identity's five values, keyed as its canonical JSON.**
-  `dataset_digest` is their SHA-256. The seed and the row count are decimal strings, because JSON
-  numbers are exact only to 2^53. A file's row and byte counts are JSON numbers, which no single
-  object nears that bound.
+- **`identity` holds the dataset identity's seven values, keyed as its canonical JSON.**
+  `dataset_digest` is their SHA-256. The seed, the row count and the scale are decimal strings,
+  because JSON numbers are exact only to 2^53. A file's row and byte counts are JSON numbers, which
+  no single object nears that bound.
 - **`format` and `writer` record every setting**, defaults included, so nothing depends on a later
   default.
 - **`scenario` records the scenario's name, the path it was loaded from, and its `document`.** The
@@ -283,6 +283,33 @@ select count(*) from read_json_auto('out/part-*.json')
 - **`faults` counts the faults `_faults.jsonl` lists, by kind.** It is null for a write that lists
   none: one with no `malformed_rows`, and no `cdc` with a fault rate. A partial manifest counts the
   faults in the objects it lists.
+
+## A bundle writes each table as its own dataset, and a root manifest names each one's
+
+```bash
+doppeldata data generate orders-customers --scale 0.1 --out shop/
+```
+
+```text
+customers  wrote 4,000 rows as parquet in 1 file, 48.1 KB
+orders     wrote 55,000 rows as parquet in 1 file, 896.4 KB
+```
+
+Each table goes under `<out>/<table>/` with its own `_manifest.json`, parents first. So
+`shop/orders/` reads and regenerates as a dataset of its own. The root `shop/_manifest.json` is a
+bundle manifest, `doppeldata schemas show bundle-manifest`.
+
+- **The root manifest is the bundle's claim.** It is stored as `_manifest.partial.json` before the
+  first table, with every table partial, and as `_manifest.json` once every table is whole. A run
+  that stops leaves the partial one, naming each table it finished.
+- **The root names each table's manifest by path and `dataset_digest`, never by embedding it.** A
+  table's manifest lists every file it wrote, so embedding it would hold every file list twice.
+- **`set_aside` names each relationship and `inherited` entry the bundle states and does not
+  draw**, by pointer. One whose columns another relationship with more of them draws is the
+  common case, as a composite key's single-column part.
+- **A bundle write is refused to one file, with `partition_by` or `partition_style`, and with
+  `embed_profile`.** Each table is partitioned as its own profile records. A table regenerates
+  from the whole bundle, which no one file could embed.
 
 ## `_faults.jsonl` lists each fault `malformed_rows` or `cdc` placed, one JSON object a line
 

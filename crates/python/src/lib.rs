@@ -633,6 +633,246 @@ mod _core {
         }
     }
 
+    /// A bundle resolved for generation: a ``Plan`` for each table, every parent before its children,
+    /// at ``scale`` times each table's row count from ``seed``. ``bundle_json`` holds every table
+    /// inline. ``scenarios``, where given, is each scenario's JSON with its perturbation ids
+    /// resolved and the source an error names it by, beside the digest of the whole set.
+    #[pyclass(frozen)]
+    struct BundlePlan {
+        plan: Arc<doppeldata_core::BundlePlan>,
+        tables: Vec<(String, Py<Plan>)>,
+        patched: String,
+    }
+
+    #[pymethods]
+    impl BundlePlan {
+        #[new]
+        #[pyo3(signature = (bundle_json, bundle_digest, seed, scale, source, scenarios=None))]
+        fn new(
+            py: Python<'_>,
+            bundle_json: &str,
+            bundle_digest: &str,
+            seed: u64,
+            scale: f64,
+            source: &str,
+            scenarios: Option<(Vec<(String, String)>, String)>,
+        ) -> PyResult<Self> {
+            let not_the_model =
+                |error: serde_json::Error| PyValueError::new_err(format!("{source} does not match the engine's profile model: {error}"));
+            let document: serde_json::Value = serde_json::from_str(bundle_json).map_err(not_the_model)?;
+            let mut read: BTreeMap<String, Scenario> = BTreeMap::new();
+            let mut sources: BTreeMap<String, String> = BTreeMap::new();
+            let digest = scenarios.as_ref().map(|(_, digest)| digest.clone());
+            for (json, scenario_source) in scenarios.map(|(listed, _)| listed).unwrap_or_default() {
+                let scenario: Scenario = serde_json::from_str(&json).map_err(|error| {
+                    PyValueError::new_err(format!("{scenario_source} does not match the engine's scenario model: {error}"))
+                })?;
+                let Some(table) = scenario.table.clone() else {
+                    let message = "a bundle's scenario names the table it bends";
+                    return Err(scenario_refused(py, &scenario_source, "unknown-table", "/table", message));
+                };
+                if read.contains_key(&table) {
+                    let message = format!("another scenario bends {table}; compose a table's scenarios into one");
+                    return Err(scenario_refused(py, &scenario_source, "unknown-table", "/table", &message));
+                }
+                sources.insert(table.clone(), scenario_source);
+                read.insert(table, scenario);
+            }
+            let source_of = |error: &PlanError| {
+                let table = match error {
+                    PlanError::Scenario { .. } | PlanError::ScenarioDigest { .. } => read.keys().next(),
+                    _ => None,
+                };
+                table
+                    .and_then(|table| sources.get(table))
+                    .map_or("the scenario", String::as_str)
+                    .to_string()
+            };
+            let patched = doppeldata_core::scenario::patched_bundle(&document, &read).map_err(|error| {
+                let scenario_source = source_of(&error);
+                scenario_refused(py, &scenario_source, error.code(), error.field(), &plan_message(&error))
+            })?;
+            let patched_json = patched.to_string();
+            let Profile::Bundle(bundle) = serde_json::from_value(patched).map_err(not_the_model)? else {
+                return Err(PyValueError::new_err(format!("{source} is a table profile, which Plan plans")));
+            };
+            let applied = digest
+                .as_deref()
+                .map(|digest| doppeldata_core::BundleScenarios { digest, tables: &read });
+            let planned = py.detach(|| doppeldata_core::plan_bundle(&bundle, bundle_digest, applied, seed, scale));
+            let plan = match planned {
+                Ok(plan) => plan,
+                Err(error) if error.in_scenario() => {
+                    let scenario_source = source_of(&error);
+                    return Err(scenario_refused(
+                        py,
+                        &scenario_source,
+                        error.code(),
+                        error.field(),
+                        &plan_message(&error),
+                    ));
+                }
+                Err(error) => return Err(plan_refused(py, source, error)),
+            };
+            let mut tables = Vec::new();
+            for (name, table_plan) in plan.tables() {
+                let Some(doppeldata_core::profile::BundleTable::Inline(table)) = bundle.tables.get(name) else {
+                    unreachable!("the engine plans only inline tables")
+                };
+                let held = Plan {
+                    profile: Arc::new(Profile::Table(table.clone())),
+                    plan: table_plan.clone(),
+                    scenario_source: sources.get(name).cloned(),
+                };
+                tables.push((name.to_string(), Py::new(py, held)?));
+            }
+            Ok(Self {
+                plan: Arc::new(plan),
+                tables,
+                patched: patched_json,
+            })
+        }
+
+        /// The bundle as the plan draws it, as JSON: every table inline, each scenario's patch
+        /// applied to its table and to the relationships drawing that table's columns.
+        #[getter]
+        fn bundle_json(&self) -> String {
+            self.patched.clone()
+        }
+
+        /// The bundle's own identity as RFC 8785 canonical JSON: no table, and every table's rows summed.
+        #[getter]
+        fn identity_json(&self) -> String {
+            self.plan.identity().canonical_json()
+        }
+
+        #[getter]
+        fn dataset_digest(&self) -> String {
+            self.plan.identity().digest()
+        }
+
+        /// Each table's name and plan, every parent before its children.
+        fn tables(&self, py: Python<'_>) -> Vec<(String, Py<Plan>)> {
+            self.tables.iter().map(|(name, plan)| (name.clone(), plan.clone_ref(py))).collect()
+        }
+
+        /// Each relationship: its name, its pointer in the bundle, what draws its columns instead
+        /// where another relationship does, and each ``inherited`` entry and ``ordinal`` set aside
+        /// with why.
+        fn relationships(&self) -> Vec<PlannedRelationshipRow> {
+            self.plan
+                .relationships()
+                .iter()
+                .map(|planned| {
+                    (
+                        planned.name.clone(),
+                        planned.pointer.clone(),
+                        planned.set_aside.clone(),
+                        planned.entries_set_aside.clone(),
+                    )
+                })
+                .collect()
+        }
+
+        /// The pointer of each relationship, ``inherited`` entry and ``ordinal`` the bundle states and
+        /// the plan does not draw.
+        fn set_aside(&self) -> Vec<String> {
+            self.plan.set_aside()
+        }
+
+        /// Claims ``destination`` for the bundle and returns the claim as JSON, which ``commit``
+        /// takes back. ``profile_json`` and ``scenario_json`` are the manifest's ``profile`` and
+        /// ``scenario`` records. Each table is then written to ``<destination>/<table>``.
+        #[pyo3(signature = (destination, profile_json, scenario_json, *, replace, s3_store=None))]
+        fn claim(
+            &self,
+            py: Python<'_>,
+            destination: &str,
+            profile_json: &str,
+            scenario_json: Option<&str>,
+            replace: bool,
+            s3_store: Option<Bound<'_, PyDict>>,
+        ) -> PyResult<String> {
+            let unreadable = |error: serde_json::Error| refused(py, WriteError::Settings(error.to_string()));
+            let profile = serde_json::from_str(profile_json).map_err(unreadable)?;
+            let scenario = scenario_json.map(serde_json::from_str).transpose().map_err(unreadable)?;
+            let destination = destination_at(py, destination, s3_store)?;
+            let claim = doppeldata_writers::bundle_manifest(&self.plan, profile, scenario, &destination);
+            let (run, cancel) = run_options(1, replace);
+            match detached(py, &cancel, || doppeldata_writers::claim_bundle(&claim, &run, &destination)) {
+                (Ok(()), None) => Ok(serde_json::to_string(&claim).expect("a manifest always serializes")),
+                (Ok(()), Some(signal)) => Err(signal),
+                (Err(failure), signal) => Err(write_failed(py, failure, signal.is_some(), None)),
+            }
+        }
+
+        /// Stores the bundle's manifest and returns it as JSON: whole as ``_manifest.json`` once
+        /// every table is, else partial under the claim's name. ``claim_json`` is what ``claim``
+        /// returned, its ``threads``, ``tasks`` and ``elapsed_ms`` set to how the tables were
+        /// written, and ``written`` each table's manifest JSON as its write returned it.
+        #[pyo3(signature = (destination, claim_json, written, *, s3_store=None))]
+        fn commit(
+            &self,
+            py: Python<'_>,
+            destination: &str,
+            claim_json: &str,
+            written: Vec<String>,
+            s3_store: Option<Bound<'_, PyDict>>,
+        ) -> PyResult<String> {
+            let unreadable = |error: serde_json::Error| PyValueError::new_err(format!("not a manifest commit takes: {error}"));
+            let claim = serde_json::from_str(claim_json).map_err(unreadable)?;
+            let written: Vec<doppeldata_core::manifest::Manifest> = written
+                .iter()
+                .map(|json| serde_json::from_str(json))
+                .collect::<Result<_, _>>()
+                .map_err(unreadable)?;
+            let destination = destination_at(py, destination, s3_store)?;
+            let (run, cancel) = run_options(1, false);
+            match detached(py, &cancel, || {
+                doppeldata_writers::commit_bundle(claim, &written, &run, &destination)
+            }) {
+                (Ok(manifest), None) => Ok(serde_json::to_string(&manifest).expect("a manifest always serializes")),
+                (Ok(_), Some(signal)) => Err(signal),
+                (Err(failure), signal) => Err(write_failed(py, failure, signal.is_some(), None)),
+            }
+        }
+    }
+
+    /// A relationship's name, pointer, what draws its columns instead, and its ``inherited``
+    /// entries set aside, each with why.
+    type PlannedRelationshipRow = (String, String, Option<String>, Vec<(String, String)>);
+
+    /// The determinism contract's SHA-256 over every table a bundle generates at ``scale``, each
+    /// table's blocks made on ``threads`` threads, the tables parent first.
+    #[pyfunction]
+    #[pyo3(signature = (bundle_json, bundle_digest, seed, scale, *, threads))]
+    fn determinism_bundle_values_digest(
+        py: Python<'_>,
+        bundle_json: &str,
+        bundle_digest: &str,
+        seed: u64,
+        scale: f64,
+        threads: usize,
+    ) -> PyResult<String> {
+        let bundle = BundlePlan::new(py, bundle_json, bundle_digest, seed, scale, "the bundle", None)?;
+        let cancel = AtomicBool::new(false);
+        let mut tables = Vec::new();
+        for (_, table) in &bundle.tables {
+            let plan = &*table.get().plan;
+            let (blocks, signal) = detached(py, &cancel, || {
+                in_parallel(plan.block_count(), threads, &cancel, |block| {
+                    let batch = plan.generate_block(block).expect("every block below block_count is in range");
+                    (batch, plan.text_cells(block).expect("every block below block_count is in range"))
+                })
+            });
+            if let Some(signal) = signal {
+                return Err(signal);
+            }
+            tables.push(blocks.expect("only a signal cancels"));
+        }
+        Ok(doppeldata_core::bundle_values_digest(&tables))
+    }
+
     /// The threads ``write_ranges`` writes on. A task scheduler such as Spark already gives each
     /// task a core, so a task's ranges are written in turn.
     const SPLIT_TASK_THREADS: usize = 1;
@@ -826,7 +1066,9 @@ mod _core {
     /// What a refusal says, without the pointer and code its display wraps it in.
     fn plan_message(error: &PlanError) -> String {
         match error {
-            PlanError::Column { message, .. } | PlanError::Scenario { message, .. } => message.clone(),
+            PlanError::Column { message, .. } | PlanError::Scenario { message, .. } | PlanError::Relationship { message, .. } => {
+                message.clone()
+            }
             _ => error.to_string(),
         }
     }

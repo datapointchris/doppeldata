@@ -85,6 +85,27 @@ driver   commit ─── _faults.jsonl, _manifest.json, claim removed
   layout settings. One call would take two disjoint sets of arguments, and Spark names its own
   files, so its way has no manifest to return.
 
+## A bundle generates one DataFrame per table, and writes each table as its own job, parents first
+
+```python
+bundle = sd.Bundle.example('orders-customers')
+frames = sd.spark.generate(spark, bundle, scale=0.1, seed=7)                    # {'customers': DataFrame, 'orders': DataFrame}
+manifest = sd.spark.write(spark, bundle, 's3://bucket/shop/', scale=0.1, seed=7)   # a BundleManifest
+```
+
+- **Each executor process plans the whole bundle once.** A task carries `BundleTableArguments`,
+  the bundle's arguments and one table's name. `built_bundle_plan` caches the plan per process.
+  A foreign key is drawn from its parent's keys by formula, so no table's tasks read another's rows.
+- **`write` writes each table under `out/<table>/` as one Spark job, parents first.** Each job
+  claims, writes and commits as above. The bundle's `_manifest.json` at `out` is stored once every
+  table is whole. A failed job stores its table's partial manifest and the bundle's, which names
+  each table already whole.
+- **`rows` is refused with a bundle, and `scale` multiplies every table's.** `scale` with one
+  table's profile is refused.
+- **The parity check below generates and writes `orders-customers` at 3 partitions.** On
+  `apache/spark:4.1.3-python3`, both tables held a local `sd.generate`'s values. The customers
+  table's 1 file and the orders table's 6 matched a local bundle write's SHA-256.
+
 ## Spark refuses unsigned integers, `date64`, times, timestamps not in microseconds, and `large_list`
 
 `struct_type(profile)` gives the DataFrame's schema, and refuses a column Spark cannot carry with
@@ -116,8 +137,9 @@ the `eight-columns` example through `generate` with 7 and with 40 partitions, co
 Arrow, and compares every value with `sd.stream`, each float by its bits. It then writes them through
 `write` with each partition count, and compares every file's SHA-256 with a `doppeldata data
 generate` of the same arguments run on the host. Under `malformed_rows` it compares `_faults.jsonl`
-byte for byte too. Last, it checks `spark_holds` against how the image
-carries each fixture column. Build the wheel, then run it over the images it names by default:
+byte for byte too. It then checks `spark_holds` against how the image
+carries each fixture column. Last, it generates and writes the `orders-customers` bundle, each
+table compared the same way. Build the wheel, then run it over the images it names by default:
 
 ```bash
 cd library && uv run --with ziglang maturin build --release --zig --compatibility manylinux2014 --out ../dist && cd ..

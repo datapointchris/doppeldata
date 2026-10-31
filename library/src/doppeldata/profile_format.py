@@ -32,6 +32,7 @@ from ruamel.yaml.representer import RoundTripRepresenter
 
 from doppeldata import _core
 from doppeldata.errors import DoppeldataError
+from doppeldata.example_profiles import bundle_example_resource
 from doppeldata.example_profiles import example_resource
 from doppeldata.published_schemas import schema_text
 
@@ -694,6 +695,18 @@ class Bundle:
                 raise InvalidProfile(str(index), [Issue('table-name-mismatch', pointer(('tables', name)), message)])
             tables[name] = table
         return cls(document, index, tables)
+
+    @classmethod
+    def example(cls, name: str) -> 'Bundle':
+        """An example bundle the library ships, every table inline. It has no file of its own, so `save` needs a path."""
+        with importlib.resources.as_file(bundle_example_resource(name)) as path:
+            bundle = cls.load(path)
+        bundle.path = None
+        return bundle
+
+    @property
+    def name(self) -> str:
+        return str(self.document['name'])
 
     @classmethod
     def from_data_package(cls, path: str | Path) -> 'Bundle':

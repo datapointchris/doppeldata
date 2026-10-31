@@ -26,6 +26,43 @@ So a dataset regenerates with no scenario file, and an edited member shows which
 misspelled column would then generate a new column from a fragment. It is refused as
 `unknown-column`.
 
+## A bundle's scenario names the table it bends, and may patch the relationships drawing it
+
+```yaml
+scenario: one-busy-customer
+table: orders
+patch:
+  relationships:
+    customer_id:
+      fanout:
+        top_share: {top1: 0.05, top10: 0.1, top100: 0.3}
+```
+
+```bash
+doppeldata data generate orders-customers --scenario one-busy-customer.scenario.yaml --out busy/
+```
+
+The busiest of 40,000 customers then holds 0.05 of the 550,000 orders, the top 10 hold 0.1 and the
+top 100 hold 0.3. `data check` measures `top_share_delta` against the patched shares.
+
+- **`table` names the bundle table the patch and every perturbation apply to.** A bundle refuses a
+  scenario naming no table, or one it lacks, as `unknown-table`. A lone profile takes a scenario
+  naming its own table, or none.
+- **Several scenarios bend several tables, one each.** Scenarios naming one table compose as they
+  do on a lone profile. One composition naming two tables is refused.
+- **`patch.relationships` is keyed by a relationship's `from` columns, without their table**,
+  joined by `,`, so a composite key is `product_code,supplier_id`. It patches a relationship
+  drawing a column of the scenario's table. Any other key is refused as `unknown-relationship`,
+  and so is the key on a lone profile.
+- **`hot_keys` on a foreign-key column takes its `keys` busiest parents.** `share` of the rows
+  take one of them, every column of the key with it. Each inherited column copies the hot
+  parent's, at the relationship's agreement. On `orders-customers`, `keys: 5` and `share: 0.6` put
+  0.60059 of 550,000 orders on 5 customers the parent table holds, with `region` agreeing at
+  0.99516. `data check` skips every metric on the key's columns and its inherited columns.
+- **The bundle's scenario digest covers the map of each table to its scenario.**
+  [determinism-contract.md](determinism-contract.md) says why one table's scenario renames every
+  table.
+
 ## `malformed_rows` writes broken files, and `_faults.jsonl` names every fault in them
 
 A pipeline's bad-row handling is tested against files broken on purpose. The `bad-csv` example

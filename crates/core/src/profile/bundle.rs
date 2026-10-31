@@ -40,18 +40,45 @@ pub enum BundleTable {
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Relationship {
-    /// `table.column` holding the reference.
-    #[schemars(regex(pattern = r"^[^.]+\..+$"))]
-    pub from: String,
-    /// `table.column` referred to.
-    #[schemars(regex(pattern = r"^[^.]+\..+$"))]
-    pub to: String,
+    /// Each `table.column` holding the reference, all in one table. A composite key names each of its
+    /// columns, in the order `to` names the columns each refers to.
+    #[schemars(length(min = 1), inner(regex(pattern = r"^[^.]+\..+$")))]
+    pub from: Vec<String>,
+    /// Each `table.column` referred to, all in one table, one for each of `from`.
+    #[schemars(length(min = 1), inner(regex(pattern = r"^[^.]+\..+$")))]
+    pub to: Vec<String>,
     /// The share of `from`'s distinct values that `to` holds.
     pub containment: Option<Rate>,
     /// The share of `from`'s rows holding a value that `to` does not hold, of those holding a value.
     pub orphan_rate: Option<Rate>,
     pub cardinality: Option<Cardinality>,
     pub fanout: Option<Fanout>,
+    /// The child columns holding their parent row's value on nearly every joined row, such as the
+    /// customer's `region` an order carries.
+    pub inherited: Option<Vec<Inherited>>,
+    /// The column of `from`'s table numbering each parent's child rows from 1 to their count, such as
+    /// an order's line number.
+    pub ordinal: Option<String>,
+}
+
+impl Relationship {
+    /// The relationship as a report names it: `orders.customer_id → customers.customer_id`, each side's
+    /// columns joined by `, `.
+    pub fn display_name(&self) -> String {
+        format!("{} → {}", self.from.join(", "), self.to.join(", "))
+    }
+}
+
+/// A child column that copies a column of its parent row, as a share of joined rows, never a value.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Inherited {
+    /// The column of `from`'s table holding the copy.
+    pub child: String,
+    /// The column of `to`'s table it copies.
+    pub parent: String,
+    /// The share of joined child rows whose value equals their parent row's, a null equal to a null.
+    pub agreement: Rate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]

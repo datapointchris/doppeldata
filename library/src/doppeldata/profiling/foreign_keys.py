@@ -1,8 +1,11 @@
-"""The foreign keys between a bundle's tables: a column whose name refers to another table's key, kept where nearly every
-value it holds is one of that key's. Each is counted over every row of both tables."""
+"""The foreign keys between a bundle's tables: columns whose names refer to another table's key of one or two columns, kept
+where nearly every value they hold is one of that key's, the columns a child copies from its parent row, and the column
+numbering each parent's child rows. Each is counted over every row of both tables."""
 
 import dataclasses as dc
+import itertools
 import math
+import re
 from typing import Any
 
 from doppeldata.profiling.backend import Backend
@@ -12,17 +15,27 @@ from doppeldata.profiling.recorded_counts import RATE_DIGITS
 from doppeldata.profiling.recorded_counts import rate
 from doppeldata.profiling.recorded_counts import significant
 from doppeldata.profiling.statistic_catalog import QUANTILES
+from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.table_keys import KEY_KINDS
 from doppeldata.profiling.table_keys import KEY_SHARE
 
 # A reference is a foreign key where the parent holds at least this share of its distinct values.
 CONTAINMENT_FLOOR = 0.95
+# A child column is inherited where at least this share of its joined rows equal their parent row's column.
+AGREEMENT_FLOOR = 0.99
+# The longest table alias a column's name begins with, as `ps_` begins every column of TPC-H's `partsupp`.
+LONGEST_ALIAS = 3
+# A key's squeezed name that names a thing and its id or key, which a column may name after a role, as `PULocationID`
+# names `LocationID` as the pickup's.
+ROLED_KEY = re.compile(r'[a-z]{2,}(?:id|key)')
 # The busiest parents whose share of the child rows is stated, by the field naming it.
 TOP_SHARES = {'top1': 1, 'top10': 10, 'top100': 100}
 # The ranks a Zipf law's normalizing sums are added up over term by term, the rest taken by an integral.
 SUMMED_RANKS = 1000
 FIT_STEPS = 80
 LARGEST_EXPONENT = 20.0
+# The relative difference between a fan-out's mean log rank and the uniform law's within which the two are one.
+EVEN_TOLERANCE = 1e-9
 
 
 @dc.dataclass(frozen=True)
@@ -37,32 +50,112 @@ class BundleMember:
 
 @dc.dataclass(frozen=True)
 class Reference:
-    """A child column found to refer to a parent's key, and the relationship written for it."""
+    """Child columns found to refer to a parent's key, and the relationship written for them."""
 
     child: BundleMember
-    column: str
+    columns: tuple[str, ...]
     parent: BundleMember
-    key: str
+    keys: tuple[str, ...]
     written: dict[str, Any]
 
 
 def relationships(backend: Backend, members: list[BundleMember], k_min: int) -> list[dict[str, Any]]:
-    """Every foreign key between the members, in the order of the tables and their columns."""
+    """Every foreign key between the members, in the order of the tables and their columns, each with the columns its
+    child copies from the parent row."""
     found = []
     for child in members:
         for parent in members:
             if parent is child:
                 continue
-            kinds = {spec.name: spec.kind for spec in parent.specs}
-            for key in single_keys(parent.document):
-                for spec in child.specs:
-                    if spec.kind not in KEY_KINDS or spec.kind is not kinds.get(key) or not refers_to(spec.name, parent.name, key):
-                        continue
-                    counts = backend.foreign_key_counts(child.table, spec.name, parent.table, key)
-                    written = written_relationship(f'{child.name}.{spec.name}', f'{parent.name}.{key}', counts, k_min)
+            for keys in parent_keys(parent.document):
+                for columns in referring_columns(child, parent, keys):
+                    written = measured_relationship(backend, child, columns, parent, keys, k_min, contained_only=True)
                     if written:
-                        found.append(Reference(child, spec.name, parent, key, written))
-    return [reference.written for reference in one_way(found, members)]
+                        found.append(Reference(child, columns, parent, keys, written))
+    kept = one_way(found, members)
+    drawn = {(reference.child.name, column) for reference in kept for column in reference.columns}
+    for reference in kept:
+        inherited = inherited_columns(backend, reference.child, reference.columns, reference.parent, reference.keys, k_min)
+        if inherited:
+            reference.written['inherited'] = inherited
+        ordinal = ordinal_column(backend, reference.child, reference.columns, drawn)
+        if ordinal:
+            reference.written['ordinal'] = ordinal
+    return [reference.written for reference in kept]
+
+
+def referring_columns(child: BundleMember, parent: BundleMember, keys: tuple[str, ...]) -> list[tuple[str, ...]]:
+    """Each choice of the child's columns, one for each key column, whose names refer to it at its kind."""
+    kinds = {spec.name: spec.kind for spec in parent.specs}
+    choices = [
+        [
+            spec.name
+            for spec in child.specs
+            if spec.kind in KEY_KINDS and spec.kind is kinds.get(key) and refers_to(spec.name, child.name, parent.name, key)
+        ]
+        for key in keys
+    ]
+    return [columns for columns in itertools.product(*choices) if len(set(columns)) == len(columns)]
+
+
+def measured_relationship(
+    backend: Backend,
+    child: BundleMember,
+    columns: tuple[str, ...],
+    parent: BundleMember,
+    keys: tuple[str, ...],
+    k_min: int,
+    *,
+    contained_only: bool,
+) -> dict[str, Any] | None:
+    """The relationship of `columns` to the parent's `keys`, counted over every row of both. Where `contained_only`, None
+    where the parent holds under `CONTAINMENT_FLOOR` of the child's values."""
+    counts = backend.foreign_key_counts(child.table, list(columns), parent.table, list(keys))
+    child_refs = [f'{child.name}.{column}' for column in columns]
+    parent_refs = [f'{parent.name}.{key}' for key in keys]
+    return written_relationship(child_refs, parent_refs, counts, k_min, contained_only=contained_only)
+
+
+def inherited_columns(
+    backend: Backend, child: BundleMember, columns: tuple[str, ...], parent: BundleMember, keys: tuple[str, ...], k_min: int
+) -> list[dict[str, Any]]:
+    """The child's columns equal to a column of the parent row they join on at least `AGREEMENT_FLOOR` of the joined rows,
+    each with the parent column it agrees with most. A pair is of one kind, neither column is a key the join is taken on,
+    and the parent column holds more than one value. Fewer than k_min disagreeing rows are written as none."""
+    distinct = {column['name']: (column.get('distinct') or {}).get('approx') or 0 for column in parent.document.get('columns') or []}
+    candidates = [spec for spec in parent.specs if spec.name not in keys and distinct.get(spec.name, 0) >= 2]
+    pairs = [(spec.name, held.name) for spec in child.specs if spec.name not in columns for held in candidates if held.kind is spec.kind]
+    if not pairs:
+        return []
+    joined, equal = backend.inherited_counts(child.table, list(columns), parent.table, list(keys), pairs)
+    if not joined:
+        return []
+    best: dict[str, tuple[int, str]] = {}
+    for (column, held), agreeing in zip(pairs, equal, strict=True):
+        if agreeing >= AGREEMENT_FLOOR * joined and agreeing > best.get(column, (-1, ''))[0]:
+            best[column] = (agreeing, held)
+    return [
+        {'child': column, 'parent': held, 'agreement': 1.0 if joined - agreeing < k_min else rate(agreeing, joined)}
+        for column, (agreeing, held) in best.items()
+    ]
+
+
+def ordinal_column(backend: Backend, child: BundleMember, columns: tuple[str, ...], drawn: set[tuple[str, str]]) -> str | None:
+    """The child's integer column numbering every key's rows from 1 to their count, the first in table order where several
+    do. A candidate's profile gives its least value as 1 and two or more distinct values, and no relationship draws it."""
+    profiled = {column['name']: column for column in child.document.get('columns') or []}
+
+    def eligible(spec: ColumnSpec) -> bool:
+        profile = profiled.get(spec.name) or {}
+        low = ((profile.get('numeric') or {}).get('extremes') or {}).get('low')
+        distinct = (profile.get('distinct') or {}).get('approx') or 0
+        return spec.kind is ColumnKind.INTEGER and (child.name, spec.name) not in drawn and low == 1 and distinct >= 2
+
+    candidates = [spec.name for spec in child.specs if spec.name not in columns and eligible(spec)]
+    if not candidates:
+        return None
+    keys, numbered = backend.ordinal_counts(child.table, list(columns), candidates)
+    return next((name for name, count in zip(candidates, numbered, strict=True) if keys and count == keys), None)
 
 
 def one_way(found: list[Reference], members: list[BundleMember]) -> list[Reference]:
@@ -70,34 +163,34 @@ def one_way(found: list[Reference], members: list[BundleMember]) -> list[Referen
     where only one is, else toward the table it is named for, as `user_id` is for `users`, else toward the key holding
     more of the other's values, else toward the earlier table."""
     order = {member.name: index for index, member in enumerate(members)}
-    by_ends = {(reference.child.name, reference.column, reference.parent.name, reference.key): reference for reference in found}
+    by_ends = {(reference.child.name, reference.columns, reference.parent.name, reference.keys): reference for reference in found}
 
     def standing(reference: Reference) -> tuple[bool, bool, float, int]:
         toward_primary = (
-            primary_key(reference.parent.document) == reference.key and primary_key(reference.child.document) != reference.column
+            primary_key(reference.parent.document) == reference.keys and primary_key(reference.child.document) != reference.columns
         )
-        named_for_parent = squeezed(reference.key) == singular(squeezed(reference.parent.name)) + 'id'
+        named_for_parent = squeezed(''.join(reference.keys)) == singular(squeezed(reference.parent.name)) + 'id'
         return toward_primary, named_for_parent, reference.written['containment'], -order[reference.parent.name]
 
     def kept(reference: Reference) -> bool:
-        mirror = by_ends.get((reference.parent.name, reference.key, reference.child.name, reference.column))
+        mirror = by_ends.get((reference.parent.name, reference.keys, reference.child.name, reference.columns))
         return mirror is None or standing(reference) > standing(mirror)
 
     return [reference for reference in found if kept(reference)]
 
 
-def primary_key(document: dict[str, Any]) -> str | None:
-    """The column a table profile names as its primary key, where that is one column."""
+def primary_key(document: dict[str, Any]) -> tuple[str, ...] | None:
+    """The columns a table profile names as its primary key."""
     primary = ((document.get('dataset') or {}).get('keys') or {}).get('primary')
-    return primary['columns'][0] if primary and len(primary['columns']) == 1 else None
+    return tuple(primary['columns']) if primary else None
 
 
-def single_keys(document: dict[str, Any]) -> list[str]:
-    """The columns a table profile names as single-column keys, the primary first."""
+def parent_keys(document: dict[str, Any]) -> list[tuple[str, ...]]:
+    """The keys of one or two columns a table profile names, the primary first."""
     keys = (document.get('dataset') or {}).get('keys') or {}
     every = [keys['primary']] if keys.get('primary') else []
     every += keys.get('candidates') or []
-    return [key['columns'][0] for key in every if len(key['columns']) == 1 and (key.get('uniqueness') or 0) >= KEY_SHARE]
+    return [tuple(key['columns']) for key in every if len(key['columns']) <= 2 and (key.get('uniqueness') or 0) >= KEY_SHARE]
 
 
 def squeezed(name: str) -> str:
@@ -110,18 +203,39 @@ def singular(name: str) -> str:
     return name[:-1] if name.endswith('s') and not name.endswith('ss') else name
 
 
-def refers_to(column: str, parent_table: str, key: str) -> bool:
-    """Whether a column's name refers to a parent's key: the key's own name other than a bare `id`, or the parent's
-    singular name and the key's, as `customer_id` refers to `customers.id`. Case and separators are ignored."""
-    written, keyed = squeezed(column), squeezed(key)
-    if written == keyed and keyed != 'id':
-        return True
-    named = singular(squeezed(parent_table))
-    return written in (named + keyed, named + 'id')
+def unaliased(column: str, table: str) -> str:
+    """`column` without the table alias its name begins with: up to three letters and a `_`, the first the table's
+    first letter and each in order in its name, as `ps_partkey` is of `partsupp` and `l_orderkey` of `lineitem`."""
+    alias, separator, rest = column.partition('_')
+    lowered, named = alias.lower(), table.lower()
+    if not separator or not rest or not alias.isalpha() or len(alias) > LONGEST_ALIAS or not named.startswith(lowered[0]):
+        return column
+    letters = iter(named)
+    return rest if all(letter in letters for letter in lowered) else column
 
 
-def written_relationship(child: str, parent: str, counts: list[tuple[bool, int, int]], k_min: int) -> dict[str, Any] | None:
-    """The relationship the counts make, or None where the parent holds too few of the child's values.
+def refers_to(column: str, child_table: str, parent_table: str, key: str) -> bool:
+    """Whether a column's name refers to a parent's key: the key's own name other than a bare `id`, the parent's
+    singular name and the key's, as `customer_id` refers to `customers.id`, or a role and a key naming a thing and its
+    id, as `PULocationID` refers to `LocationID`. Case, separators and each table's alias are ignored, so `o_custkey` of
+    `orders` refers to `c_custkey` of `customer`."""
+    for written, keyed in ((column, key), (unaliased(column, child_table), unaliased(key, parent_table))):
+        written, keyed = squeezed(written), squeezed(keyed)
+        if written == keyed and keyed != 'id':
+            return True
+        named = singular(squeezed(parent_table))
+        if written in (named + keyed, named + 'id'):
+            return True
+        if written.endswith(keyed) and ROLED_KEY.fullmatch(keyed):
+            return True
+    return False
+
+
+def written_relationship(
+    child: list[str], parent: list[str], counts: list[tuple[bool, int, int]], k_min: int, *, contained_only: bool = True
+) -> dict[str, Any] | None:
+    """The relationship the counts make, or where `contained_only`, None where the parent holds too few of the child's
+    values.
 
     Orphan rows fewer than k_min are written as none, so neither rate names them.
     """
@@ -129,7 +243,7 @@ def written_relationship(child: str, parent: str, counts: list[tuple[bool, int, 
     child_values = sum(values for _, rows, values in counts if rows)
     contained = sum(values for held, rows, values in counts if held and rows)
     orphan_rows = sum(rows * values for held, rows, values in counts if not held)
-    if not child_values or contained / child_values < CONTAINMENT_FLOOR:
+    if contained_only and (not child_values or contained / child_values < CONTAINMENT_FLOOR):
         return None
     floored = orphan_rows < k_min
     written: dict[str, Any] = {
@@ -211,9 +325,10 @@ def zipf_exponent(busiest: list[tuple[int, int]]) -> float | None:
         total, logged = zipf_sums(s, parents)
         return logged / total
 
-    # The mean log rank a law gives falls as s rises, from the uniform law's at 0.
+    # The mean log rank a law gives falls as s rises, from the uniform law's at 0. An even fan-out's target is the uniform
+    # law's, computed by another formula, so rounding alone must not move it off 0.
     low, high = 0.0, LARGEST_EXPONENT
-    if mean_log_rank(low) <= target:
+    if mean_log_rank(low) <= target * (1 + EVEN_TOLERANCE):
         return 0.0
     for _ in range(FIT_STEPS):
         middle = (low + high) / 2

@@ -676,11 +676,18 @@
           "$ref": "#/$defs/Decimal"
         },
         "profile_digest": {
-          "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON, as given, before a\nscenario's patch.",
+          "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON, as given, before a\nscenario's patch. In a bundle, the bundle's, every table inline.",
           "type": "string"
         },
+        "scale": {
+          "description": "The scale a bundle was generated at, in decimal, or null for a table generated alone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "scenario_digest": {
-          "description": "`sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON, or null for none.\nThe JSON is taken with each perturbation's `id` resolved, and with `description` and\n`expect` left out. A composition's is its composed document's: the patches merged in order,\nthe perturbations concatenated, and the names joined with `+`.",
+          "description": "`sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON, or null for none.\nThe JSON is taken with each perturbation's `id` resolved, and with `description` and\n`expect` left out. A composition's is its composed document's: the patches merged in order,\nthe perturbations concatenated, and the names joined with `+`. In a bundle, the map of each\ntable a scenario names to its composed document.",
           "type": [
             "string",
             "null"
@@ -695,6 +702,13 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0
+        },
+        "table": {
+          "description": "The bundle table the rows are of, or null for a table generated alone and for a bundle's own\nmanifest.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

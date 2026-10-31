@@ -55,6 +55,7 @@ use self::text::Shape;
 use self::text::StringOutput;
 use self::text::TextSampler;
 use self::text::TextSource;
+pub(crate) use self::text::push_uuid;
 pub use self::text::shape_of;
 pub use self::text_cells::TextCell;
 use self::text_cells::TextOnlyValues;
@@ -331,6 +332,165 @@ impl ColumnPlan {
         };
         let mut tokens = rng_for(at.seed, self.keys.missing_tokens, at.block);
         text_only.cells(nulls, &mut tokens, rows)
+    }
+
+    /// The column made a key a child reads at any row of `rows`, its nulls and missing-value tokens
+    /// dropped: a sequence or a uuid as drawn, another integer as a sequence across its profiled
+    /// extremes, and other text as each row's own value. None for any other column.
+    pub(crate) fn as_row_key(&mut self, column: &Column, rows: u64, seed: u64) -> Option<RowKey> {
+        let key = match &mut self.values {
+            ValueSampler::Sequence(sequence) if sequence.step != 0 => RowKey::Sequence {
+                start: sequence.start,
+                step: sequence.step,
+            },
+            ValueSampler::Numeric(numeric) if numeric.output.is_integer() => {
+                let extremes = column.numeric.as_ref().and_then(|n| n.extremes.as_ref());
+                let (low, high) = (extremes.and_then(|e| e.low)?, extremes.and_then(|e| e.high)?);
+                if !low.is_finite() || !high.is_finite() || high < low {
+                    return None;
+                }
+                let start = low.round() as i64;
+                let step = (((high - low) / rows.saturating_sub(1).max(1) as f64).floor() as i64).max(1);
+                let output = numeric.output;
+                self.values = ValueSampler::Sequence(SequenceSampler { start, step, output });
+                self.sampler = format!("sequence from {start} by {step} across its profiled extremes");
+                RowKey::Sequence { start, step }
+            }
+            ValueSampler::Text(text)
+                if text.index.is_none() && text.check_digit.is_none() && matches!(text.source, TextSource::Provider(Provider::Uuid)) =>
+            {
+                RowKey::Uuid {
+                    seed,
+                    values: self.keys.values,
+                }
+            }
+            ValueSampler::Text(text) => {
+                text.by_row = true;
+                self.sampler = format!("{}, each row its own value", self.sampler);
+                RowKey::TextAtRow {
+                    seed,
+                    keys: self.keys,
+                    sampler: Box::new(text.clone()),
+                }
+            }
+            _ => return None,
+        };
+        self.nulls = None;
+        self.null_share = 0.0;
+        self.text_only = None;
+        Some(key)
+    }
+
+    /// What a key's values are written as in this column: an integer where it stores a number,
+    /// text where it stores text. None for any other column.
+    pub(crate) fn key_column(&self) -> Option<KeyColumn> {
+        Some(match &self.values {
+            ValueSampler::Sequence(sequence) => KeyColumn::Integer(sequence.output),
+            ValueSampler::Numeric(numeric) => KeyColumn::Integer(numeric.output),
+            ValueSampler::Text(text) => KeyColumn::Text(text.output),
+            ValueSampler::Categorical(categorical) => KeyColumn::Text(categorical.output),
+            _ => return None,
+        })
+    }
+
+    /// The share of rows the column's own null mask draws null, before any key draw replaces it.
+    pub(crate) fn profiled_null_share(&self) -> f64 {
+        self.null_share
+    }
+}
+
+/// A key column whose value at any row is a function of the row alone.
+#[derive(Debug, Clone)]
+pub(crate) enum RowKey {
+    Sequence {
+        start: i64,
+        step: i64,
+    },
+    /// The uuid the column's values stream draws at the row: two words of the block's stream each.
+    Uuid {
+        seed: u64,
+        values: u64,
+    },
+    TextAtRow {
+        seed: u64,
+        keys: StreamKeys,
+        sampler: Box<TextSampler>,
+    },
+}
+
+/// One value of a key.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum KeyValue {
+    Null,
+    Integer(i64),
+    Text(String),
+}
+
+impl RowKey {
+    pub(crate) fn is_text(&self) -> bool {
+        !matches!(self, Self::Sequence { .. })
+    }
+
+    pub(crate) fn value_at(&self, row: u64) -> KeyValue {
+        match self {
+            Self::Sequence { start, step } => {
+                let value = i128::from(*start) + i128::from(*step) * i128::from(row);
+                KeyValue::Integer(value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64)
+            }
+            Self::Uuid { seed, values } => {
+                let mut rng = rng_for(*seed, *values, row / crate::rng::BLOCK_ROWS);
+                rng.set_word_pos(4 * u128::from(row % crate::rng::BLOCK_ROWS));
+                let mut out = String::with_capacity(36);
+                text::push_uuid(&mut rng, &mut out);
+                KeyValue::Text(out)
+            }
+            Self::TextAtRow { seed, keys, sampler } => {
+                let mut out = String::new();
+                sampler.push_at_row(*seed, keys, row, &mut out);
+                KeyValue::Text(out)
+            }
+        }
+    }
+
+    /// The largest integer the key holds over `rows` rows, None for text.
+    pub(crate) fn largest(&self, rows: u64) -> Option<i64> {
+        let Self::Sequence { start, step } = self else { return None };
+        let last = i128::from(*start) + i128::from(*step) * i128::from(rows.saturating_sub(1));
+        Some(i128::from(*start).max(last).clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64)
+    }
+}
+
+/// How a column stores a key's values.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum KeyColumn {
+    Integer(NumericOutput),
+    Text(StringOutput),
+}
+
+impl KeyColumn {
+    /// The array of `values`, one per row, an integer written as text in a text column.
+    pub(crate) fn array(self, values: &[KeyValue]) -> ArrayRef {
+        let rows = values.len();
+        let nulls = values
+            .contains(&KeyValue::Null)
+            .then(|| NullBuffer::new(BooleanBuffer::collect_bool(rows, |row| values[row] != KeyValue::Null)));
+        match self {
+            Self::Integer(output) => output.exact_array(rows, nulls, |row| match values[row] {
+                KeyValue::Integer(value) => value,
+                _ => 0,
+            }),
+            Self::Text(output) => {
+                let mut row = 0;
+                output.build(rows, nulls.as_ref(), |out| {
+                    match &values[row] {
+                        KeyValue::Integer(value) => out.push_str(&value.to_string()),
+                        KeyValue::Text(text) => out.push_str(text),
+                        KeyValue::Null => {}
+                    }
+                    row += 1;
+                })
+            }
+        }
     }
 }
 
@@ -611,6 +771,7 @@ fn value_sampler(
     });
     Ok(ValueSampler::Text(TextSampler {
         index: target.and_then(|target| ValueIndex::for_distinct(target, &source.variety())),
+        by_row: false,
         source,
         check_digit,
         output,

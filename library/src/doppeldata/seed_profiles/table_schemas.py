@@ -176,20 +176,21 @@ def as_list(value: Any) -> list[str]:
     return [value] if isinstance(value, str) else [str(each) for each in value]
 
 
-def foreign_keys(resources: Mapping[str, Mapping[str, Any]], found: Path) -> list[dict[str, str]]:
-    """Each single-field foreign key in the package as a relationship from `table.column` to `table.column`."""
+def foreign_keys(resources: Mapping[str, Mapping[str, Any]], found: Path) -> list[dict[str, list[str]]]:
+    """Each foreign key in the package as a relationship from each `table.column` to the `table.column` it refers to."""
     relationships, unread = [], []
     for name, schema in resources.items():
         for key in schema.get('foreignKeys') or []:
             reference = key.get('reference') or {}
             fields, referred = as_list(key.get('fields')), as_list(reference.get('fields'))
             target = reference.get('resource') or name
-            if len(fields) != 1 or len(referred) != 1 or target not in resources:
+            if not fields or len(fields) != len(referred) or target not in resources or target == name:
                 unread.append(f'{name}({", ".join(fields)})')
                 continue
-            relationships.append({'from': f'{name}.{fields[0]}', 'to': f'{target}.{referred[0]}'})
+            relationships.append({'from': [f'{name}.{field}' for field in fields], 'to': [f'{target}.{field}' for field in referred]})
     if unread:
         warn_left_out(
-            f'{found}: foreign keys of several fields, or naming no resource the package holds, are left out: {", ".join(unread)}'
+            f'{found}: foreign keys referring to the same resource, to no resource the package holds, or naming fields '
+            f'unevenly are left out: {", ".join(unread)}'
         )
     return relationships

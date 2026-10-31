@@ -320,6 +320,12 @@ class Scenario:
             return members[0]
         plain = [member.to_plain() for member in members]
         document: dict[str, Any] = {'scenario': '+'.join(each['scenario'] for each in plain)}
+        tables = sorted({each['table'] for each in plain if each.get('table') is not None})
+        if len(tables) > 1:
+            issue = Issue('unknown-table', '/table', f'the scenarios bend {", ".join(tables)}, and one composition bends one table')
+            raise InvalidScenario('+'.join(each['scenario'] for each in plain), [issue])
+        if tables:
+            document['table'] = tables[0]
         patches = [each['patch'] for each in plain if each.get('patch') is not None]
         if patches:
             document['patch'] = functools.reduce(composed_patch, patches)

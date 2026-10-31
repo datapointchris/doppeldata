@@ -24,6 +24,8 @@ CALENDAR_SHARES = ('by_month', 'by_dow', 'by_hour')
 TRIMMED_K = 'trimmed_k'
 DIGIT_BOUNDS = 'digit_bounds'
 EXACT = 'exact'
+# The rule a table's keys are withheld by: they are stated only over at least k_min rows.
+ROWS_AT_LEAST_K_MIN = 'rows >= k_min'
 ROWS_EXPECTED = 'expected dataset.row_count, or generated.sample.rows_read'
 
 
@@ -423,6 +425,10 @@ for definition, classified in FIELD_KINDS.items():
     if published != set(classified):
         unread, gone = sorted(published - set(classified)), sorted(set(classified) - published)
         raise RuntimeError(f'privacy_policy has not classified the {definition} fields {unread}, and classifies {gone}, which it lacks')
-for definition, spelled in (('AuditRule', {kind.rule for kind in FieldKind}), ('ExtremesMethod', {TRIMMED_K, DIGIT_BOUNDS, EXACT})):
+for definition, spelled in (
+    ('AuditRule', {kind.rule for kind in FieldKind}),
+    ('ExtremesMethod', {TRIMMED_K, DIGIT_BOUNDS, EXACT}),
+    ('WithheldRule', {ROWS_AT_LEAST_K_MIN}),
+):
     if spelled != set(published_enum(definition)):
         raise RuntimeError(f'privacy_policy spells {definition} as {sorted(spelled)}; the profile format has {published_enum(definition)}')

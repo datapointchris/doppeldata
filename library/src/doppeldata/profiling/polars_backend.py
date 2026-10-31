@@ -529,13 +529,55 @@ class PolarsBackend:
         return {name: (pl.col(name).cast(pl.Datetime('us')) if schema[name] == pl.Date else pl.col(name)).dt.epoch('us') for name in names}
 
     def foreign_key_counts(
-        self, child: pl.LazyFrame, child_column: str, parent: pl.LazyFrame, parent_column: str
+        self, child: pl.LazyFrame, child_columns: list[str], parent: pl.LazyFrame, parent_columns: list[str]
     ) -> list[tuple[bool, int, int]]:
-        children = child.select(join_key(child, child_column).alias('key')).drop_nulls().group_by('key').len('children')
-        parents = parent.select(join_key(parent, parent_column).alias('key')).drop_nulls().unique().with_columns(parent=pl.lit(True))
-        joined = parents.join(children, on='key', how='full', coalesce=True)
+        keys = [f'key{at}' for at in range(len(child_columns))]
+        children = child.select(join_keys(child, child_columns)).drop_nulls().group_by(keys).len('children')
+        parents = parent.select(join_keys(parent, parent_columns)).drop_nulls().unique().with_columns(parent=pl.lit(True))
+        joined = parents.join(children, on=keys, how='full', coalesce=True)
         counted = joined.group_by(pl.col('parent').fill_null(False), pl.col('children').fill_null(0)).len('values')
         return [(bool(held), int(rows), int(values)) for held, rows, values in counted.collect(engine='streaming').iter_rows()]
+
+    def inherited_counts(
+        self,
+        child: pl.LazyFrame,
+        child_columns: list[str],
+        parent: pl.LazyFrame,
+        parent_columns: list[str],
+        pairs: list[tuple[str, str]],
+    ) -> tuple[int, list[int]]:
+        keys = [f'key{at}' for at in range(len(child_columns))]
+        compared_child = sorted({name for name, _ in pairs})
+        compared_parent = sorted({name for _, name in pairs})
+        children = child.select(*join_keys(child, child_columns), *(pl.col(name).alias(f'c:{name}') for name in compared_child))
+        parents = parent.select(*join_keys(parent, parent_columns), *(pl.col(name).alias(f'p:{name}') for name in compared_parent))
+        joined = children.drop_nulls(keys).join(parents.drop_nulls(keys).unique(keys), on=keys, how='inner')
+        equal = [pl.col(f'c:{a}').eq_missing(pl.col(f'p:{b}')).sum().alias(str(at)) for at, (a, b) in enumerate(pairs)]
+        counted = joined.select(pl.len().alias('joined'), *equal).collect(engine='streaming').row(0)
+        return int(counted[0]), [int(value or 0) for value in counted[1:]]
+
+    def ordinal_counts(self, child: pl.LazyFrame, child_columns: list[str], candidates: list[str]) -> tuple[int, list[int]]:
+        keys = [f'key{at}' for at in range(len(child_columns))]
+        held = [pl.col(f'c{at}') for at in range(len(candidates))]
+        per_key = (
+            child.select(*join_keys(child, child_columns), *(pl.col(name).alias(f'c{at}') for at, name in enumerate(candidates)))
+            .drop_nulls(keys)
+            .group_by(keys)
+            .agg(
+                pl.len().alias('rows'),
+                *(value.min().alias(f'least{at}') for at, value in enumerate(held)),
+                *(value.max().alias(f'greatest{at}') for at, value in enumerate(held)),
+                *(value.drop_nulls().n_unique().alias(f'distinct{at}') for at, value in enumerate(held)),
+            )
+        )
+        numbered = [
+            ((pl.col(f'least{at}') == 1) & (pl.col(f'greatest{at}') == pl.col('rows')) & (pl.col(f'distinct{at}') == pl.col('rows')))
+            .sum()
+            .alias(f'numbered{at}')
+            for at in range(len(candidates))
+        ]
+        counted = per_key.select(pl.len().alias('keys'), *numbered).collect(engine='streaming').row(0)
+        return int(counted[0]), [int(value or 0) for value in counted[1:]]
 
 
 def numeric_value(c: pl.Expr, kind: ColumnKind) -> pl.Expr:
@@ -575,6 +617,11 @@ class PolarsOps:
 def join_key(table: pl.LazyFrame, name: str) -> pl.Expr:
     """A key column as both sides of a join hold it: text as text, and any integer as an int64."""
     return pl.col(name).cast(pl.Int64, strict=False) if table.collect_schema()[name].is_integer() else pl.col(name)
+
+
+def join_keys(table: pl.LazyFrame, names: list[str]) -> list[pl.Expr]:
+    """Each key column as `join_key` holds it, named `key0`, `key1` and on, so both sides join on the same names."""
+    return [join_key(table, name).alias(f'key{at}') for at, name in enumerate(names)]
 
 
 def read_files(source: Source) -> SourceRead:

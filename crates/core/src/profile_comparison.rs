@@ -34,6 +34,36 @@ pub struct CheckReport {
     pub expectations: Vec<ExpectationResult>,
 }
 
+/// Related tables generated from a bundle, measured against it: each table against its own
+/// profile, then each relationship's fan-out, orphan rate and busiest parents.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BundleCheckReport {
+    /// The bundle the tables were generated from.
+    pub profile: ReportedProfile,
+    /// The scenarios applied, named as a bundle's manifest names them, with the digest taken over
+    /// the map of each table to its scenario. Null for none.
+    pub scenario: Option<ReportedScenario>,
+    /// The data as the caller named it, and the rows of every table together. `fingerprint` is
+    /// null, as each table's report holds its own.
+    pub data: CheckedData,
+    /// Whether every table's check and every relationship metric that decides passed.
+    pub passed: bool,
+    /// Whether every table's scenario expectations held.
+    pub verified: bool,
+    /// Each table's check, every parent before its children.
+    pub tables: Vec<CheckedTable>,
+    /// `fanout_ks`, `orphan_rate_delta` and `top_share_delta` of each relationship, in the
+    /// bundle's order, each naming its relationship in `relationship`.
+    pub relationships: Vec<MetricResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CheckedTable {
+    /// The table's name in the bundle.
+    pub name: String,
+    pub report: CheckReport,
+}
+
 /// Two profiles of one table, such as last month's and this month's, and how far the second
 /// drifted from the first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -110,6 +140,10 @@ pub struct MetricResult {
     /// given another, such as `conditional_kl`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worst_given_value: Option<String>,
+    /// The relationship, as `orders.customer_id → customers.customer_id`, for a metric of one
+    /// in a bundle check. `column` is then null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship: Option<String>,
     /// The metric's value. It is null where `unmeasured` says why the other profile cannot supply
     /// it, and where `skipped_by` names the perturbation that moves it.
     pub value: Option<f64>,
@@ -138,7 +172,9 @@ pub struct MetricResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmeasured: Option<String>,
     /// The id of the scenario's perturbation that moves what the metric compares, so the metric
-    /// is not measured and passes.
+    /// is not measured and passes. In a bundle check, it is the relationship drawing a foreign-key
+    /// column, as `orders.customer_id → customers.customer_id`, for a metric comparing which values
+    /// that column holds, which the relationship deals out from its parent's keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped_by: Option<String>,
 }
@@ -210,6 +246,11 @@ pub struct ExpectationResult {
 /// The check report's JSON Schema (Draft 2020-12), as the library ships it.
 pub fn check_json_schema() -> String {
     titled(schemars::schema_for!(CheckReport), "doppeldata check report")
+}
+
+/// The bundle check report's JSON Schema (Draft 2020-12), as the library ships it.
+pub fn bundle_check_json_schema() -> String {
+    titled(schemars::schema_for!(BundleCheckReport), "doppeldata bundle check report")
 }
 
 /// The diff report's JSON Schema (Draft 2020-12), as the library ships it.

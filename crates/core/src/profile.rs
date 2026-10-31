@@ -23,6 +23,7 @@ pub use bundle::BundleProfile;
 pub use bundle::BundleTable;
 pub use bundle::Cardinality;
 pub use bundle::Fanout;
+pub use bundle::Inherited;
 pub use bundle::Relationship;
 pub use table::*;
 pub use values::Duration;
@@ -50,7 +51,12 @@ pub mod provenance {
     /// The rows generated in decimal, before any copies a scenario adds, which no one file of it
     /// holds. An identity key.
     pub const DATASET_ROWS: &str = "doppeldata.dataset_rows";
-    /// The digest of the dataset's identity, a quick equality check beside the five values.
+    /// The bundle table the file is of, null outside a bundle. An identity key.
+    pub const TABLE: &str = "doppeldata.table";
+    /// What a bundle's every table's row count was multiplied by, in decimal, null outside a bundle.
+    /// An identity key.
+    pub const SCALE: &str = "doppeldata.scale";
+    /// The digest of the dataset's identity, a quick equality check beside the values it is taken over.
     pub const DATASET_DIGEST: &str = "doppeldata.dataset_digest";
     /// The whole profile as RFC 8785 canonical JSON. `PROFILE_DIGEST` is taken over it without the
     /// generated fields the digest leaves out. Only a write that embeds the profile writes it, and

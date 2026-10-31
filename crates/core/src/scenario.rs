@@ -31,6 +31,9 @@ pub struct Scenario {
     /// The scenario's name.
     pub scenario: String,
     pub description: Option<String>,
+    /// The table of a bundle the scenario bends: its patch and every perturbation apply to that table
+    /// alone. A bundle takes only a scenario naming one of its tables.
+    pub table: Option<String>,
     pub patch: Option<ProfilePatch>,
     /// Faults applied in order to each block of generated rows. Each draws from its own stream,
     /// keyed by its `id`, so inserting one never moves another's rows.
@@ -41,9 +44,11 @@ pub struct Scenario {
     pub expect: Vec<Expectation>,
 }
 
-/// An RFC 7396 JSON Merge Patch onto the profile, with one extension: `columns` is a map keyed by
+/// An RFC 7396 JSON Merge Patch onto the profile, with two extensions. `columns` is a map keyed by
 /// column name rather than the profile's list, so a patch names only the columns it changes. A
-/// column patched to null is removed. A column the profile does not hold is refused.
+/// column patched to null is removed. A column the profile does not hold is refused. In a bundle,
+/// `relationships` is a map keyed by the `from` columns, joined by `,` and without their table, of
+/// each relationship drawing a column of the scenario's table.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(transparent)]
 pub struct ProfilePatch(pub Map<String, Value>);
@@ -55,12 +60,16 @@ impl JsonSchema for ProfilePatch {
 
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
-            "description": "An RFC 7396 JSON Merge Patch onto the profile. `columns` is a map keyed by column name, an extension of RFC 7396, whose arrays replace wholesale, so a patch names only the columns it changes. A column patched to null is removed, and one the profile does not hold is refused.",
+            "description": "An RFC 7396 JSON Merge Patch onto the profile. `columns` is a map keyed by column name, an extension of RFC 7396, whose arrays replace wholesale, so a patch names only the columns it changes. A column patched to null is removed, and one the profile does not hold is refused. In a bundle, `relationships` is a map keyed by the `from` columns of each relationship drawing a column of the scenario's table, joined by `,` and without their table, such as `customer_id`.",
             "type": "object",
             "properties": {
                 "columns": {
                     "type": "object",
                     "additionalProperties": { "type": ["object", "null"] },
+                },
+                "relationships": {
+                    "type": "object",
+                    "additionalProperties": { "type": "object" },
                 },
             },
         })
@@ -909,6 +918,7 @@ pub fn patched_profile(profile: &Value, patch: &ProfilePatch) -> (Value, Vec<Str
     let mut patched = profile.clone();
     let mut rest = patch.0.clone();
     let columns = rest.remove("columns");
+    rest.remove(RELATIONSHIPS);
     merge_patch(&mut patched, &Value::Object(rest));
     let Some(Value::Object(columns)) = columns else {
         return (patched, Vec::new());
@@ -960,10 +970,107 @@ pub struct DuplicateId {
     pub id: String,
 }
 
+/// The patch key holding a bundle's relationship patches.
+const RELATIONSHIPS: &str = "relationships";
+
+/// `bundle`, a bundle's JSON with every table inline, with each of `scenarios`, keyed by the table it
+/// names, patching its table and the relationships drawing that table's columns. A scenario naming no
+/// table, or one the bundle lacks, is refused.
+pub fn patched_bundle(bundle: &Value, scenarios: &BTreeMap<String, Scenario>) -> Result<Value, PlanError> {
+    let mut patched = bundle.clone();
+    for (table, scenario) in scenarios {
+        let unknown = |message: String| PlanError::Scenario {
+            code: ScenarioFault::UnknownTable,
+            field: "/table".into(),
+            message,
+        };
+        if scenario.table.as_deref() != Some(table.as_str()) {
+            return Err(unknown("a bundle's scenario names the table it bends".into()));
+        }
+        let Some(document) = patched.get_mut("tables").and_then(|tables| tables.get_mut(table)) else {
+            return Err(unknown(format!("the bundle holds no table {table:?}")));
+        };
+        *document = scenario.patched_table(document)?;
+        let relationships = patched.get("relationships").and_then(Value::as_array).cloned().unwrap_or_default();
+        let relationships = scenario.patched_relationships(&relationships)?;
+        if let Some(object) = patched.as_object_mut()
+            && !relationships.is_empty()
+        {
+            object.insert(RELATIONSHIPS.into(), Value::from(relationships));
+        }
+    }
+    Ok(patched)
+}
+
+/// The key a scenario's patch names a relationship by: its `from` columns without their table,
+/// joined by `,`.
+pub fn relationship_patch_key(from: &[String]) -> String {
+    let columns: Vec<&str> = from
+        .iter()
+        .map(|reference| reference.split_once('.').map_or(reference.as_str(), |(_, column)| column))
+        .collect();
+    columns.join(",")
+}
+
 impl Scenario {
     /// The profile the engine generates from: `profile` as given, with the scenario's patch
-    /// applied. A patched column the profile does not hold is refused.
+    /// applied. A patched column the profile does not hold is refused, and so are a patch of
+    /// relationships, which a lone table has none of, and a `table` other than the profile's name.
     pub fn patched_profile(&self, profile: &Value) -> Result<Value, PlanError> {
+        if let Some(table) = &self.table
+            && profile.get("name").and_then(Value::as_str) != Some(table)
+        {
+            return Err(PlanError::Scenario {
+                code: ScenarioFault::UnknownTable,
+                field: "/table".into(),
+                message: format!("the scenario bends the table {table}, and the profile is of another"),
+            });
+        }
+        if self.patch.as_ref().is_some_and(|patch| patch.0.contains_key(RELATIONSHIPS)) {
+            return Err(PlanError::Scenario {
+                code: ScenarioFault::UnknownRelationship,
+                field: format!("/patch/{RELATIONSHIPS}"),
+                message: "a lone table has no relationships; a bundle's scenario patches them".into(),
+            });
+        }
+        self.patched_table(profile)
+    }
+
+    /// `relationships`, a bundle's as JSON, with the patch's `relationships` merged into each
+    /// relationship that draws a column of the scenario's table, matched by
+    /// [`relationship_patch_key`]. A key matching none of them is refused.
+    pub fn patched_relationships(&self, relationships: &[Value]) -> Result<Vec<Value>, PlanError> {
+        let mut patched = relationships.to_vec();
+        let Some(Value::Object(changes)) = self.patch.as_ref().and_then(|patch| patch.0.get(RELATIONSHIPS)) else {
+            return Ok(patched);
+        };
+        let table = self.table.as_deref().unwrap_or_default();
+        for (key, change) in changes {
+            let drawn = patched.iter_mut().find(|relationship| {
+                let from: Vec<String> = relationship
+                    .get("from")
+                    .and_then(Value::as_array)
+                    .map(|from| from.iter().filter_map(Value::as_str).map(String::from).collect())
+                    .unwrap_or_default();
+                from.first()
+                    .is_some_and(|first| first.split_once('.').map(|(t, _)| t) == Some(table))
+                    && relationship_patch_key(&from) == *key
+            });
+            let Some(relationship) = drawn else {
+                return Err(PlanError::Scenario {
+                    code: ScenarioFault::UnknownRelationship,
+                    field: format!("/patch/{RELATIONSHIPS}/{}", pointer_token(key)),
+                    message: format!("no relationship draws {key} in the table {table}"),
+                });
+            };
+            merge_patch(relationship, change);
+        }
+        Ok(patched)
+    }
+
+    /// `profile`, one table, with the patch's table fields applied, whether the table stands alone
+    /// or in a bundle.
+    pub fn patched_table(&self, profile: &Value) -> Result<Value, PlanError> {
         let Some(patch) = &self.patch else {
             return Ok(profile.clone());
         };

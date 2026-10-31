@@ -498,8 +498,8 @@ and 200,000 orders, with about 5% of the orders naming a customer the table lack
 
 ```yaml
 relationships:
-- from: orders.customer_id
-  to: customers.customer_id
+- from: [orders.customer_id]
+  to: [customers.customer_id]
   containment: 0.9524
   orphan_rate: 0.0478
   cardinality: many_to_one
@@ -575,8 +575,13 @@ which `--sample` makes its sample.
   values reach `NOMINATED_SHARE` of the rows. That sits three of HyperLogLog++'s standard errors
   under `KEY_SHARE`, so Spark's estimate misses no key Polars' count finds. Its `uniqueness` is the
   share of rows holding a value no other row holds. Fewer than `k_min` rows sharing a value are written as a
-  uniqueness of 1. `primary` is the first key at 1, and `candidates` holds the rest.
-- **A pair of columns is tried as a key only where no column is one.** Up to `COMPOSITE_PAIRS`
+  uniqueness of 1. `primary` is the first key at 1, and `candidates` holds the rest. A table of
+  fewer than `k_min` rows is keyed as any other, and the policy withholds its keys, recording
+  `/dataset/keys` in `privacy.withheld`.
+- **A pair of columns is tried as a key only where no column holds every value once.** A nearly
+  unique column, such as TPC-H `partsupp`'s free-text `ps_comment`, is a key at `KEY_SHARE` and
+  still leaves the pair `(ps_partkey, ps_suppkey)` a child refers to. The pairs are tried among the
+  columns that are not a key themselves. Up to `COMPOSITE_PAIRS`
   pairs of integer, string, date and timestamp columns are tried, the most distinct first, among
   those whose distinct counts multiply to the rows or more. A pair is nominated where the fits'
   seeded sample repeats none of its values, then confirmed over the whole table. A pair names its
@@ -693,11 +698,20 @@ which `--sample` makes its sample.
   most. One ZIP code holding two states counts all its rows as breaking it.
 - **A one-column dependency writes its `table`: each `lhs` value `k_min` rows hold, beside the
   `rhs` value most of its rows hold.** The generator looks `rhs` up there.
-- **A child column is a foreign key where its name refers to another table's single-column key, and
-  the key holds `CONTAINMENT_FLOOR` of the column's distinct values.** The names refer where they
-  are equal ignoring case and separators, other than a bare `id`. They also refer where the column
-  is the parent's singular name followed by the key's name or by `id`, so `customer_id` refers to
-  `customers.id`. Both columns are integers, or both strings.
+- **A child column is a foreign key where its name refers to another table's key of one or two
+  columns, and the key holds `CONTAINMENT_FLOOR` of the column's distinct values.** A key of two
+  columns needs a child column referring to each, and the pair's values are counted together. A
+  name refers to a key in three ways, each ignoring case and separators:
+  - it equals the key's name, other than a bare `id`;
+  - it is the parent's singular name followed by the key's name or by `id`, so `customer_id` refers
+    to `customers.id`;
+  - it ends in the key's name, where the key names a thing and its `id` or `key`, so the pickup's
+    `PULocationID` refers to `zones.LocationID`.
+
+  Each rule is also tried with each table's alias dropped. An alias is up to `LONGEST_ALIAS`
+  letters and a `_`, the first the table's first letter and each in order in its name. So
+  `lineitem.l_partkey` refers to `partsupp.ps_partkey`, and `orders.o_custkey` to
+  `customer.c_custkey`. Both columns are integers, or both strings.
 - **Two keys that refer to each other are one relationship.** It points toward the table whose
   primary key it is, where only one is. Otherwise it points toward the table the key is named for,
   as `user_id` is for `users`, then toward the key holding more of the other's values, then toward
@@ -711,7 +725,21 @@ which `--sample` makes its sample.
   each count of busiest parents `TOP_SHARES` names, each stated where its last parent holds `k_min`
   rows. `zipf_s` is the
   exponent maximizing the likelihood of the child rows under a Zipf law over the parents ranked
-  busiest first.
+  busiest first. An even fan-out's is 0. Its mean log rank and the uniform law's come from two
+  formulas, which round apart in the last bit. So a mean within `EVEN_TOLERANCE` of the uniform
+  law's is read as it.
+- **A child column is `inherited` where it equals a column of its parent row on `AGREEMENT_FLOOR`
+  of the joined rows.** The two are of one kind, neither is a key the join is taken on, and the
+  parent column holds two values or more. Where several parent columns agree, the one agreeing on
+  most rows is named. `agreement` is the share of joined rows equal, written as 1 where fewer than
+  `k_min` disagree. So `orders.region` copying `customers.region` is written
+  `{child: region, parent: region, agreement: 0.995}`. The generator copies it from the parent row
+  each child row draws, on the share of rows that lands that agreement.
+- **A child column is the `ordinal` where it numbers every key's rows from 1 to their count.** One
+  grouped pass over the child counts each key's rows and each candidate's least and greatest value
+  and distinct values. A candidate is an integer column that no relationship draws, whose profile
+  gives its least value as 1 and two values or more. So TPC-H's `lineitem` states
+  `ordinal: l_linenumber` on its relationship to `orders`. The first candidate in table order wins.
 
 *Rejected:* phik for a mixed pair, and Apache DataSketches' theta sketches for containment. Each is a
 dependency every consumer's Glue job would install. η comes from the group counts and moments

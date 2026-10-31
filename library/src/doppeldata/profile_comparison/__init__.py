@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import overload
 
 from doppeldata import _core
 from doppeldata.dataset_generation import engine_plan
@@ -35,6 +36,7 @@ from doppeldata.profile_comparison.metrics import Document
 from doppeldata.profile_comparison.metrics import Thresholded
 from doppeldata.profile_comparison.metrics import Unmeasured
 from doppeldata.profile_comparison.real_data_scores import DEFAULT_SAMPLE_ROWS
+from doppeldata.profile_comparison.reports import BundleCheckReport
 from doppeldata.profile_comparison.reports import CheckedData
 from doppeldata.profile_comparison.reports import CheckReport
 from doppeldata.profile_comparison.reports import DiffReport
@@ -47,6 +49,7 @@ from doppeldata.profile_comparison.scenario_moves import moves
 from doppeldata.profile_comparison.scenario_moves import skipped
 from doppeldata.profile_comparison.scenario_moves import uncompared_malformed_rates
 from doppeldata.profile_comparison.thresholds import Thresholds
+from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import SampledTable
 from doppeldata.profiling import profile_in_dialect
@@ -67,6 +70,7 @@ if TYPE_CHECKING:
 REPORT_DIGITS = 6
 
 
+@overload
 def check(
     profile: Profile,
     data: Any,
@@ -76,7 +80,32 @@ def check(
     against: Any = None,
     against_sample: int | None = None,
     html: str | Path | None = None,
-) -> CheckReport:
+) -> CheckReport: ...
+
+
+@overload
+def check(
+    profile: Bundle,
+    data: Any,
+    *,
+    thresholds: Thresholds | None = None,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+    against: None = None,
+    against_sample: None = None,
+    html: None = None,
+) -> BundleCheckReport: ...
+
+
+def check(
+    profile: Profile | Bundle,
+    data: Any,
+    *,
+    thresholds: Thresholds | None = None,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+    against: Any = None,
+    against_sample: int | None = None,
+    html: str | Path | None = None,
+) -> CheckReport | BundleCheckReport:
     """Profile `data` with `profile`'s edges and value lists frozen, and measure every metric and column change against `profile`.
 
     `data` is anything `doppeldata.profile` reads. The report's `passed` is False when any metric that decides misses its
@@ -99,11 +128,37 @@ def check(
     sets its threshold. `html` writes the two samples side by side, showing the real data's extremes and categories. It
     needs sweetviz, which doppeldata does not install, and `PackagesMissing` names it where it is missing. A
     `SourceError` the real data raises has `role` `against`.
+
+    With a `Bundle`, `data` is the directory or prefix a bundle's write left, each table under `<data>/<table>/`, or a
+    mapping of each table's name to its data, as `generate` returns it. Each table is checked against its own profile,
+    under the scenarios naming it, and each relationship is measured by `RELATIONSHIP_METRICS`. The report is a
+    `BundleCheckReport`, and a bundle takes no `against`.
     """
+    if isinstance(profile, Bundle):
+        from doppeldata.profile_comparison import bundle_checks
+
+        if against is not None or against_sample is not None or html is not None:
+            raise ValueError('against scores one table against its real data; check a table of the bundle on its own to score it')
+        return bundle_checks.check_bundle(profile, data, thresholds=thresholds, scenario=scenario)
     applied = composed(scenario)
     written = written_manifest(data)
     if written is not None:
         refuse_other_scenario(applied, written, data_named(data))
+    return checked_table(profile, data, applied, written, thresholds=thresholds, against=against, against_sample=against_sample, html=html)
+
+
+def checked_table(
+    profile: Profile,
+    data: Any,
+    applied: Scenario | None,
+    written: Manifest | None,
+    *,
+    thresholds: Thresholds | None,
+    against: Any,
+    against_sample: int | None,
+    html: str | Path | None,
+) -> CheckReport:
+    """`check` of one table, under the scenario that `written`, its manifest where it has one, records it was written under."""
     unreadable = unreadable_refusal(applied, written, data)
     if unreadable is not None:
         raise InvalidScenario(data_named(data), [], refusal=unreadable)
@@ -340,6 +395,7 @@ def metric_row(
     unmeasured_passes: bool,
     paired_with: str | None = None,
     worst_given_value: str | None = None,
+    relationship: str | None = None,
     decides: bool = True,
 ) -> MetricResult:
     """One measure's row at `threshold`, its value written to `REPORT_DIGITS`. A row that decides nothing passes."""
@@ -356,6 +412,7 @@ def metric_row(
             unmeasured=compared.reason,
             paired_with=paired_with,
             worst_given_value=worst_given_value,
+            relationship=relationship,
             decides=decides,
         )
     written = significant(compared.value)
@@ -371,6 +428,7 @@ def metric_row(
         observed=compared.observed,
         paired_with=paired_with,
         worst_given_value=worst_given_value,
+        relationship=relationship,
         decides=decides,
     )
 

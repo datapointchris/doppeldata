@@ -16,6 +16,18 @@ use crate::samplers::TextCell;
 /// The hex SHA-256 over `blocks` in order: each block's batch with the text cells
 /// [`crate::Plan::text_cells`] returned for it.
 pub fn values_digest(blocks: &[(RecordBatch, Vec<Vec<TextCell>>)]) -> String {
+    digest_of(blocks.iter())
+}
+
+/// One block's batch and the text cells [`crate::Plan::text_cells`] returned for it.
+pub type DrawnBlock = (RecordBatch, Vec<Vec<TextCell>>);
+
+/// [`values_digest`] over every table's blocks, the tables in the order a bundle's plan holds them.
+pub fn bundle_values_digest(tables: &[Vec<DrawnBlock>]) -> String {
+    digest_of(tables.iter().flatten())
+}
+
+fn digest_of<'a>(blocks: impl Iterator<Item = &'a DrawnBlock>) -> String {
     let mut hash = Sha256::new();
     for (batch, cells) in blocks {
         for (column, cells) in batch.columns().iter().zip(cells) {

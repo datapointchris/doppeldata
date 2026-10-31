@@ -205,8 +205,8 @@ def test_two_folders_named_with_tables_are_two_tables_and_a_column_naming_the_ot
     assert keys == {'customers': ['customer_id'], 'orders': ['order_id']}
     [relationship] = bundle['relationships']
     assert {field: relationship[field] for field in ('from', 'to', 'cardinality', 'orphan_rate')} == {
-        'from': 'orders.customer_id',
-        'to': 'customers.customer_id',
+        'from': ['orders.customer_id'],
+        'to': ['customers.customer_id'],
         'cardinality': 'many_to_one',
         'orphan_rate': 0.05,
     }

@@ -25,6 +25,11 @@ pub fn all() -> Vec<PublishedSchema> {
             derive: manifest::json_schema,
         },
         PublishedSchema {
+            name: "bundle-manifest",
+            file_name: "bundle-manifest.json",
+            derive: manifest::bundle_json_schema,
+        },
+        PublishedSchema {
             name: "faults",
             file_name: "faults.json",
             derive: manifest::faults_json_schema,
@@ -33,6 +38,11 @@ pub fn all() -> Vec<PublishedSchema> {
             name: "check",
             file_name: "check.json",
             derive: profile_comparison::check_json_schema,
+        },
+        PublishedSchema {
+            name: "bundle-check",
+            file_name: "bundle-check.json",
+            derive: profile_comparison::bundle_check_json_schema,
         },
         PublishedSchema {
             name: "diff",

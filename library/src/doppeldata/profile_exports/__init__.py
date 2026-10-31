@@ -84,17 +84,11 @@ def loaded(source: Profile | Bundle | str | os.PathLike[str]) -> Profile | Bundl
     """The profile or bundle `source` names: itself, a file or directory holding one, or an example's name."""
     if isinstance(source, Profile | Bundle):
         return source
-    path = Path(source)
-    if (path / BUNDLE_INDEX).is_file() or (path.is_file() and data_file_metadata(path) is None and bundle_file(path)):
-        return Bundle.load(path)
+    from doppeldata.bundle_generation import bundle_from
     from doppeldata.short_profiles import file_profile
 
-    return file_profile(str(source))
-
-
-def bundle_file(path: Path) -> bool:
-    document = read_document(path)
-    return isinstance(document, dict) and document.get('kind') == 'bundle'
+    bundle = bundle_from(source)
+    return bundle if bundle is not None else file_profile(str(source))
 
 
 def one_table(found: Profile | Bundle, table: str) -> Profile:

@@ -4,8 +4,9 @@
 compared value for value with `doppeldata.stream`, each float by its bits. `write`'s files are compared by SHA-256 with the
 manifest of a `doppeldata data generate` with the same arguments, and its `_faults.jsonl` byte for byte with the one beside
 that manifest. Each column of the every-column-kind fixture then goes through
-`mapInArrow` alone, and whether Spark gave every value back is compared with `spark_holds`. It prints one JSON object per check,
-and exits 1 when any differs.
+`mapInArrow` alone, and whether Spark gave every value back is compared with `spark_holds`. The orders-customers bundle then
+goes through `generate` and `write`, each table compared as the example is, with a local bundle write's table manifests. It
+prints one JSON object per check, and exits 1 when any differs.
 
 Given a scenario, `write` and the local run apply all of it, and `generate` and the stream its ops that write rows, because
 `generate` writes no files. Each op draws from its own stream, so the rest generate the same values without them.
@@ -29,6 +30,10 @@ ROWS = 10_000_000
 SEED = 42
 FILE_ROWS = 1_000_000
 PARTITIONS = (7, 40)
+# The bundle generated and written beside the eight-columns example, and the partitions each of its tables takes.
+BUNDLE = 'orders-customers'
+BUNDLE_PARTITIONS = 3
+BUNDLE_FILE_ROWS = 100_000
 # A float compares by its bits, so a NaN equals itself and -0.0 differs from 0.0.
 FLOAT_BITS = {pa.float32(): pa.int32(), pa.float64(): pa.int64()}
 
@@ -112,7 +117,28 @@ def row_ops(scenario: sd.Scenario | None) -> sd.Scenario | None:
     return sd.Scenario(plain | {'perturbations': [entry for entry, facts in entries if not facts.shapes_files]})
 
 
-def main(local_manifest_path: str, out: str, fixture: str, scenario_path: str = '') -> int:
+def bundle_identical(spark: SparkSession, bundle_manifest_path: str, out: str) -> bool:
+    """Whether the orders-customers bundle, through `generate` and `write` at `BUNDLE_PARTITIONS`, holds a local run's values
+    in each table, and writes each table's files with the SHA-256 the local write beside `bundle_manifest_path` recorded."""
+    bundle = sd.Bundle.example(BUNDLE)
+    identical = True
+    expected = sd.generate(bundle, seed=SEED)
+    for name, frame in sd.spark.generate(spark, bundle, seed=SEED, partitions=BUNDLE_PARTITIONS).items():
+        difference = first_difference(arrow_of(frame), pa.RecordBatchReader.from_stream(expected[name]))
+        check = {'check': 'bundle generate', 'table': name, 'partitions': BUNDLE_PARTITIONS}
+        identical &= report(check | {'identical': difference is None, 'difference': difference})
+    manifest = sd.spark.write(spark, bundle, f'{out}/bundle', seed=SEED, file_rows=BUNDLE_FILE_ROWS, partitions=BUNDLE_PARTITIONS)
+    root = pathlib.Path(bundle_manifest_path).parent
+    for name, table in manifest.tables.items():
+        local = {file['path']: file['sha256'] for file in json.loads((root / name / '_manifest.json').read_text())['files']}
+        written = {file['path']: file['sha256'] for file in table.files}
+        differ = sorted(path for path in local.keys() | written.keys() if local.get(path) != written.get(path))
+        check = {'check': 'bundle write', 'table': name, 'files': len(written)}
+        identical &= report(check | {'identical': not differ, 'differ': differ})
+    return identical
+
+
+def main(local_manifest_path: str, out: str, fixture: str, bundle_manifest_path: str, scenario_path: str = '') -> int:
     spark = SparkSession.builder.getOrCreate()
     profile = sd.Profile.example('eight-columns')
     scenario = sd.Scenario.load(scenario_path) if scenario_path else None
@@ -153,6 +179,7 @@ def main(local_manifest_path: str, out: str, fixture: str, scenario_path: str = 
         identical &= report(check | {'identical': not differ, 'differ': differ})
     disagree = type_disagreements(spark, fixture)
     identical &= report({'check': 'types', 'fixture': pathlib.Path(fixture).name, 'identical': not disagree, 'disagree': disagree})
+    identical &= bundle_identical(spark, bundle_manifest_path, out)
     spark.stop()
     return 0 if identical else 1
 
