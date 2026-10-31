@@ -823,7 +823,8 @@ impl KeyDraw {
         }
         let stated: HashMap<&str, f64> = listed.iter().map(|top| (top.value.as_str(), top.rate.0)).collect();
         let null_rate = child.null_rate.map_or(0.0, |rate| rate.0);
-        let rest = (1.0 - stated.values().sum::<f64>() - null_rate).max(0.0);
+        // Summed in the profile's order, since a map's order varies by process and moves the sum by an ulp.
+        let rest = (1.0 - listed.iter().map(|top| top.rate.0).sum::<f64>() - null_rate).max(0.0);
         let is_unlisted = |name: &Option<String>| name.as_deref().is_some_and(|value| !stated.contains_key(value));
         let unlisted: u64 = names
             .iter()
