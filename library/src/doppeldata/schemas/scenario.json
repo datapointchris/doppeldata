@@ -37,6 +37,13 @@
     "scenario": {
       "description": "The scenario's name.",
       "type": "string"
+    },
+    "table": {
+      "description": "The table of a bundle the scenario bends: its patch and every perturbation apply to that table\nalone. A bundle takes only a scenario naming one of its tables.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "additionalProperties": false,
@@ -1109,7 +1116,7 @@
       ]
     },
     "ProfilePatch": {
-      "description": "An RFC 7396 JSON Merge Patch onto the profile. `columns` is a map keyed by column name, an extension of RFC 7396, whose arrays replace wholesale, so a patch names only the columns it changes. A column patched to null is removed, and one the profile does not hold is refused.",
+      "description": "An RFC 7396 JSON Merge Patch onto the profile. `columns` is a map keyed by column name, an extension of RFC 7396, whose arrays replace wholesale, so a patch names only the columns it changes. A column patched to null is removed, and one the profile does not hold is refused. In a bundle, `relationships` is a map keyed by the `from` columns of each relationship drawing a column of the scenario's table, joined by `,` and without their table, such as `customer_id`.",
       "type": "object",
       "properties": {
         "columns": {
@@ -1119,6 +1126,12 @@
               "object",
               "null"
             ]
+          }
+        },
+        "relationships": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
           }
         }
       }

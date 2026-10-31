@@ -425,6 +425,35 @@ def sampled_table(data: Any, rows: int, *, engine: str = 'polars', seed: int = t
     return sampled
 
 
+def relationship_counts(
+    data: Mapping[str, Any],
+    dialects: Mapping[str, CsvDialect],
+    relationships: Sequence[tuple[str, Sequence[str], str, Sequence[str]]],
+    *,
+    engine: str = 'polars',
+) -> list[list[tuple[bool, int, int]]]:
+    """For each relationship, named as its child table, columns, parent table and key columns, what
+    `Backend.foreign_key_counts` counts over every row of both. `data` holds each table, anything `profile` reads, by
+    name, each read as one table at the types `profile` reads it as, and in the dialect `dialects` holds for it."""
+    named = {table for child, _, parent, _ in relationships for table in (child, parent)}
+    listed = {name: listed_source(data[name], engine)[0] for name in data if name in named}
+    if not listed:
+        return []
+    backend = engine_backend(engine, data[next(iter(listed))])
+    with backend.profiling():
+        tables = {
+            name: table_profile.typed_table(backend, dc.replace(source, dialect=dialects[name]) if name in dialects else source)
+            for name, source in listed.items()
+        }
+        counts = [
+            backend.foreign_key_counts(tables[child], list(columns), tables[parent], list(keys))
+            for child, columns, parent, keys in relationships
+        ]
+    for source in listed.values():
+        importlib.import_module(SOURCES_MODULE).check_unchanged(source)
+    return counts
+
+
 def refuse_unread_format(engine: str, source: Source) -> None:
     """Refuse a source of a format the engine does not read from where it lies, naming the engines that do."""
     if source.format is None:

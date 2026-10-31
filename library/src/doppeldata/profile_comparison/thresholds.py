@@ -15,18 +15,21 @@ from doppeldata.profile_comparison.metrics import Document
 from doppeldata.profile_comparison.metrics import Thresholded
 from doppeldata.profile_comparison.real_data_scores import SCORES
 from doppeldata.profile_comparison.real_data_scores import SCORES_BY_NAME
+from doppeldata.profile_comparison.relationship_metrics import RELATIONSHIP_METRICS
+from doppeldata.profile_comparison.relationship_metrics import RELATIONSHIP_METRICS_BY_NAME
 from doppeldata.profile_format import to_plain
 
-# Every name a thresholds file keys, the profile metrics' and the real-data scores' in one keyspace.
-THRESHOLDED = {measure.name: measure for measure in (*METRICS, *SCORES)}
-if len(THRESHOLDED) != len(METRICS) + len(SCORES):
-    raise RuntimeError('a real-data score shares a name with a profile metric, so a thresholds file could not tell them apart')
+# Every name a thresholds file keys, the profile metrics', the real-data scores' and the relationship metrics' in one keyspace.
+THRESHOLDED = {measure.name: measure for measure in (*METRICS, *SCORES, *RELATIONSHIP_METRICS)}
+if len(THRESHOLDED) != len(METRICS) + len(SCORES) + len(RELATIONSHIP_METRICS):
+    raise RuntimeError('two metrics or scores share a name, so a thresholds file could not tell them apart')
 
 
 @dc.dataclass(frozen=True)
 class Thresholds:
     """`defaults` replaces a metric's threshold for every column, and `columns` replaces it for one column. A metric
-    or score of a pair of columns is set under `defaults` alone.
+    or score of a pair of columns, and a bundle's relationship metric, is set under `defaults` alone. In a bundle check,
+    `columns` names a column of any table, and holds wherever a table has it.
 
     In YAML: `{defaults: {ks: 0.03}, columns: {paid_amount: {ks: 0.08}}}`.
     """
@@ -80,12 +83,19 @@ class Thresholds:
         if named and not scoring:
             raise InvalidThresholds(f'the thresholds set {", ".join(named)}, which score data against the real data, and {refusing}')
 
-    def check_columns(self, source: Document) -> None:
-        """Refuse a column the source profile does not hold, which a misspelled name would be. Each metric measures the source's columns."""
-        held = {column['name'] for column in source.get('columns') or []}
+    def check_columns(self, source: Document | list[Document]) -> None:
+        """Refuse a column the source profile does not hold, or none of a bundle's tables do, which a misspelled name would
+        be. Each metric measures the source's columns."""
+        sources = source if isinstance(source, list) else [source]
+        held = {column['name'] for document in sources for column in document.get('columns') or []}
         unknown = sorted(name for name in self.columns if name not in held)
         if unknown:
             raise InvalidThresholds(f'the thresholds name columns the source profile does not hold: {", ".join(unknown)}')
+
+    def of_table(self, source: Document) -> 'Thresholds':
+        """These thresholds with `columns` cut to the columns one of a bundle's tables holds."""
+        held = {column['name'] for column in source.get('columns') or []}
+        return Thresholds(self.defaults, {name: metrics for name, metrics in self.columns.items() if name in held})
 
 
 def metric_faults(metrics: Any, at: str, *, for_column: bool) -> list[str]:
@@ -99,6 +109,8 @@ def metric_faults(metrics: Any, at: str, *, for_column: bool) -> list[str]:
             faults.append(f'{at}/{name}: {name!r} is not a metric; choose from {", ".join(THRESHOLDED)}')
         elif for_column and THRESHOLDED[name].pairs:
             faults.append(f'{at}/{name}: {name} measures a pair of columns; set it under `defaults`')
+        elif for_column and name in RELATIONSHIP_METRICS_BY_NAME:
+            faults.append(f'{at}/{name}: {name} measures a relationship between tables; set it under `defaults`')
         elif isinstance(value, bool) or not isinstance(value, int | float):
             faults.append(f'{at}/{name}: {value!r} is not a number')
     return faults

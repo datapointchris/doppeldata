@@ -137,6 +137,13 @@
           "description": "False on a row the report's verdict leaves out: a score against the real data whose\nthreshold no thresholds file sets, and `malformed_rate_delta` on data written with no\n`malformed_rows`. Such a row passes. A score's `threshold` is its reference, which `value`\nand `bound` say whether it meets.",
           "type": "boolean"
         },
+        "drawn_by": {
+          "description": "In a bundle check, the relationship drawing a foreign-key column, as\n`orders.customer_id → customers.customer_id`, for a metric comparing which values that column\nholds, which the relationship deals out from its parent's keys. The metric is not measured\nand passes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "expected": {
           "description": "The statistic the metric compares, as the source profile holds it, or the real data for a\nscore against it: A's, in a diff.",
           "type": [
@@ -168,6 +175,13 @@
           "description": "Whether the row counts against the report: false only on a row that decides and whose\nvalue misses `threshold` or is unmeasured.",
           "type": "boolean"
         },
+        "relationship": {
+          "description": "The relationship, as `orders.customer_id → customers.customer_id`, for a metric of one\nin a bundle check. `column` is then null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "skipped_by": {
           "description": "The id of the scenario's perturbation that moves what the metric compares, so the metric\nis not measured and passes.",
           "type": [
@@ -187,7 +201,7 @@
           ]
         },
         "value": {
-          "description": "The metric's value. It is null where `unmeasured` says why the other profile cannot supply\nit, and where `skipped_by` names the perturbation that moves it.",
+          "description": "The metric's value. It is null where `unmeasured` says why the other profile cannot supply\nit, where `skipped_by` names the perturbation that moves it, and where `drawn_by` names the\nrelationship that decides it.",
           "type": [
             "number",
             "null"

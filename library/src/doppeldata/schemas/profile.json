@@ -1302,14 +1302,14 @@
           ]
         },
         "top_share": {
-          "description": "The share of child rows the busiest parents hold: `top1`, `top10`, `top100`.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TopShare"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "zipf_s": {
           "description": "The exponent of a Zipf law fitted by maximum likelihood to the parents' child counts, busiest first.",
@@ -1663,6 +1663,30 @@
       "required": [
         "below",
         "above"
+      ]
+    },
+    "Inherited": {
+      "description": "A child column that copies a column of its parent row, as a share of joined rows, never a value.",
+      "type": "object",
+      "properties": {
+        "agreement": {
+          "description": "The share of joined child rows whose value equals their parent row's, a null equal to a null.",
+          "$ref": "#/$defs/Rate"
+        },
+        "child": {
+          "description": "The column of `from`'s table holding the copy.",
+          "type": "string"
+        },
+        "parent": {
+          "description": "The column of `to`'s table it copies.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "child",
+        "parent",
+        "agreement"
       ]
     },
     "JsonSettings": {
@@ -2552,6 +2576,16 @@
           "items": {
             "$ref": "#/$defs/Suppression"
           }
+        },
+        "withheld": {
+          "description": "Every dataset-level field left out because it failed a floor, and the rule it failed.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/WithheldField"
+          }
         }
       },
       "additionalProperties": false
@@ -2707,9 +2741,31 @@
           ]
         },
         "from": {
-          "description": "`table.column` holding the reference.",
-          "type": "string",
-          "pattern": "^[^.]+\\..+$"
+          "description": "Each `table.column` holding the reference, all in one table. A composite key names each of its\ncolumns, in the order `to` names the columns each refers to.",
+          "type": "array",
+          "items": {
+            "description": "A column of one of the bundle's tables, as table.column. The table runs to the first dot.",
+            "type": "string",
+            "pattern": "^[^.]+\\..+$"
+          },
+          "minItems": 1
+        },
+        "inherited": {
+          "description": "The child columns holding their parent row's value on nearly every joined row, such as the\ncustomer's `region` an order carries.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Inherited"
+          }
+        },
+        "ordinal": {
+          "description": "The column of `from`'s table numbering each parent's child rows from 1 to their count, such as\nan order's line number.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "orphan_rate": {
           "description": "The share of `from`'s rows holding a value that `to` does not hold, of those holding a value.",
@@ -2723,9 +2779,14 @@
           ]
         },
         "to": {
-          "description": "`table.column` referred to.",
-          "type": "string",
-          "pattern": "^[^.]+\\..+$"
+          "description": "Each `table.column` referred to, all in one table, one for each of `from`.",
+          "type": "array",
+          "items": {
+            "description": "A column of one of the bundle's tables, as table.column. The table runs to the first dot.",
+            "type": "string",
+            "pattern": "^[^.]+\\..+$"
+          },
+          "minItems": 1
         }
       },
       "additionalProperties": false,
@@ -3428,6 +3489,46 @@
         "ns"
       ]
     },
+    "TopShare": {
+      "description": "The share of matched child rows the busiest parents hold together, at the rank each field names.",
+      "type": "object",
+      "properties": {
+        "top1": {
+          "description": "The busiest parent's.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "top10": {
+          "description": "The busiest 10 parents'.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "top100": {
+          "description": "The busiest 100 parents'.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "TopValue": {
       "type": "object",
       "properties": {
@@ -3492,6 +3593,33 @@
       "additionalProperties": false,
       "required": [
         "new_value_rows"
+      ]
+    },
+    "WithheldField": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "The RFC 6901 pointer to the field from the profile's root, such as `/dataset/keys`.",
+          "type": "string"
+        },
+        "rule": {
+          "$ref": "#/$defs/WithheldRule"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "rule"
+      ]
+    },
+    "WithheldRule": {
+      "description": "The floor a withheld field failed.",
+      "oneOf": [
+        {
+          "description": "The table holds at least `k_min` rows, as a key is stated only over that many.",
+          "type": "string",
+          "const": "rows >= k_min"
+        }
       ]
     }
   }

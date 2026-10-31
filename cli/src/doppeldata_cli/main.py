@@ -36,11 +36,15 @@ from doppeldata import diff
 from doppeldata import example_scenarios
 from doppeldata import profile
 from doppeldata import profile_tables
+from doppeldata.bundle_generation import BundleWritePlan
 from doppeldata.dataset_generation import GenerationSource
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.dataset_generation import generation_source
 from doppeldata.dataset_generation import one_file_of
 from doppeldata.dataset_generation import prepared_write
+from doppeldata.example_profiles import bundle_example_names
+from doppeldata.example_profiles import bundle_example_resource
+from doppeldata.example_profiles import bundle_example_text
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_resource
 from doppeldata.example_profiles import example_text
@@ -56,9 +60,11 @@ from doppeldata.profile_comparison.metrics import METRICS
 from doppeldata.profile_comparison.real_data_scores import DEFAULT_SAMPLE_ROWS
 from doppeldata.profile_comparison.real_data_scores import SCORES
 from doppeldata.profile_comparison.real_data_scores import scored_columns
+from doppeldata.profile_comparison.relationship_metrics import RELATIONSHIP_METRICS
 from doppeldata.profile_comparison.side_by_side_html import unwritable
 from doppeldata.profile_exports import EXPORT_FORMATS
 from doppeldata.profile_exports import export
+from doppeldata.profile_sources import bundle_from
 from doppeldata.profiling import ENGINES
 from doppeldata.profiling import applied_policy
 from doppeldata.published_schemas import enum_values
@@ -124,7 +130,8 @@ app.add_typer(schemas_app, name='schemas')
 JsonOption = Annotated[bool, typer.Option('--json', help='Print JSON instead of a table.')]
 PROFILE_HELP = (
     'A profile file, a short YAML of rows and columns, a Parquet or Arrow file written with --embed-profile, '
-    'or an example name as profile list prints it.'
+    'a bundle of related tables as a directory holding bundle.yaml or a kind: bundle file, or an example name as profile '
+    'list prints it.'
 )
 ProfileArgument = Annotated[str, typer.Argument(metavar='PROFILE', help=PROFILE_HELP)]
 ProfileOrColumnsArgument = Annotated[str | None, typer.Argument(metavar='[PROFILE]', help=f'{PROFILE_HELP} Or give --columns.')]
@@ -155,6 +162,14 @@ SeedOption = Annotated[
         min=0,
         max=2**64 - 1,
         help=f'The seed. One profile, seed and row count give the same values anywhere. Defaults to 0, {WRITTEN_WITH}.',
+    ),
+]
+ScaleOption = Annotated[
+    float | None,
+    typer.Option(
+        '--scale',
+        metavar='X',
+        help="With a bundle PROFILE, generate X times each table's row count, each relationship keeping its fan-out shape. Defaults to 1.",
     ),
 ]
 EmbedProfileOption = Annotated[
@@ -239,6 +254,10 @@ METRIC_DEFINITIONS = '\n\n'.join(
     + (', set under defaults alone.' if metric.pairs else '.')
     for metric in METRICS
 )
+RELATIONSHIP_DEFINITIONS = 'On a bundle, each relationship is measured by these, each set under defaults alone.\n\n' + '\n\n'.join(
+    f'{metric.name}: {metric.summary}. Passes at {metric.bound.value.removeprefix("at_")} {metric.threshold:g} by default.'
+    for metric in RELATIONSHIP_METRICS
+)
 SCORE_DEFINITIONS = (
     "With --against, these scores compare a sample of DATA with one of REAL_DATA, by SDMetrics' definitions. Each decides "
     'nothing until a --thresholds file sets its threshold, a pair score under defaults alone. A row that decides nothing '
@@ -251,15 +270,32 @@ SCORE_DEFINITIONS = (
 
 @profile_app.command('list')
 def profile_list(as_json: JsonOption = False) -> None:
-    """List the hand-written example profiles doppeldata ships, by the name profile show takes."""
+    """List the hand-written example profiles and bundles doppeldata ships, by the name profile show takes."""
     examples = [Profile.example(name).document for name in example_names()]
-    rows = [{'name': doc['name'], 'row_count': doc['dataset']['row_count'], 'columns': len(doc['columns'])} for doc in examples]
+    rows: list[dict[str, Any]] = [
+        {'name': doc['name'], 'kind': 'table', 'row_count': doc['dataset']['row_count'], 'columns': len(doc['columns'])} for doc in examples
+    ]
+    for name in bundle_example_names():
+        bundle = Bundle.example(name)
+        rows.append(
+            {
+                'name': name,
+                'kind': 'bundle',
+                'row_count': sum(table.document['dataset']['row_count'] for table in bundle.tables.values()),
+                'tables': len(bundle.tables),
+                'relationships': len(bundle.document.get('relationships') or []),
+            }
+        )
     if as_json:
         typer.echo(json.dumps(rows, indent=2))
         return
     width = max(len(row['name']) for row in rows)
     for row in rows:
-        typer.echo(f'{row["name"]:<{width}}  {row["columns"]} columns, {row["row_count"]:,} rows')
+        if row['kind'] == 'bundle':
+            held = f'bundle of {counted(row["tables"], "table")} and {counted(row["relationships"], "relationship")}'
+        else:
+            held = f'{row["columns"]} columns'
+        typer.echo(f'{row["name"]:<{width}}  {held}, {row["row_count"]:,} rows')
 
 
 @profile_app.command('create', no_args_is_help=True)
@@ -482,13 +518,38 @@ def scenario_named(name: str, param_hint: str) -> Scenario:
 
 def loaded_scenario(names: list[str] | None) -> Scenario | None:
     """The scenarios named, composed in order, refused with exit 2 when one is neither a file nor an example, or does not validate."""
+    scenarios = loaded_scenarios(names)
+    return Scenario.compose(*scenarios) if scenarios else None
+
+
+def loaded_scenarios(names: list[str] | None) -> list[Scenario]:
+    """The scenarios named, in order, as a bundle takes them, each bending the table it names."""
     scenarios = []
     for name in names or []:
         try:
             scenarios.append(scenario_named(name, '--scenario'))
         except InvalidScenario as error:
             raise typer.BadParameter(str(error), param_hint='--scenario') from error
-    return Scenario.compose(*scenarios) if scenarios else None
+    return scenarios
+
+
+def bundle_named(profile_name: str | None, columns: str | None, rows: int | None, scale: float | None) -> Bundle | None:
+    """The bundle PROFILE names, or None where it names one table. Each is refused with exit 2 where it cannot be read, and
+    with it --rows and --columns, which make one table, and --scale where PROFILE names one table."""
+    try:
+        bundle = bundle_from(profile_name) if profile_name is not None else None
+    except (OSError, InvalidProfile, SourceError) as error:
+        raise typer.BadParameter(str(error), param_hint='PROFILE') from error
+    if bundle is None:
+        if scale is not None:
+            raise typer.BadParameter('--scale sizes a bundle, and PROFILE names one table; size it with --rows', param_hint='--scale')
+        return None
+    if columns is not None:
+        raise typer.BadParameter('give PROFILE or --columns, not both', param_hint='PROFILE')
+    if rows is not None:
+        message = "--rows sizes one table, and PROFILE names a bundle; size it with --scale, a multiple of each table's row count"
+        raise typer.BadParameter(message, param_hint='--rows')
+    return bundle
 
 
 @contextlib.contextmanager
@@ -544,12 +605,14 @@ def profile_diff(
         raise ProfilesDrifted(report)
 
 
-@data_app.command('check', no_args_is_help=True, epilog=f'{METRIC_DEFINITIONS}\n\n{SCORE_DEFINITIONS}')
+@data_app.command('check', no_args_is_help=True, epilog=f'{METRIC_DEFINITIONS}\n\n{RELATIONSHIP_DEFINITIONS}\n\n{SCORE_DEFINITIONS}')
 def data_check(
     profile_name: Annotated[
-        str, typer.Argument(metavar='PROFILE', help='The profile the data was generated from, a file or an example name.')
+        str, typer.Argument(metavar='PROFILE', help='The profile or bundle the data was generated from, a file or an example name.')
     ],
-    data: Annotated[str, typer.Argument(metavar='DATA', help='A file, directory or s3:// prefix holding the generated table.')],
+    data: Annotated[
+        str, typer.Argument(metavar='DATA', help="A file, directory or s3:// prefix holding the generated table, or a bundle's tables.")
+    ],
     thresholds: ThresholdsOption = None,
     scenario: ScenarioOption = None,
     against: Annotated[
@@ -592,7 +655,32 @@ def data_check(
     skipped, naming it, and each expectation the scenario declares is measured.
     Only --against reads the real data. Exits 0 when every metric, column and expectation passes, and 3 when one does not
     or the check could not finish.
+
+    A bundle PROFILE checks each table under DATA/<table>/ against its own profile, then measures each relationship by the
+    relationship metrics below: doppeldata data check orders-customers shop/. It takes no --against.
     """
+    bundle = bundle_named(profile_name, None, None, None)
+    if bundle is not None:
+        if against is not None or against_sample is not None or html is not None:
+            message = 'a bundle check scores no real data; check one table of the bundle against its real data on its own'
+            raise typer.BadParameter(message, param_hint='--against')
+        chosen = loaded_thresholds(thresholds)
+        try:
+            with failure_exits_3(), warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter('always', ProfilingWarning)
+                bundle_report = check(bundle, data, thresholds=chosen, scenario=loaded_scenarios(scenario))
+                shown = bundle_report.to_json() if as_json else bundle_report.to_markdown()
+        except InvalidThresholds as error:
+            raise typer.BadParameter(str(error), param_hint='--thresholds') from error
+        except SourceError as error:
+            if error.exit_code != 2:
+                raise
+            raise typer.BadParameter(str(error), param_hint='DATA') from error
+        print_notices(caught)
+        typer.echo(shown, nl=False)
+        if not (bundle_report.passed and bundle_report.verified):
+            raise CheckFailed(bundle_report)
+        return
     source = loaded_profile(profile_name, 'PROFILE')
     chosen = loaded_thresholds(thresholds)
     applied = loaded_scenario(scenario)
@@ -709,7 +797,7 @@ def profile_import(
             help=(
                 "Import the one table NAME from a source holding several: an ODCS contract's schema object, or a Data Package's "
                 'resource. Without it a Data Package imports as a bundle of every resource and its foreign keys, as '
-                'profile create --tables profiles every table. data generate reads one table, so it reads no bundle.'
+                'profile create --tables profiles every table.'
             ),
         ),
     ] = None,
@@ -840,11 +928,13 @@ def profile_export(
 
 @profile_app.command('show', no_args_is_help=True)
 def profile_show(name: Annotated[str, typer.Argument(metavar='NAME', help='An example name, as profile list prints it.')]) -> None:
-    """Print an example profile's YAML, to start a profile from: doppeldata profile show orders > orders.profile.yaml"""
+    """Print an example profile's or bundle's YAML, to start one from: doppeldata profile show orders > orders.profile.yaml"""
+    if name in bundle_example_names():
+        typer.echo(bundle_example_text(name), nl=False)
+        return
     if name not in example_names():
-        raise typer.BadParameter(
-            f'{name!r} is not an example profile doppeldata ships; choose from {", ".join(example_names())}', param_hint='NAME'
-        )
+        known = ', '.join([*example_names(), *bundle_example_names()])
+        raise typer.BadParameter(f'{name!r} is not an example profile doppeldata ships; choose from {known}', param_hint='NAME')
     typer.echo(example_text(name), nl=False)
 
 
@@ -859,11 +949,13 @@ def profile_check(profile_name: ProfileArgument, as_json: JsonOption = False) ->
     try:
         if path.is_file():
             report = ProfileFileCheck.of(profile_name, file_checks(path))
-        elif profile_name in example_names():
-            with importlib.resources.as_file(example_resource(profile_name)) as example:
+        elif profile_name in example_names() or profile_name in bundle_example_names():
+            resource = example_resource(profile_name) if profile_name in example_names() else bundle_example_resource(profile_name)
+            with importlib.resources.as_file(resource) as example:
                 report = ProfileFileCheck.of(profile_name, file_checks(example))
         else:
-            message = f'{profile_name!r} is neither a profile file nor an example; name a file, or one of {", ".join(example_names())}'
+            known = ', '.join([*example_names(), *bundle_example_names()])
+            message = f'{profile_name!r} is neither a profile file nor an example; name a file, or one of {known}'
             raise typer.BadParameter(message, param_hint='PROFILE')
     except OSError as error:
         raise typer.BadParameter(f'{profile_name} cannot be read: {error.strerror}', param_hint='PROFILE') from error
@@ -1009,13 +1101,20 @@ def data_plan(
     writer: WriterOption = None,
     scenario: ScenarioOption = None,
     embed_profile: EmbedProfileOption = False,
+    scale: ScaleOption = None,
     as_json: JsonOption = False,
 ) -> None:
     """Print what data generate would write with the same flags: doppeldata data plan orders --rows 1000000000 --out s3://bucket/orders/
 
     It reads nothing at --out, and generates the first blocks to estimate the size. The --json shape may change before 1.0.
+    A bundle PROFILE prints each table's plan in one line, parents first, and each relationship.
     """
+    bundle = bundle_named(profile_name, columns, rows, scale)
     write = write_choices(file_format, file_rows, partition_by, no_partitions, partition_style, writer, embed_profile)
+    if bundle is not None:
+        planned_bundle = doppeldata.plan(bundle, out, seed=seed, scale=scale, scenario=loaded_scenarios(scenario), **dc.asdict(write))
+        typer.echo(json.dumps(planned_bundle.to_json(), indent=2) if as_json else bundle_plan_text(planned_bundle))
+        return
     choices = data_choices(profile_name, columns, rows, seed, out, write, scenario)
     with refused_as_profile(profile_name):
         planned = doppeldata.plan(choices.profile, choices.out, **choices.arguments())
@@ -1070,6 +1169,31 @@ def data_plan(
     typer.echo('\n'.join(lines))
 
 
+def bundle_plan_text(planned: BundleWritePlan) -> str:
+    """A bundle's plan: its identity, each table's rows, files and estimate, and each relationship, with what is set aside."""
+    identity = planned.identity
+    lines = [
+        f'dataset    {planned.dataset_digest}',
+        f'identity   {int(identity["dataset_rows"]):,} rows at scale {identity["scale"]} from seed {identity["seed"]}, bundle '
+        f'{identity["profile_digest"]}, stream version {identity["stream_version"]}',
+    ]
+    if identity.get('scenario_digest') is not None:
+        lines.append(f'scenario   {identity["scenario_digest"]}')
+    lines.append('')
+    width = max(len(name) for name in planned.tables)
+    for name, table in planned.tables.items():
+        lines.append(
+            f'{name:<{width}}  {int(table.identity["dataset_rows"]):,} rows as {table.format}, up to '
+            f'{counted(table.files_at_most, "file")} to {table.destination}, estimate {size(table.estimated_bytes)}'
+        )
+    lines.append('')
+    for relationship in planned.relationships:
+        aside = f', set aside, as {relationship["set_aside"]}' if relationship['set_aside'] is not None else ''
+        lines.append(f'{relationship["name"]}{aside}')
+        lines += [f'  {pointer} set aside: {why}' for pointer, why in relationship['entries_set_aside']]
+    return '\n'.join(lines)
+
+
 @data_app.command('generate', no_args_is_help=True)
 def data_generate(
     out: OutOption,
@@ -1100,6 +1224,7 @@ def data_generate(
         bool,
         typer.Option('--manifest', help='Write _manifest.json beside a one-file --out. A directory or S3 write always writes one.'),
     ] = False,
+    scale: ScaleOption = None,
 ) -> None:
     """Write a dataset, as data plan prints it: doppeldata data generate --columns name,email,zip --rows 1000 --out people.csv
 
@@ -1112,8 +1237,44 @@ def data_generate(
     A Parquet or Arrow file written with --embed-profile regenerates its dataset as PROFILE: doppeldata data generate
     orders/part-00000-fe89a3c3.parquet --out again/. Its seed, rows and scenario are the defaults, and with none of the
     three given, a file whose dataset this release would not make again is refused.
+
+    A bundle PROFILE writes each table under --out/<table>/ with its own manifest, parents first, each foreign key drawn
+    from its parent's keys, and a _manifest.json at --out naming each: doppeldata data generate orders-customers --scale
+    0.1 --out shop/. Each --scenario bends the table it names.
     """
+    bundle = bundle_named(profile_name, columns, rows, scale)
     write = write_choices(file_format, file_rows, partition_by, no_partitions, partition_style, writer, embed_profile)
+    if bundle is not None:
+        if manifest_beside:
+            raise typer.BadParameter('a bundle writes a directory of tables, which always holds its manifests', param_hint='--manifest')
+        terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
+        try:
+            stored_bundle = doppeldata.write(
+                bundle,
+                out,
+                seed=seed,
+                scale=scale,
+                scenario=loaded_scenarios(scenario),
+                threads=threads,
+                replace=replace,
+                **dc.asdict(write),
+            )
+        finally:
+            signal.signal(signal.SIGTERM, terminate)
+        width = max(len(name) for name in stored_bundle.tables)
+        for name, table in stored_bundle.tables.items():
+            stored = size(sum(file['bytes'] for file in table.files))
+            rows_written = sum(file['rows'] for file in table.files)
+            typer.echo(
+                f'{name:<{width}}  wrote {counted(rows_written, "row")} as {table.format} in {counted(len(table.files), "file")}, {stored}'
+            )
+        document = stored_bundle.document
+        seconds = max(document['elapsed_ms'], 1) / 1000
+        typer.echo(
+            f'in {seconds:.2f} s on {counted(document["threads"], "thread")}; '
+            f'{beside(document["destination"], MANIFEST_FILE_NAME)} names dataset {stored_bundle.dataset_digest}'
+        )
+        return
     choices = data_choices(profile_name, columns, rows, seed, out, write, scenario)
     one_file = one_file_of(choices.out)
     if (written := choices.written_values_line()) is not None:

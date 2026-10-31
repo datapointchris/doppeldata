@@ -56,10 +56,15 @@ table. The directory form lets each table be reviewed and regenerated alone. The
 with every table inline, so moving between the forms keeps the identity. A table file's `name` must
 match the key the index gives it.
 
+A relationship's `from` and `to` are lists of `table.column`, each list in one table and both of
+one length. So a key of two columns, such as `[order_lines.product_code, order_lines.supplier_id]`
+to `[product_suppliers.product_code, product_suppliers.supplier_id]`, relates its columns in order.
+
 A relationship stores its fan-out as shares and quantiles, never key values. So join skew survives
 into synthetic data while no key leaves the source. Its quantiles stay `k_min` parents clear of each
 end, and a top share is stated only where its last parent holds `k_min` child rows. Where fewer than
-`k_min` child rows are orphans, `containment` is written as 1 and `orphan_rate` as 0.
+`k_min` child rows are orphans, `containment` is written as 1 and `orphan_rate` as 0. An `inherited`
+entry states an agreement and an `ordinal` a column's name, so neither holds a literal.
 
 ## Generated files name the profile they came from
 
@@ -179,6 +184,18 @@ Each kind of field is admitted by one rule:
 An integer identifier's digit bounds hold no data value, so they are not a literal. Nor does an
 expression, which names columns and numbers.
 
+`privacy.withheld` lists each dataset-level field left out for a floor it failed. A table of fewer
+than `k_min` rows states no `keys`, because a key's uniqueness rests on every row:
+
+```yaml
+privacy:
+  withheld:
+    - {field: /dataset/keys, rule: rows >= k_min}
+```
+
+So a bundle's relationship to such a table is not found, and the entry says why. `--policy none`
+keeps the keys.
+
 A conditional table's `values` counts its cells, and `min_count` is the fewest rows a cell holds.
 The writer counts every cell over the rows profiled, and floors each one before the table is
 written. Conditional quantiles count each quantile, and their `min_count` is the fewest rows any
@@ -198,7 +215,8 @@ an array's length only by quantile, and an element is counted by element rather 
 writer withholds every literal an element holds. Every literal field must have an audit entry
 whose column, pointer, rule and value count match it, and must meet that rule. A dataset-level
 field's entry is in `dataset_audit`, matched by its pointer. A column the policy withholds from
-must hold nothing withheld, and an audit entry naming no literal field is reported too.
+must hold nothing withheld, and an audit entry naming no literal field is reported too. Keys on a
+table of fewer than `k_min` rows are reported as `keys-under-k-min`.
 
 A conditional table's cells are the literal the check cannot recompute, so it trusts the entry's
 `min_count` for them. A cell is a share of the rows its row's kept cells hold, and the file states

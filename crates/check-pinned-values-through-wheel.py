@@ -8,8 +8,10 @@ Usage: python crates/check-pinned-values-through-wheel.py
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
+from doppeldata import Bundle
 from doppeldata import Profile
 from doppeldata import _core
 from ruamel.yaml import YAML
@@ -30,10 +32,17 @@ def main() -> int:
     profile_json = json.dumps(Profile.load(TESTS / 'every-column-kind.profile.yaml').to_plain(), allow_nan=False)
     scenario_json = json.dumps(YAML(typ='safe').load(TESTS / 'every-column-kind.scenario.yaml'), allow_nan=False)
     cdc_json = json.dumps(YAML(typ='safe').load(TESTS / 'every-column-kind.cdc.scenario.yaml'), allow_nan=False)
+    bundle_json = json.dumps(Bundle.load(TESTS / 'every-column-kind.bundle.yaml').to_plain(), allow_nan=False)
+    digest, seed, rows = constants['PROFILE_DIGEST'], int(constants['SEED']), int(constants['ROWS'])
+
+    def table(scenario: tuple[str, str] | None) -> Callable[[], str]:
+        return lambda: _core.determinism_values_digest(profile_json, digest, seed, rows, threads=0, scenario=scenario)
+
     runs = {
-        'PINNED_VALUES': None,
-        'PINNED_SCENARIO_VALUES': (scenario_json, constants['SCENARIO_DIGEST']),
-        'PINNED_CDC_VALUES': (cdc_json, constants['SCENARIO_DIGEST']),
+        'PINNED_VALUES': table(None),
+        'PINNED_SCENARIO_VALUES': table((scenario_json, constants['SCENARIO_DIGEST'])),
+        'PINNED_CDC_VALUES': table((cdc_json, constants['SCENARIO_DIGEST'])),
+        'PINNED_BUNDLE_VALUES': lambda: _core.determinism_bundle_values_digest(bundle_json, digest, seed, 1.0, threads=0),
     }
     unrun = sorted(name for name in constants if name.startswith('PINNED_') and name.endswith('VALUES') and name not in runs)
     if unrun:
@@ -41,10 +50,8 @@ def main() -> int:
             f'check-pinned-values-through-wheel: the test pins {", ".join(unrun)}, and this script names no fixture for it', file=sys.stderr
         )
         return 1
-    for pin, scenario in runs.items():
-        values = _core.determinism_values_digest(
-            profile_json, constants['PROFILE_DIGEST'], int(constants['SEED']), int(constants['ROWS']), threads=0, scenario=scenario
-        )
+    for pin, generate in runs.items():
+        values = generate()
         if values != constants[pin]:
             print(
                 f'check-pinned-values-through-wheel: the wheel generates {values}, not the pinned {pin} {constants[pin]}', file=sys.stderr

@@ -18,6 +18,7 @@ test_file=crates/core/tests/determinism_contract.rs
 profile_fixture=crates/core/tests/every-column-kind.profile.yaml
 scenario_fixture=crates/core/tests/every-column-kind.scenario.yaml
 cdc_fixture=crates/core/tests/every-column-kind.cdc.scenario.yaml
+bundle_fixture=crates/core/tests/every-column-kind.bundle.yaml
 
 pinned() {
   sed -nE "s/^const $1: [^=]+ = \"?([0-9a-f]+)\"?;$/\1/p"
@@ -107,6 +108,7 @@ compare() {
 compare PINNED_VALUES "$profile_fixture"
 compare PINNED_SCENARIO_VALUES "$profile_fixture" "$scenario_fixture"
 compare PINNED_CDC_VALUES "$profile_fixture" "$cdc_fixture"
+compare PINNED_BUNDLE_VALUES "$bundle_fixture"
 
 sed -nE 's/^const (PINNED_[A-Z_]*VALUES): .*/\1/p' <"$test_file" | while read -r name; do
   case "$compared" in

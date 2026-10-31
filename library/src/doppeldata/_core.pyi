@@ -4,7 +4,7 @@ doppeldata's engine, compiled.
 
 from _typeshed import SupportsGetItem
 from os import PathLike
-from typing import Any, Final, SupportsIndex, final
+from typing import Any, Final, SupportsFloat, SupportsIndex, final
 
 BLOCK_ROWS: Final[int]
 """
@@ -92,6 +92,60 @@ The engine's release, which is the tag the wheel was built from.
 """
 
 @final
+class BundlePlan:
+    """
+    A bundle resolved for generation: a ``Plan`` for each table, every parent before its children,
+    at ``scale`` times each table's row count from ``seed``. ``bundle_json`` holds every table
+    inline. ``scenarios``, where given, is each scenario's JSON with its perturbation ids
+    resolved and the source an error names it by, beside the digest of the whole set.
+    """
+    def __new__(cls, /, bundle_json: str, bundle_digest: str, seed: SupportsIndex, scale: SupportsFloat |SupportsIndex, source: str, scenarios: tuple[SupportsGetItem[int, tuple[str, str]], str] |None = None) -> BundlePlan: ...
+    @property
+    def bundle_json(self, /) -> str:
+        """
+        The bundle as the plan draws it, as JSON: every table inline, each scenario's patch
+        applied to its table and to the relationships drawing that table's columns.
+        """
+    def claim(self, /, destination: str, profile_json: str, scenario_json: str |None, *, replace: bool, s3_store: dict |None = None) -> str:
+        """
+        Claims ``destination`` for the bundle and returns the claim as JSON, which ``commit``
+        takes back. ``profile_json`` and ``scenario_json`` are the manifest's ``profile`` and
+        ``scenario`` records. Each table is then written to ``<destination>/<table>``.
+        """
+    def commit(self, /, destination: str, claim_json: str, written: SupportsGetItem[int, str], *, elapsed_ms: SupportsIndex, s3_store: dict |None = None) -> str:
+        """
+        Stores the bundle's manifest and returns it as JSON: whole as ``_manifest.json`` once
+        every table is, else partial under the claim's name. ``claim_json`` is what ``claim``
+        returned, ``written`` each table's manifest JSON as its write returned it, and
+        ``elapsed_ms`` the time from the claim. The manifest takes the most threads and tasks
+        any table used.
+        """
+    @property
+    def dataset_digest(self, /) -> str: ...
+    @property
+    def identity_json(self, /) -> str:
+        """
+        The bundle's own identity as RFC 8785 canonical JSON: no table, and every table's rows summed.
+        """
+    @property
+    def relationships_json(self, /) -> str:
+        """
+        Each relationship as JSON, in the bundle's order: its name, pointer, child and parent
+        tables and columns, what draws its columns instead where another relationship does, each
+        ``inherited`` entry and ``ordinal`` set aside with why, and the columns it copies and
+        numbers where it is drawn.
+        """
+    def set_aside(self, /) -> list[str]:
+        """
+        The pointer of each relationship, ``inherited`` entry and ``ordinal`` the bundle states and
+        the plan does not draw.
+        """
+    def tables(self, /) -> list[tuple[str, Plan]]:
+        """
+        Each table's name and plan, every parent before its children.
+        """
+
+@final
 class Plan:
     """
     A table profile resolved for generation: ``rows`` rows from ``seed``. ``source`` names the
@@ -150,6 +204,11 @@ class Plan:
         """
         The dataset identity's RFC 8785 canonical JSON: the five values its rows are a pure
         function of.
+        """
+    def perturbation_writes(self, /) -> list[tuple[str, list[str]]]:
+        """
+        Each perturbation's id and the columns it writes as planned, in the scenario's order.
+        A ``hot_keys`` on a foreign key writes every column its relationship draws or copies.
         """
     def ranges_json(self, /, options: WriteOptions) -> str:
         """
@@ -239,6 +298,12 @@ def destination_scheme(url: str) -> tuple[str, str |None]:
     ``("memory", None)``. Any other scheme raises the library's ``WriteFailed``.
     """
 
+def determinism_bundle_values_digest(bundle_json: str, bundle_digest: str, seed: SupportsIndex, scale: SupportsFloat |SupportsIndex, *, threads: SupportsIndex) -> str:
+    """
+    The determinism contract's SHA-256 over every table a bundle generates at ``scale``, each
+    table's blocks made on ``threads`` threads, the tables parent first.
+    """
+
 def determinism_values_digest(profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, *, threads: SupportsIndex, scenario: tuple[str, str] |None = None) -> str:
     """
     The determinism contract's SHA-256 over every value and text cell generated from a profile,
@@ -325,4 +390,10 @@ def shape_of(value: str) -> str:
     """
     The value's shape, as a profile stores it: each ASCII upper-case letter as A, lower-case
     letter as a and digit as 9, and every other character as itself.
+    """
+
+def top_share_ranks() -> list[tuple[str, int]]:
+    """
+    Each ``fanout.top_share`` field's name and the rank, at scale 1, its share is held at,
+    busiest first.
     """

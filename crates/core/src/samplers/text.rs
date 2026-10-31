@@ -279,7 +279,7 @@ fn provider_variety(provider: Provider) -> Variety {
 }
 
 /// A version 4 UUID in its hyphenated lowercase form.
-fn push_uuid(rng: &mut ChaCha8Rng, out: &mut String) {
+pub(crate) fn push_uuid(rng: &mut ChaCha8Rng, out: &mut String) {
     let mut bytes = [0u8; 16];
     bytes[..8].copy_from_slice(&rng.next_u64().to_le_bytes());
     bytes[8..].copy_from_slice(&rng.next_u64().to_le_bytes());
@@ -616,6 +616,8 @@ pub(crate) struct TextSampler {
     pub(crate) check_digit: Option<CheckDigitDraw>,
     /// Where set, each row's value is the one at an index the row draws.
     pub(crate) index: Option<ValueIndex>,
+    /// Each row's value is the one at its own row's index, so a child can read it at any row.
+    pub(crate) by_row: bool,
     pub(crate) output: StringOutput,
 }
 
@@ -623,6 +625,13 @@ impl TextSampler {
     pub(crate) fn generate(&self, at: &BlockPosition, keys: &StreamKeys, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
         let block_stream = |key| rng_for(at.seed, key, at.block);
         let nulls = nulls.as_ref();
+        if self.by_row {
+            let mut row = at.first_row;
+            return self.output.build(rows, nulls, |out| {
+                self.push_at_row(at.seed, keys, row, out);
+                row += 1;
+            });
+        }
         match self.index {
             None => {
                 let (mut values, mut invalid) = (block_stream(keys.values), block_stream(keys.invalid));
@@ -642,6 +651,13 @@ impl TextSampler {
                 })
             }
         }
+    }
+
+    /// The value at row `row`'s own index, as [`Self::by_row`] draws it.
+    pub(crate) fn push_at_row(&self, seed: u64, keys: &StreamKeys, row: u64, out: &mut String) {
+        let mut value = rng_for(seed, keys.indexed_values, row);
+        self.source.push(&mut value, out);
+        self.apply_check_digit(&mut value, out);
     }
 
     fn apply_check_digit(&self, rng: &mut ChaCha8Rng, out: &mut String) {

@@ -319,14 +319,15 @@ fn identity(k: usize) -> Vec<f64> {
     matrix
 }
 
-/// The lower-triangular factor `L` with `L·Lᵀ = matrix`, or `None` where the matrix is not positive definite.
+/// The lower-triangular factor `L` with `L·Lᵀ = matrix`, or `None` where the matrix is not positive definite or holds
+/// a value that is not finite.
 fn cholesky(matrix: &[f64], k: usize) -> Option<Vec<f64>> {
     let mut factor = vec![0.0; k * k];
     for i in 0..k {
         for j in 0..=i {
             let sum = matrix[i * k + j] - (0..j).map(|m| factor[i * k + m] * factor[j * k + m]).sum::<f64>();
             if i == j {
-                if sum <= EIGEN_FLOOR / 2.0 {
+                if sum.is_nan() || sum <= EIGEN_FLOOR / 2.0 {
                     return None;
                 }
                 factor[i * k + i] = sum.sqrt();
@@ -341,7 +342,8 @@ fn cholesky(matrix: &[f64], k: usize) -> Option<Vec<f64>> {
 /// `matrix` with each pair `stated` leaves out filled so that its inverse is zero there, every stated entry kept: the
 /// maximum-determinant completion of Dempster's covariance selection, a Gaussian graphical model whose missing edges
 /// are conditional independences. Each sweep regresses every member on its stated partners, as Hastie, Tibshirani
-/// and Friedman's Algorithm 17.1 does. `None` where a regression is singular or the sweeps do not settle.
+/// and Friedman's Algorithm 17.1 does. `None` where a regression is singular, the sweeps do not settle, or a filled
+/// value is not finite, as it becomes where no valid matrix holds the stated pairs.
 fn completed(matrix: &[f64], stated: &[bool], k: usize) -> Option<Vec<f64>> {
     let mut filled = matrix.to_vec();
     for _ in 0..COMPLETION_SWEEPS {
@@ -358,6 +360,9 @@ fn completed(matrix: &[f64], stated: &[bool], k: usize) -> Option<Vec<f64>> {
             let weights = solved(system, partners.iter().map(|&p| matrix[p * k + j]).collect(), n)?;
             for i in (0..k).filter(|&i| i != j) {
                 let value: f64 = partners.iter().zip(&weights).map(|(&p, w)| filled[i * k + p] * w).sum();
+                if !value.is_finite() {
+                    return None;
+                }
                 moved = moved.max((value - filled[i * k + j]).abs());
                 (filled[i * k + j], filled[j * k + i]) = (value, value);
             }

@@ -150,6 +150,15 @@ def column(name: str) -> Column:
     return sf.col('`' + name.replace('`', '``') + '`')
 
 
+def join_keys(table: DataFrame, names: list[str]) -> list[Column]:
+    """Each key column as both sides of a join hold it, text as text and any integer as a bigint, named `key0`, `key1` and
+    on, so both sides join on the same names."""
+    return [
+        (column(name).cast('bigint') if kind_of(table.schema[name].dataType) is ColumnKind.INTEGER else column(name)).alias(f'key{at}')
+        for at, name in enumerate(names)
+    ]
+
+
 def count_where(condition: Column) -> Column:
     return sf.count(sf.when(condition, 1))
 
@@ -1089,22 +1098,66 @@ class SparkBackend:
             found += [(int(row[at] or 0), int(row[at + 1] or 0), int(row[at + 2] or 0)) for at in range(0, len(row), 3)]
         return found
 
-    def foreign_key_counts(self, child: DataFrame, child_column: str, parent: DataFrame, parent_column: str) -> list[tuple[bool, int, int]]:
-        def key(table: DataFrame, name: str) -> Column:
-            integral = kind_of(table.schema[name].dataType) is ColumnKind.INTEGER
-            return (column(name).cast('bigint') if integral else column(name)).alias('key')
-
+    def foreign_key_counts(
+        self, child: DataFrame, child_columns: list[str], parent: DataFrame, parent_columns: list[str]
+    ) -> list[tuple[bool, int, int]]:
+        keys = [f'key{at}' for at in range(len(child_columns))]
         children = (
-            child.select(key(child, child_column))
-            .where(sf.col('key').isNotNull())
-            .groupBy('key')
-            .agg(sf.count(sf.lit(1)).alias('children'))
+            child.select(*join_keys(child, child_columns)).dropna(subset=keys).groupBy(*keys).agg(sf.count(sf.lit(1)).alias('children'))
         )
-        parents = parent.select(key(parent, parent_column)).where(sf.col('key').isNotNull()).distinct().withColumn('parent', sf.lit(True))
-        joined = parents.join(children, on='key', how='full')
+        parents = parent.select(*join_keys(parent, parent_columns)).dropna(subset=keys).distinct().withColumn('parent', sf.lit(True))
+        joined = parents.join(children, on=keys, how='full')
         held = sf.coalesce(sf.col('parent'), sf.lit(False)).alias('parent')
         counted = joined.groupBy(held, sf.coalesce(sf.col('children'), sf.lit(0)).alias('children')).count().collect()
         return [(bool(row['parent']), int(row['children']), int(row['count'])) for row in counted]
+
+    def inherited_counts(
+        self, child: DataFrame, child_columns: list[str], parent: DataFrame, parent_columns: list[str], pairs: list[tuple[str, str]]
+    ) -> tuple[int, list[int]]:
+        keys = [f'key{at}' for at in range(len(child_columns))]
+        compared_child = sorted({name for name, _ in pairs})
+        compared_parent = sorted({name for _, name in pairs})
+        children = child.select(
+            *join_keys(child, child_columns), *(column(name).alias(f'c_{at}') for at, name in enumerate(compared_child))
+        )
+        parents = parent.select(
+            *join_keys(parent, parent_columns), *(column(name).alias(f'p_{at}') for at, name in enumerate(compared_parent))
+        )
+        joined = children.dropna(subset=keys).join(parents.dropna(subset=keys).dropDuplicates(keys), on=keys, how='inner')
+        equal = [
+            sf.sum(sf.col(f'c_{compared_child.index(a)}').eqNullSafe(sf.col(f'p_{compared_parent.index(b)}')).cast('bigint')).alias(
+                f'equal_{at}'
+            )
+            for at, (a, b) in enumerate(pairs)
+        ]
+        row = joined.agg(sf.count(sf.lit(1)).alias('joined'), *equal).collect()[0]
+        return int(row['joined']), [int(row[f'equal_{at}'] or 0) for at in range(len(pairs))]
+
+    def ordinal_counts(self, child: DataFrame, child_columns: list[str], candidates: list[str]) -> tuple[int, list[int]]:
+        keys = [f'key{at}' for at in range(len(child_columns))]
+        per_key = (
+            child.select(*join_keys(child, child_columns), *(column(name).alias(f'c_{at}') for at, name in enumerate(candidates)))
+            .dropna(subset=keys)
+            .groupBy(*keys)
+            .agg(
+                sf.count(sf.lit(1)).alias('rows'),
+                *(sf.min(f'c_{at}').alias(f'least_{at}') for at in range(len(candidates))),
+                *(sf.max(f'c_{at}').alias(f'greatest_{at}') for at in range(len(candidates))),
+                *(sf.count_distinct(f'c_{at}').alias(f'distinct_{at}') for at in range(len(candidates))),
+            )
+        )
+        numbered = [
+            sf.sum(
+                (
+                    (sf.col(f'least_{at}') == 1)
+                    & (sf.col(f'greatest_{at}') == sf.col('rows'))
+                    & (sf.col(f'distinct_{at}') == sf.col('rows'))
+                ).cast('bigint')
+            ).alias(f'numbered_{at}')
+            for at in range(len(candidates))
+        ]
+        row = per_key.agg(sf.count(sf.lit(1)).alias('keys'), *numbered).collect()[0]
+        return int(row['keys']), [int(row[f'numbered_{at}'] or 0) for at in range(len(candidates))]
 
     def distinct_counts(self, table: DataFrame, requests: list[Request], operand: Callable[[Request], Operand]) -> dict[Request, Any]:
         """Each column's distinct non-null values, estimated over each value as text, so one stream holds every type.

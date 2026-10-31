@@ -1,6 +1,7 @@
 //! A profile resolved into per-column samplers, and the pure function from a block number to that
 //! block's rows.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -33,6 +34,10 @@ use crate::profile::Profile;
 use crate::profile::Quantiles;
 use crate::profile::TableProfile;
 use crate::profile::provenance;
+use crate::related_tables;
+use crate::related_tables::RelatedColumns;
+use crate::related_tables::RelationshipFault;
+use crate::related_tables::TableRelations;
 use crate::rng::BLOCK_ROWS;
 use crate::samplers::BlockPosition;
 use crate::samplers::ColumnPlan;
@@ -70,6 +75,14 @@ pub enum PlanError {
     },
     #[error("scenario digest {digest:?} is not `sha256:` and 64 lowercase hex digits")]
     ScenarioDigest { digest: String },
+    /// A bundle's relationship the engine cannot draw. `field` is an RFC 6901 JSON Pointer into the
+    /// bundle.
+    #[error("{field}: {message} [{code}]")]
+    Relationship {
+        code: RelationshipFault,
+        field: String,
+        message: String,
+    },
 }
 
 /// Why a column cannot be generated, as a code a caller can branch on.
@@ -130,6 +143,19 @@ impl PlanError {
             Self::Column { code, .. } => code.code(),
             Self::Scenario { code, .. } => code.code(),
             Self::ScenarioDigest { .. } => "invalid-scenario-digest",
+            Self::Relationship { code, .. } => code.code(),
+        }
+    }
+
+    /// The refusal of a bundle's table `table`, its pointer into the table made one into the bundle.
+    pub(crate) fn in_bundle_table(self, table: &str) -> Self {
+        match self {
+            Self::Column { code, field, message } => Self::Column {
+                code,
+                field: format!("/tables/{}{field}", crate::perturbations::pointer_token(table)),
+                message,
+            },
+            other => other,
         }
     }
 
@@ -140,7 +166,7 @@ impl PlanError {
             Self::Bundle { .. } => "/kind",
             Self::NoColumns { .. } | Self::DuplicateColumn { .. } => "/columns",
             Self::ProfileDigest { .. } | Self::ScenarioDigest { .. } => "",
-            Self::Column { field, .. } | Self::Scenario { field, .. } => field,
+            Self::Column { field, .. } | Self::Scenario { field, .. } | Self::Relationship { field, .. } => field,
         }
     }
 
@@ -200,6 +226,10 @@ pub struct Plan {
     across_files: Vec<(String, u64)>,
     /// The first perturbation ordering the whole table: its pointer and its op.
     one_process: Option<(String, &'static str)>,
+    /// Each perturbation's id and the columns it writes as planned, in the scenario's order.
+    writes: Vec<(String, Vec<String>)>,
+    /// What a bundle's relationships draw, and how its children read its keys.
+    related: Option<RelatedColumns>,
 }
 
 /// One perturbation applied to every block, and the schema its rows carry after it.
@@ -327,6 +357,27 @@ pub fn plan_with_scenario(
             digest: profile_digest.into(),
         });
     }
+    let mut identity = DatasetIdentity::new(profile_digest, seed, rows);
+    if let Some(applied) = scenario {
+        if !is_sha256_digest(applied.digest) {
+            return Err(PlanError::ScenarioDigest {
+                digest: applied.digest.into(),
+            });
+        }
+        identity = identity.with_scenario(applied.digest);
+    }
+    plan_table(table, identity, scenario.map(|applied| applied.scenario), None)
+}
+
+/// Plans `table` for the dataset `identity` names, under `scenario`, with what a bundle's
+/// `relations` draw where the table is one of a bundle's.
+pub(crate) fn plan_table(
+    table: &TableProfile,
+    identity: DatasetIdentity,
+    scenario: Option<&Scenario>,
+    relations: Option<TableRelations<'_>>,
+) -> Result<Plan, PlanError> {
+    let (seed, rows) = (identity.seed(), identity.rows());
     let columns = table.columns.as_deref().unwrap_or_default();
     if columns.is_empty() {
         return Err(PlanError::NoColumns { name: table.name.clone() });
@@ -342,27 +393,31 @@ pub fn plan_with_scenario(
         }
         planned.push(column_plan(&context, column, &ColumnSite::top_level(index, column))?);
     }
-    let dependent = DependentColumns::plan(&context, table, &mut planned)?;
-    let mut identity = DatasetIdentity::new(profile_digest, seed, rows);
-    if let Some(applied) = scenario {
-        if !is_sha256_digest(applied.digest) {
-            return Err(PlanError::ScenarioDigest {
-                digest: applied.digest.into(),
-            });
+    let (related, fixed) = match relations {
+        Some(relations) => {
+            let (related, fixed) = related_tables::relate(relations, table, &mut planned, seed, rows)?;
+            (Some(related), fixed)
         }
-        identity = identity.with_scenario(applied.digest);
-    }
+        None => (None, BTreeMap::new()),
+    };
+    let dependent = DependentColumns::plan(&context, table, &mut planned, &fixed)?;
     let mut metadata = HashMap::from([
         (provenance::PROFILE_NAME.to_string(), table.name.clone()),
-        (provenance::PROFILE_DIGEST.to_string(), profile_digest.to_string()),
+        (provenance::PROFILE_DIGEST.to_string(), identity.profile_digest().to_string()),
         (provenance::SEED.to_string(), seed.to_string()),
         (provenance::STREAM_VERSION.to_string(), identity.stream_version().to_string()),
         (provenance::DATASET_ROWS.to_string(), rows.to_string()),
         (provenance::DATASET_DIGEST.to_string(), identity.digest()),
     ]);
-    if let Some(applied) = scenario {
-        metadata.insert(provenance::SCENARIO_NAME.to_string(), applied.scenario.scenario.clone());
-        metadata.insert(provenance::SCENARIO_DIGEST.to_string(), applied.digest.to_string());
+    if let Some(digest) = identity.scenario_digest() {
+        metadata.insert(provenance::SCENARIO_DIGEST.to_string(), digest.to_string());
+    }
+    if let Some(scenario) = scenario {
+        metadata.insert(provenance::SCENARIO_NAME.to_string(), scenario.scenario.clone());
+    }
+    if let (Some(scale), Some(name)) = (identity.scale(), identity.table()) {
+        metadata.insert(provenance::SCALE.to_string(), scale.to_string());
+        metadata.insert(provenance::TABLE.to_string(), name.to_string());
     }
     let fields: Vec<_> = planned.iter().map(|column| column.field.clone()).collect();
     let mut plan = Plan {
@@ -378,9 +433,11 @@ pub fn plan_with_scenario(
         cdc: None,
         across_files: Vec::new(),
         one_process: None,
+        writes: Vec::new(),
+        related,
     };
-    if let Some(applied) = scenario {
-        plan.apply_scenario(table, applied.scenario)?;
+    if let Some(scenario) = scenario {
+        plan.apply_scenario(table, scenario)?;
     }
     Ok(plan)
 }
@@ -476,10 +533,20 @@ impl Plan {
                 schema: &schema,
                 index,
                 id: &ids[index],
+                related: self.related.as_ref(),
             };
             if perturbation.needs_one_process() && self.one_process.is_none() {
                 self.one_process = Some((format!("/perturbations/{index}"), perturbation.op_name()));
             }
+            let mut written: Vec<String> = perturbation.written_columns().into_iter().map(String::from).collect();
+            if let (Perturbation::HotKeys(op), Some(related)) = (perturbation, self.related.as_ref())
+                && let Ok(column) = schema.index_of(&op.column)
+                && let Some(drawn) = related.drawn_with(column)
+            {
+                let names = drawn.into_iter().map(|at| schema.field(at).name().clone());
+                written.extend(names.filter(|name| *name != op.column));
+            }
+            self.writes.push((ids[index].clone(), written));
             let one_only = || {
                 planning.refuse(
                     ScenarioFault::InvalidParameter,
@@ -487,6 +554,9 @@ impl Plan {
                     format!("a dataset takes one {}, and an earlier perturbation is one", perturbation.op_name()),
                 )
             };
+            if matches!(perturbation, Perturbation::Cdc(_)) && self.related.is_some() {
+                return Err(planning.refuse(ScenarioFault::OpNotForFormat, "", "cdc of a bundle's table is not generated yet"));
+            }
             let deferred = match perturbation {
                 Perturbation::SchemaDrift(_) => Some(&mut drift_at),
                 Perturbation::Cdc(_) => Some(&mut cdc_at),
@@ -533,6 +603,7 @@ impl Plan {
                 schema: &schema,
                 index,
                 id: &ids[index],
+                related: self.related.as_ref(),
             };
             let cdc = perturbations::plan_cdc(op, &planning, &self.columns, self.dependent.following())?;
             refuse_beside_cdc(scenario, &cdc)?;
@@ -547,6 +618,7 @@ impl Plan {
                 schema: &schema,
                 index,
                 id: &ids[index],
+                related: self.related.as_ref(),
             };
             if let Planned::SchemaDrift(drift) = plan_perturbation(&scenario.perturbations[index], &planning)? {
                 self.drift = Some(drift);
@@ -581,6 +653,12 @@ impl Plan {
     /// The change stream a scenario's `cdc` writes beside the full load, where it has one.
     pub fn cdc(&self) -> Option<&CdcPlan> {
         self.cdc.as_ref()
+    }
+
+    /// Each perturbation's id and the columns it writes as planned, in the scenario's order. A
+    /// `hot_keys` on a foreign key writes every column its relationship draws or copies.
+    pub fn perturbation_writes(&self) -> &[(String, Vec<String>)] {
+        &self.writes
     }
 
     /// The pointer to the first perturbation ordering the whole table, and its op, where one does.
@@ -685,17 +763,34 @@ impl Plan {
         self.staged(&position, rows, through, cells)
     }
 
+    /// What a bundle's relationships draw for this table, where it is one of a bundle's.
+    pub(crate) fn related(&self) -> Option<&RelatedColumns> {
+        self.related.as_ref()
+    }
+
+    /// The schema the samplers' rows carry, before any perturbation.
+    pub(crate) fn generated_schema(&self) -> &SchemaRef {
+        &self.generated_schema
+    }
+
+    /// The rows `block` generates before any perturbation adds one.
+    pub(crate) fn generated_rows(&self, block: u64) -> usize {
+        self.position(block).map_or(0, |(_, rows)| rows)
+    }
+
     /// `rows` rows drawn at `position`, every perturbation up to `through` applied.
     fn staged(&self, position: &BlockPosition, rows: usize, through: usize, cells: bool) -> Block {
         let options = RecordBatchOptions::new().with_row_count(Some(rows));
-        let (arrays, cells) = match self.dependent.is_empty() {
-            true => {
+        let given = self.related.as_ref().map(|related| related.generate(&self.columns, position, rows));
+        let (arrays, cells) = match (self.dependent.is_empty(), given) {
+            (true, None) => {
                 let arrays = self.columns.iter().map(|column| column.generate(position, rows)).collect();
                 let cells = cells.then(|| self.columns.iter().map(|column| column.text_cells(position, rows)).collect());
                 (arrays, cells)
             }
-            false => {
-                let DrawnColumns { arrays, nulls } = self.dependent.generate(&self.columns, position, rows);
+            (_, given) => {
+                let given = given.unwrap_or_default();
+                let DrawnColumns { arrays, nulls } = self.dependent.generate(&self.columns, position, rows, &given);
                 let cells = cells.then(|| {
                     self.columns
                         .iter()

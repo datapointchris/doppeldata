@@ -15,6 +15,7 @@ from doppeldata.privacy_policy.column_treatment import column_treatment
 from doppeldata.privacy_policy.column_treatment import oldest_birth_year
 from doppeldata.privacy_policy.file_check import table_check
 from doppeldata.privacy_policy.literal_fields import EXACT
+from doppeldata.privacy_policy.literal_fields import ROWS_AT_LEAST_K_MIN
 from doppeldata.privacy_policy.literal_fields import FieldKind
 from doppeldata.privacy_policy.literal_fields import column_literals
 from doppeldata.privacy_policy.literal_fields import dataset_literals
@@ -34,8 +35,8 @@ def withheld(
     document: dict[str, Any], policy: Policy, k_min: int, cell_floors: dict[tuple[str, str, str], int] | None = None
 ) -> dict[str, Any]:
     """The document with what `policy` withholds removed, and its `privacy` section written: the policy, `k_min`,
-    each column withheld from and why, each literal field kept with the rule that admitted it, and each dataset-level
-    field a floor holds.
+    each column withheld from and why, each literal field kept with the rule that admitted it, each dataset-level
+    field a floor holds, and each one it left out, as the keys of a table of fewer than `k_min` rows.
 
     `cell_floors` holds the fewest rows a literal of each entry of the dataset's `GIVEN_LISTS` rests on, by the list's
     name and the entry's given and child column, and the fewest a lookup table's key rests on, by `dependencies` and its
@@ -91,6 +92,10 @@ def withheld(
     for index, dependency in enumerate(dataset.get('dependencies') or []):
         if lookup_faults(document, index, policy):
             del dependency['table']
+    left_out = []
+    if dataset.get('keys') and (dataset.get('row_count') or 0) < k_min:
+        del dataset['keys']
+        left_out.append({'field': '/dataset/keys', 'rule': ROWS_AT_LEAST_K_MIN})
     audit = []
     for column in column_literals(document):
         for field in column.fields:
@@ -118,6 +123,8 @@ def withheld(
         privacy['audit'] = audit
     if dataset_audit:
         privacy['dataset_audit'] = dataset_audit
+    if left_out:
+        privacy['withheld'] = left_out
     document['privacy'] = privacy
     broken = table_check(document, ()).violations
     if broken:

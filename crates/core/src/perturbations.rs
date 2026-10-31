@@ -52,6 +52,7 @@ use crate::plan::PlanError;
 use crate::profile::Column;
 use crate::profile::Quantiles;
 use crate::profile::TableProfile;
+use crate::related_tables::RelatedColumns;
 use crate::rng::rng_for;
 use crate::rng::stream_key;
 use crate::rng::unit;
@@ -81,11 +82,18 @@ pub enum ScenarioFault {
     NoPrimaryKey,
     /// An op that orders the whole table, such as `cdc`, asked of a write split across processes.
     OpNeedsOneProcess,
+    /// A scenario on a bundle naming no table of it, or one naming a table applied to a lone table
+    /// of another name.
+    UnknownTable,
+    /// A patch of a relationship the scenario's table draws no column from.
+    UnknownRelationship,
 }
 
 impl ScenarioFault {
     pub fn code(self) -> &'static str {
         match self {
+            Self::UnknownTable => "unknown-table",
+            Self::UnknownRelationship => "unknown-relationship",
             Self::UnknownColumn => "unknown-column",
             Self::OpNotForColumn => "op-not-for-column",
             Self::InvalidParameter => "invalid-parameter",
@@ -189,6 +197,8 @@ pub(crate) struct Planning<'a> {
     pub(crate) schema: &'a SchemaRef,
     pub(crate) index: usize,
     pub(crate) id: &'a str,
+    /// What a bundle's relationships draw in the table, where it is one of a bundle's.
+    pub(crate) related: Option<&'a RelatedColumns>,
 }
 
 impl Planning<'_> {

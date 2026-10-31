@@ -32,6 +32,7 @@ from ruamel.yaml.representer import RoundTripRepresenter
 
 from doppeldata import _core
 from doppeldata.errors import DoppeldataError
+from doppeldata.example_profiles import bundle_example_resource
 from doppeldata.example_profiles import example_resource
 from doppeldata.published_schemas import schema_text
 
@@ -649,6 +650,17 @@ class Profile:
         self.path = target
 
 
+@dc.dataclass(frozen=True)
+class StatedRelationship:
+    """A relationship a bundle states, with the child table and columns its `from` names, and the parent's its `to` does."""
+
+    document: Mapping[str, Any]
+    child: str
+    child_columns: tuple[str, ...]
+    parent: str
+    parent_columns: tuple[str, ...]
+
+
 class Bundle:
     """Several tables' profiles and their relationships: a `kind: bundle` file, or a directory holding `bundle.yaml`."""
 
@@ -694,6 +706,29 @@ class Bundle:
                 raise InvalidProfile(str(index), [Issue('table-name-mismatch', pointer(('tables', name)), message)])
             tables[name] = table
         return cls(document, index, tables)
+
+    @classmethod
+    def example(cls, name: str) -> 'Bundle':
+        """An example bundle the library ships, every table inline. It has no file of its own, so `save` needs a path."""
+        with importlib.resources.as_file(bundle_example_resource(name)) as path:
+            bundle = cls.load(path)
+        bundle.path = None
+        return bundle
+
+    @property
+    def name(self) -> str:
+        return str(self.document['name'])
+
+    def relationships(self) -> list[StatedRelationship]:
+        """Each relationship the bundle states, in order. An end is `table.column`, split at its first dot, as the engine
+        reads it."""
+        stated = []
+        for relationship in to_plain(self.document).get('relationships') or []:
+            child = [reference.split('.', 1) for reference in relationship['from']]
+            parent = [reference.split('.', 1) for reference in relationship['to']]
+            children, parents = tuple(column for _, column in child), tuple(column for _, column in parent)
+            stated.append(StatedRelationship(relationship, child[0][0], children, parent[0][0], parents))
+        return stated
 
     @classmethod
     def from_data_package(cls, path: str | Path) -> 'Bundle':

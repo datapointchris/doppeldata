@@ -320,6 +320,12 @@ class Scenario:
             return members[0]
         plain = [member.to_plain() for member in members]
         document: dict[str, Any] = {'scenario': '+'.join(each['scenario'] for each in plain)}
+        tables = sorted({each['table'] for each in plain if each.get('table') is not None})
+        if len(tables) > 1:
+            issue = Issue('unknown-table', '/table', f'the scenarios bend {", ".join(tables)}, and one composition bends one table')
+            raise InvalidScenario('+'.join(each['scenario'] for each in plain), [issue])
+        if tables:
+            document['table'] = tables[0]
         patches = [each['patch'] for each in plain if each.get('patch') is not None]
         if patches:
             document['patch'] = functools.reduce(composed_patch, patches)
@@ -427,11 +433,21 @@ def refuse_file_shaping(
 
 
 def refuse_other_scenario(scenario: Scenario | None, written: 'Manifest', data: str) -> None:
-    """Raise InvalidScenario when `scenario` is not the one the manifest of `data` records, or is None where it records one."""
-    digest = written.identity.get('scenario_digest')
-    if (scenario.digest if scenario is not None else None) == digest:
-        return
+    """Raise InvalidScenario when `scenario` is not the one the manifest of `data` records, or is None where it records one.
+
+    A bundle's table records the bundle's map of each table to its scenario, so the table is held to its own entry there.
+    """
     recorded = written.document.get('scenario') or {}
+    table = written.identity.get('table')
+    if table is not None:
+        applied = (recorded.get('document') or {}).get(table)
+        if (json.loads(scenario.canonical()) if scenario is not None else None) == applied:
+            return
+        digest = digest_of(rfc8785.dumps(applied)) if applied is not None else None
+    else:
+        digest = written.identity.get('scenario_digest')
+        if (scenario.digest if scenario is not None else None) == digest:
+            return
     wrote = f'scenario {recorded.get("name")} ({digest})' if digest is not None else 'no scenario'
     if scenario is None:
         issue = Issue('data-has-scenario', '', f'{data} was written under {wrote}; check it under that scenario')

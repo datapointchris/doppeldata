@@ -10,17 +10,27 @@ from doppeldata.profile_comparison.metrics import Bound
 BOUND_SIGNS = {Bound.AT_MOST: '≤', Bound.AT_LEAST: '≥'}
 
 
-OPTIONAL_METRIC_FIELDS = ('expected', 'observed', 'unmeasured', 'skipped_by', 'paired_with', 'worst_given_value')
+OPTIONAL_METRIC_FIELDS = (
+    'expected',
+    'observed',
+    'unmeasured',
+    'skipped_by',
+    'drawn_by',
+    'paired_with',
+    'worst_given_value',
+    'relationship',
+)
 
 
 @dc.dataclass(frozen=True)
 class MetricResult:
     """One metric's value for one column, or a pair where `paired_with` names the second, with its verdict. A metric of
-    a column given another names the value of `paired_with` it is worst within in `worst_given_value`.
+    a column given another names the value of `paired_with` it is worst within in `worst_given_value`, and one of a
+    bundle's relationship names it in `relationship`, as `orders.customer_id → customers.customer_id`.
 
-    `value` is None where `unmeasured` says why it has none, or where `skipped_by` names the scenario's perturbation that
-    moves what it compares. A row whose `decides` is False is one the report's verdict leaves out, such as a score against
-    the real data no thresholds file sets, and it passes.
+    `value` is None where `unmeasured` says why it has none, where `skipped_by` names the scenario's perturbation that
+    moves what it compares, or where `drawn_by` names the bundle's relationship drawing the column. A row whose `decides` is False is
+    one the report's verdict leaves out, such as a score against the real data no thresholds file sets, and it passes.
     """
 
     metric: str
@@ -33,8 +43,10 @@ class MetricResult:
     observed: float | None = None
     unmeasured: str | None = None
     skipped_by: str | None = None
+    drawn_by: str | None = None
     paired_with: str | None = None
     worst_given_value: str | None = None
+    relationship: str | None = None
     decides: bool = True
 
     def to_plain(self) -> dict[str, Any]:
@@ -46,7 +58,10 @@ class MetricResult:
         return self.value is not None and self.bound.holds(self.value, self.threshold)
 
     def where(self) -> str:
-        """` on amount`, ` on fare and total`, ` on channel given region = north`, or nothing for the table."""
+        """` on amount`, ` on fare and total`, ` on channel given region = north`, ` on orders.customer_id →
+        customers.customer_id`, or nothing for the table."""
+        if self.relationship is not None:
+            return f' on {self.relationship}'
         if self.worst_given_value is not None:
             return f' on {self.column} given {self.paired_with} = {self.worst_given_value}'
         if self.paired_with is not None:
@@ -219,10 +234,14 @@ class CheckReport:
     def to_markdown(self) -> str:
         """The report for a person, failures first."""
         verdict = 'passed' if self.passed and self.verified else 'failed'
+        return '\n'.join(self.markdown_lines(f'# doppeldata check {verdict}')) + '\n'
+
+    def markdown_lines(self, heading: str) -> list[str]:
+        """The report's lines under `heading`, as a bundle's report holds each table's under its own."""
         against = f'profile `{self.profile.name}` ({self.profile.digest})'
         if self.scenario is not None:
             against += f' under scenario `{self.scenario.name}` ({self.scenario.digest})'
-        lines = [f'# doppeldata check {verdict}', '', f'`{self.data.path}`, {self.data.rows:,} rows, against {against}.', '']
+        lines = [heading, '', f'`{self.data.path}`, {self.data.rows:,} rows, against {against}.', '']
         if self.against is not None:
             real = self.against
             lines += [
@@ -230,7 +249,83 @@ class CheckReport:
                 f'on a seeded sample of {real.scored_rows:,} rows from each side.',
                 '',
             ]
-        return '\n'.join(lines + findings(self.metrics, self.changes, self.failures()) + expected(self.expectations)) + '\n'
+        return lines + findings(self.metrics, self.changes, self.failures()) + expected(self.expectations)
+
+
+@dc.dataclass(frozen=True)
+class CheckedTable:
+    name: str
+    report: CheckReport
+
+
+@dc.dataclass(frozen=True)
+class BundleCheckReport:
+    """Related tables generated from a bundle, measured against it: each table's check, every parent before its children,
+    and each relationship's `fanout_ks`, `orphan_rate_delta` and `top_share_delta`.
+
+    `passed` covers every table's check and every relationship metric that decides, and `verified` every table's
+    expectations. `data.rows` is every table's rows together.
+    """
+
+    profile: ReportedProfile
+    data: CheckedData
+    tables: list[CheckedTable]
+    relationships: list[MetricResult]
+    scenario: ReportedScenario | None = None
+
+    def failures(self) -> Failures:
+        """What failed across the bundle: the relationship metrics, then each table's in order."""
+        metrics = self.relationships + [result for table in self.tables for result in table.report.metrics]
+        changes = [change for table in self.tables for change in table.report.changes]
+        return Failures.of(metrics, changes, [result for table in self.tables for result in table.report.expectations])
+
+    def failure_message(self) -> str:
+        """What `CheckFailed` says of a bundle check the data did not pass."""
+        return f'the data missed its bundle on {self.failures().summary()}'
+
+    @property
+    def passed(self) -> bool:
+        failures = Failures.of(self.relationships, [])
+        return not failures.metrics and all(table.report.passed for table in self.tables)
+
+    @property
+    def verified(self) -> bool:
+        return all(table.report.verified for table in self.tables)
+
+    def to_plain(self) -> dict[str, Any]:
+        return {
+            'profile': dc.asdict(self.profile),
+            'scenario': dc.asdict(self.scenario) if self.scenario is not None else None,
+            'data': dc.asdict(self.data),
+            'passed': self.passed,
+            'verified': self.verified,
+            'tables': [{'name': table.name, 'report': table.report.to_plain()} for table in self.tables],
+            'relationships': [result.to_plain() for result in self.relationships],
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_plain(), indent=2, allow_nan=False) + '\n'
+
+    def to_markdown(self) -> str:
+        """The report for a person: the relationships, failures first, then each table's report under its name."""
+        verdict = 'passed' if self.passed and self.verified else 'failed'
+        against = f'bundle `{self.profile.name}` ({self.profile.digest})'
+        if self.scenario is not None:
+            against += f' under scenario `{self.scenario.name}` ({self.scenario.digest})'
+        rows = f'{self.data.rows:,} rows in {len(self.tables)} tables'
+        lines = [f'# doppeldata bundle check {verdict}', '', f'`{self.data.path}`, {rows}, against {against}.', '']
+        failed = Failures.of(self.relationships, [])
+        lines += [f'{len(failed.metrics)} of {failed.of_metrics} relationship metrics failed.', '']
+        lines += metric_table([result for result in self.relationships if result.decides])
+        lines += [
+            f'`{result.metric}` on `{result.relationship}` decides nothing: {result.unmeasured}.'
+            for result in self.relationships
+            if not result.decides
+        ]
+        for table in self.tables:
+            report = table.report
+            lines += ['', *report.markdown_lines(f'## {table.name} {"passed" if report.passed and report.verified else "failed"}')]
+        return '\n'.join(lines) + '\n'
 
 
 @dc.dataclass(frozen=True)
@@ -286,14 +381,24 @@ def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: 
         ]
     for result in metrics:
         if not result.decides and result.value is None:
-            on = f' on `{result.column}`' if result.column else ''
-            lines += [f'`{result.metric}`{on} decides nothing, unmeasured: {result.unmeasured}.', '']
+            named = result.relationship or result.column
+            on = f' on `{named}`' if named else ''
+            lines += [f'`{result.metric}`{on} decides nothing, {unvalued(result)}.', '']
     if changes:
         lines += ['| Change | Column | Passed | Detail |', '| --- | --- | --- | --- |']
         for change in sorted(changes, key=lambda change: change.passed):
             lines.append(f'| {change.change.value} | {change.column or ""} | {verdict(change.passed)} | {change.message} |')
         lines.append('')
     return lines
+
+
+def unvalued(result: MetricResult) -> str:
+    """Why `result` holds no value: the perturbation or relationship it is skipped by, or what left it unmeasured."""
+    if result.skipped_by is not None:
+        return f'skipped by {result.skipped_by}'
+    if result.drawn_by is not None:
+        return f'drawn by {result.drawn_by}'
+    return f'unmeasured: {result.unmeasured}'
 
 
 def metric_table(metrics: list[MetricResult], *, against_reference: bool = False) -> list[str]:
@@ -305,15 +410,13 @@ def metric_table(metrics: list[MetricResult], *, against_reference: bool = False
         return []
     judged = MetricResult.meets_threshold if against_reference else (lambda result: result.passed)
     heading = 'Meets it' if against_reference else 'Passed'
-    lines = [f'| Metric | Column | Value | Threshold | Expected | Observed | {heading} |', '| --- | --- | --- | --- | --- | --- | --- |']
+    where = 'Relationship' if all(result.relationship is not None for result in metrics) else 'Column'
+    lines = [f'| Metric | {where} | Value | Threshold | Expected | Observed | {heading} |', '| --- | --- | --- | --- | --- | --- | --- |']
     for result in sorted(metrics, key=judged):
         threshold = f'{BOUND_SIGNS[result.bound]} {result.threshold:g}'
-        if result.skipped_by is not None:
-            shown = f'skipped by {result.skipped_by}'
-        else:
-            shown = f'{result.value:.6g}' if result.value is not None else f'unmeasured: {result.unmeasured}'
+        shown = f'{result.value:.6g}' if result.value is not None else unvalued(result)
         expected, observed = (f'{value:.6g}' if value is not None else '' for value in (result.expected, result.observed))
-        column = ', '.join(name for name in (result.column, result.paired_with) if name)
+        column = result.relationship or ', '.join(name for name in (result.column, result.paired_with) if name)
         lines.append(f'| {result.metric} | {column} | {shown} | {threshold} | {expected} | {observed} | {verdict(judged(result))} |')
     return [*lines, '']
 

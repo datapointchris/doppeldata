@@ -73,6 +73,7 @@ use crate::profile::Granularity;
 use crate::profile::Quantiles;
 use crate::profile::Rate;
 use crate::profile::TableProfile;
+use crate::related_tables::GivenColumn;
 use crate::rng::Bernoulli;
 use crate::rng::rng_for;
 use crate::rng::unit;
@@ -501,8 +502,14 @@ fn temporal_step(output: &TemporalOutput, granularity: Option<Granularity>) -> O
 impl DependentColumns {
     /// How `columns`, the plans of `table`'s columns in order, are drawn given each other. It refuses a dependence
     /// naming a column the table lacks, a column of a kind the dependence cannot apply to, an expression that does
-    /// not parse, and a cycle. Each column's plan description gains what it is drawn from.
-    pub(crate) fn plan(context: &PlanContext, table: &TableProfile, columns: &mut [ColumnPlan]) -> Result<Self, PlanError> {
+    /// not parse, and a cycle. Each column's plan description gains what it is drawn from. Each entry drawing a
+    /// column `fixed` holds is set aside, for the reason it holds.
+    pub(crate) fn plan(
+        context: &PlanContext,
+        table: &TableProfile,
+        columns: &mut [ColumnPlan],
+        fixed: &BTreeMap<usize, String>,
+    ) -> Result<Self, PlanError> {
         let profile = table.columns.as_deref().unwrap_or_default();
         let dataset = table.dataset.as_ref();
         let mut draws = vec![ColumnDraw::default(); columns.len()];
@@ -521,9 +528,19 @@ impl DependentColumns {
                 .collect(),
             children: vec![BTreeSet::new(); profile.len()],
         };
+        let already = |drawn_by: &[Option<String>], child: usize| {
+            fixed
+                .get(&child)
+                .cloned()
+                .or_else(|| drawn_by[child].as_ref().map(|drawn| format!("{drawn} draws it")))
+        };
         for (index, column) in profile.iter().enumerate() {
             let Some(derived) = &column.derived else { continue };
             let field = format!("/columns/{index}/derived");
+            if let Some(why) = fixed.get(&index) {
+                set_aside.entry(field, index, "derived values".into(), why.clone());
+                continue;
+            }
             let (draw, note) = match derived {
                 Derived::Timedelta(timedelta) => {
                     let base = planner.column(&timedelta.base, &format!("{field}/base"))?;
@@ -632,8 +649,8 @@ impl DependentColumns {
                 continue;
             };
             let lhs_index = planner.column(lhs, &format!("{field}/lhs/0"))?;
-            if let Some(drawn) = &drawn_by[rhs] {
-                set_aside.entry(format!("{field}/table"), rhs, what, format!("{drawn} draws it"));
+            if let Some(why) = already(&drawn_by, rhs) {
+                set_aside.entry(format!("{field}/table"), rhs, what, why);
                 continue;
             }
             if planner.draws_from(lhs_index, rhs) {
@@ -661,8 +678,8 @@ impl DependentColumns {
             let child = planner.column(&conditional.column, &format!("{field}/column"))?;
             let parent = planner.column(&conditional.given, &format!("{field}/given"))?;
             let what = format!("conditional table given {}", conditional.given);
-            if let Some(drawn) = &drawn_by[child] {
-                set_aside.entry(field, child, what, format!("{drawn} draws it"));
+            if let Some(why) = already(&drawn_by, child) {
+                set_aside.entry(field, child, what, why);
                 continue;
             }
             if planner.draws_from(parent, child) {
@@ -699,8 +716,24 @@ impl DependentColumns {
             drawn_by[child] = Some(format!("its {what}"));
         }
         let ranked = |draws: &[ColumnDraw], index: usize| {
-            draws[index].values.is_none() && matches!(planner.columns[index].values, ValueSampler::Numeric(_))
+            draws[index].values.is_none()
+                && !fixed.contains_key(&index)
+                && matches!(planner.columns[index].values, ValueSampler::Numeric(_))
         };
+        let correlations = dataset.and_then(|d| d.correlations.as_deref()).unwrap_or_default();
+        for (at, correlation) in correlations.iter().enumerate() {
+            let (Some(&a), Some(&b)) = (planner.names.get(correlation.a.as_str()), planner.names.get(correlation.b.as_str())) else {
+                continue;
+            };
+            let Some((held, other, why)) = [(a, b), (b, a)]
+                .into_iter()
+                .find_map(|(held, other)| fixed.get(&held).map(|why| (held, other, why)))
+            else {
+                continue;
+            };
+            let what = format!("correlation with {}", profile[other].name);
+            set_aside.entry(format!("/dataset/correlations/{at}"), held, what, why.clone());
+        }
         let spearman = spearman_pairs(table, profile, |index| ranked(&draws, index));
         let component = copula_components(&spearman, profile.len());
         // A copula level is drawn given every other member's, so a member's levels are not uniform among the rows
@@ -712,8 +745,8 @@ impl DependentColumns {
         // Why a warp of `child`'s level given `parent` cannot be drawn, where it cannot, `held` naming the parent of
         // the warp of that kind the child already takes.
         let unwarped = |planner: &Planner, draws: &[ColumnDraw], child: usize, parent: usize, held: Option<(&str, usize)>| {
-            if let Some(drawn) = &drawn_by[child] {
-                return Some(format!("{drawn} draws it"));
+            if let Some(why) = already(&drawn_by, child) {
+                return Some(why);
             }
             if !ranked(draws, child) {
                 return Some("it is not numeric".to_string());
@@ -813,7 +846,9 @@ impl DependentColumns {
                 }
             }
             if let Some(null_rate) = &rates.null_rate {
-                let why = if !planner.columns[child].field.is_nullable() {
+                let why = if let Some(why) = fixed.get(&child) {
+                    Some(why.clone())
+                } else if !planner.columns[child].field.is_nullable() {
                     Some("its field holds no nulls".to_string())
                 } else if let Some(nulls) = &draws[child].nulls {
                     Some(format!("its null rate is given {}", profile[nulls.parent].name))
@@ -980,12 +1015,18 @@ impl DependentColumns {
         }
     }
 
-    /// The block's columns at `at`, each drawn after the columns it depends on.
-    pub(crate) fn generate(&self, columns: &[ColumnPlan], at: &BlockPosition, rows: usize) -> DrawnColumns {
+    /// The block's columns at `at`, each drawn after the columns it depends on, and each `given` holds taken
+    /// as it holds it.
+    pub(crate) fn generate(&self, columns: &[ColumnPlan], at: &BlockPosition, rows: usize, given: &[Option<GivenColumn>]) -> DrawnColumns {
         let levels: Vec<Vec<Vec<f64>>> = self.groups.iter().map(|group| group.levels(at.seed, at.block, rows)).collect();
         let mut arrays: Vec<Option<ArrayRef>> = vec![None; columns.len()];
         let mut masks: Vec<Option<BooleanBuffer>> = vec![None; columns.len()];
         for &index in &self.order {
+            if let Some(Some(given)) = given.get(index) {
+                arrays[index] = Some(given.array.clone());
+                masks[index] = given.nulls.clone();
+                continue;
+            }
             let column = &columns[index];
             let draw = &self.draws[index];
             let drawn_nulls = match &draw.nulls {

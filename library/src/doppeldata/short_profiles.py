@@ -18,6 +18,7 @@ from doppeldata.column_name_words import hint_runs_in
 from doppeldata.column_name_words import name_words
 from doppeldata.embedded_profiles import data_file_metadata
 from doppeldata.embedded_profiles import data_file_profile
+from doppeldata.example_profiles import bundle_example_names
 from doppeldata.example_profiles import example_names
 from doppeldata.inline_columns import Fake
 from doppeldata.inline_columns import InlineColumn
@@ -27,6 +28,7 @@ from doppeldata.inline_columns import decimals
 from doppeldata.inline_columns import integers
 from doppeldata.name_hinted_types import GENERAL
 from doppeldata.name_hinted_types import type_named_by
+from doppeldata.profile_format import BUNDLE_INDEX
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
@@ -89,6 +91,12 @@ def file_profile(source: str | os.PathLike[str]) -> Profile:
     if not path.is_file():
         if isinstance(source, str) and source in example_names():
             return Profile.example(source)
+        if isinstance(source, str) and source in bundle_example_names():
+            raise ValueError(f'{source} is an example bundle; give Bundle.example({source!r}), which every call generating a bundle takes')
+        if (path / BUNDLE_INDEX).is_file():
+            raise ValueError(
+                f'{os.fspath(source)} holds a bundle; give Bundle.load({os.fspath(source)!r}), which every call generating a bundle takes'
+            )
         raise FileNotFoundError(
             f'{os.fspath(source)} is neither a profile file nor an example; name a file, or one of {", ".join(example_names())}'
         )
@@ -96,6 +104,8 @@ def file_profile(source: str | os.PathLike[str]) -> Profile:
     if metadata is not None:
         return data_file_profile(path, metadata)
     document = to_plain(read_document(path))
+    if isinstance(document, dict) and document.get('kind') == 'bundle':
+        raise ValueError(f'{path} is a bundle; give Bundle.load({os.fspath(path)!r}), which every call generating a bundle takes')
     if not is_short(document):
         return Profile.load(path)
     return validated(short_expanded(document, path), str(path))

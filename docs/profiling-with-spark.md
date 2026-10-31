@@ -196,6 +196,10 @@ TABLES=1 spark-parity/check-profiler-parity.sh \
   shop public.ecr.aws/glue/aws-glue-libs:5
 ```
 
+It ran on the six tables the generator's bundle fixture writes, in `apache/spark:4.1.3-python3`.
+Every relationship field matched Polars' exactly, `zipf_s` and `ordinal` included, and so did
+every table's keys and row count.
+
 It ran on CMS DE-SynPUF sample 1 under `--policy healthcare`, in `apache/spark:3.5.9-python3`,
 `apache/spark:4.1.3-python3` and `public.ecr.aws/glue/aws-glue-libs:5`:
 
@@ -281,6 +285,8 @@ one query over every column it covers, except the compiled aggregate, which is o
 | lag quantiles | a lag's quantiles, `min` and `max` | one `agg` of `percentile_approx` over each lag, then one pass of `EndValues` for the values at rank `k_min` from each end |
 | expression matches | which expression of two columns gives a third | one `agg` per `PAIRS_PER_QUERY` candidates, counting the rows holding all three columns, those of them not zero on both sides, and those of the latter within tolerance; a division by zero is null, because ANSI mode would raise |
 | foreign key counts | a bundle's relationships | a full join of the parent's distinct keys and the child's rows per key, grouped by `(in parent, child rows)` |
+| inherited counts | a relationship's `inherited` columns | an inner join of the child's rows to one parent row per key, with each candidate pair's null-safe equal rows summed in one `agg` |
+| ordinal counts | a relationship's `ordinal` | one `groupBy` on the child's key, with each candidate's least, greatest and distinct non-null values beside the rows, then one `agg` counting the keys each candidate numbers 1 to their rows |
 
 The split follows what Spark compiles:
 

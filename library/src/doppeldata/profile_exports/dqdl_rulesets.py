@@ -65,18 +65,20 @@ def table_rules(table: ContractTable, notes: list[str]) -> Iterator[str]:
         elif key.uniqueness.rows:
             yield f'Uniqueness {named} >= {number(key.uniqueness.least())}'
     for reference in table.foreign_keys:
-        found = table.column(reference.column)
-        target = quoted(f'{reference.to_table}.{reference.to_column}')
-        if reference.share is None or found is None:
-            notes.append(f'{reference.column}: the foreign key to {reference.to_table}.{reference.to_column}, of no stated share')
-        elif reference.share.whole and found.completeness.whole:
-            yield f'ReferentialIntegrity {quoted(reference.column)} {target} = 1.0'
-        elif found.completeness.rows:
-            yield f'ReferentialIntegrity {quoted(reference.column)} {target} >= {number(found.completeness.of(reference.share).least())}'
+        held = [table.column(column) for column in reference.columns]
+        found = [column for column in held if column is not None]
+        # DQDL names a composite key's columns as one comma-joined string, and the reference's in braces.
+        named = quoted(','.join(reference.columns))
+        listed = reference.to_columns[0] if len(reference.to_columns) == 1 else '{' + ','.join(reference.to_columns) + '}'
+        target = quoted(f'{reference.to_table}.{listed}')
+        if reference.share is None or len(found) < len(held):
+            notes.append(f'{reference.named}: the foreign key to {reference.target}, of no stated share')
+        elif reference.share.whole and all(column.completeness.whole for column in found):
+            yield f'ReferentialIntegrity {named} {target} = 1.0'
+        elif len(found) == 1 and found[0].completeness.rows:
+            yield f'ReferentialIntegrity {named} {target} >= {number(found[0].completeness.of(reference.share).least())}'
         else:
-            notes.append(
-                f'{reference.column}: the foreign key to {reference.to_table}.{reference.to_column}, of a column of no stated null share'
-            )
+            notes.append(f'{reference.named}: the foreign key to {reference.target}, of columns of no stated null share together')
 
 
 def column_rules(column: ContractColumn, table: ContractTable, notes: list[str]) -> list[str]:

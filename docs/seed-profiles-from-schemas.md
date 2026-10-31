@@ -104,14 +104,16 @@ Without `--out` the seed prints as YAML. A file names its table up to its first 
 
 - **`--table` picks one table from a source holding several**: an ODCS contract's schema objects,
   or a Data Package's resources. It is refused for the other sources, which hold one table.
-- **A contract of several objects with no `--table` is refused, naming each.** A bundle would be no
-  use to `data generate`, which reads one table, and taking the first would pick silently.
+- **A contract of several objects with no `--table` is refused, naming each.** Taking the first
+  would pick silently, and a contract states no foreign keys to relate them by.
 - **A Data Package with no `--table` imports as a bundle, recording every table and its keys.** Each
-  resource is a table, and each foreign key of one field a relationship, as `orders.customer_id` to
-  `customers.id`. A key of several fields, or naming a resource the package lacks, is left out with
-  a warning. A resource's schema may be a file beside the package. A schema at a URL is refused.
-- **`data generate` reads one table, so it refuses a bundle, naming `--table`.** No verb generates
-  related tables from a bundle, so a foreign key's values are not drawn from its parent's.
+  resource is a table, and each foreign key a relationship, as `orders.customer_id` to
+  `customers.id`. A key of several fields relates them in order. A key referring to its own
+  resource, to a resource the package lacks, or naming more fields on one side is left out with a
+  warning. A resource's schema may be a file beside the package. A schema at a URL is refused.
+- **`data generate` takes the bundle once each table states `dataset.row_count`.** A seed states
+  none, so it is refused as `no-row-count` until one is written in. A seed states no fan-out, so
+  every parent then holds the same number of children, to within one.
 - **`Profile.from_table_schema` reads one table and records no relationship.** A foreign key names a
   resource, and only a package declares one.
 - **A failure exits as profiling's do.** A file that cannot be read, decoded as UTF-8 or parsed, or

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks doppeldata.spark against doppeldata run locally, in each Spark image named, one container at a time. Each generates
-# 10M rows of the eight-columns example through generate and write, with 7 and with 40 partitions, and checks spark_holds
-# against how the image carries every column of every-column-kind.profile.yaml.
+# 10M rows of the eight-columns example through generate and write, with 7 and with 40 partitions, checks spark_holds
+# against how the image carries every column of every-column-kind.profile.yaml, and generates and writes the
+# orders-customers bundle.
 #
 #   spark-parity/check-spark-parity.sh [--scenario FILE] WHEEL [IMAGE...]
 #
@@ -11,7 +12,7 @@
 # applies FILE, such as eight-columns.scenario.yaml beside this script.
 set -euo pipefail
 
-readonly ROWS=10000000 SEED=42 FILE_ROWS=1000000
+readonly ROWS=10000000 SEED=42 FILE_ROWS=1000000 BUNDLE_FILE_ROWS=100000
 readonly CONTAINER_MEMORY=7g DRIVER_MEMORY=3g SPARK_MASTER='local[8]'
 
 main() {
@@ -40,15 +41,17 @@ main() {
   mkdir -p "$cache"
   uv run --project "$here/.." doppeldata data generate eight-columns --rows "$ROWS" --seed "$SEED" \
     --file-rows "$FILE_ROWS" --out "$work/local" "${scenario[@]}" >&2
+  uv run --project "$here/.." doppeldata data generate orders-customers --seed "$SEED" --file-rows "$BUNDLE_FILE_ROWS" \
+    --out "$work/bundle" >&2
   for image in "$@"; do
     echo "== $image" >&2
     run_spark_image_as_caller "$work" "$image" --memory "$CONTAINER_MEMORY" \
       -e UV_CACHE_DIR=/uv/cache -e UV_PYTHON_INSTALL_DIR=/uv/python -v "$(command -v uv):/opt/uv:ro" -v "$cache:/uv" -v "$here:/parity:ro" -v "$work/local:/work/local:ro" \
-      -v "$fixture:/work/every-column-kind.profile.yaml:ro" "${mounted[@]}" \
+      -v "$work/bundle:/work/bundle:ro" -v "$fixture:/work/every-column-kind.profile.yaml:ro" "${mounted[@]}" \
       -v "$wheel:/wheel/$(basename "$wheel"):ro" --entrypoint bash "$image" \
       /parity/inside-spark-image.sh "/wheel/$(basename "$wheel")" "$SPARK_MASTER" "$DRIVER_MEMORY" \
       /parity/compare_spark_with_local.py /work/local/_manifest.json /tmp/out /work/every-column-kind.profile.yaml \
-      "${mounted:+/work/scenario.yaml}" || status=1
+      /work/bundle/_manifest.json "${mounted:+/work/scenario.yaml}" || status=1
   done
   exit "$status"
 }

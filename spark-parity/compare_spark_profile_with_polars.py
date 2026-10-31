@@ -84,8 +84,9 @@ READ_FIELDS = {
     'ConditionalRates': {'given', 'column', 'zero_rate', 'null_rate', 'other'},
     'OtherRates': {'zero_rate', 'null_rate'},
     'Dependency': {'kind', 'lhs', 'rhs', 'violation_rate', 'table'},
-    'Relationship': {'from', 'to', 'containment', 'orphan_rate', 'cardinality', 'fanout'},
+    'Relationship': {'from', 'to', 'containment', 'orphan_rate', 'cardinality', 'fanout', 'inherited', 'ordinal'},
     'Fanout': {'quantiles', 'top_share', 'zipf_s'},
+    'Inherited': {'child', 'parent', 'agreement'},
 }
 for definition, read in READ_FIELDS.items():
     unread = sorted(set(published_fields(definition)) - read)
@@ -175,14 +176,16 @@ def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
 def relationship_entries(relationships: list[dict[str, Any]]) -> Iterator[tuple[str, str, Any]]:
     """Each value a bundle's relationships state, as the field, the relationship and part, and the value."""
     for relationship in relationships:
-        named = f'{relationship["from"]} -> {relationship["to"]}'
-        for field in ('containment', 'orphan_rate', 'cardinality'):
+        named = f'{", ".join(relationship["from"])} -> {", ".join(relationship["to"])}'
+        for field in ('containment', 'orphan_rate', 'cardinality', 'ordinal'):
             yield f'relationships {field}', named, relationship.get(field)
         fanout = relationship.get('fanout') or {}
         for part in ('quantiles', 'top_share'):
             for level, value in (fanout.get(part) or {}).items():
                 yield f'relationships fanout {part}', f'{named} {level}', value
         yield 'relationships fanout zipf_s', named, fanout.get('zipf_s')
+        for entry in relationship.get('inherited') or []:
+            yield 'relationships inherited agreement', f'{named} {entry["child"]} from {entry["parent"]}', entry['agreement']
 
 
 def conditional_name(conditional: dict[str, Any]) -> str:

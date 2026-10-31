@@ -15,7 +15,7 @@ KEY_SHARE = 0.99
 # A single column's rows held once are counted where its distinct values reach this share of the rows: below KEY_SHARE
 # by more than three of HyperLogLog++'s 1% standard errors, so Spark's estimate passes every key Polars' count does.
 NOMINATED_SHARE = 0.95
-# The pairs of columns tried as a composite key on the dependence sample, where no single column is a key.
+# The pairs of columns tried as a composite key on the dependence sample, where no single column is unique.
 COMPOSITE_PAIRS = 20
 KEY_KINDS = frozenset({ColumnKind.INTEGER, ColumnKind.STRING})
 COMPOSITE_KINDS = KEY_KINDS | {ColumnKind.DATE, ColumnKind.DATETIME}
@@ -33,12 +33,11 @@ class KeyColumn:
 
 def table_keys(backend: Backend, full: Table, sample: Table, columns: list[KeyColumn], rows: int, k_min: int) -> dict[str, Any]:
     """The dataset's `duplicate_row_rate` and `keys`, from `full`, which holds every row, and `sample`, the dependence
-    sample, which nominates a composite key before every row confirms it."""
+    sample, which nominates a composite key before every row confirms it. A table of fewer than k_min rows is keyed as
+    any other, and the privacy policy withholds its keys."""
     names = tuple(column.spec.name for column in columns)
     singles = [
-        column
-        for column in columns
-        if column.spec.kind in KEY_KINDS and not column.has_nulls and column.distinct >= NOMINATED_SHARE * rows and rows >= k_min
+        column for column in columns if column.spec.kind in KEY_KINDS and not column.has_nulls and column.distinct >= NOMINATED_SHARE * rows
     ]
     requests = [Request(None, 'distinct_rows', names)] + [Request(None, 'unique_rows', (column.spec.name,)) for column in singles]
     counted = backend.aggregate(full, requests) if names else {}
@@ -48,8 +47,11 @@ def table_keys(backend: Backend, full: Table, sample: Table, columns: list[KeyCo
         found['duplicate_row_rate'] = rate(repeated, rows) if repeated >= k_min else 0.0
     unique = {column.spec.name: counted[Request(None, 'unique_rows', (column.spec.name,))] for column in singles}
     keys = [key for name, rows_unique in unique.items() if (key := written_key((name,), rows_unique, rows, k_min))]
-    if not keys:
-        keys = composite_keys(backend, full, sample, columns, rows, k_min)
+    # A column no two rows share keys the table alone, and a nearly unique one, such as a free-text comment, leaves the
+    # pair a child refers to still to find.
+    if not any(rows_unique == rows for rows_unique in unique.values()):
+        single = {key['columns'][0] for key in keys}
+        keys += composite_keys(backend, full, sample, [column for column in columns if column.spec.name not in single], rows, k_min)
     if keys:
         primary = next((key for key in keys if key['uniqueness'] == 1.0), None)
         section: dict[str, Any] = {}
@@ -77,7 +79,7 @@ def composite_keys(backend: Backend, full: Table, sample: Table, columns: list[K
         for second in eligible[at + 1 :]
         if first.distinct * second.distinct >= rows
     ][:COMPOSITE_PAIRS]
-    if not pairs or rows < k_min:
+    if not pairs:
         return []
     tried = backend.aggregate(sample, [Request(None, 'rows'), *(Request(None, 'distinct_rows', pair) for pair in pairs)])
     nominated = [pair for pair in pairs if tried[Request(None, 'distinct_rows', pair)] == tried[Request(None, 'rows')]]

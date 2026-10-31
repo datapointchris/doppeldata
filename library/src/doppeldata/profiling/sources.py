@@ -20,6 +20,7 @@ from doppeldata.errors import SourceError
 from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import PARTIAL_MANIFEST_FILE_NAME
 from doppeldata.manifest import Manifest
+from doppeldata.manifest import unfinished
 from doppeldata.profiling.backend import FORMAT_TRAITS
 from doppeldata.profiling.backend import TEXT_CODEC_SUFFIXES
 from doppeldata.profiling.backend import Source
@@ -108,13 +109,6 @@ def local_files(path: Path) -> list[SourceFile]:
     return kept
 
 
-def unfinished(root: str) -> str:
-    return (
-        f'{root} holds {UNFINISHED_WRITE}, so the doppeldata write there stopped or is still running and its files are incomplete; '
-        'once no write is running there, generate the dataset again, replacing what it left'
-    )
-
-
 def local_file(path: Path, relative: PurePosixPath) -> SourceFile:
     stat = path.stat()
     # Resolved, so the same files fingerprint alike from any working directory.
@@ -174,6 +168,18 @@ def s3_manifest(url: str) -> Manifest | None:
                 return None
             raise
     return Manifest.from_json(body.decode('utf-8'))
+
+
+def s3_holds(url: str, name: str) -> bool:
+    """Whether the `s3://` prefix `url` holds an object named `name` at its root."""
+    parsed = urlparse(url)
+    prefix = parsed.path.strip('/')
+    try:
+        _, client = s3_session()
+    except ValueError as error:
+        raise SourceError(f'{url} could not be read: {error}', exit_code=2) from error
+    with s3_errors(url, endpoint_named(client), doing='read'):
+        return object_head(client, parsed.netloc, f'{prefix}/{name}' if prefix else name) is not None
 
 
 def object_head(client: Any, bucket: str, key: str) -> dict[str, Any] | None:

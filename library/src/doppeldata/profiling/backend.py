@@ -341,7 +341,23 @@ class Backend(Protocol):
         informative ones among them, and those of the latter where the target is its result."""
         ...
 
-    def foreign_key_counts(self, child: Table, child_column: str, parent: Table, parent_column: str) -> list[tuple[bool, int, int]]:
-        """The values of both columns, counted as `(in_parent, child_rows, values)`: how many values the parent holds or
-        not that `child_rows` child rows hold. A parent value no child row holds is counted at 0 child rows."""
+    def foreign_key_counts(
+        self, child: Table, child_columns: list[str], parent: Table, parent_columns: list[str]
+    ) -> list[tuple[bool, int, int]]:
+        """The values of both sides' columns, each value a tuple of one per column, counted as `(in_parent, child_rows,
+        values)`: how many values the parent holds or not that `child_rows` child rows hold. A child row with a null in any
+        of its columns refers to nothing. A parent value no child row holds is counted at 0 child rows."""
+        ...
+
+    def inherited_counts(
+        self, child: Table, child_columns: list[str], parent: Table, parent_columns: list[str], pairs: list[tuple[str, str]]
+    ) -> tuple[int, list[int]]:
+        """The child rows joined to a parent row on the key, and of those, for each `(child, parent)` column pair, the rows
+        whose two values are equal, a null equal to a null. The parent's key is unique, so each child row joins one."""
+        ...
+
+    def ordinal_counts(self, child: Table, child_columns: list[str], candidates: list[str]) -> tuple[int, list[int]]:
+        """The child's distinct keys, a key a tuple of one value per column, and for each candidate column the keys whose
+        rows it numbers 1 to their count: its least value 1, its greatest the count, and as many distinct values, none
+        null. A child row with a null in any key column holds no key."""
         ...

@@ -8,6 +8,7 @@ from doppeldata.manifest import Manifest
 
 if TYPE_CHECKING:
     from doppeldata.privacy_policy import ProfileFileCheck
+    from doppeldata.profile_comparison.reports import BundleCheckReport
     from doppeldata.profile_comparison.reports import CheckReport
     from doppeldata.profile_comparison.reports import DiffReport
 
@@ -126,13 +127,14 @@ class InvalidThresholds(DoppeldataError, ValueError):
 class CheckFailed(DoppeldataError):
     """A check found what a person must act on. `report` is the check, naming each finding.
 
-    It is a `CheckReport` where generated data missed its profile on a metric or a column, and a `ProfileFileCheck`
-    where a profile file breaks its schema or its privacy policy.
+    It is a `CheckReport` where generated data missed its profile on a metric or a column, a `BundleCheckReport` where
+    a bundle's tables missed it on a table or a relationship, and a `ProfileFileCheck` where a profile file breaks its
+    schema or its privacy policy.
     """
 
     exit_code = 3
 
-    def __init__(self, report: 'CheckReport | ProfileFileCheck') -> None:
+    def __init__(self, report: 'CheckReport | BundleCheckReport | ProfileFileCheck') -> None:
         self.report = report
         super().__init__(report.failure_message())
 

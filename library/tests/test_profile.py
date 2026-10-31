@@ -85,7 +85,7 @@ def test_each_fault_is_reported_at_the_field_that_holds_it(tmp_path, edit, expec
 def test_a_bundle_directory_and_its_single_file_form_share_one_digest(tmp_path):
     orders = Profile.load(EXAMPLE).to_plain()
     customers = {'kind': 'table', 'name': 'customers', 'dataset': {'row_count': 5000}}
-    relationships = [{'from': 'orders.customer_id', 'to': 'customers.customer_id', 'cardinality': 'many_to_one'}]
+    relationships = [{'from': ['orders.customer_id'], 'to': ['customers.customer_id'], 'cardinality': 'many_to_one'}]
 
     directory = tmp_path / 'shop'
     directory.mkdir()

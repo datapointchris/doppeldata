@@ -52,6 +52,18 @@ def odcs_contract(document: ContractDocument, examples: dict[str, dict[str, list
 def schema_object(table: ContractTable, examples: dict[str, list[Any]]) -> dict[str, Any]:
     entry: dict[str, Any] = {'name': table.name, 'physicalName': table.name, 'logicalType': 'object', 'physicalType': 'table'}
     entry['properties'] = [table_property(table, column, examples.get(column.name)) for column in table.columns]
+    # A foreign key of several columns is stated on the schema object, each side a list of its columns.
+    references = [
+        {
+            'type': 'foreignKey',
+            'from': [f'{table.name}.{column}' for column in key.columns],
+            'to': [f'{key.to_table}.{column}' for column in key.to_columns],
+        }
+        for key in table.foreign_keys
+        if len(key.columns) > 1
+    ]
+    if references:
+        entry['relationships'] = references
     composite = [key for key in table.stated_keys() if len(key.columns) > 1 and not key.uniqueness.whole]
     quality = [duplicates(key.uniqueness, list(key.columns)) for key in composite]
     if quality:
@@ -70,7 +82,7 @@ def table_property(table: ContractTable, column: ContractColumn, examples: list[
     if column.name in table.partition_keys:
         prop |= {'partitioned': True, 'partitionKeyPosition': table.partition_keys.index(column.name) + 1}
     references = [
-        {'type': 'foreignKey', 'to': f'{key.to_table}.{key.to_column}'} for key in table.foreign_keys if key.column == column.name
+        {'type': 'foreignKey', 'to': f'{key.to_table}.{key.to_columns[0]}'} for key in table.foreign_keys if key.columns == (column.name,)
     ]
     if references:
         prop['relationships'] = references

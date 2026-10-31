@@ -73,9 +73,27 @@ pub fn faults_json_schema() -> String {
 /// The rows a file holds when neither the call nor the profile sets a size.
 pub const DEFAULT_FILE_ROWS: u64 = 1_000_000;
 
+/// The `kind` of a [`Manifest`], which tells it from a [`BundleManifest`] under the same file name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TableManifestKind {
+    #[default]
+    Table,
+}
+
+/// The `kind` of a [`BundleManifest`], which tells it from a [`Manifest`] under the same file name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum BundleManifestKind {
+    #[default]
+    Bundle,
+}
+
 /// The record of a generated dataset, which with its profile and scenario regenerates every file byte for byte.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Manifest {
+    /// Always `table`: the manifest of one table's files.
+    pub kind: TableManifestKind,
     /// The tool that wrote the files, as `doppeldata <version>`. The files' bytes are a function of
     /// the identity and this version.
     pub tool: String,
@@ -127,12 +145,15 @@ pub struct ManifestIdentity {
     #[schemars(with = "Decimal")]
     pub dataset_rows: u64,
     /// `sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON, as given, before a
-    /// scenario's patch.
+    /// scenario's patch. In a bundle, the bundle's, every table inline.
     pub profile_digest: String,
+    /// The scale a bundle was generated at, in decimal, or null for a table generated alone.
+    pub scale: Option<String>,
     /// `sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON, or null for none.
     /// The JSON is taken with each perturbation's `id` resolved, and with `description` and
     /// `expect` left out. A composition's is its composed document's: the patches merged in order,
-    /// the perturbations concatenated, and the names joined with `+`.
+    /// the perturbations concatenated, and the names joined with `+`. In a bundle, the map of each
+    /// table a scenario names to its composed document.
     pub scenario_digest: Option<String>,
     /// The seed, in decimal.
     #[serde(with = "decimal")]
@@ -140,6 +161,9 @@ pub struct ManifestIdentity {
     pub seed: u64,
     /// The engine's stream version.
     pub stream_version: u32,
+    /// The bundle table the rows are of, or null for a table generated alone and for a bundle's own
+    /// manifest.
+    pub table: Option<String>,
 }
 
 impl From<&DatasetIdentity> for ManifestIdentity {
@@ -147,11 +171,64 @@ impl From<&DatasetIdentity> for ManifestIdentity {
         Self {
             dataset_rows: identity.rows(),
             profile_digest: identity.profile_digest().to_string(),
+            scale: identity.scale().map(String::from),
             scenario_digest: identity.scenario_digest().map(String::from),
             seed: identity.seed(),
             stream_version: identity.stream_version(),
+            table: identity.table().map(String::from),
         }
     }
+}
+
+/// The record written at a bundle's destination once every table is whole. Each table is written
+/// under `<table>/` with a manifest of its own, which this names rather than holds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BundleManifest {
+    /// Always `bundle`: the manifest naming each table's own.
+    pub kind: BundleManifestKind,
+    /// The tool that wrote the files, as `doppeldata <version>`.
+    pub tool: String,
+    /// `sha256:` and the hex SHA-256 of `identity`'s RFC 8785 canonical JSON.
+    pub dataset_digest: String,
+    /// The bundle's own identity: no table, and `dataset_rows` every table's rows summed.
+    pub identity: ManifestIdentity,
+    pub profile: ManifestProfile,
+    /// The scenarios applied, or null for none.
+    pub scenario: Option<ManifestScenario>,
+    /// Where the bundle was written, as the caller named it.
+    pub destination: String,
+    /// Every table, each parent before its children.
+    pub tables: Vec<BundleTable>,
+    /// The pointer of each relationship and `inherited` entry the bundle states and does not draw,
+    /// such as one whose columns another relationship with more of them draws.
+    pub set_aside: Vec<String>,
+    /// True until every table is whole. Such a manifest is stored as `_manifest.partial.json`.
+    pub partial: bool,
+    /// The threads that generated and encoded in each process that wrote.
+    pub threads: u32,
+    /// The tasks a write split across processes divided each table's ranges among, or null for a
+    /// write in one process.
+    #[serde(default)]
+    pub tasks: Option<u32>,
+    pub elapsed_ms: u64,
+    /// When the write finished, in RFC 3339.
+    pub written_at: String,
+}
+
+/// One table of a bundle's write.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BundleTable {
+    pub name: String,
+    /// The table's manifest under the destination, `/`-separated, such as `orders/_manifest.json`.
+    pub manifest: String,
+    /// The table's manifest's `dataset_digest`.
+    pub dataset_digest: String,
+    /// The rows the table's identity names, in decimal.
+    #[serde(with = "decimal")]
+    #[schemars(with = "Decimal")]
+    pub dataset_rows: u64,
+    /// True until the table's own manifest is stored whole as `manifest`.
+    pub partial: bool,
 }
 
 impl Manifest {
@@ -159,6 +236,7 @@ impl Manifest {
     /// are copied, never recomputed.
     pub fn new(identity: &DatasetIdentity, profile: ManifestProfile, output: Output, layout: LayoutSettings, destination: String) -> Self {
         Self {
+            kind: TableManifestKind::Table,
             tool: format!("doppeldata {}", crate::VERSION),
             dataset_digest: identity.digest(),
             identity: ManifestIdentity::from(identity),
@@ -349,6 +427,15 @@ mod decimal {
 pub fn json_schema() -> String {
     let mut schema = schemars::schema_for!(Manifest);
     schema.insert("title".into(), "doppeldata manifest".into());
+    let mut text = serde_json::to_string_pretty(&schema).expect("a derived schema always serializes");
+    text.push('\n');
+    text
+}
+
+/// A bundle manifest's JSON Schema (Draft 2020-12), as the library ships it.
+pub fn bundle_json_schema() -> String {
+    let mut schema = schemars::schema_for!(BundleManifest);
+    schema.insert("title".into(), "doppeldata bundle manifest".into());
     let mut text = serde_json::to_string_pretty(&schema).expect("a derived schema always serializes");
     text.push('\n');
     text

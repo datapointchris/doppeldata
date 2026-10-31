@@ -141,6 +141,24 @@ pub struct Privacy {
     /// Every dataset-level field a floor holds, such as a conditional table's cells or a dependency's left-hand
     /// values, and the rule it met.
     pub dataset_audit: Option<Vec<DatasetAuditEntry>>,
+    /// Every dataset-level field left out because it failed a floor, and the rule it failed.
+    pub withheld: Option<Vec<WithheldField>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WithheldField {
+    /// The RFC 6901 pointer to the field from the profile's root, such as `/dataset/keys`.
+    pub field: String,
+    pub rule: WithheldRule,
+}
+
+/// The floor a withheld field failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+pub enum WithheldRule {
+    /// The table holds at least `k_min` rows, as a key is stated only over that many.
+    #[serde(rename = "rows >= k_min")]
+    RowsAtLeastKMin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
