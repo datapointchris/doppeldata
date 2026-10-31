@@ -51,8 +51,6 @@ jobs:
     defaults:
       run:
         working-directory: library
-    env:
-      UV_PYTHON: "3.11"
     steps:
 
       - uses: actions/checkout@v7
