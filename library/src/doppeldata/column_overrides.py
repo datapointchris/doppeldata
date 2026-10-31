@@ -42,6 +42,18 @@ def given_value(column: str, value: object) -> dict[str, str] | None:
     )
 
 
+def per_row(values: object) -> bool:
+    """Whether an override's `values` hold one value per row: any iterable but a str or bytes."""
+    return isinstance(values, Iterable) and not isinstance(values, str | bytes)
+
+
+def materialized(overrides: Overrides | None) -> Overrides | None:
+    """`overrides` with each per-row iterable read into a list, so a generator can be read twice."""
+    if not isinstance(overrides, Mapping):
+        return overrides
+    return {column: list(values) if per_row(values) else values for column, values in overrides.items()}
+
+
 def overrides_json(overrides: Overrides | None) -> str | None:
     """The engine's JSON for `overrides`, sorted by column, or None where nothing is pinned."""
     if overrides is None:
@@ -52,8 +64,8 @@ def overrides_json(overrides: Overrides | None) -> str | None:
     for column, values in sorted(overrides.items()):
         if not isinstance(column, str):
             raise TypeError(f'overrides are keyed by column names, as strs, not {column!r}')
-        if isinstance(values, str | bytes) or not isinstance(values, Iterable):
-            pinned.append({'column': column, 'values': {'every': given_value(column, values)}})
-        else:
+        if per_row(values):
             pinned.append({'column': column, 'values': {'each_row': [given_value(column, value) for value in values]}})
+        else:
+            pinned.append({'column': column, 'values': {'every': given_value(column, values)}})
     return json.dumps(pinned, allow_nan=False) if pinned else None

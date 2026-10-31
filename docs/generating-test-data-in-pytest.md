@@ -34,8 +34,9 @@ doppeldata_scenarios = "tests/scenarios"
   `NAME.yml` or `NAME.json`, then as a bundled example or a file. It also takes a `Scenario`, or a list composed in order.
 - **`rows`, `scenario` and `overrides` are taken as `sd.sample` takes them.** So `overrides={'channel': 'store'}` pins a
   column, and a conditional child of it draws from the pinned value.
-- **A bundle gives a dict of each table's name to its table, parents first**, at `scale`. Overrides are refused with a
-  bundle, because they name one table's columns.
+- **A bundle gives a dict of each table's name to its table, parents first**, at `scale`. `rows` is refused with a bundle
+  and `scale` with one table, as `generate` refuses them. Overrides are refused with a bundle, because they name one
+  table's columns.
 
 ## A test's seed is a digest of its node id, and `--doppeldata-seed` sets every test's
 
@@ -47,25 +48,30 @@ pytest --doppeldata-seed 9
 - **The seed is the first 8 bytes of the SHA-256 of the test's node id**, such as `tests/test_people.py::test_people`. A
   test gets the same data on every run, and two tests get different data. Python's `hash()` is salted per process, so it
   would change every run.
-- **`--doppeldata-seed N` generates every test's tables from seed N.** The report header says so:
+- **Renaming a test, moving its file or changing a parametrize id changes its data.** Each changes the node id. So does a
+  release raising the engine's stream version, which moves every test's data at once. A test asserting on a drawn value
+  passes `seed=`, or pins the column with `overrides=`.
+- **`--doppeldata-seed N` generates every test's tables from seed N.** N is 0 to 2^64 − 1, and any other value stops pytest
+  with a usage error before it collects. The report header says so:
 
   ```text
   doppeldata: every synthetic table generated from seed 9
   ```
 
 - **`seed=` in the call outranks both.**
-- **A failed test's report prints its seed and the option that reruns it.** That option makes the same data, so
-  `pytest --doppeldata-seed N path::test` reproduces the failure:
+- **A failed test's report prints each seed, the stream version, and the option that reruns the test's own seed.** That
+  option makes the same data, so `pytest --doppeldata-seed N path::test` reproduces the failure. A table given `seed=` in
+  the call is the same on every run already:
 
   ```text
   ---------------------------------- doppeldata ----------------------------------
-  synthetic data generated from seed 11934420282479109664; rerun with --doppeldata-seed 11934420282479109664
+  synthetic data generated from seed 15853056665299191586 and seed 7 given in the call, at stream version 12; rerun with --doppeldata-seed 15853056665299191586
   ```
 
 - *Rejected:* `--doppeldata-seed` salting each test's node id. The printed seed would then not rerun the failure on its
   own. So under the option every test shares one seed, and two tests asking for the same table get the same rows.
 
-## `as_` chooses the type, and each request converts the session's one table afresh
+## `as_` chooses the type, and each request converts the cached table afresh
 
 | `as_` | Returns | Needs |
 | --- | --- | --- |
@@ -82,8 +88,10 @@ pytest --doppeldata-seed 9
 
 - **`as_='spark'` needs a fixture named `spark` that returns a SparkSession.** Without one it raises LookupError saying so.
   [generating-inside-spark.md](generating-inside-spark.md) says how `to_spark` builds the frame on each Spark version.
-- **Each table generates once a session.** The cache holds the engine's Arrow table, keyed by the profile's or bundle's
-  digest, the scenario's digest, the rows, the scale, the seed and the overrides. So ten tests asking for the same data pay
-  once.
+- **A table from the test's own seed generates once a test, and one from a shared seed once a session.** The cache holds
+  the engine's Arrow table, keyed by the profile's or bundle's digest, the scenario's digest, the rows, the scale, the seed
+  and the overrides. No other test holds the test's own seed, so that table goes with the test's fixture when the test
+  ends, and a suite's memory stays flat. Under `--doppeldata-seed`, or with `seed=` in the call, tests asking for the same
+  data share one table for the session.
 - **Each request converts the cached table into a new object.** A pandas DataFrame is mutable, so a cached one a test
   edited would leak into the next test.
