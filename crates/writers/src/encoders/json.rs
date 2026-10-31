@@ -2,13 +2,23 @@
 //! null at its row with its own JSON.
 
 use std::io::Write as _;
+use std::sync::Arc;
 
+use arrow_array::Array;
 use arrow_array::RecordBatch;
+use arrow_array::StringArray;
+use arrow_array::cast::AsArray;
+use arrow_json::writer::Encoder;
+use arrow_json::writer::EncoderFactory;
 use arrow_json::writer::EncoderOptions;
+use arrow_json::writer::NullableEncoder;
 use arrow_json::writer::make_encoder;
+use arrow_schema::ArrowError;
 use arrow_schema::DataType;
+use arrow_schema::FieldRef;
 use arrow_schema::SchemaRef;
 use doppeldata_core::RowFaults;
+use doppeldata_core::TYPE_MIX_FIELD_KEY;
 use doppeldata_core::TextCell;
 use doppeldata_core::format_settings::JsonSettings;
 use doppeldata_core::manifest::FaultRecord;
@@ -105,7 +115,9 @@ impl JsonEncoder {
         Ok(Self {
             sink,
             layout,
-            options: EncoderOptions::default().with_explicit_nulls(settings.explicit_nulls),
+            options: EncoderOptions::default()
+                .with_explicit_nulls(settings.explicit_nulls)
+                .with_encoder_factory(Arc::new(TypeMixFields)),
             explicit_nulls: settings.explicit_nulls,
             keys,
             rows_written: 0,
@@ -126,6 +138,36 @@ fn push_text_cell(text: &str, out: &mut Vec<u8>) {
     match serde_json::from_str::<Value>(text) {
         Ok(Value::Number(_) | Value::Bool(_) | Value::Null) => out.extend_from_slice(text.trim().as_bytes()),
         _ => serde_json::to_writer(&mut *out, text).expect("a string always serializes"),
+    }
+}
+
+/// Encodes each field a type mix generated as the JSON its text parses as, so a number its source
+/// held as a JSON number is one again, at any depth.
+#[derive(Debug)]
+struct TypeMixFields;
+
+impl EncoderFactory for TypeMixFields {
+    fn make_default_encoder<'a>(
+        &self,
+        field: &'a FieldRef,
+        array: &'a dyn Array,
+        _options: &'a EncoderOptions,
+    ) -> Result<Option<NullableEncoder<'a>>, ArrowError> {
+        if !field.metadata().contains_key(TYPE_MIX_FIELD_KEY) {
+            return Ok(None);
+        }
+        let Some(texts) = array.as_string_opt::<i32>() else {
+            return Ok(None);
+        };
+        Ok(Some(NullableEncoder::new(Box::new(ParsedText(texts)), texts.nulls().cloned())))
+    }
+}
+
+struct ParsedText<'a>(&'a StringArray);
+
+impl Encoder for ParsedText<'_> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        push_text_cell(self.0.value(idx), out);
     }
 }
 

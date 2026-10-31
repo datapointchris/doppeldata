@@ -1044,10 +1044,20 @@ impl DependentColumns {
             arrays[index] = Some(array);
             masks[index] = drawn_nulls;
         }
+        // Every dependence read its parents' own typed draws, so a column generating as text is written so last.
+        let given_at = |index: usize| matches!(given.get(index), Some(Some(_)));
         DrawnColumns {
             arrays: arrays
                 .into_iter()
-                .map(|array| array.expect("the order holds every column"))
+                .enumerate()
+                .map(|(index, array)| {
+                    let array = array.expect("the order holds every column");
+                    if given_at(index) {
+                        array
+                    } else {
+                        columns[index].rendered(at, array)
+                    }
+                })
                 .collect(),
             nulls: masks,
         }

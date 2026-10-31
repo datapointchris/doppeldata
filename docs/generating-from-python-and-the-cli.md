@@ -297,8 +297,8 @@ doppeldata data plan orders-customers --scale 0.1 --out shop/
 ```
 
 ```text
-dataset    sha256:9e59a6a8…
-identity   59,000 rows at scale 0.1 from seed 0, bundle sha256:e8dda4ed…, stream version 11
+dataset    sha256:fb9f1bb0…
+identity   59,000 rows at scale 0.1 from seed 0, bundle sha256:e8dda4ed…, stream version 12
 
 customers  4,000 rows as parquet, up to 1 file to shop/customers, estimate 48.1 KB
 orders     55,000 rows as parquet, up to 1 file to shop/orders, estimate 896.4 KB

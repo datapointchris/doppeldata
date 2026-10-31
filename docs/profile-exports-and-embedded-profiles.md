@@ -35,10 +35,13 @@ Without `--out` the export prints.
   logical type, nullability, listed values and bounds. Table Schema has no integer width, decimal
   precision or time zone, and the record schema has no decimal. Those import back as the importer's
   default.
-- **Data generated from a profile passes its exports, except a column holding several types.** The
-  engine draws one type a column, so `events-json`'s `user_id`, an integer in most values and a
-  string in the rest, generates as integers. Its strict exports type it string, so pandera and
-  dataframely refuse the generated column.
+- **Data generated from a profile passes its exports.** A text source's column holding values of
+  other types, such as `events-json`'s `user_id`, generates as text, and its exports type it as a
+  string. The exports read which columns those are from the engine's plan, so the two never
+  disagree. [column-samplers.md](column-samplers.md) says which columns generate as text.
+- **A sampled profile's types are the sample's.** A column whose sampled values all parse as its
+  type is exported as that type, though a row outside the sample may hold text. Profile every row
+  where a strict export must accept the whole source.
 - **Data a profile was made from passes its exports.** A test checks each export with the tool
   that reads it, against rows generated from a profile and against rows a profile was made from.
 - **The same profile exports the same bytes.** An export names the profile's digest and holds no

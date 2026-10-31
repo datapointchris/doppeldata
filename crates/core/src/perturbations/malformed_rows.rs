@@ -2,10 +2,7 @@
 //! file, so a fault's place depends on neither the thread count nor the file layout. The writers
 //! render its bytes.
 
-use chrono::DateTime;
 use rand::Rng;
-use rand::RngExt;
-use rand_chacha::ChaCha8Rng;
 
 use super::Planned;
 use super::Planning;
@@ -18,6 +15,7 @@ use crate::rng::below;
 use crate::rng::rng_for;
 use crate::rng::stream_key;
 use crate::rng::unit;
+use crate::samplers::foreign_text;
 use crate::scenario::FaultKind;
 use crate::scenario::MalformedRows;
 
@@ -243,7 +241,10 @@ fn reproduce(plan: &mut MalformedPlan, planning: &Planning<'_>) -> Result<(), Pl
             add(&mut plan.row_sources, share.0, RowSource::Kind(kind));
         }
     }
+    // A column of other types' values names where the cast rows lie. One holding them as text already
+    // writes them in every plain write, so the op adds none there.
     let mut foreign_values = false;
+    let mut held_as_text = Vec::new();
     for column in planning.table.columns.iter().flatten() {
         let Some(mix) = column.type_mix.as_ref() else {
             continue;
@@ -251,20 +252,30 @@ fn reproduce(plan: &mut MalformedPlan, planning: &Planning<'_>) -> Result<(), Pl
         let Ok(index) = planning.schema.index_of(&column.name) else {
             continue;
         };
-        if matches!(
-            planning.schema.field(index).data_type(),
-            arrow_schema::DataType::Utf8 | arrow_schema::DataType::LargeUtf8
-        ) {
+        let dominant = mix.iter().max_by(|a, b| a.1.0.total_cmp(&b.1.0)).map(|(&raw, _)| raw);
+        let foreign: Vec<(RawValueType, f64)> = mix
+            .iter()
+            .filter(|&(&raw, share)| Some(raw) != dominant && share.0 > 0.0)
+            .map(|(&raw, share)| (raw, share.0))
+            .collect();
+        let field = planning.schema.field(index);
+        if foreign.is_empty() || matches!(field.data_type(), arrow_schema::DataType::LargeUtf8) {
             continue;
         }
-        let dominant = mix.iter().max_by(|a, b| a.1.0.total_cmp(&b.1.0)).map(|(&raw, _)| raw);
-        for (&raw, share) in mix.iter().filter(|&(&raw, share)| Some(raw) != dominant && share.0 > 0.0) {
-            foreign_values = true;
+        if field.data_type() == &arrow_schema::DataType::Utf8 {
+            if field.metadata().contains_key(crate::samplers::TYPE_MIX_FIELD_KEY) {
+                foreign_values = true;
+                held_as_text.push(column.name.as_str());
+            }
+            continue;
+        }
+        foreign_values = true;
+        for (raw, share) in foreign {
             let source = RowSource::Foreign {
                 column: column.name.clone(),
                 raw,
             };
-            add(&mut plan.row_sources, share.0, source);
+            add(&mut plan.row_sources, share, source);
         }
     }
     let cast = by_type
@@ -284,34 +295,25 @@ fn reproduce(plan: &mut MalformedPlan, planning: &Planning<'_>) -> Result<(), Pl
     kinds.sort();
     kinds.dedup();
     if kinds.is_empty() {
+        let message = match (held_as_text.as_slice(), cast > 0.0) {
+            ([], _) => "the profile records no malformed rows or values of other types to reproduce".to_string(),
+            (columns, true) => format!(
+                "the profile's only malformed rows are values of other types, which {} holds as text in every write",
+                columns.join(", ")
+            ),
+            (columns, false) => format!(
+                "the profile records no malformed rows, and its values of other types are in {}, which every write holds as text",
+                columns.join(", ")
+            ),
+        };
         return Err(planning.refuse(
             ScenarioFault::InvalidParameter,
             "",
-            "the profile records no malformed rows or values of other types to reproduce; name kinds, with a rate or a files_share",
+            format!("{message}; name kinds, with a rate or a files_share"),
         ));
     }
     plan.kinds = kinds.into_iter().map(|kind| (kind, field.clone())).collect();
     Ok(())
-}
-
-/// Text that parses as `raw`, foreign to its column's type.
-fn foreign_text(raw: RawValueType, rng: &mut ChaCha8Rng) -> String {
-    const DAYS_FROM_EPOCH_TO_2000: i64 = 10_957;
-    let instant = |rng: &mut ChaCha8Rng| {
-        let seconds = (DAYS_FROM_EPOCH_TO_2000 + rng.random_range(0..10_957i64)) * 86_400;
-        DateTime::from_timestamp(seconds + rng.random_range(0..86_400i64), 0).unwrap_or_default()
-    };
-    match raw {
-        RawValueType::Integer => rng.random_range(0..100_000u32).to_string(),
-        RawValueType::Decimal => format!("{}.{:02}", rng.random_range(0..10_000u32), rng.random_range(0..100u32)),
-        RawValueType::Boolean => if rng.random_bool(0.5) { "true" } else { "false" }.to_string(),
-        RawValueType::Date => instant(rng).format("%Y-%m-%d").to_string(),
-        RawValueType::Timestamp => instant(rng).format("%Y-%m-%dT%H:%M:%S").to_string(),
-        RawValueType::String => {
-            let length = rng.random_range(3..=8);
-            (0..length).map(|_| char::from(b'a' + rng.random_range(0..26u8))).collect()
-        }
-    }
 }
 
 impl MalformedPlan {

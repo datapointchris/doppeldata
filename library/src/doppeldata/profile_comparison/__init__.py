@@ -35,6 +35,7 @@ from doppeldata.profile_comparison.metrics import Compared
 from doppeldata.profile_comparison.metrics import Document
 from doppeldata.profile_comparison.metrics import Thresholded
 from doppeldata.profile_comparison.metrics import Unmeasured
+from doppeldata.profile_comparison.metrics import source_plan
 from doppeldata.profile_comparison.real_data_scores import DEFAULT_SAMPLE_ROWS
 from doppeldata.profile_comparison.reports import BundleCheckReport
 from doppeldata.profile_comparison.reports import CheckedData
@@ -159,8 +160,10 @@ def checked_table(
     against: Any,
     against_sample: int | None,
     html: str | Path | None,
+    planned: '_core.Plan | None' = None,
 ) -> CheckReport:
-    """`check` of one table, under the scenario that `written`, its manifest where it has one, records it was written under."""
+    """`check` of one table, under the scenario that `written`, its manifest where it has one, records it was written under.
+    `planned` is the engine's plan of the table where a bundle's plan holds it, else the table's own plan is read."""
     unreadable = unreadable_refusal(applied, written, data)
     if unreadable is not None:
         raise InvalidScenario(data_named(data), [], refusal=unreadable)
@@ -199,7 +202,13 @@ def checked_table(
         # Generated data is never the data the profile was made from, so the profile is always made again.
         warnings.simplefilter('ignore', EarlierProfileNotReused)
         checked = profile_in_dialect(
-            data, dialect, policy=policy, k_min=k_min, edges_from=effective, packs=[each.pack.name for each in packs]
+            data,
+            dialect,
+            policy=policy,
+            k_min=k_min,
+            edges_from=effective,
+            packs=[each.pack.name for each in packs],
+            text_columns=text_column_names(source, planned if planned is not None else source_plan(source)),
         )
     observed = checked.to_plain()
     fingerprint = (observed.get('generated') or {}).get('source_fingerprint')
@@ -249,6 +258,15 @@ def unreadable_refusal(scenario: Scenario | None, written: Manifest | None, data
     data_format = format_of_data(data) if named_kinds else None
     named = unreadable(named_kinds, data_format) if data_format is not None else []
     return f'is checked under a scenario writing {" and ".join(named)} faults, {cannot}' if named else None
+
+
+def text_column_names(source: Document, planned: '_core.Plan | Unmeasured') -> list[str]:
+    """The name of each column `planned` generates as text, which a check types by its text as the profiler typed the
+    source's, so a file holding them as strings reads as the profile's types. A nested field stays text."""
+    if isinstance(planned, Unmeasured):
+        return []
+    columns = source.get('columns') or []
+    return [columns[int(pointer.split('/')[2])]['name'] for pointer, _ in planned.type_mix_columns() if pointer.count('/') == 2]
 
 
 def full_load(written: Manifest, data: str | os.PathLike[str]) -> list[str]:

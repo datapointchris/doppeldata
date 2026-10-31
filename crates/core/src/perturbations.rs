@@ -201,7 +201,7 @@ pub(crate) struct Planning<'a> {
     pub(crate) related: Option<&'a RelatedColumns>,
 }
 
-impl Planning<'_> {
+impl<'a> Planning<'a> {
     /// The stream for the op's draw named `draw`.
     pub(crate) fn key(&self, draw: &str) -> u64 {
         stream_key(&self.table.name, self.id, &format!("perturbation.{draw}"))
@@ -214,7 +214,10 @@ impl Planning<'_> {
 
     /// What a column sampler the op runs is planned against: the table's own context, with its
     /// streams named for `sampler_table`.
-    pub(crate) fn sampler_context<'b>(&self, sampler_table: &'b str) -> PlanContext<'b> {
+    pub(crate) fn sampler_context<'b>(&self, sampler_table: &'b str) -> PlanContext<'b>
+    where
+        'a: 'b,
+    {
         crate::plan::plan_context(self.table, sampler_table, self.seed, self.rows)
     }
 

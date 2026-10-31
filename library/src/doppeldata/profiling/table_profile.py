@@ -245,12 +245,14 @@ def profile_table(
     code_lists: Mapping[str, SuppliedCodeList],
     readers: dict[str, str],
     frozen: FrozenLayout | None = None,
+    text_columns: frozenset[str] = frozenset(),
 ) -> ProfiledTable:
     """The profile of `source`, from every row or from a seeded sample of `sample` rows, written under `policy`.
 
     The detectors of `packs` type each column `semantic_types.detected_columns` names, reading `code_lists`, and the
     type decides which rule of the policy holds the column. With `frozen`, each column it names is counted against the
-    earlier profile's edges and value list. Keys and repeated rows are counted over every row, sampled or not.
+    earlier profile's edges and value list. Keys and repeated rows are counted over every row, sampled or not. Each
+    string column `text_columns` names is typed by its text, as a text source's columns are.
     """
     read = backend.read(source)
     table = read.table
@@ -265,7 +267,7 @@ def profile_table(
     if sample is not None and rows > sample:
         table, sampled = backend.sampled(table, sample, SAMPLE_SEED), True
     elements = read.json.elements if read.json else {}
-    settings = ColumnSettings(source.format, k_min, policy, packs, code_lists, frozen or FrozenLayout(), elements)
+    settings = ColumnSettings(source.format, k_min, policy, packs, code_lists, frozen or FrozenLayout(), elements, text_columns)
     json_root = read.json.paths if read.json else None
     profiled = profile_columns(backend, table, settings, rows, whole_distinct, json_root, read.table if sampled else None)
     full = profiled.table if profiled.whole is None else profiled.whole
@@ -326,8 +328,8 @@ def visible_specs(backend: Backend, table: Table) -> list[ColumnSpec]:
 @dc.dataclass(frozen=True)
 class ColumnSettings:
     """What every table of one source is profiled with: its format, the floor, the privacy policy, the detector packs
-    and the code lists they read, an earlier profile's edges and value lists, and a JSON source's element tables by
-    array path.
+    and the code lists they read, an earlier profile's edges and value lists, a JSON source's element tables by
+    array path, and the string columns of a source of another format to type by their text, as a text source's are.
     """
 
     source_format: SourceFormat | None
@@ -337,6 +339,7 @@ class ColumnSettings:
     code_lists: Mapping[str, SuppliedCodeList]
     frozen: FrozenLayout
     elements: dict[str, Table]
+    text_columns: frozenset[str] = frozenset()
 
 
 def profile_columns(
@@ -370,6 +373,10 @@ def profile_columns(
                 name: dc.replace(column.parsed, missing=tuple(sorted(set(typed.tokens[name]) - {text_types.EMPTY})))
                 for name, column in text.items()
             }
+        table = backend.parse(table, {name: column.parsed for name, column in text.items()})
+    elif settings.text_columns:
+        named = [spec for spec in visible_specs(backend, table) if spec.name in settings.text_columns and spec.kind is ColumnKind.STRING]
+        text = text_types.type_text_columns(backend, table, named, SAMPLE_SEED)
         table = backend.parse(table, {name: column.parsed for name, column in text.items()})
     specs = visible_specs(backend, table)
     stats = answered(backend, table, pass_one_requests(specs, k_min))

@@ -32,6 +32,7 @@ use crate::perturbations::plan_perturbation;
 use crate::profile::DEFAULT_K_MIN;
 use crate::profile::Profile;
 use crate::profile::Quantiles;
+use crate::profile::RawValueType;
 use crate::profile::TableProfile;
 use crate::profile::provenance;
 use crate::related_tables;
@@ -444,7 +445,7 @@ pub(crate) fn plan_table(
 
 /// What `table`'s column samplers are planned against for `rows` rows from `seed`, with streams
 /// named for `name`.
-pub(crate) fn plan_context<'a>(table: &TableProfile, name: &'a str, seed: u64, rows: u64) -> PlanContext<'a> {
+pub(crate) fn plan_context<'a>(table: &'a TableProfile, name: &'a str, seed: u64, rows: u64) -> PlanContext<'a> {
     let source_rows = table.dataset.as_ref().and_then(|dataset| dataset.row_count);
     let rows_read = table
         .generated
@@ -458,6 +459,8 @@ pub(crate) fn plan_context<'a>(table: &TableProfile, name: &'a str, seed: u64, r
         source_rows: source_rows.map(|rows| rows as f64),
         described_rows: rows_read.or(source_rows).map(|rows| rows as f64),
         k_min: table.privacy.as_ref().and_then(|privacy| privacy.k_min).unwrap_or(DEFAULT_K_MIN),
+        source_format: table.source.as_ref().and_then(|source| source.format),
+        keys: table.dataset.as_ref().and_then(|dataset| dataset.keys.as_ref()),
     }
 }
 
@@ -722,10 +725,22 @@ impl Plan {
             .map(|column| ColumnSampler {
                 name: column.field.name().clone(),
                 data_type: column.field.data_type().clone(),
-                sampler: column.sampler.clone(),
+                sampler: column.description(),
                 null_share: column.null_share,
             })
             .collect()
+    }
+
+    /// The JSON Pointer into the profile of each column, nested fields included, that generates as
+    /// text, with the raw type its own draws render as, in profile order. A column is text where its
+    /// type mix holds other types, or where a bundle copies its values from a parent's text.
+    pub fn type_mix_columns(&self) -> Vec<(String, RawValueType)> {
+        self.columns.iter().flat_map(ColumnPlan::type_mix_columns).collect()
+    }
+
+    /// Whether top-level column `column` generates as text from a type mix.
+    pub(crate) fn draws_type_mix(&self, column: usize) -> bool {
+        self.columns[column].draws_type_mix()
     }
 
     /// The names of the columns each Gaussian copula draws together, each group sorted.

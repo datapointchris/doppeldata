@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from collections.abc import Mapping
 from typing import Any
 
+from doppeldata.bundle_generation import bundle_arguments
 from doppeldata.privacy_policy import DEFAULT_K_MIN
 from doppeldata.profile_exports.type_names import SEMANTIC_FORMATS
 from doppeldata.profile_exports.type_names import TYPE_MIX_JSON_TYPES
@@ -21,7 +22,9 @@ from doppeldata.profile_exports.type_names import timestamp_of
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import StatedRelationship
+from doppeldata.profile_format import UngenerableProfile
 from doppeldata.profile_format import described_rows
+from doppeldata.profile_format import engine_plan
 from doppeldata.profile_format import listed_section
 from doppeldata.profiling.recorded_counts import RATE_DIGITS
 from doppeldata.profiling.table_profile import MOMENT_DIGITS
@@ -114,8 +117,9 @@ class ContractColumn:
     holding one of them. `pattern_share` and `format_share` are the shares of rows matching the pattern and the format.
     Each share is of every row, a null counting against it, so `completeness` is the share holding a value.
 
-    `parsed_type` is the profile's logical type where a text source holds values that do not parse as it. A reader of
-    that type turns them into nulls, so the column is typed as a string, and `raw_type_share` is the share that parse.
+    `parsed_type` is the profile's logical type where the engine generates the column as text, as it does where a text
+    source holds values that do not parse as that type. A reader of the type turns them into nulls, so the column is
+    typed as a string, and `raw_type_share` is the share that parse.
     """
 
     name: str
@@ -347,22 +351,48 @@ class ContractDocument:
     bundle: bool
 
 
-def contract_document(profile: Profile | Bundle) -> ContractDocument:
-    """The contract of a table profile, or of every table of a bundle, with the foreign keys its relationships state."""
+def contract_document(profile: Profile | Bundle, text: frozenset[str] | None = None) -> ContractDocument:
+    """The contract of a table profile, or of every table of a bundle, with the foreign keys its relationships state.
+    `text` names the columns a table profile generates as text where its bundle's plan decides them."""
     plain = profile.to_plain()
     digest = profile.digest.removeprefix('sha256:')
     if isinstance(profile, Profile):
-        return ContractDocument(str(plain['name']), digest, (contract_table(profile),), False)
+        table_text = text if text is not None else text_columns(profile)
+        return ContractDocument(str(plain['name']), digest, (contract_table(profile, table_text),), False)
     relationships = profile.relationships()
+    planned = bundle_text_columns(profile)
     tables = []
     for name, table in profile.tables.items():
-        found = contract_table(table)
+        found = contract_table(table, None if planned is None else planned[name])
         keys = tuple(foreign_key(relationship, found) for relationship in relationships if relationship.child == name)
         tables.append(dc.replace(found, foreign_keys=keys))
     return ContractDocument(str(plain['name']), digest, tuple(tables), True)
 
 
-def contract_table(profile: Profile) -> ContractTable:
+# Which columns generate as text holds at every scale, and the smallest plans fastest.
+PLANNED_SCALE = 1e-9
+
+
+def text_columns(profile: Profile) -> frozenset[str] | None:
+    """The pointer of each column the engine generates as text, or None where it refuses to plan the profile."""
+    try:
+        plan = engine_plan(profile.to_plain(), str(profile.path or 'the exported profile'))
+    except UngenerableProfile:
+        return None
+    return frozenset(pointer for pointer, _ in plan.type_mix_columns())
+
+
+def bundle_text_columns(bundle: Bundle) -> dict[str, frozenset[str]] | None:
+    """Each table's columns the engine generates as text, which a parent's text decides for a key referring to it, or
+    None where it refuses to plan the bundle."""
+    try:
+        plan = bundle_arguments(bundle, 0, PLANNED_SCALE, {}).plan()
+    except UngenerableProfile:
+        return None
+    return {name: frozenset(pointer for pointer, _ in table.type_mix_columns()) for name, table in plan.tables()}
+
+
+def contract_table(profile: Profile, text: frozenset[str] | None) -> ContractTable:
     document = profile.to_plain()
     generated = document.get('generated') or {}
     seed = generated.get('engine') == 'import'
@@ -383,12 +413,13 @@ def contract_table(profile: Profile) -> ContractTable:
         declared=None if declared is None else {path: frozenset(listed) for path, listed in declared.items()},
         sample=f'measured over a sample of {rows:,} rows' if sampled and rows else None,
         floor=k_min if not seed and generated.get('engine') else None,
+        text_columns=text,
     )
     keys = (document.get('dataset') or {}).get('keys') or {}
     partitioning = (source.get('layout') or {}).get('partitioning') or {}
     return ContractTable(
         name=str(document['name']),
-        columns=tuple(contract_column(column, facts) for column in document.get('columns') or []),
+        columns=tuple(contract_column(column, facts, f'/columns/{index}') for index, column in enumerate(document.get('columns') or [])),
         seed=seed,
         rows=rows,
         k_min=privacy.get('k_min'),
@@ -409,7 +440,8 @@ class TableFacts:
     """What a column's facts are read against: whether the table is a seed, the rows its shares are of, the columns the
     policy treats as identifiers, whether its source is JSON, whose raw types a record schema follows, whether it is
     text, whose raw values may not parse as a column's type, a seed's `generated.declared`, where the profile read a
-    sample, the caveat each share of it carries, and, where the profiler wrote it, the k_min its privacy floor applied."""
+    sample, the caveat each share of it carries, where the profiler wrote it, the k_min its privacy floor applied, and
+    the pointer of each column the engine generates as text, None where it refuses to plan the table."""
 
     seed: bool
     rows: int | None
@@ -420,6 +452,7 @@ class TableFacts:
     declared: Mapping[str, frozenset[str]] | None = None
     sample: str | None = None
     floor: int | None = None
+    text_columns: frozenset[str] | None = None
 
     def stated(self, path: str, fact: str) -> bool:
         """Whether the profile states `fact` of the column at `path`, rather than drawing a default for it. A profile
@@ -466,8 +499,9 @@ def foreign_key(relationship: StatedRelationship, child: ContractTable) -> Forei
     return ForeignKey(columns, relationship.parent, relationship.parent_columns, share)
 
 
-def contract_column(column: Mapping[str, Any], facts: TableFacts, presence: float | None = None) -> ContractColumn:
-    """The contract facts of a profile column, or of a struct's field present in `presence` of its parent's rows."""
+def contract_column(column: Mapping[str, Any], facts: TableFacts, pointer: str, presence: float | None = None) -> ContractColumn:
+    """The contract facts of the profile column at `pointer`, or of a struct's field present in `presence` of its
+    parent's rows."""
     name = str(column['name'])
     null_rate = column.get('null_rate') or 0.0
     rows = facts.rows
@@ -524,22 +558,30 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, presence: floa
     logical = str(column['logical_type'])
     if type_mix and facts.json_source:
         found['type_mix'] = json_type_mix(type_mix)
+    parsed = None
     if type_mix and logical in RAW_TYPE_KEYS and RAW_TYPE_KEYS[logical] in type_mix:
         raw = type_mix[RAW_TYPE_KEYS[logical]]
         parsed = Share(raw, held_rows, half_unit(1 - raw, RATE_DIGITS), facts.sample)
         found['raw_type_share'] = completeness.of(parsed)
-        if facts.text_source and not parsed.whole:
-            found['parsed_type'] = logical
-            logical = physical = 'string'
-            # The extremes were trimmed over the values that parse.
-            if found.get('trimmed_share') is not None:
-                found['trimmed_share'] = found['trimmed_share'].of(parsed)
+    if facts.text_columns is None:
+        as_text = facts.text_source and parsed is not None and not parsed.whole
+    else:
+        as_text = pointer in facts.text_columns
+    if as_text:
+        found['parsed_type'] = logical
+        logical = physical = 'string'
+        # The extremes were trimmed over the values that parse.
+        if parsed is not None and found.get('trimmed_share') is not None:
+            found['trimmed_share'] = found['trimmed_share'].of(parsed)
     struct = column.get('struct') or {}
     shares = struct.get('presence') or {}
-    found['fields'] = tuple(contract_column(field, facts, shares.get(field['name'])) for field in struct.get('fields') or [])
+    found['fields'] = tuple(
+        contract_column(field, facts, f'{pointer}/struct/fields/{index}', shares.get(field['name']))
+        for index, field in enumerate(struct.get('fields') or [])
+    )
     listing = column.get('list') or {}
     if listing.get('element'):
-        found['element'] = contract_column(listing['element'], dc.replace(facts, rows=None))
+        found['element'] = contract_column(listing['element'], dc.replace(facts, rows=None), f'{pointer}/list/element')
     if facts.seed and listing.get('length'):
         least, most = (listing['length'].get(level) for level in LIST_LENGTH_LEVELS)
         found |= {'min_items': least if stated('min_items') else None, 'max_items': most if stated('max_items') else None}

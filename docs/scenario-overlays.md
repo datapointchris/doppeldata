@@ -190,8 +190,10 @@ sets. It then prints, per kind, what each reader caught of what `_faults.jsonl` 
 
 ## `malformed_rows` breaks bytes, so no value moves and the faults are the same on any split
 
-- **Every write without the op is clean.** A profile's malformed rows, line-break mix and `type_mix`
-  shape no plain write, whatever its source held.
+- **Every write without the op holds no fault.** A profile's malformed rows and line-break mix
+  shape no plain write, whatever its source held. A text source's column holding values of other
+  types generates as text at its `type_mix` shares, because its exports type it as a string.
+  [column-samplers.md](column-samplers.md) says which columns.
 - **The op breaks the encoded bytes, never the rows.** Each block generates the rows a clean write
   does. So no other perturbation moves, and the determinism fixtures hold no fault.
 - **A row's fault is drawn from the op's stream, keyed by the block.** A file's fault is drawn from
@@ -227,7 +229,7 @@ Each reason in `source.csv.malformed.by_type` becomes the kind DuckDB rejects fo
 | `unquoted_value` | `unescaped_quote` |
 | `line_size_over_maximum` | `line_too_long` |
 | `invalid_encoding` | `invalid_utf8` |
-| `cast` | each typed column's `type_mix` values of other types, at their shares, or `type_invalid` where no column records one |
+| `cast` | each typed column's `type_mix` values of other types, at their shares. A column generating as text holds them in every write, so the op adds none there. `type_invalid` where no column records any |
 
 - **The profile's `line_terminator_mix` is not reproduced.** The profiler refuses a file whose
   records mix line breaks, so a mix it records comes from breaks inside quoted fields, in a file
@@ -235,7 +237,8 @@ Each reason in `source.csv.malformed.by_type` becomes the kind DuckDB rejects fo
 - **`invalid_state` is not reproduced.** No bytes were found that DuckDB stores as an
   `invalid_state` reject rather than refusing the whole read.
 - **A profile recording none of these is refused** as `invalid-parameter`, because the op would
-  write nothing.
+  write nothing. So is one whose only rejects are `cast` rows a text column already holds, and the
+  refusal names the column.
 
 ## `cdc` writes an AWS DMS change stream, and `_expected` holds the table its merge must reach
 

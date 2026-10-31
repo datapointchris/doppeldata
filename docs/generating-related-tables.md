@@ -106,6 +106,23 @@ numbers every order's lines from 1 with no gap.
 The plan sets an `ordinal` aside where its column is another relationship's foreign key, a key a
 child refers to, or copied by an `inherited` entry. The column is then drawn from its own profile.
 
+## A column a relationship draws is text exactly where its parent's is
+
+A text source's column holding values of other types generates as text, as
+[column-samplers.md](column-samplers.md) says. A relationship's column holds its parent's values,
+so its own `type_mix` gives way to the parent's form, and every join still holds.
+
+- **A foreign key is text where its parent's key is, and typed where it is not.** It holds the
+  parent's keys as written, values of other types included.
+- **An orphan key lies past every parent's.** Under an integer key it is an integer past the largest
+  the parent's own draws hold, written as text where the key is. Under a string key it is a uuid.
+- **A copied column is text where the parent column it copies is, and typed where it is not.**
+- **An ordinal is typed.** It is a row's number, whatever its `type_mix` states.
+- **A parent's key holding a type mix repeats no value.** Each value of another type is derived from
+  its row, so every child row joins one parent.
+- **The exports type each column as the bundle generates it.** A table exported alone with `table`
+  reads its foreign keys' form from the bundle's plan.
+
 ## A bridge whose primary key is its two foreign keys repeats no pair
 
 `partsupp` refers to `part` and to `supplier`, and its primary key is the pair. Drawn apart, two of

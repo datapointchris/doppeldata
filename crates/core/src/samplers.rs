@@ -15,6 +15,7 @@ mod ranked_marginal;
 mod temporal;
 mod text;
 mod text_cells;
+mod type_mix;
 
 use std::sync::Arc;
 
@@ -59,6 +60,10 @@ pub(crate) use self::text::push_uuid;
 pub use self::text::shape_of;
 pub use self::text_cells::TextCell;
 use self::text_cells::TextOnlyValues;
+pub use self::type_mix::TYPE_MIX_FIELD_KEY;
+use self::type_mix::TypeMix;
+pub(crate) use self::type_mix::foreign_text;
+pub use self::type_mix::raw_type_name;
 use crate::physical_type;
 use crate::physical_type::Container;
 use crate::physical_type::PhysicalType;
@@ -67,8 +72,11 @@ use crate::plan::PlanError;
 use crate::profile::Column;
 use crate::profile::Distinct;
 use crate::profile::GeneratorHint;
+use crate::profile::Keys;
 use crate::profile::LogicalType;
 use crate::profile::Provider;
+use crate::profile::RawValueType;
+use crate::profile::SourceFormat;
 use crate::profile::StringStats;
 use crate::rng::Bernoulli;
 use crate::rng::rng_for;
@@ -111,9 +119,23 @@ pub(crate) struct PlanContext<'a> {
     /// The profile's `privacy.k_min`, or [`crate::profile::DEFAULT_K_MIN`] where it states none. It bounds the rows
     /// the trimmed extremes leave beyond them.
     pub(crate) k_min: u64,
+    /// The format the profiled source was read in. A text format's column holding values of several
+    /// types generates as text.
+    pub(crate) source_format: Option<SourceFormat>,
+    /// The keys the profile states, whose columns' foreign text is each one row's own.
+    pub(crate) keys: Option<&'a Keys>,
 }
 
 impl PlanContext<'_> {
+    /// Whether `name` is a column of a key the profile states.
+    fn is_key_column(&self, name: &str) -> bool {
+        let Some(keys) = self.keys else { return false };
+        keys.primary
+            .iter()
+            .chain(keys.candidates.iter().flatten())
+            .any(|key| key.columns.iter().any(|column| column == name))
+    }
+
     /// The distinct values a column is to hold over the dataset, drawn in its `filled_rows`. At or
     /// above the source's rows its ratio holds, so a longer run holds more values. Below them it is
     /// what a random sample of the source holds where each value fills an equal share of its rows,
@@ -215,6 +237,10 @@ pub(crate) struct StreamKeys {
     /// A row's draw given another column: its cell of a conditional table, or whether it breaks a lookup or an
     /// expression.
     given: u64,
+    /// One word a row: which of its type mix's shares the row holds.
+    type_mix: u64,
+    /// The text of each row holding a share of another type.
+    type_mix_text: u64,
 }
 
 impl StreamKeys {
@@ -230,6 +256,8 @@ impl StreamKeys {
             index: key("index"),
             indexed_values: key("indexed_values"),
             given: key("given"),
+            type_mix: key("type_mix"),
+            type_mix_text: key("type_mix_text"),
         }
     }
 }
@@ -291,6 +319,9 @@ pub(crate) struct ColumnPlan {
     values: ValueSampler,
     nulls: Option<Bernoulli>,
     text_only: Option<TextOnlyValues>,
+    /// Where the column generates as text, the type mix its `values` are rendered through. `values`
+    /// stays the column's own typed draw, which every dependence between columns reads.
+    type_mix: Option<TypeMix>,
 }
 
 impl ColumnPlan {
@@ -302,7 +333,8 @@ impl ColumnPlan {
             ValueSampler::Text(text) => text.index.is_none() && matches!(text.source, TextSource::Provider(Provider::Uuid)),
             _ => false,
         };
-        unique && self.nulls.is_none() && self.text_only.is_none()
+        let renders_its_own = self.type_mix.as_ref().is_none_or(TypeMix::renders_only);
+        unique && renders_its_own && self.nulls.is_none() && self.text_only.is_none()
     }
 
     pub(crate) fn generate(&self, at: &BlockPosition, rows: usize) -> ArrayRef {
@@ -310,7 +342,62 @@ impl ColumnPlan {
             .drawn_nulls(at, rows)
             .map(|nulls| NullBuffer::new(!&nulls))
             .filter(|nulls| nulls.null_count() > 0);
-        self.values.generate(at, &self.keys, rows, nulls)
+        self.rendered(at, self.values.generate(at, &self.keys, rows, nulls))
+    }
+
+    /// `typed`, the column's own draws for the block at `at`, as the column holds them: written as
+    /// text where it generates from a type mix, else unchanged.
+    pub(crate) fn rendered(&self, at: &BlockPosition, typed: ArrayRef) -> ArrayRef {
+        match &self.type_mix {
+            Some(mix) => mix.render(at, &self.keys, &typed),
+            None => typed,
+        }
+    }
+
+    /// Whether the column generates as text through a type mix, its own share included.
+    pub(crate) fn draws_type_mix(&self) -> bool {
+        self.type_mix.is_some()
+    }
+
+    /// The JSON Pointer of this column and each field nested in it that generates as text, with the
+    /// type its own draws render as.
+    pub(crate) fn type_mix_columns(&self) -> Vec<(String, RawValueType)> {
+        let mut found: Vec<(String, RawValueType)> = self.type_mix.iter().map(|mix| (mix.pointer.clone(), mix.own)).collect();
+        match &self.values {
+            ValueSampler::Struct(structure) => found.extend(structure.fields.iter().flat_map(ColumnPlan::type_mix_columns)),
+            ValueSampler::List(list) => found.extend(list.element.type_mix_columns()),
+            _ => {}
+        }
+        found
+    }
+
+    /// Draws the column as its own type, as a relationship whose values it takes needs.
+    pub(crate) fn drop_type_mix(&mut self) {
+        if self.type_mix.take().is_some() {
+            self.field = Arc::new(Field::new(self.field.name(), self.values.data_type(), self.field.is_nullable()));
+        }
+    }
+
+    /// What draws the values, as a plan reports it, the type mix's text included.
+    pub(crate) fn description(&self) -> String {
+        match &self.type_mix {
+            Some(mix) => format!("{}{}", self.sampler, mix.describe()),
+            None => self.sampler.clone(),
+        }
+    }
+
+    /// Writes the column's own draws as text on every row, as its parent's text needs where a
+    /// relationship copies it. `column` is its profile entry. False where text cannot hold its type.
+    pub(crate) fn render_as_text(&mut self, column: &Column, pointer: &str) -> bool {
+        if self.type_mix.is_some() {
+            return true;
+        }
+        let Ok(Some(mix)) = TypeMix::rendered_only(column, &self.values.data_type(), pointer) else {
+            return false;
+        };
+        self.field = text_field(self.field.name(), self.field.is_nullable(), &mix);
+        self.type_mix = Some(mix);
+        true
     }
 
     /// The rows the null mask draws as null, one draw per row.
@@ -375,6 +462,18 @@ impl ColumnPlan {
             }
             _ => return None,
         };
+        let key = match &mut self.type_mix {
+            Some(mix) => {
+                mix.make_keyed();
+                RowKey::TypeMix {
+                    own: Box::new(key),
+                    mix: Box::new(mix.clone()),
+                    seed,
+                    keys: self.keys,
+                }
+            }
+            None => key,
+        };
         self.nulls = None;
         self.null_share = 0.0;
         self.text_only = None;
@@ -384,6 +483,9 @@ impl ColumnPlan {
     /// What a key's values are written as in this column: an integer where it stores a number,
     /// text where it stores text. None for any other column.
     pub(crate) fn key_column(&self) -> Option<KeyColumn> {
+        if self.type_mix.is_some() {
+            return Some(KeyColumn::Text(StringOutput::Utf8));
+        }
         Some(match &self.values {
             ValueSampler::Sequence(sequence) => KeyColumn::Integer(sequence.output),
             ValueSampler::Numeric(numeric) => KeyColumn::Integer(numeric.output),
@@ -415,6 +517,14 @@ pub(crate) enum RowKey {
         seed: u64,
         keys: StreamKeys,
         sampler: Box<TextSampler>,
+    },
+    /// A key generated from its type mix: `own` at a row holding its own type, else text only that
+    /// row holds.
+    TypeMix {
+        own: Box<RowKey>,
+        mix: Box<TypeMix>,
+        seed: u64,
+        keys: StreamKeys,
     },
 }
 
@@ -449,11 +559,24 @@ impl RowKey {
                 sampler.push_at_row(*seed, keys, row, &mut out);
                 KeyValue::Text(out)
             }
+            Self::TypeMix { own, mix, seed, keys } => match mix.key_text_at(*seed, keys, row) {
+                Some(text) => KeyValue::Text(text),
+                None => own.value_at(row),
+            },
         }
     }
 
-    /// The largest integer the key holds over `rows` rows, None for text.
+    /// Whether the key is written as text from a type mix, so a child's key holding it is text too.
+    pub(crate) fn draws_type_mix(&self) -> bool {
+        matches!(self, Self::TypeMix { .. })
+    }
+
+    /// The largest integer the key holds over `rows` rows, None for text. A type mix's own integers
+    /// count, so its orphans lie past them.
     pub(crate) fn largest(&self, rows: u64) -> Option<i64> {
+        if let Self::TypeMix { own, .. } = self {
+            return own.largest(rows);
+        }
         let Self::Sequence { start, step } = self else { return None };
         let last = i128::from(*start) + i128::from(*step) * i128::from(rows.saturating_sub(1));
         Some(i128::from(*start).max(last).clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64)
@@ -509,7 +632,17 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
     } else {
         0.0
     };
-    let values = value_sampler(context, column, site, &keys, context.rows * (1.0 - null_share))?;
+    let type_mix = match physical(column) {
+        Ok(PhysicalType::Scalar(data_type)) => {
+            let keyed = !site.nested && context.is_key_column(&column.name);
+            TypeMix::planned(column, &data_type, context.source_format, keyed, &site.pointer).map_err(site.refuse("/temporal/format"))?
+        }
+        _ => None,
+    };
+    // A text source's distinct values are counted over the values parsing as the column's type, so
+    // the own draw holds every one of them in its share of the rows.
+    let own_share = type_mix.as_ref().map_or(1.0, TypeMix::own_share);
+    let values = value_sampler(context, column, site, &keys, context.rows * (1.0 - null_share) * own_share)?;
     let text_only = TextOnlyValues::new(column.missing_tokens.as_ref(), null_share).map_err(site.refuse("/missing_tokens"))?;
     if site.nested && text_only.is_some() {
         let message = "a text cell names no nested field, so a nested field's missing-value tokens are not generated yet".to_string();
@@ -520,15 +653,26 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
     if column.missing_tokens.as_ref().is_some_and(|tokens| !tokens.is_empty()) {
         sampler.push_str(", with missing-value tokens as text");
     }
+    let field = match &type_mix {
+        Some(mix) => text_field(&column.name, may_be_null, mix),
+        None => Arc::new(Field::new(&column.name, values.data_type(), may_be_null)),
+    };
     Ok(ColumnPlan {
-        field: Arc::new(Field::new(&column.name, values.data_type(), may_be_null)),
+        field,
         sampler,
         null_share: nulls.map_or(0.0, |_| null_share),
         keys,
         values,
         nulls,
         text_only,
+        type_mix,
     })
+}
+
+/// A string field named `name`, its metadata naming the type `mix`'s own share renders.
+fn text_field(name: &str, nullable: bool, mix: &TypeMix) -> FieldRef {
+    let metadata = std::collections::HashMap::from([(TYPE_MIX_FIELD_KEY.to_string(), raw_type_name(mix.own).to_string())]);
+    Arc::new(Field::new(name, DataType::Utf8, nullable).with_metadata(metadata))
 }
 
 /// What draws `column`'s values through `values`, in a few words a plan prints.
@@ -600,7 +744,7 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
             }
             description
         }
-        ValueSampler::List(list) => format!("list of {}", list.element.sampler),
+        ValueSampler::List(list) => format!("list of {}", list.element.description()),
         ValueSampler::Struct(structure) => format!("struct of {} fields", structure.fields.len()),
     }
 }

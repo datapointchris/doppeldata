@@ -161,6 +161,31 @@ files. It printed:
 - **The runs shared the machine at a load average of 15.3 to 28.2**, against 2.9 to 6.5 for the
   sections above. So a range here is wide, and only rows run beside each other compare.
 
+## A column its type mix draws as text takes four to four and a half times as long as drawn typed
+
+The `throughput` example of `crates/core` timed one column alone, 20M rows, three runs per arm.
+Both profiles hold one `int64` column with `type_mix: {integer: 0.75, string: 0.25}` and 25,000
+distinct values. One states `source: {format: ndjson}`, so its column generates as text. The other
+states no source, so the same column generates as `int64`.
+
+```bash
+cargo run --release -p doppeldata-core --example throughput -- PROFILE_STEM --rows 20000000 --threads 16 --repeat 3
+```
+
+| Column | Threads | Per second, range of 3 runs |
+| --- | --- | --- |
+| `int64` | 1 | 100.5M to 102.8M |
+| text, 25% of other types | 1 | 22.0M to 23.1M |
+| `int64` | 16 | 771M to 802M |
+| text, 25% of other types | 16 | 179M to 192M |
+
+- **A text row does three things where a typed row does one.** It draws the same own value, then a
+  uniform picks its share, then it writes the value's digits or a foreign string into a string
+  array.
+- **A wide table pays this only on its text columns.** A column whose type mix is all its own type,
+  or whose source is Parquet, draws at the `int64` rate.
+- **The machine's load was not recorded for these runs.**
+
 ## The dependence passes take a sixth of a Polars profile of the taxi trips, and a fifth of the claims
 
 `profile create` under cProfile gives each pass's share of one profile:

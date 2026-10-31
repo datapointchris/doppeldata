@@ -8,7 +8,10 @@ profile writes is one PROFILE could hold, such as a ZIP column's prefixes under 
 `--against` is the one way a check reads real rows, and a section below covers it.
 Generated data has its own `source_fingerprint`, so the stats cache never hands PROFILE back
 unchanged. DATA is typed with the detector packs PROFILE records, so a type one of them declares can
-be confirmed.
+be confirmed. A column the engine generates as text from its `type_mix` is typed by its text in
+any format, as PROFILE's text source was. So a Parquet column of `48213` and `abc` profiles as an
+integer column holding a type mix, and its statistics are its integers', as PROFILE's are. A nested
+field generated as text is profiled as text.
 
 CSV or TSV a doppeldata write left `_manifest.json` beside is read in the dialect the manifest
 records, header included, and no sniffer reads it. Files written with no header take their column
