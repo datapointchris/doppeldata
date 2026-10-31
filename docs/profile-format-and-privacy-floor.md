@@ -8,9 +8,10 @@ is accepted on input. One JSON Schema validates both.
 
 - **Every section refuses a key it does not declare.** A reviewer hand-edits the file, so a
   misspelled key must fail rather than be read as absent. serde's `deny_unknown_fields` refuses it
-  in the engine, and the schema's `additionalProperties: false` refuses it in the library. Each is
-  an `unknown-field` at the key's own JSON Pointer, naming the closest field its section takes. The
-  tool that wrote the profile records its version under `generated.tool`.
+  in the engine, listing the fields its section takes. The schema's `additionalProperties: false`
+  refuses it in the library, as an `unknown-field` at the key's JSON Pointer naming the closest
+  field its section takes. The tool that wrote the profile records its version under
+  `generated.tool`.
 - **Every section is optional.** A profile imported from a data catalog or a data contract has types
   and no statistics, and the generator falls back to defaults for what is missing.
 - **A rewrite keeps a reviewer's comments and key order.** The file is written back through
@@ -67,9 +68,9 @@ the `doppeldata.*` constants in the core crate's `profile::provenance`, where ea
 holds. So the next profiler can tell synthetic data from real, and any one file names the whole
 dataset it belongs to.
 
-The keys carry the profile's name and the dataset's whole identity: the five values
-`determinism-contract.md` names, and their digest as a quick equality check. The row key names the
-dataset, because every file of it carries the same schema. One part file reading
+The keys carry the profile's name and the dataset's whole identity: the values
+`determinism-contract.md` names as that identity, and their digest as a quick equality check. The
+row key names the dataset, because every file of it carries the same schema. One part file reading
 `rows: 10000000` would mislead.
 
 A write asked to embed the profile adds `doppeldata.profile`, the whole profile as canonical JSON,
