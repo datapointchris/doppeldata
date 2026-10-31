@@ -76,7 +76,6 @@ use crate::profile::Keys;
 use crate::profile::LogicalType;
 use crate::profile::Provider;
 use crate::profile::RawValueType;
-use crate::profile::SourceFormat;
 use crate::profile::StringStats;
 use crate::rng::Bernoulli;
 use crate::rng::rng_for;
@@ -119,9 +118,6 @@ pub(crate) struct PlanContext<'a> {
     /// The profile's `privacy.k_min`, or [`crate::profile::DEFAULT_K_MIN`] where it states none. It bounds the rows
     /// the trimmed extremes leave beyond them.
     pub(crate) k_min: u64,
-    /// The format the profiled source was read in. A text format's column holding values of several
-    /// types generates as text.
-    pub(crate) source_format: Option<SourceFormat>,
     /// The keys the profile states, whose columns' foreign text is each one row's own.
     pub(crate) keys: Option<&'a Keys>,
 }
@@ -354,6 +350,15 @@ impl ColumnPlan {
         }
     }
 
+    /// `array`, as the column holds it, read as its own type: unchanged where it generates typed,
+    /// else each own value, and null where a row holds text of another type.
+    pub(crate) fn read_typed(&self, array: &ArrayRef) -> ArrayRef {
+        match &self.type_mix {
+            Some(mix) => mix.read(array, &self.values.data_type()),
+            None => array.clone(),
+        }
+    }
+
     /// Whether the column generates as text through a type mix, its own share included.
     pub(crate) fn draws_type_mix(&self) -> bool {
         self.type_mix.is_some()
@@ -361,11 +366,11 @@ impl ColumnPlan {
 
     /// The JSON Pointer of this column and each field nested in it that generates as text, with the
     /// type its own draws render as.
-    pub(crate) fn type_mix_columns(&self) -> Vec<(String, RawValueType)> {
+    pub(crate) fn type_mix_pointers(&self) -> Vec<(String, RawValueType)> {
         let mut found: Vec<(String, RawValueType)> = self.type_mix.iter().map(|mix| (mix.pointer.clone(), mix.own)).collect();
         match &self.values {
-            ValueSampler::Struct(structure) => found.extend(structure.fields.iter().flat_map(ColumnPlan::type_mix_columns)),
-            ValueSampler::List(list) => found.extend(list.element.type_mix_columns()),
+            ValueSampler::Struct(structure) => found.extend(structure.fields.iter().flat_map(ColumnPlan::type_mix_pointers)),
+            ValueSampler::List(list) => found.extend(list.element.type_mix_pointers()),
             _ => {}
         }
         found
@@ -635,7 +640,7 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
     let type_mix = match physical(column) {
         Ok(PhysicalType::Scalar(data_type)) => {
             let keyed = !site.nested && context.is_key_column(&column.name);
-            TypeMix::planned(column, &data_type, context.source_format, keyed, &site.pointer).map_err(site.refuse("/temporal/format"))?
+            TypeMix::planned(column, &data_type, keyed, &site.pointer).map_err(site.refuse("/temporal/format"))?
         }
         _ => None,
     };

@@ -208,7 +208,7 @@ def checked_table(
             k_min=k_min,
             edges_from=effective,
             packs=[each.pack.name for each in packs],
-            text_columns=text_column_names(source, planned if planned is not None else source_plan(source)),
+            type_mix_columns=type_mix_column_names(source, planned if planned is not None else source_plan(source)),
         )
     observed = checked.to_plain()
     fingerprint = (observed.get('generated') or {}).get('source_fingerprint')
@@ -260,13 +260,13 @@ def unreadable_refusal(scenario: Scenario | None, written: Manifest | None, data
     return f'is checked under a scenario writing {" and ".join(named)} faults, {cannot}' if named else None
 
 
-def text_column_names(source: Document, planned: '_core.Plan | Unmeasured') -> list[str]:
-    """The name of each column `planned` generates as text, which a check types by its text as the profiler typed the
-    source's, so a file holding them as strings reads as the profile's types. A nested field stays text."""
+def type_mix_column_names(source: Document, planned: '_core.Plan | Unmeasured') -> list[str]:
+    """The name of each top-level column `planned` generates as text, which a check types by its text as the profiler
+    typed the source's, so a file holding them as strings reads as the profile's types. A nested field stays text."""
     if isinstance(planned, Unmeasured):
         return []
     columns = source.get('columns') or []
-    return [columns[int(pointer.split('/')[2])]['name'] for pointer, _ in planned.type_mix_columns() if pointer.count('/') == 2]
+    return [columns[int(pointer.split('/')[2])]['name'] for pointer, _ in planned.type_mix_pointers() if pointer.count('/') == 2]
 
 
 def full_load(written: Manifest, data: str | os.PathLike[str]) -> list[str]:

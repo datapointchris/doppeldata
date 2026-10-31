@@ -192,7 +192,7 @@ sets. It then prints, per kind, what each reader caught of what `_faults.jsonl` 
 
 - **Every write without the op holds no fault.** A profile's malformed rows and line-break mix
   shape no plain write, whatever its source held. A text source's column holding values of other
-  types generates as text at its `type_mix` shares, because its exports type it as a string.
+  types is no fault either. It generates as text at its `type_mix` shares, as its source held them.
   [column-samplers.md](column-samplers.md) says which columns.
 - **The op breaks the encoded bytes, never the rows.** Each block generates the rows a clean write
   does. So no other perturbation moves, and the determinism fixtures hold no fault.
@@ -463,6 +463,13 @@ local run does.
   extremes come from the profile's `extremes`, else the outer quantiles.
 - **`partition_skew` gives each value named its share**, so a write partitioned by the column fills
   its directories in those shares.
+- **An op on numbers or times refuses a column drawn as text from its type mix**, as
+  `op-not-for-column`. `noise`, `scaling`, `outliers`, `out_of_range` and `late_arrival` rewrite a
+  typed array, and that column holds strings in every write. The refusal names the type its profile
+  states, beside the string it generates as.
+- **A `cdc` update recomputes a derived or looked-up column from a column drawn as text**, read
+  back as the profile's type. A row holding another type reads as null, so the recomputed value is
+  null there.
 - **`cdc` keys every change by `key`, else the profile's one-column `dataset.keys.primary`.** A
   profile stating neither, or a primary key of several columns, is refused as `no-primary-key`. A
   key column must draw unique values, such as a sequence or a UUID with no nulls, or it is refused

@@ -242,12 +242,12 @@ class Plan:
         ``style``, ``prefix``, ``expected_prefix``, ``changes``, ``change_files_at_most`` and
         ``expected_parts``, or None without a ``cdc``. Every change is drawn to count it.
         """
-    def type_mix_columns(self, /) -> list[tuple[str, str]]:
+    def type_mix_pointers(self, /) -> list[tuple[str, str]]:
         """
         The JSON Pointer into the profile of each column, nested fields included, that the plan
         generates as text, with the ``type_mix`` type its own draws are written as, in profile
-        order. A column is text where its text source held values of other types in it, or where
-        a bundle copies its values from a parent's text.
+        order. A column is text where its type mix holds values of other types, or where a bundle
+        copies its values from a parent's text.
         """
     def write(self, /, options: WriteOptions, destination: str, *, threads: SupportsIndex, replace: bool, s3_store: dict |None = None) -> str:
         """

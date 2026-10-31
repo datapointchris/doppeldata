@@ -459,7 +459,6 @@ pub(crate) fn plan_context<'a>(table: &'a TableProfile, name: &'a str, seed: u64
         source_rows: source_rows.map(|rows| rows as f64),
         described_rows: rows_read.or(source_rows).map(|rows| rows as f64),
         k_min: table.privacy.as_ref().and_then(|privacy| privacy.k_min).unwrap_or(DEFAULT_K_MIN),
-        source_format: table.source.as_ref().and_then(|source| source.format),
         keys: table.dataset.as_ref().and_then(|dataset| dataset.keys.as_ref()),
     }
 }
@@ -734,8 +733,8 @@ impl Plan {
     /// The JSON Pointer into the profile of each column, nested fields included, that generates as
     /// text, with the raw type its own draws render as, in profile order. A column is text where its
     /// type mix holds other types, or where a bundle copies its values from a parent's text.
-    pub fn type_mix_columns(&self) -> Vec<(String, RawValueType)> {
-        self.columns.iter().flat_map(ColumnPlan::type_mix_columns).collect()
+    pub fn type_mix_pointers(&self) -> Vec<(String, RawValueType)> {
+        self.columns.iter().flat_map(ColumnPlan::type_mix_pointers).collect()
     }
 
     /// Whether top-level column `column` generates as text from a type mix.

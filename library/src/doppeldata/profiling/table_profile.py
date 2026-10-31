@@ -245,14 +245,14 @@ def profile_table(
     code_lists: Mapping[str, SuppliedCodeList],
     readers: dict[str, str],
     frozen: FrozenLayout | None = None,
-    text_columns: frozenset[str] = frozenset(),
+    type_mix_columns: frozenset[str] = frozenset(),
 ) -> ProfiledTable:
     """The profile of `source`, from every row or from a seeded sample of `sample` rows, written under `policy`.
 
     The detectors of `packs` type each column `semantic_types.detected_columns` names, reading `code_lists`, and the
     type decides which rule of the policy holds the column. With `frozen`, each column it names is counted against the
     earlier profile's edges and value list. Keys and repeated rows are counted over every row, sampled or not. Each
-    string column `text_columns` names is typed by its text, as a text source's columns are.
+    string column `type_mix_columns` names is typed by its text, as a text source's columns are.
     """
     read = backend.read(source)
     table = read.table
@@ -267,7 +267,7 @@ def profile_table(
     if sample is not None and rows > sample:
         table, sampled = backend.sampled(table, sample, SAMPLE_SEED), True
     elements = read.json.elements if read.json else {}
-    settings = ColumnSettings(source.format, k_min, policy, packs, code_lists, frozen or FrozenLayout(), elements, text_columns)
+    settings = ColumnSettings(source.format, k_min, policy, packs, code_lists, frozen or FrozenLayout(), elements, type_mix_columns)
     json_root = read.json.paths if read.json else None
     profiled = profile_columns(backend, table, settings, rows, whole_distinct, json_root, read.table if sampled else None)
     full = profiled.table if profiled.whole is None else profiled.whole
@@ -339,7 +339,7 @@ class ColumnSettings:
     code_lists: Mapping[str, SuppliedCodeList]
     frozen: FrozenLayout
     elements: dict[str, Table]
-    text_columns: frozenset[str] = frozenset()
+    type_mix_columns: frozenset[str] = frozenset()
 
 
 def profile_columns(
@@ -374,8 +374,10 @@ def profile_columns(
                 for name, column in text.items()
             }
         table = backend.parse(table, {name: column.parsed for name, column in text.items()})
-    elif settings.text_columns:
-        named = [spec for spec in visible_specs(backend, table) if spec.name in settings.text_columns and spec.kind is ColumnKind.STRING]
+    elif settings.type_mix_columns:
+        named = [
+            spec for spec in visible_specs(backend, table) if spec.name in settings.type_mix_columns and spec.kind is ColumnKind.STRING
+        ]
         text = text_types.type_text_columns(backend, table, named, SAMPLE_SEED)
         table = backend.parse(table, {name: column.parsed for name, column in text.items()})
     specs = visible_specs(backend, table)

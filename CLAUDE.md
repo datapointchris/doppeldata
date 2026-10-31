@@ -50,8 +50,8 @@ malformed-file-readers/
   `PINNED_VALUES` covers what `crates/core/tests/every-column-kind.profile.yaml` generates, and
   `PINNED_SCENARIO_VALUES` covers it under `every-column-kind.scenario.yaml` beside it. A column
   kind, family, provider or profile field the engine gains adds a column there, and a perturbation
-  op that writes rows adds an entry. The fixture's source is CSV, so a column given a `type_mix`
-  share under 1 there generates as text. `PINNED_CDC_VALUES` covers it under
+  op that writes rows adds an entry. A column given a `type_mix` share under 1 there generates as
+  text. `PINNED_CDC_VALUES` covers it under
   `every-column-kind.cdc.scenario.yaml`: the full load, every change file and the expected table. A
   change to how `cdc` draws moves it.
 - **Nothing that feeds a generated value calls std's `exp`, `ln`, `powf`, `powi` or any other

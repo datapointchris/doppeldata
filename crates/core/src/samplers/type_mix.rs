@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 
 use arrow_array::Array;
 use arrow_array::ArrayRef;
+use arrow_array::TimestampMicrosecondArray;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Date32Type;
 use arrow_array::types::Date64Type;
@@ -24,10 +25,14 @@ use arrow_array::types::UInt8Type;
 use arrow_array::types::UInt16Type;
 use arrow_array::types::UInt32Type;
 use arrow_array::types::UInt64Type;
+use arrow_cast::CastOptions;
+use arrow_cast::cast_with_options;
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
 use chrono::DateTime;
 use chrono::NaiveDate;
+use chrono::NaiveDateTime;
+use chrono::NaiveTime;
 use chrono::Utc;
 use chrono::format::Item;
 use chrono::format::StrftimeItems;
@@ -41,7 +46,6 @@ use super::text::StringOutput;
 use crate::plan::ColumnFault;
 use crate::profile::Column;
 use crate::profile::RawValueType;
-use crate::profile::SourceFormat;
 use crate::rng::BLOCK_ROWS;
 use crate::rng::rng_for;
 use crate::rng::unit;
@@ -55,13 +59,9 @@ const DEFAULT_DATE_LAYOUT: &str = "%Y-%m-%d";
 /// The layout a timestamp renders in where the profile states none.
 const DEFAULT_TIMESTAMP_LAYOUT: &str = "%Y-%m-%dT%H:%M:%S%.f";
 
-/// Whether `format` is read as text, so each value's type is what its text parses as.
-fn is_text_source(format: SourceFormat) -> bool {
-    matches!(
-        format,
-        SourceFormat::Csv | SourceFormat::Tsv | SourceFormat::Json | SourceFormat::Ndjson
-    )
-}
+/// The letters a string share draws from. No vowel, so no draw spells `null`, `true`, `false`,
+/// `nan` or `inf`, which a reader takes for a value of another type.
+const STRING_LETTERS: &[u8] = b"bcdfghjklmnpqrstvwxz";
 
 /// The raw type a column of `data_type` reads its text as, or None for a type text never parses as.
 pub(crate) fn own_raw_type(data_type: &DataType) -> Option<RawValueType> {
@@ -113,6 +113,8 @@ enum Rendering {
     Boolean,
     Instant {
         layout: Vec<Item<'static>>,
+        /// The layout as stated, which reads the text back.
+        pattern: String,
     },
 }
 
@@ -132,22 +134,17 @@ pub(crate) struct TypeMix {
 }
 
 impl TypeMix {
-    /// The type mix `column`, planned as `data_type`, generates from: where its table's source is
-    /// read as text, and the share of its values parsing as its own type is under 1. None for any
-    /// other column. `keyed` makes each foreign value one no other row holds.
-    pub(crate) fn planned(
-        column: &Column,
-        data_type: &DataType,
-        source: Option<SourceFormat>,
-        keyed: bool,
-        pointer: &str,
-    ) -> Result<Option<Self>, Refusal> {
+    /// The type mix `column`, planned as `data_type`, generates from: where the share of its values
+    /// parsing as its own type is under 1. Only a source read as text records such a share, so
+    /// the table's format is not read, and a scenario changing it changes no column's type. None
+    /// for any other column. `keyed` makes each foreign value one no other row holds.
+    pub(crate) fn planned(column: &Column, data_type: &DataType, keyed: bool, pointer: &str) -> Result<Option<Self>, Refusal> {
         let (Some(own), Some(mix)) = (own_raw_type(data_type), column.type_mix.as_ref()) else {
             return Ok(None);
         };
         let total: f64 = mix.values().map(|share| share.0.max(0.0)).sum();
         let own_share = mix.get(&own).map_or(0.0, |share| share.0);
-        if !source.is_some_and(is_text_source) || own_share >= 1.0 || total <= 0.0 {
+        if own_share >= 1.0 || total <= 0.0 {
             return Ok(None);
         }
         let mut running = 0.0;
@@ -263,6 +260,43 @@ impl TypeMix {
             }
         }
     }
+
+    /// `text`, the column as it generates, read back as `data_type` the way a reader of that type
+    /// reads it: each value in the column's own layout, and null where a row holds another type.
+    pub(crate) fn read(&self, text: &ArrayRef, data_type: &DataType) -> ArrayRef {
+        let options = CastOptions {
+            safe: true,
+            ..CastOptions::default()
+        };
+        let read = match &self.rendering {
+            Rendering::Instant { pattern, .. } => {
+                let micros: TimestampMicrosecondArray = text
+                    .as_string::<i32>()
+                    .iter()
+                    .map(|value| value.and_then(|value| parsed_micros(value, pattern)))
+                    .collect();
+                let zone = match data_type {
+                    DataType::Timestamp(_, zone) => zone.clone(),
+                    _ => None,
+                };
+                cast_with_options(&micros.with_timezone_opt(zone), data_type, &options)
+            }
+            _ => cast_with_options(text, data_type, &options),
+        };
+        read.expect("text casts to the column's own type, a value that does not parse reading as null")
+    }
+}
+
+/// `text` in `pattern` as microseconds after the epoch, at UTC where it states no offset.
+fn parsed_micros(text: &str, pattern: &str) -> Option<i64> {
+    if let Ok(instant) = DateTime::parse_from_str(text, pattern) {
+        return Some(instant.timestamp_micros());
+    }
+    if let Ok(instant) = NaiveDateTime::parse_from_str(text, pattern) {
+        return Some(instant.and_utc().timestamp_micros());
+    }
+    let day = NaiveDate::parse_from_str(text, pattern).ok()?;
+    Some(day.and_time(NaiveTime::MIN).and_utc().timestamp_micros())
 }
 
 /// How `column`, planned as `data_type`, writes its own values, refused where its temporal layout
@@ -283,9 +317,14 @@ fn rendering(column: &Column, data_type: &DataType) -> Result<Rendering, Refusal
                 DataType::Timestamp(..) => DEFAULT_TIMESTAMP_LAYOUT,
                 _ => DEFAULT_DATE_LAYOUT,
             };
-            let stated = column.temporal.as_ref().and_then(|temporal| temporal.format.as_deref());
+            let pattern = column
+                .temporal
+                .as_ref()
+                .and_then(|temporal| temporal.format.as_deref())
+                .unwrap_or(default);
             Rendering::Instant {
-                layout: written_layout(stated.unwrap_or(default))?,
+                layout: written_layout(pattern)?,
+                pattern: pattern.to_string(),
             }
         }
         _ => Rendering::Digits,
@@ -342,15 +381,15 @@ impl Rendering {
                 let values = array.as_boolean();
                 Box::new(move |row, out| out.push_str(if values.value(row) { "true" } else { "false" }))
             }
-            (Self::Instant { layout }, DataType::Date32) => {
+            (Self::Instant { layout, .. }, DataType::Date32) => {
                 let values = array.as_primitive::<Date32Type>();
                 Box::new(move |row, out| push_instant(i64::from(values.value(row)) * 86_400_000_000, layout, out))
             }
-            (Self::Instant { layout }, DataType::Date64) => {
+            (Self::Instant { layout, .. }, DataType::Date64) => {
                 let values = array.as_primitive::<Date64Type>();
                 Box::new(move |row, out| push_instant(values.value(row).saturating_mul(1_000), layout, out))
             }
-            (Self::Instant { layout }, &DataType::Timestamp(unit, _)) => {
+            (Self::Instant { layout, .. }, &DataType::Timestamp(unit, _)) => {
                 macro_rules! instants {
                     ($type:ty) => {{
                         let values = array.as_primitive::<$type>();
@@ -379,11 +418,17 @@ fn micros(ticks: i64, unit: TimeUnit) -> i64 {
     }
 }
 
+/// A float at `places` places, else its shortest decimal. A whole value keeps a `.0`, which a
+/// reader of text would otherwise count as an integer.
 fn push_float<T: std::fmt::Display>(value: f64, native: T, places: Option<usize>, out: &mut String) {
+    let start = out.len();
     let _ = match places {
         Some(places) => write!(out, "{value:.places$}"),
         None => write!(out, "{native}"),
     };
+    if value.is_finite() && !out[start..].contains(['.', 'e', 'E']) {
+        out.push_str(".0");
+    }
 }
 
 /// A decimal's unscaled `value` at `scale` places.
@@ -421,14 +466,16 @@ pub(crate) fn foreign_text(raw: RawValueType, rng: &mut ChaCha8Rng) -> String {
         RawValueType::Timestamp => instant(rng).format("%Y-%m-%dT%H:%M:%S").to_string(),
         RawValueType::String => {
             let length = rng.random_range(3..=8);
-            (0..length).map(|_| char::from(b'a' + rng.random_range(0..26u8))).collect()
+            (0..length)
+                .map(|_| char::from(STRING_LETTERS[rng.random_range(0..STRING_LETTERS.len())]))
+                .collect()
         }
     }
 }
 
-/// Text of type `raw` that only dataset row `row` holds. It never parses as an earlier raw type,
-/// and never as a number where the column's own values are digits. A boolean or date share holds
-/// too few values for every row, so it is written as string text.
+/// Text of type `raw` that only dataset row `row` holds. An integer share is negative, and a
+/// decimal share ends in `.5`, so neither repeats a key's own values counting up from zero. A
+/// boolean or date share holds too few values for every row, so it is written as string text.
 fn push_key_text(raw: RawValueType, row: u64, out: &mut String) {
     match raw {
         RawValueType::Decimal => {

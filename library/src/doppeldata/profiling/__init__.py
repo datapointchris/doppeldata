@@ -185,10 +185,10 @@ def profile_in_dialect(
     edges_from: Profile | None = None,
     packs: Sequence[str] = (),
     code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
-    text_columns: Collection[str] = (),
+    type_mix_columns: Collection[str] = (),
 ) -> Profile:
     """`profile`, reading delimited `data` in `dialect` where one is given rather than in the dialect its files are
-    sniffed in, as a check reads files whose manifest records how they were written. Each string column `text_columns`
+    sniffed in, as a check reads files whose manifest records how they were written. Each string column `type_mix_columns`
     names is typed by its text, as a check reads a column the engine generates as text in any format."""
     settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
     listed, reading = listed_source(data, engine)
@@ -213,7 +213,7 @@ def profile_in_dialect(
             return edges_from
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=3)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
-    only = profiled_tables(backend, [(source, readers)], settings, frozen, text_columns=frozenset(text_columns))[0][source.name]
+    only = profiled_tables(backend, [(source, readers)], settings, frozen, type_mix_columns=frozenset(type_mix_columns))[0][source.name]
     importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
     issues = only.validate()
     if issues:
@@ -339,11 +339,11 @@ def profiled_tables(
     frozen: table_profile.FrozenLayout | None,
     *,
     related: bool = False,
-    text_columns: frozenset[str] = frozenset(),
+    type_mix_columns: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, Profile], list[dict[str, Any]]]:
     """Each table's profile by its name, each source beside the readers that read it, and where `related`, the foreign
     keys between them, counted in the same session, which holds every table's rows until it ends. Each string column
-    `text_columns` names is typed by its text."""
+    `type_mix_columns` names is typed by its text."""
     profiled: dict[str, table_profile.ProfiledTable] = {}
     # `none` holds no floor, so every statistic is computed over every row.
     k_min = settings.k_min or 1
@@ -359,7 +359,7 @@ def profiled_tables(
                 code_lists=settings.code_lists,
                 readers=readers,
                 frozen=frozen,
-                text_columns=text_columns,
+                type_mix_columns=type_mix_columns,
             )
         members = [foreign_keys.BundleMember(name, table.table, table.specs, table.document) for name, table in profiled.items()]
         relationships = foreign_keys.relationships(backend, members, k_min) if related else []

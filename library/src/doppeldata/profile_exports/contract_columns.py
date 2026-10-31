@@ -351,16 +351,17 @@ class ContractDocument:
     bundle: bool
 
 
-def contract_document(profile: Profile | Bundle, text: frozenset[str] | None = None) -> ContractDocument:
+def contract_document(profile: Profile | Bundle, type_mix: frozenset[str] | None = None) -> ContractDocument:
     """The contract of a table profile, or of every table of a bundle, with the foreign keys its relationships state.
-    `text` names the columns a table profile generates as text where its bundle's plan decides them."""
+    `type_mix` holds the pointers of the columns a table profile generates as text where its bundle's plan decides
+    them."""
     plain = profile.to_plain()
     digest = profile.digest.removeprefix('sha256:')
     if isinstance(profile, Profile):
-        table_text = text if text is not None else text_columns(profile)
-        return ContractDocument(str(plain['name']), digest, (contract_table(profile, table_text),), False)
+        pointers = type_mix if type_mix is not None else type_mix_pointers(profile)
+        return ContractDocument(str(plain['name']), digest, (contract_table(profile, pointers),), False)
     relationships = profile.relationships()
-    planned = bundle_text_columns(profile)
+    planned = bundle_type_mix_pointers(profile)
     tables = []
     for name, table in profile.tables.items():
         found = contract_table(table, None if planned is None else planned[name])
@@ -369,30 +370,30 @@ def contract_document(profile: Profile | Bundle, text: frozenset[str] | None = N
     return ContractDocument(str(plain['name']), digest, tuple(tables), True)
 
 
-# Which columns generate as text holds at every scale, and the smallest plans fastest.
-PLANNED_SCALE = 1e-9
-
-
-def text_columns(profile: Profile) -> frozenset[str] | None:
-    """The pointer of each column the engine generates as text, or None where it refuses to plan the profile."""
+def type_mix_pointers(profile: Profile) -> frozenset[str] | None:
+    """The pointer of each column the engine generates as text at the profile's row count, or None where the engine
+    refuses the profile, which then generates nothing."""
+    document = profile.to_plain()
+    rows = (document.get('dataset') or {}).get('row_count') or 1
     try:
-        plan = engine_plan(profile.to_plain(), str(profile.path or 'the exported profile'))
+        plan = engine_plan(document, str(profile.path or 'the exported profile'), rows)
     except UngenerableProfile:
         return None
-    return frozenset(pointer for pointer, _ in plan.type_mix_columns())
+    return frozenset(pointer for pointer, _ in plan.type_mix_pointers())
 
 
-def bundle_text_columns(bundle: Bundle) -> dict[str, frozenset[str]] | None:
-    """Each table's columns the engine generates as text, which a parent's text decides for a key referring to it, or
-    None where it refuses to plan the bundle."""
+def bundle_type_mix_pointers(bundle: Bundle) -> dict[str, frozenset[str]] | None:
+    """Each table's pointers of the columns the engine generates as text at the bundle's own scale, which a parent's
+    text decides for a key referring to it, or None where the engine refuses the bundle, which then generates
+    nothing."""
     try:
-        plan = bundle_arguments(bundle, 0, PLANNED_SCALE, {}).plan()
+        plan = bundle_arguments(bundle, 0, 1.0, {}).plan()
     except UngenerableProfile:
         return None
-    return {name: frozenset(pointer for pointer, _ in table.type_mix_columns()) for name, table in plan.tables()}
+    return {name: frozenset(pointer for pointer, _ in table.type_mix_pointers()) for name, table in plan.tables()}
 
 
-def contract_table(profile: Profile, text: frozenset[str] | None) -> ContractTable:
+def contract_table(profile: Profile, type_mix: frozenset[str] | None) -> ContractTable:
     document = profile.to_plain()
     generated = document.get('generated') or {}
     seed = generated.get('engine') == 'import'
@@ -413,7 +414,7 @@ def contract_table(profile: Profile, text: frozenset[str] | None) -> ContractTab
         declared=None if declared is None else {path: frozenset(listed) for path, listed in declared.items()},
         sample=f'measured over a sample of {rows:,} rows' if sampled and rows else None,
         floor=k_min if not seed and generated.get('engine') else None,
-        text_columns=text,
+        type_mix_pointers=type_mix,
     )
     keys = (document.get('dataset') or {}).get('keys') or {}
     partitioning = (source.get('layout') or {}).get('partitioning') or {}
@@ -452,7 +453,7 @@ class TableFacts:
     declared: Mapping[str, frozenset[str]] | None = None
     sample: str | None = None
     floor: int | None = None
-    text_columns: frozenset[str] | None = None
+    type_mix_pointers: frozenset[str] | None = None
 
     def stated(self, path: str, fact: str) -> bool:
         """Whether the profile states `fact` of the column at `path`, rather than drawing a default for it. A profile
@@ -563,10 +564,12 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, pointer: str, 
         raw = type_mix[RAW_TYPE_KEYS[logical]]
         parsed = Share(raw, held_rows, half_unit(1 - raw, RATE_DIGITS), facts.sample)
         found['raw_type_share'] = completeness.of(parsed)
-    if facts.text_columns is None:
+    if facts.type_mix_pointers is None:
+        # The engine refuses the profile, so the contract holds only for the source, whose values a sample does not
+        # prove all parse.
         as_text = facts.text_source and parsed is not None and not parsed.whole
     else:
-        as_text = pointer in facts.text_columns
+        as_text = pointer in facts.type_mix_pointers
     if as_text:
         found['parsed_type'] = logical
         logical = physical = 'string'

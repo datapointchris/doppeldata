@@ -260,29 +260,31 @@ place.
 
 ## A text source's column holding values of other types generates as text
 
-A column generates as a string column where its table's `source.format` is csv, tsv, json or
-ndjson, its `physical_type` is an integer, float, decimal, boolean, date or timestamp, and its
-`type_mix` share of that type is under 1. A reader of the profile's type turns the other values
-into nulls. So the exports type such a column as a string, and the generated column holds text, as
-its source did. Every other column keeps its type, and a nested field follows the same rule.
+A column generates as a string column where its `physical_type` is an integer, float, decimal,
+boolean, date or timestamp, and its `type_mix` share of that type is under 1. Only a source read as
+text records such a share. A reader of the profile's type turns the other values into nulls, so the
+generated column holds text, as its source did, and the exports type it as a string. The rule reads
+the column alone, so a scenario changing `source.format` changes no column's type. Every other
+column keeps its type, and a nested field follows the same rule.
 
 - **Each row draws one `type_mix` share.** The draw is one word a row from the column's
   `type_mix` stream, taken on null rows too, so the shares never move with the null mask.
-- **The column's own share is its sampler's draw, written in the source's layout.** An integer is
-  its digits. A float is its shortest decimal, or `numeric.scale` places. A decimal is written at its
-  scale, and a boolean as `true` or `false`. A date or timestamp is written in `temporal.format`,
-  else as `%Y-%m-%d` or `%Y-%m-%dT%H:%M:%S%.f`, and a timestamp at UTC.
-- **Every other share is text parsing as its type, and nothing else.** An integer is 0 to 99,999,
-  a decimal has two places, and a date or timestamp falls between 2000 and 2029. A string is 3 to
-  8 lowercase letters. The profile states nothing of these values, so they are drawn plainly.
+- **The column's own share is its sampler's draw, written in the source's layout.** A date or
+  timestamp takes its `temporal.format`. A whole float keeps its `.0`, so a reader counts it as the
+  column's type rather than as an integer.
+- **Every other share is text parsing as its type, and as nothing else.** The profile states
+  nothing of these values, so they are drawn plainly. A string share holds no vowel, so it never
+  spells `null`, `true` or `false`, which a JSON or CSV reader takes for another type.
+- **Each share profiles back as itself.** `library/tests/test_type_mix_round_trip.py` writes a
+  column of each own type as CSV and NDJSON, and profiles the files back to their shares.
 - **The own draw holds the column's distinct values in its own rows.** A text source's distinct
   count is taken over the values parsing as the column's type, so the other shares add none to it.
 - **A stated key repeats no value.** Where `dataset.keys` names the column, each value of another
-  type is derived from its row rather than drawn. A decimal is `<row>.5`, an integer `-<row + 1>`, a
-  timestamp `2000-01-01T00:00:00` plus the row in seconds, and anything else `x` and the row in
-  letters.
+  type is derived from its row rather than drawn.
 - **A dependence reads the own draw typed.** A copula, conditional table, lookup or expression reads
   its parent's own values. The text is written after every dependence has drawn.
+- **A `cdc` update recomputes a derived column from the text, read back as its type.** A row holding
+  another type reads as null there, as it does to any reader of the type.
 - **A JSON writer prints each value as the JSON its text parses as.** The field carries
   `doppeldata.type_mix` metadata naming the own type. So an NDJSON file holds `48213` as a number
   and `abc` as a string, which the profiler counts as its source's shares. A CSV writer quotes by

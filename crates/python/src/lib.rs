@@ -402,11 +402,11 @@ mod _core {
 
         /// The JSON Pointer into the profile of each column, nested fields included, that the plan
         /// generates as text, with the ``type_mix`` type its own draws are written as, in profile
-        /// order. A column is text where its text source held values of other types in it, or where
-        /// a bundle copies its values from a parent's text.
-        fn type_mix_columns(&self) -> Vec<(String, &'static str)> {
+        /// order. A column is text where its type mix holds values of other types, or where a bundle
+        /// copies its values from a parent's text.
+        fn type_mix_pointers(&self) -> Vec<(String, &'static str)> {
             self.plan
-                .type_mix_columns()
+                .type_mix_pointers()
                 .into_iter()
                 .map(|(pointer, own)| (pointer, doppeldata_core::raw_type_name(own)))
                 .collect()

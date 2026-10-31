@@ -7,7 +7,7 @@ from pathlib import Path
 from doppeldata.embedded_profiles import data_file_metadata
 from doppeldata.privacy_policy.file_check import refuse_failed_check
 from doppeldata.profile_exports.contract_columns import ContractDocument
-from doppeldata.profile_exports.contract_columns import bundle_text_columns
+from doppeldata.profile_exports.contract_columns import bundle_type_mix_pointers
 from doppeldata.profile_exports.contract_columns import contract_document
 from doppeldata.profile_exports.dataframely_schemas import dataframely_module
 from doppeldata.profile_exports.dqdl_rulesets import dqdl_rulesets
@@ -76,14 +76,14 @@ def export(profile: Profile | Bundle | str | os.PathLike[str], format: str, *, t
     if exporter is None:
         raise ValueError(f'{format!r} is not an export format; choose from {", ".join(EXPORT_FORMATS)}')
     found = loaded(profile)
-    text = None
+    type_mix = None
     if table is not None:
         # A foreign key is text where its parent's key is, which only the bundle's plan says.
-        planned = bundle_text_columns(found) if isinstance(found, Bundle) else None
-        text = planned.get(table) if planned is not None else None
+        planned = bundle_type_mix_pointers(found) if isinstance(found, Bundle) else None
+        type_mix = planned.get(table) if planned is not None else None
         found = one_table(found, table)
     refuse_failed_check(found)
-    return exporter(contract_document(found, text))
+    return exporter(contract_document(found, type_mix))
 
 
 def loaded(source: Profile | Bundle | str | os.PathLike[str]) -> Profile | Bundle:

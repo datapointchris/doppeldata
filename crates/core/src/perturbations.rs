@@ -59,6 +59,7 @@ use crate::rng::unit;
 use crate::samplers::DEFAULT_NUMERIC_RANGE as DEFAULT_RANGE;
 use crate::samplers::NumericOutput;
 use crate::samplers::PlanContext;
+use crate::samplers::TYPE_MIX_FIELD_KEY;
 use crate::samplers::TextCell;
 use crate::samplers::quantile_knots;
 use crate::scenario::Perturbation;
@@ -275,7 +276,7 @@ impl<'a> Planning<'a> {
             None => Err(self.refuse(
                 ScenarioFault::OpNotForColumn,
                 field,
-                format!("{name:?} is {}, and {op} acts on a number", physical_type_name(column.data_type())),
+                format!("{name:?} is {}, and {op} acts on a number", held_type(&column)),
             )),
         }
     }
@@ -289,6 +290,16 @@ impl<'a> Planning<'a> {
         let low = extremes.and_then(|e| e.low).or(knots.first().map(|&(_, value)| value));
         let high = extremes.and_then(|e| e.high).or(knots.last().map(|&(_, value)| value));
         (low.unwrap_or(DEFAULT_RANGE.0), high.unwrap_or(DEFAULT_RANGE.1))
+    }
+}
+
+/// What `field` holds, as a refusal names it. A column drawn as text from its type mix names the
+/// type its profile states as well, because the profile alone calls it that type.
+pub(crate) fn held_type(field: &Field) -> String {
+    let named = physical_type_name(field.data_type());
+    match field.metadata().get(TYPE_MIX_FIELD_KEY) {
+        Some(own) => format!("{named}, its {own} values drawn as text among values of other types"),
+        None => named,
     }
 }
 
