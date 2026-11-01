@@ -1,7 +1,6 @@
 """The record a write leaves beside a generated dataset, which with its profile and scenario regenerates every file."""
 
 import dataclasses as dc
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -141,12 +140,12 @@ def holds_unfinished_write(data: Any) -> bool:
     item = os.fspath(data)
     if not item.startswith('s3://'):
         return (Path(item) / PARTIAL_MANIFEST_FILE_NAME).is_file()
-    # Without boto3 nothing reads S3, and reading the tables refuses it next, naming boto3.
-    if importlib.util.find_spec('boto3') is None:
-        return False
-    from doppeldata.profiling import s3_sources
+    from doppeldata.aws_sessions import require_boto3
 
-    return s3_sources.s3_holds(item, PARTIAL_MANIFEST_FILE_NAME)
+    require_boto3(f'reading {item}')
+    from doppeldata import s3_access
+
+    return s3_access.s3_holds(item, PARTIAL_MANIFEST_FILE_NAME)
 
 
 def written_document(data: Any) -> dict[str, Any] | None:
@@ -165,10 +164,10 @@ def written_document(data: Any) -> dict[str, Any] | None:
         path = local / MANIFEST_FILE_NAME
         document: dict[str, Any] | None = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
         return document
-    # Without boto3 nothing reads S3, and profiling the data refuses it next, naming boto3.
-    if importlib.util.find_spec('boto3') is None:
-        return None
-    from doppeldata.profiling import s3_sources
+    from doppeldata.aws_sessions import require_boto3
 
-    held = s3_sources.s3_manifest(item)
-    return held.document if held is not None else None
+    require_boto3(f'reading {item}')
+    from doppeldata import s3_access
+
+    text = s3_access.s3_object_text(item, MANIFEST_FILE_NAME)
+    return Manifest.from_json(text).document if text is not None else None

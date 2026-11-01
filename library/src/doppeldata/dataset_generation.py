@@ -20,6 +20,7 @@ import rfc8785
 
 from doppeldata import _core
 from doppeldata import issue_codes
+from doppeldata.aws_sessions import require_boto3
 from doppeldata.column_overrides import Overrides
 from doppeldata.column_overrides import overrides_json
 from doppeldata.embedded_profiles import WrittenDataFile
@@ -29,8 +30,6 @@ from doppeldata.errors import InvalidArgument
 from doppeldata.errors import SourceError
 from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
-from doppeldata.errors import not_installed
-from doppeldata.errors import uninstalled
 from doppeldata.issue_codes import Issue
 from doppeldata.manifest import FAULTS_FILE_NAME
 from doppeldata.manifest import MANIFEST_FILE_NAME
@@ -196,8 +195,8 @@ def destination_of(out: str | os.PathLike[str]) -> tuple[str, str, str | None]:
         raise WriteFailed(issue_codes.URL_IN_A_PATH, message)
     scheme, bucket = _core.destination_scheme(destination)
     # boto3 resolves the credentials an S3 write signs with.
-    if scheme == 's3' and uninstalled({'boto3': 'boto3'}):
-        raise WriteFailed(issue_codes.PACKAGES_MISSING, not_installed('writing to s3://', ['boto3']))
+    if scheme == 's3':
+        require_boto3(f'writing to {destination}')
     return destination, scheme, bucket
 
 

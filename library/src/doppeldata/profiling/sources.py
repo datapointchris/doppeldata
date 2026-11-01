@@ -1,6 +1,5 @@
 """The data a profile describes: files on disk or under an `s3://` prefix, or a table already in memory."""
 
-import importlib
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -8,9 +7,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from doppeldata import issue_codes
-from doppeldata.errors import PackagesMissing
+from doppeldata.aws_sessions import require_boto3
 from doppeldata.errors import SourceError
-from doppeldata.errors import uninstalled
 from doppeldata.manifest import PARTIAL_MANIFEST_FILE_NAME
 from doppeldata.manifest import unfinished
 from doppeldata.profiling.backend import FORMAT_TRAITS
@@ -19,8 +17,6 @@ from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFile
 from doppeldata.profiling.backend import SourceFormat
 
-# Imported by name, and only for an `s3://` source, because it imports boto3.
-S3_SOURCES_MODULE = 'doppeldata.profiling.s3_sources'
 SUFFIX_FORMATS = {suffix: source_format for source_format, traits in FORMAT_TRAITS.items() for suffix in traits.suffixes}
 # The format of a text file compressed with one of these is the suffix before it.
 COMPRESSION_SUFFIXES = tuple(TEXT_CODEC_SUFFIXES)
@@ -54,10 +50,10 @@ def listed_files(item: str) -> list[SourceFile]:
     which lists them, is not installed."""
     if not item.startswith('s3://'):
         return local_files(Path(item))
-    if uninstalled({'boto3': 'boto3'}):
-        raise PackagesMissing('s3', ['boto3'], doing=f'listing {item}', installed_by=', or install doppeldata-cli, which declares it')
-    files: list[SourceFile] = importlib.import_module(S3_SOURCES_MODULE).s3_files(item)
-    return files
+    require_boto3(f'listing {item}')
+    from doppeldata.profiling import s3_sources
+
+    return s3_sources.s3_files(item)
 
 
 def s3_url(item: str) -> str:

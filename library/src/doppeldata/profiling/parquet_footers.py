@@ -35,12 +35,11 @@ def read_footers(files: tuple[SourceFile, ...]) -> tuple[ParquetFooter, ...]:
     if not chosen or not chosen[0].path.startswith('s3://'):
         with concurrent.futures.ThreadPoolExecutor(FOOTER_THREADS) as pool:
             return tuple(pool.map(lambda file: footer_of(parsed(file.path, file.path)), chosen))
-    from doppeldata.profiling.s3_sources import s3_errors
-    from doppeldata.s3_access import endpoint_named
-    from doppeldata.s3_access import s3_session
+    from doppeldata import s3_access
 
-    _, client = s3_session()
-    with s3_errors(chosen[0].path, endpoint_named(client), doing='read'), concurrent.futures.ThreadPoolExecutor(FOOTER_THREADS) as pool:
+    client = s3_access.reading_client(chosen[0].path)
+    endpoint = s3_access.endpoint_named(client)
+    with s3_access.read_errors(chosen[0].path, endpoint, doing='read'), concurrent.futures.ThreadPoolExecutor(FOOTER_THREADS) as pool:
         return tuple(pool.map(lambda file: footer_of(parsed(pa.BufferReader(tail_of(client, file)), file.path)), chosen))
 
 
