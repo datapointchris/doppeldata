@@ -98,28 +98,36 @@ matrix. Clipping shrinks every pair toward 0, the stated ones too.
 - **Each row of `fractions` sums to 1 at most, and `other_fractions` covers every value of `given`
   the table does not list.** `profile check` refuses a row over 1 as `E-PROFILE-015`. A null parent
   draws from the column's own values.
+- **The share a row leaves short of 1 is the rows of child values it does not state.** The
+  profiler leaves out a cell under `k_min` rows. Each child value the column lists takes as much of
+  that share as no row states of it, each row weighted by its given value's share. That is one step
+  of iterative proportional fitting toward the child's own shares, so its marginal holds.
+- **The share of values the column lists none of draws only such values.** It draws as the
+  column's own draw does when its listed draw misses. A string comes from the source below its
+  `top_values`, and a number from the CDF with its listed values cut out. That draw has its own
+  streams. The value at a distinct index is the one the column's own draw holds there, so the two
+  share their distinct values.
 - **Without `other_fractions`, a given value with no row draws what the rows leave of the child's
-  own shares.** Each child value takes its own share less what every row draws of it, each row
-  weighted by its given value's share. A row's draw is its cells and the rest spread over it. So the
-  marginal holds where the profiler dropped the row of the values `given` does not list. A value
-  left under 1% of its own share takes none. Where nothing is left, or either column lists no
-  values, such a row draws from the column's own values.
+  own shares.** Each child value, and the share it lists none of, takes its own share less what
+  every row draws of it, each row weighted by its given value's share. A row's draw is its cells and
+  the rest spread over it. So the marginal holds where the profiler dropped the row of the values
+  `given` does not list. A share left under 1% of its own takes none. Where nothing is left, or
+  either column lists no values, such a row draws from the column's own values.
 - **That draw states nothing the profile does not.** It is computed from the profile's rates
   alone. For a child value some row states, what is left is its rows outside the kept cells, which
   the writer holds at 0 or at least `k_min`. For a child value no row states, it is only what the
   spread estimates.
-- **The share a row leaves short of 1 is the rows of child values it does not state.** The
-  profiler leaves out a cell under `k_min` rows. Each child value the column lists takes as much of
-  that share as no row states of it, each row weighted by its given value's share. That is one step
-  of iterative proportional fitting toward the child's own shares, so its marginal holds. The share
-  of values the column lists none of draws from its own values.
 - **A value is a key as its text**: a string as itself, an integer in decimal, a boolean as
   `true` or `false`.
 - **A column takes one parent.** Where two entries name the same child, the first is drawn and the
   second set aside.
 
-The same test holds each share of that table within its tolerance, and the child's own shares
-where a table states no `other_fractions`.
+The same test holds each share of that table within its tolerance, and the child's own shares,
+its rest's among them, where a table states no `other_fractions`.
+
+*Rejected:* drawing the share of values the column lists none of from the column's own draw. That
+draw lands on a listed value at the listed values' share. So the values the column lists none of
+were drawn too seldom, and their distinct count fell.
 
 *Rejected:* drawing a given value with no row from the column's own values. Where the profiler
 dropped the row of a rare rest, the child values that rest held were drawn too seldom.

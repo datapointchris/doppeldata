@@ -40,9 +40,9 @@ const _: () = assert!(
 /// raises STREAM_VERSION. `crates/check-stream-version-raised.sh` reads these lines and refuses a
 /// new hash at a released version.
 const PINNED_STREAM_VERSION: u32 = 13;
-const PINNED_VALUES: &str = "846b5d52038ff3094a4ee894b347b1a446e4232771140f433c9f2582d9115d2c";
-const PINNED_SCENARIO_VALUES: &str = "6ab86d985d3ee464c63fe66e741b7796e7317fbb74845a430f0b1595bce28ace";
-const PINNED_CDC_VALUES: &str = "5fa552eee0de2880f4be4fa60e9193776eb5e1eec898b65c015622b59ed12c50";
+const PINNED_VALUES: &str = "a18e45af736086f98f13f22eeb58d77d78561613e908f15d6d0bd321aa211591";
+const PINNED_SCENARIO_VALUES: &str = "cbfff696a19154eeb18abb6ebccee79b6809e211de871da1f6c31e7a2de8ebe8";
+const PINNED_CDC_VALUES: &str = "0f0b320f2f4860358a88680fee1868c1a7d6e7d853914dfe91d158ce00838711";
 const PINNED_BUNDLE_VALUES: &str = "a797deac6442bd7e9ccc1a8457bd053d18359acba3d458db62ff3c2b8fff40e3";
 
 fn document(path: &Path) -> serde_json::Value {

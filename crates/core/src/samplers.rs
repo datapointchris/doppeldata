@@ -233,6 +233,9 @@ pub(crate) struct StreamKeys {
     index: u64,
     /// Positioned at an index rather than a block: the value at that index.
     indexed_values: u64,
+    /// The values and indices of rows drawn as the column's rest alone, apart from its listed draw's.
+    rest_values: u64,
+    rest_index: u64,
     /// A row's draw given another column: its cell of a conditional table, or whether it breaks a lookup or an
     /// expression.
     given: u64,
@@ -254,9 +257,21 @@ impl StreamKeys {
             gap_days: key("gap_days"),
             index: key("index"),
             indexed_values: key("indexed_values"),
+            rest_values: key("rest_values"),
+            rest_index: key("rest_index"),
             given: key("given"),
             type_mix: key("type_mix"),
             type_mix_text: key("type_mix_text"),
+        }
+    }
+
+    /// The keys of a draw of the column's rest alone. The value at an index stays the one the column's own draw
+    /// holds there, so the two share their distinct values.
+    fn for_rest(self) -> Self {
+        Self {
+            values: self.rest_values,
+            index: self.rest_index,
+            ..self
         }
     }
 }
@@ -316,6 +331,17 @@ impl ValueSampler {
             Self::Text(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::List(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::Struct(sampler) => sampler.generate(at, rows, nulls),
+        }
+    }
+
+    /// Each row drawn as the column draws a value it lists none of: the branch its listed draw takes on a miss.
+    /// `None` for a column listing no values.
+    fn rest(&self, at: &BlockPosition, keys: &StreamKeys, rows: usize, nulls: Option<NullBuffer>) -> Option<ArrayRef> {
+        let keys = keys.for_rest();
+        match self {
+            Self::Numeric(sampler) if sampler.listed.is_some() => Some(sampler.generate_rest(at, &keys, rows, nulls)),
+            Self::Categorical(sampler) => Some(sampler.generate_rest(at, &keys, rows, nulls)),
+            _ => None,
         }
     }
 }

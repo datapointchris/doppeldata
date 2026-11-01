@@ -196,12 +196,28 @@ enum ChildValues {
     Boolean(Vec<bool>),
 }
 
+/// What a slot of a conditional table's row draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Slot<T> {
+    Value(T),
+    /// A value the child lists none of, drawn as the child's listed draw draws one on a miss.
+    Rest,
+    Own,
+}
+
+impl Slot<u32> {
+    fn place(self) -> Option<u32> {
+        match self {
+            Self::Value(place) => Some(place),
+            Self::Rest | Self::Own => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct TableRow {
     choice: WeightedAliasIndex<f64>,
-    /// Each slot's place among the child's values, and `None` for the share of the row's rest the column's own draw
-    /// fills.
-    values: Vec<Option<u32>>,
+    values: Vec<Slot<u32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -444,67 +460,68 @@ impl RestShares {
 
     /// What a given value with no row draws: the child's own shares less what `rows` draw at their given values'
     /// shares, a value left under `UNSTATED_FLOOR` of its own taking none. `None` where they leave nothing.
-    fn remainder<'a>(&self, rows: impl IntoIterator<Item = (&'a str, &'a [(Option<String>, f64)])>) -> Option<Vec<(Option<String>, f64)>> {
-        let mut drawn: HashMap<Option<&str>, f64> = HashMap::new();
+    fn remainder<'a>(&self, rows: impl IntoIterator<Item = (&'a str, &'a [(Slot<String>, f64)])>) -> Option<Vec<(Slot<String>, f64)>> {
+        let mut drawn: HashMap<&Slot<String>, f64> = HashMap::new();
         for (given, shares) in rows {
             let weight = self.given.iter().find(|(value, _)| value == given).map_or(0.0, |(_, rate)| *rate);
-            for (value, share) in shares {
-                *drawn.entry(value.as_deref()).or_default() += weight * share;
+            for (slot, share) in shares {
+                *drawn.entry(slot).or_default() += weight * share;
             }
         }
-        let left = |value: Option<&str>, own: f64| {
-            let left = own - drawn.get(&value).copied().unwrap_or(0.0);
-            (left > UNSTATED_FLOOR * own).then_some((value.map(str::to_string), left))
+        let left = |slot: Slot<String>, own: f64| {
+            let left = own - drawn.get(&slot).copied().unwrap_or(0.0);
+            (left > UNSTATED_FLOOR * own).then_some((slot, left))
         };
-        let shares: Vec<(Option<String>, f64)> = self
+        let shares: Vec<(Slot<String>, f64)> = self
             .own
             .iter()
-            .filter_map(|(value, own)| left(Some(value), *own))
-            .chain(left(None, self.unlisted))
+            .filter_map(|(value, own)| left(Slot::Value(value.clone()), *own))
+            .chain(left(Slot::Rest, self.unlisted))
             .collect();
         let total = shares.iter().map(|(_, share)| share).sum::<f64>();
-        (total > 0.0).then(|| shares.into_iter().map(|(value, share)| (value, share / total)).collect())
+        (total > 0.0).then(|| shares.into_iter().map(|(slot, share)| (slot, share / total)).collect())
     }
 }
 
-/// A conditional table row's share of each child value, `None` for the column's own draw. The share its cells leave
-/// short of 1 is the rows whose value the table does not state, spread as `rest` says, or drawn as the column's own
-/// value where it says nothing.
-fn row_shares(cells: &BTreeMap<String, Rate>, rest: Option<&RestShares>) -> Vec<(Option<String>, f64)> {
-    let mut shares: Vec<(Option<String>, f64)> = cells.iter().map(|(value, rate)| (Some(value.clone()), rate.0)).collect();
+/// A conditional table row's share of each slot. The share its cells leave short of 1 is the rows whose value the
+/// table does not state, spread as `rest` says over the values the child lists and its rest, or drawn as the column's
+/// own value where it says nothing.
+fn row_shares(cells: &BTreeMap<String, Rate>, rest: Option<&RestShares>) -> Vec<(Slot<String>, f64)> {
+    let mut shares: Vec<(Slot<String>, f64)> = cells.iter().map(|(value, rate)| (Slot::Value(value.clone()), rate.0)).collect();
     let left = 1.0 - cells.values().map(|rate| rate.0).sum::<f64>();
     if left > SHARE_SLACK {
-        let spread: Vec<&(String, f64)> = rest
+        let unlisted = rest.map_or(0.0, |rest| rest.unlisted);
+        let spread: Vec<(Slot<String>, f64)> = rest
             .into_iter()
             .flat_map(|rest| &rest.unstated)
             .filter(|(value, share)| *share > 0.0 && !cells.contains_key(value))
+            .map(|(value, share)| (Slot::Value(value.clone()), *share))
+            .chain((unlisted > 0.0).then_some((Slot::Rest, unlisted)))
             .collect();
-        let unlisted = rest.map_or(0.0, |rest| rest.unlisted);
-        let total = spread.iter().map(|(_, share)| share).sum::<f64>() + unlisted;
+        let total = spread.iter().map(|(_, share)| share).sum::<f64>();
         if spread.is_empty() {
-            shares.push((None, left));
+            shares.push((Slot::Own, left));
         } else {
-            shares.extend(spread.into_iter().map(|(value, share)| (Some(value.clone()), left * share / total)));
-            if unlisted > 0.0 {
-                shares.push((None, left * unlisted / total));
-            }
+            shares.extend(spread.into_iter().map(|(slot, share)| (slot, left * share / total)));
         }
     }
     shares
 }
 
-/// A row drawing each child value at its share, placing a value among `values` the first time a row names it.
-fn table_row(shares: &[(Option<String>, f64)], values: &mut Vec<String>, field: &str) -> Result<TableRow, PlanError> {
+/// A row drawing each slot at its share, placing a value among `values` the first time a row names it.
+fn table_row(shares: &[(Slot<String>, f64)], values: &mut Vec<String>, field: &str) -> Result<TableRow, PlanError> {
     let places = shares
         .iter()
-        .map(|(value, _)| {
-            value.as_ref().map(|value| {
+        .map(|(slot, _)| match slot {
+            Slot::Value(value) => {
                 let place = values.iter().position(|known| known == value).unwrap_or_else(|| {
                     values.push(value.clone());
                     values.len() - 1
                 });
-                place as u32
-            })
+                Slot::Value(place as u32)
+            }
+            Slot::Rest => Slot::Rest,
+            Slot::Own => Slot::Own,
         })
         .collect();
     let choice = WeightedAliasIndex::new(shares.iter().map(|(_, share)| *share).collect())
@@ -1407,7 +1424,7 @@ impl ValueDraw {
             Self::Table(draw) => {
                 let places = draw.keys.places(drawn(arrays, draw.parent));
                 let mut rng = rng_for(at.seed, keys.given, at.block);
-                let chosen: Vec<Option<u32>> = places
+                let slots: Vec<Slot<u32>> = places
                     .iter()
                     .map(|&place| {
                         let row = match place {
@@ -1415,22 +1432,26 @@ impl ValueDraw {
                             OTHER => draw.other.as_ref(),
                             listed => Some(&draw.rows[listed as usize]),
                         };
-                        row.and_then(|row| row.values[row.choice.sample(&mut rng)])
+                        row.map_or(Slot::Own, |row| row.values[row.choice.sample(&mut rng)])
                     })
                     .collect();
-                draw.values.array(&chosen, column, at, rows, nulls)
+                draw.values.array(&slots, column, at, rows, nulls)
             }
             Self::Lookup(draw) => {
                 let places = draw.keys.places(drawn(arrays, draw.lhs));
                 let mut rng = rng_for(at.seed, keys.given, at.block);
-                let chosen: Vec<Option<u32>> = places
+                let slots: Vec<Slot<u32>> = places
                     .iter()
                     .map(|&place| {
                         let violated = draw.violation.is_some_and(|violation| violation.draw(&mut rng));
-                        (place != NULL && place != OTHER && !violated).then_some(place)
+                        if place != NULL && place != OTHER && !violated {
+                            Slot::Value(place)
+                        } else {
+                            Slot::Own
+                        }
                     })
                     .collect();
-                draw.values.array(&chosen, column, at, rows, nulls)
+                draw.values.array(&slots, column, at, rows, nulls)
             }
             Self::Timedelta(draw) => {
                 let mut rng = rng_for(at.seed, keys.values, at.block);
@@ -1458,15 +1479,26 @@ impl ValueDraw {
 }
 
 impl ChildValues {
-    /// The column with each row's chosen value, or its own draw where none was chosen.
-    fn array(&self, chosen: &[Option<u32>], column: &ColumnPlan, at: &BlockPosition, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
-        let picked = self.picked(chosen, rows, nulls.as_ref());
-        if chosen.iter().all(Option::is_some) {
-            return picked;
+    /// The column with each row's chosen value, its rest where its slot is the rest, and its own draw where its slot
+    /// is that or the column draws no rest.
+    fn array(&self, slots: &[Slot<u32>], column: &ColumnPlan, at: &BlockPosition, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
+        let chosen: Vec<Option<u32>> = slots.iter().map(|slot| slot.place()).collect();
+        let mut array = self.picked(&chosen, rows, nulls.as_ref());
+        let rest = slots
+            .contains(&Slot::Rest)
+            .then(|| column.values.rest(at, &column.keys, rows, nulls.clone()))
+            .flatten();
+        let own = |slot: &Slot<u32>| *slot == Slot::Own || (*slot == Slot::Rest && rest.is_none());
+        let keeping = |taken: &dyn Fn(&Slot<u32>) -> bool| BooleanArray::from(slots.iter().map(|slot| !taken(slot)).collect::<Vec<_>>());
+        let zipped = "both arrays hold the column's type and the block's rows";
+        if slots.iter().any(own) {
+            let drawn = column.values.generate(at, &column.keys, rows, nulls);
+            array = arrow_select::zip::zip(&keeping(&own), &array, &drawn).expect(zipped);
         }
-        let own = column.values.generate(at, &column.keys, rows, nulls);
-        let from_table = BooleanArray::from(chosen.iter().map(Option::is_some).collect::<Vec<_>>());
-        arrow_select::zip::zip(&from_table, &picked, &own).expect("both arrays hold the column's type and the block's rows")
+        if let Some(rest) = &rest {
+            array = arrow_select::zip::zip(&keeping(&|slot| *slot == Slot::Rest), &array, rest).expect(zipped);
+        }
+        array
     }
 
     /// The column with each row's chosen value, a placeholder where none was chosen.

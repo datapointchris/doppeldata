@@ -175,7 +175,8 @@ function of its index, no pool of values is held, and any block still generates 
   the column's distinct count.
 - **With `top_values` or `prefixes`, the index covers only the `other_fraction`.** Its target is the
   column's less the listed values' count, over the rows the share draws, for strings and numbers
-  alike.
+  alike. A conditional table's share of values the column lists none of draws through the same
+  index, so it holds the same values.
 - **With `prefixes`, the distinct ratio is of prefixes**, so the `other_fraction`'s strings are
   counted by their first characters, as many as a prefix holds. A shape counts them per
   character; any other source counts its whole strings.

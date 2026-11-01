@@ -4,6 +4,7 @@
 
 use arrow_array::ArrayRef;
 use arrow_buffer::NullBuffer;
+use rand_chacha::ChaCha8Rng;
 
 use super::BlockPosition;
 use super::StreamKeys;
@@ -36,10 +37,23 @@ impl CategoricalSampler {
                         suffix.push(&mut values, out);
                     }
                 }
-                None => match self.other_index {
-                    Some(index) => self.other.push(&mut index.value_stream(at.seed, keys, &mut indices), out),
-                    None => self.other.push(&mut values, out),
-                },
+                None => self.push_other(at, keys, &mut values, &mut indices, out),
             })
+    }
+
+    /// Each row drawn as a listed draw's miss draws it, from `other`.
+    pub(crate) fn generate_rest(&self, at: &BlockPosition, keys: &StreamKeys, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
+        let mut values = rng_for(at.seed, keys.values, at.block);
+        let mut indices = rng_for(at.seed, keys.index, at.block);
+        self.output.build(rows, nulls.as_ref(), |out| {
+            self.push_other(at, keys, &mut values, &mut indices, out)
+        })
+    }
+
+    fn push_other(&self, at: &BlockPosition, keys: &StreamKeys, values: &mut ChaCha8Rng, indices: &mut ChaCha8Rng, out: &mut String) {
+        match self.other_index {
+            Some(index) => self.other.push(&mut index.value_stream(at.seed, keys, indices), out),
+            None => self.other.push(values, out),
+        }
     }
 }

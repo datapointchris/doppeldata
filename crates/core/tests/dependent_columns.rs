@@ -126,24 +126,31 @@ fn generated_rows_hold_each_stated_correlation_and_each_conditional_share() {
             }
         }
         if conditional.get("other_fractions").is_none() {
-            // A given value with no row draws what the rows leave, so the child keeps its own shares.
+            // A given value with no row draws what the rows leave, so the child keeps its own shares, its rest's too.
             let entry = document["columns"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .find(|entry| entry["name"] == column)
                 .unwrap();
-            let yes = entry["boolean"]["true_fraction"].as_f64().expect("a child listing no rest");
+            let listed: Vec<(&str, f64)> = entry["string"]["top_values"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|top| (top["value"].as_str().unwrap(), top["fraction"].as_f64().unwrap()))
+                .collect();
+            let rest = 1.0 - listed.iter().map(|(_, share)| share).sum::<f64>();
             let rows = totals.values().sum::<f64>();
-            for (child, share) in [("true", yes), ("false", 1.0 - yes)] {
+            for (child, share) in listed.iter().map(|&(value, share)| (Some(value), share)).chain([(None, rest)]) {
                 let held = counts
                     .iter()
-                    .filter(|((_, value), _)| value == child)
+                    .filter(|((_, value), _)| child.map_or(listed.iter().all(|(top, _)| value != top), |child| value == child))
                     .map(|(_, count)| count)
                     .sum::<f64>();
                 assert!(
                     (held / rows - share).abs() < SHARE_TOLERANCE,
-                    "{column}={child} over every {given}: {:.4} against its own {share}",
+                    "{column}={} over every {given}: {:.4} against its own {share}",
+                    child.unwrap_or("its rest"),
                     held / rows
                 );
             }

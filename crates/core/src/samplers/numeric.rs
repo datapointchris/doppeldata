@@ -445,6 +445,22 @@ impl NumericSampler {
     }
 
     pub(crate) fn generate(&self, at: &BlockPosition, keys: &StreamKeys, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
+        self.draw(self.listed.as_ref(), at, keys, rows, nulls)
+    }
+
+    /// Each row drawn as a listed draw's miss draws it: through `cdf`, which leaves the listed values out.
+    pub(crate) fn generate_rest(&self, at: &BlockPosition, keys: &StreamKeys, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
+        self.draw(None, at, keys, rows, nulls)
+    }
+
+    fn draw(
+        &self,
+        listed: Option<&ListedValues<f64>>,
+        at: &BlockPosition,
+        keys: &StreamKeys,
+        rows: usize,
+        nulls: Option<NullBuffer>,
+    ) -> ArrayRef {
         let mut values = rng_for(at.seed, keys.values, at.block);
         let mut indices = rng_for(at.seed, keys.index, at.block);
         let mut unlisted = |values: &mut ChaCha8Rng| {
@@ -454,7 +470,7 @@ impl NumericSampler {
             };
             self.rounding.apply(self.cdf.value_at(level))
         };
-        match &self.listed {
+        match listed {
             None => self.output.drawn_array(rows, nulls, || unlisted(&mut values)),
             Some(listed) => self.output.drawn_array(rows, nulls, || match listed.sample(&mut values) {
                 Some(&value) => value,
