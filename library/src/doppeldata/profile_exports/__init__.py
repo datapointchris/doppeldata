@@ -72,7 +72,7 @@ def export(profile: Profile | Bundle | str | os.PathLike[str], format: str, *, t
     values of other types generates as text, and every format types it as a string, reading which columns those are from
     the engine's plan. A sampled profile's types are the sample's.
 
-    Raises CheckFailed where a profile made from data fails its schema or privacy policy, because an export never carries a
+    Raises ProfileFailsCheck where a profile made from data fails its schema or privacy policy, because an export never carries a
     literal the policy did not pass. SourceError names a data file holding no profile, and InvalidArgument an unknown format
     or table.
     """
@@ -93,13 +93,9 @@ def export(profile: Profile | Bundle | str | os.PathLike[str], format: str, *, t
 
 def loaded(source: Profile | Bundle | str | os.PathLike[str]) -> Profile | Bundle:
     """The profile or bundle `source` names: itself, a file or directory holding one, or an example's name."""
-    if isinstance(source, Profile | Bundle):
-        return source
-    from doppeldata.profile_sources import bundle_from
-    from doppeldata.short_profiles import file_profile
+    from doppeldata.profile_sources import profile_or_bundle
 
-    bundle = bundle_from(source)
-    return bundle if bundle is not None else file_profile(str(source))
+    return profile_or_bundle(source)
 
 
 def one_table(found: Profile | Bundle, table: str) -> Profile:

@@ -7,6 +7,7 @@ stop between blocks on Ctrl-C.
 
 import dataclasses as dc
 import json
+import logging
 import os
 import re
 import shutil
@@ -47,6 +48,8 @@ from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
 from doppeldata.scenario_format import manifest_record
 from doppeldata.scenario_format import refuse_file_shaping
+
+log = logging.getLogger(__name__)
 
 LARGEST_SEED = 2**64 - 1
 
@@ -116,7 +119,8 @@ class WritePlan:
     every copy a scenario's `duplicates` adds. `estimated_bytes` comes from the write's first blocks encoded with its own
     settings, and leaves the manifest out. Under a scenario's `cdc`, `ranges` are the full-load files, `cdc` is the stream
     beside them as the manifest's `cdc` will describe it, and `files_at_most` and `estimated_bytes` count the change files
-    and the expected table too. The shape of `to_json` may change before 1.0.
+    and the expected table too. `scenario` is the applied scenario's name, a data file's own included, and `one_file` the
+    file a write to one local file makes. The shape of `to_json` may change before 1.0.
     """
 
     destination: str
@@ -131,6 +135,8 @@ class WritePlan:
     rows_written: int
     estimated_bytes: int
     cdc: dict[str, Any] | None = None
+    scenario: str | None = None
+    one_file: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return dc.asdict(self)
@@ -359,14 +365,14 @@ def generation_source(
     profile: ProfileSource, rows: int | None, seed: int | None, scenario: Scenario | Sequence[Scenario] | None
 ) -> GenerationSource:
     """The source each call that generates reads `profile` and the three values as, with a data file's write filling in any
-    value left None. A seed left None is 0 for any other source."""
+    value left None, which the `doppeldata` logger warns of. A seed left None is 0 for any other source."""
     written = None
     if isinstance(profile, str | os.PathLike) and Path(profile).is_file():
         metadata = data_file_metadata(profile)
         written = written_data_file(profile, metadata) if metadata is not None else None
     if written is None:
         return GenerationSource(profile, rows, 0 if seed is None else seed, scenario)
-    return GenerationSource(
+    source = GenerationSource(
         written.profile,
         written.recorded(_core.DATASET_ROWS_KEY) if rows is None else rows,
         (written.recorded(_core.SEED_KEY) or 0) if seed is None else seed,
@@ -374,6 +380,14 @@ def generation_source(
         written,
         regenerates=rows is None and seed is None and scenario is None,
     )
+    taken = [f'seed {source.seed}'] if seed is None else []
+    if rows is None and source.rows is not None:
+        taken.append(f'{source.rows:,} row' + ('' if source.rows == 1 else 's'))
+    if scenario is None and written.scenario is not None:
+        taken.append(f'scenario {written.scenario.name}')
+    if taken:
+        log.warning('%s, as %s was written', ', '.join(taken), written.path)
+    return source
 
 
 @dc.dataclass(frozen=True)
@@ -530,8 +544,11 @@ def s3_store_of(destination: str, bucket: str | None) -> dict[str, Any] | None:
     return s3_store_settings(destination, bucket)
 
 
-def write_plan_of(engine: '_core.Plan', options: '_core.WriteOptions', destination: str, target: Path | None = None) -> WritePlan:
-    """What writing `engine`'s dataset with `options` to `destination` would do, as the one file `target` where given."""
+def write_plan_of(
+    engine: '_core.Plan', options: '_core.WriteOptions', destination: str, target: Path | None = None, scenario: str | None = None
+) -> WritePlan:
+    """What writing `engine`'s dataset with `options` to `destination` would do, as the one file `target` where given,
+    under the scenario named `scenario`."""
     settings = json.loads(engine.written_settings_json(options))
     ranges = [PlannedRange(**planned) for planned in json.loads(engine.ranges_json(options))]
     if target is not None:
@@ -552,4 +569,6 @@ def write_plan_of(engine: '_core.Plan', options: '_core.WriteOptions', destinati
         rows_written=engine.rows_written,
         estimated_bytes=engine.estimate_bytes(options),
         cdc=stream,
+        scenario=scenario,
+        one_file=str(target) if target is not None else None,
     )

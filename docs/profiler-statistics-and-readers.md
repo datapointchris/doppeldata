@@ -144,7 +144,7 @@ Every profile imports scipy, so that `generated.fitter` records the version that
 that is missing, or installed and failing to import, costs only the fits. Each column fitting
 applies to is then written `fit: null`, `generated.fitter` is left out, and `profile()` issues one
 `FitsSkipped` warning carrying the import's error. `profile create` prints every
-`ProfilingWarning` as one line on stderr. scipy's newest release can need a later Python than the
+`ProfilingWarning` as one line on stderr, unless given `-q`. scipy's newest release can need a later Python than the
 library's floor, so a Glue job on 3.11 resolves an older scipy, which fits the same families.
 
 A fit is profile content, so it is in the profile's digest. Two scipy versions that fit different
@@ -162,7 +162,7 @@ parameters write two profiles, and those generate different tails.
   installed since, or a detector pack enabled or upgraded, profiles again. A profile of every row
   stands for a sampled run too. The fingerprint hashes each file's resolved path, so the same files
   match from any working directory. `profile create` says on stderr when it returns the earlier
-  profile. Otherwise a `ProfilingWarning` names the first thing that differs, which `profile create`
+  profile, and `data check` never returns it. Otherwise a `ProfilingWarning` names the first thing that differs, which `profile create`
   prints. No cache directory is written, because the library runs inside Glue executors.
 - **Otherwise each column is counted against the earlier histogram edges and value list.** Values
   outside the edges are written as `histogram.overflow`, `rows_below` and `rows_above`. A column only one of
@@ -232,6 +232,8 @@ Polars reads an `s3://` prefix but cannot list one, and the profiler needs the l
 files' format and for `source_fingerprint`. Neither Polars nor obstore reads `AWS_PROFILE` or an SSO
 profile without boto3 installed. With boto3 installed, Polars resolves the profile and its endpoint
 itself. So boto3 lists the prefix, and the profile credentials a workstation uses work unchanged.
+Where a call names `aws_profile`, Polars reads through a `CredentialProviderAWS` of that profile,
+so the listing and the read take one profile's credentials.
 
 *Rejected:* obstore for the listing. It needs boto3 for profile credentials too, which would make it
 a second S3 client doing one job.

@@ -13,6 +13,7 @@ import importlib
 import importlib.resources
 import io
 import json
+import os
 from collections.abc import Iterator
 from collections.abc import Sequence
 from pathlib import Path
@@ -23,6 +24,7 @@ import jsonschema
 import rfc8785
 
 from doppeldata import _core
+from doppeldata import example_scenarios
 from doppeldata import issue_codes
 from doppeldata.errors import DoppeldataError
 from doppeldata.errors import InvalidArgument
@@ -309,6 +311,24 @@ class Scenario:
         if issues:
             raise InvalidScenario(f'the {name} example', issues)
         return scenario
+
+    @classmethod
+    def named(cls, name: str | os.PathLike[str]) -> 'Scenario':
+        """The scenario file `name` names, else the example of that name. A name that is neither raises InvalidArgument
+        listing every example, as does a file that cannot be read, each at `scenario`, and one that does not validate
+        InvalidScenario."""
+        named = os.fspath(name)
+        if not Path(named).is_file() and named in example_scenarios.example_names():
+            return cls.example(named)
+        try:
+            return cls.load(named)
+        except FileNotFoundError as error:
+            message = f'{named!r} is neither a scenario file nor an example; name a file, or an example'
+            examples = example_scenarios.example_names()
+            raise InvalidArgument(issue_codes.SCENARIO_NOT_FOUND, message, field='scenario', value=named, valid=examples) from error
+        except OSError as error:
+            message = f'{named!r} could not be read: {error.strerror}'
+            raise InvalidArgument(issue_codes.FILE_UNREADABLE, message, field='scenario', value=named) from error
 
     @classmethod
     def compose(cls, *scenarios: 'Scenario') -> 'Scenario':

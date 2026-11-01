@@ -1,6 +1,7 @@
 """Profile a dataset into a reviewable file holding no rows, then generate synthetic data from it."""
 
 import importlib
+import logging
 from types import ModuleType
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,7 @@ from doppeldata.dataset_generation import PlannedRange
 from doppeldata.dataset_generation import SamplerParameter
 from doppeldata.dataset_generation import WritePlan
 from doppeldata.errors import CheckFailed
+from doppeldata.errors import CheckStopped
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import DetectorPackError
 from doppeldata.errors import DoppeldataError
@@ -25,6 +27,7 @@ from doppeldata.errors import InvalidThresholds
 from doppeldata.errors import IssueCarrier
 from doppeldata.errors import PackagesMissing
 from doppeldata.errors import PoorFits
+from doppeldata.errors import ProfileFailsCheck
 from doppeldata.errors import ProfileNotFound
 from doppeldata.errors import ProfilesDrifted
 from doppeldata.errors import ProfilingEnginesMissing
@@ -71,6 +74,7 @@ __all__ = [
     'BundleWritePlan',
     'CheckFailed',
     'CheckReport',
+    'CheckStopped',
     'ColumnTrace',
     'ColumnsNotFrozen',
     'DetectorPackError',
@@ -93,6 +97,7 @@ __all__ = [
     'PlannedRange',
     'PoorFits',
     'Profile',
+    'ProfileFailsCheck',
     'ProfileNotFound',
     'ProfilesDrifted',
     'ProfilingEnginesMissing',
@@ -126,6 +131,8 @@ __all__ = [
     'write',
 ]
 
+# The library's progress and notices go to the `doppeldata` logger, which writes nothing until the caller adds a handler.
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 if TYPE_CHECKING:
     from doppeldata import spark as spark

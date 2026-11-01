@@ -5,8 +5,11 @@ or a schema class of a library `seed_profiles.schema_classes` reads. The short f
 the schema classes `seed_profiles`', so this module sits above both.
 """
 
+import contextlib
 import copy
+import dataclasses as dc
 import os
+from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
@@ -14,21 +17,27 @@ from typing import Any
 from typing import Protocol
 
 from doppeldata import issue_codes
+from doppeldata.errors import DoppeldataError
 from doppeldata.errors import InvalidArgument
 from doppeldata.errors import UnsupportedArgument
 from doppeldata.example_profiles import bundle_example_names
 from doppeldata.inline_columns import InlineColumn
+from doppeldata.issue_codes import Issue
 from doppeldata.profile_format import BUNDLE_INDEX
 from doppeldata.profile_format import Bundle
+from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import read_document
 from doppeldata.seed_profiles.schema_classes import LIBRARIES
 from doppeldata.seed_profiles.schema_classes import schema_class_profile
+from doppeldata.short_profiles import COMMAND_LINE_REMEDY
 from doppeldata.short_profiles import DICT_SOURCE
 from doppeldata.short_profiles import INLINE_TABLE
 from doppeldata.short_profiles import LIST_SOURCE
 from doppeldata.short_profiles import expanded
 from doppeldata.short_profiles import file_profile
+from doppeldata.short_profiles import named_column
+from doppeldata.short_profiles import no_fake_message
 from doppeldata.short_profiles import validated
 from doppeldata.short_profiles import with_row_count
 
@@ -95,6 +104,57 @@ def bundle_from(source: Any) -> Bundle | None:
     if isinstance(source, str) and source in bundle_example_names():
         return Bundle.example(source)
     return None
+
+
+@contextlib.contextmanager
+def read_as(field: str) -> Iterator[None]:
+    """Name `field` on each issue of a refusal inside the block that names no place, or names `profile`, the argument a
+    profile is read from. A file that cannot be read is refused as FILE_UNREADABLE at `field`. So a caller reading two
+    profiles learns which of its arguments a refusal is about."""
+    try:
+        yield
+    except DoppeldataError as error:
+        error.issues = tuple(dc.replace(issue, field=field) if issue.field in (None, 'profile') else issue for issue in error.issues)
+        raise
+    except OSError as error:
+        named = os.fspath(error.filename) if error.filename is not None else None
+        message = f'{named} could not be read: {error.strerror or error}'
+        raise InvalidArgument(issue_codes.FILE_UNREADABLE, message, field=field, value=named) from error
+
+
+def profile_or_bundle(source: Profile | Bundle | str | os.PathLike[str], field: str = 'profile') -> Profile | Bundle:
+    """The profile or bundle `source` names: itself, a file or directory holding one, a data file's embedded profile, or an
+    example's name. A refusal names `field`."""
+    if isinstance(source, Profile | Bundle):
+        return source
+    with read_as(field):
+        bundle = bundle_from(source)
+        return bundle if bundle is not None else file_profile(source)
+
+
+def profile_or_columns(profile: str | os.PathLike[str] | None, columns: Sequence[str] | None) -> str | os.PathLike[str] | Profile | Bundle:
+    """What a caller naming a profile, or the column names to expand into one, generates from. A `profile` naming a bundle
+    gives the Bundle, and any other is returned as given, so a data file's write is read where it is generated. Else each
+    column is drawn by the fake its name hints. Both or neither is refused, and so is each column name no fake draws, at
+    `columns`."""
+    if (profile is None) == (columns is None):
+        given = 'both' if profile is not None else 'neither'
+        message = f'name a profile or the columns to expand into one, not {given}'
+        raise InvalidArgument(issue_codes.PROFILE_OR_COLUMNS, message, field='profile')
+    if profile is not None:
+        with read_as('profile'):
+            return bundle_from(profile) or profile
+    names = list(columns or ())
+    issues = [
+        Issue(issue_codes.NO_FAKE_FOR_NAME, 'columns', message, name, (), closest)
+        for name in names
+        if named_column(name) is None
+        for message, closest in [no_fake_message(name, COMMAND_LINE_REMEDY)]
+    ]
+    if issues:
+        raise InvalidProfile(LIST_SOURCE, issues)
+    with read_as('columns'):
+        return profile_from(names)
 
 
 def profile_from(source: ProfileSource) -> Profile:

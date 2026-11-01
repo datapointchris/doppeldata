@@ -1,6 +1,7 @@
 """The data a profile describes: files on disk or under an `s3://` prefix, or a table already in memory."""
 
 import contextlib
+import logging
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -30,6 +31,8 @@ from doppeldata.profiling.backend import SourceFile
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.s3_access import endpoint_named
 from doppeldata.s3_access import s3_session
+
+log = logging.getLogger(__name__)
 
 SUFFIX_FORMATS = {suffix: source_format for source_format, traits in FORMAT_TRAITS.items() for suffix in traits.suffixes}
 # The format of a text file compressed with one of these is the suffix before it.
@@ -145,6 +148,7 @@ def s3_files(url: str) -> list[SourceFile]:
         _, client = s3_session()
     except InvalidArgument as error:
         raise SourceError(error.code, f'{url} could not be listed: {error.message}', role='environment') from error
+    log.debug('%s: listing through %s', url, endpoint_named(client))
     with s3_errors(url, endpoint_named(client)):
         # Spark writes a table as a `name.parquet/` directory, so a key with a suffix may still be a prefix.
         if format_of(key) and not key.endswith('/') and (head := object_head(client, bucket, key)):

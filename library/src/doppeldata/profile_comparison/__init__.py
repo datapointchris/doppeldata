@@ -4,11 +4,14 @@ Neither reads the real rows again, except a check handed them as `against`. A ch
 the source profile's edges frozen, so histograms and value lists compare bin for bin.
 """
 
+import contextlib
 import dataclasses as dc
 import importlib.util
+import logging
 import os
 import warnings
 from collections.abc import Iterable
+from collections.abc import Iterator
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -17,10 +20,14 @@ from typing import overload
 
 from doppeldata import _core
 from doppeldata import issue_codes
+from doppeldata.aws_sessions import aws_profile_chosen
 from doppeldata.dataset_generation import engine_plan
+from doppeldata.errors import CheckStopped
 from doppeldata.errors import ColumnsNotFrozen
+from doppeldata.errors import DoppeldataError
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import InvalidArgument
+from doppeldata.errors import InvalidThresholds
 from doppeldata.errors import PoorFits
 from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
@@ -56,6 +63,7 @@ from doppeldata.profile_comparison.scenario_moves import uncompared_malformed_ra
 from doppeldata.profile_comparison.thresholds import Thresholds
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import Profile
+from doppeldata.profile_sources import profile_or_bundle
 from doppeldata.profiling import SampledTable
 from doppeldata.profiling import profile_in_dialect
 from doppeldata.profiling import sampled_table
@@ -71,6 +79,8 @@ from doppeldata.scenario_format import refuse_other_scenario
 if TYPE_CHECKING:
     import polars as pl
 
+log = logging.getLogger(__name__)
+
 # A report's values keep this many significant digits, and each verdict is taken on the value as written.
 REPORT_DIGITS = 6
 
@@ -80,11 +90,12 @@ def check(
     profile: Profile,
     data: Any,
     *,
-    thresholds: Thresholds | None = None,
+    thresholds: Thresholds | str | os.PathLike[str] | None = None,
     scenario: Scenario | Sequence[Scenario] | None = None,
     against: Any = None,
     against_sample: int | None = None,
     html: str | Path | None = None,
+    aws_profile: str | None = None,
 ) -> CheckReport: ...
 
 
@@ -93,27 +104,44 @@ def check(
     profile: Bundle,
     data: Any,
     *,
-    thresholds: Thresholds | None = None,
+    thresholds: Thresholds | str | os.PathLike[str] | None = None,
     scenario: Scenario | Sequence[Scenario] | None = None,
     against: None = None,
     against_sample: None = None,
     html: None = None,
+    aws_profile: str | None = None,
 ) -> BundleCheckReport: ...
 
 
+@overload
 def check(
-    profile: Profile | Bundle,
+    profile: str | os.PathLike[str],
     data: Any,
     *,
-    thresholds: Thresholds | None = None,
+    thresholds: Thresholds | str | os.PathLike[str] | None = None,
     scenario: Scenario | Sequence[Scenario] | None = None,
     against: Any = None,
     against_sample: int | None = None,
     html: str | Path | None = None,
+    aws_profile: str | None = None,
+) -> CheckReport | BundleCheckReport: ...
+
+
+def check(
+    profile: Profile | Bundle | str | os.PathLike[str],
+    data: Any,
+    *,
+    thresholds: Thresholds | str | os.PathLike[str] | None = None,
+    scenario: Scenario | Sequence[Scenario] | None = None,
+    against: Any = None,
+    against_sample: int | None = None,
+    html: str | Path | None = None,
+    aws_profile: str | None = None,
 ) -> CheckReport | BundleCheckReport:
     """Profile `data` with `profile`'s edges and value lists frozen, and measure every metric and column change against `profile`.
 
-    `data` is anything `doppeldata.profile` reads. The report's `passed` is False when any metric that decides misses its
+    `profile` is a Profile or a Bundle, or a file, directory or example name holding one. `data` is anything
+    `doppeldata.profile` reads. The report's `passed` is False when any metric that decides misses its
     threshold or cannot be measured, or `column_changes` finds a change that fails.
 
     With `scenario`, a Scenario or a list composed in order, the data is measured against the profile its patch makes. Each
@@ -138,22 +166,61 @@ def check(
     mapping of each table's name to its data, as `generate` returns it. Each table is checked against its own profile,
     under the scenarios naming it, and each relationship is measured by `RELATIONSHIP_METRICS`. The report is a
     `BundleCheckReport`, and a bundle takes no `against`.
-    """
-    if not isinstance(profile, Profile | Bundle):
-        message = f'check takes a Profile or a Bundle, as Profile.load and Bundle.load read them, not {type(profile).__name__}'
-        raise UnsupportedArgument(issue_codes.UNSUPPORTED_PROFILE_SOURCE, message, field='profile', value=type(profile).__name__)
-    if isinstance(profile, Bundle):
-        from doppeldata.profile_comparison import bundle_checks
 
-        if against is not None or against_sample is not None or html is not None:
-            message = 'against scores one table against its real data; check a table of the bundle on its own to score it'
-            raise InvalidArgument(issue_codes.AGAINST_NEEDED, message, field='against')
-        return bundle_checks.check_bundle(profile, data, thresholds=thresholds, scenario=scenario)
-    applied = composed(scenario)
-    written = written_manifest(data)
-    if written is not None:
-        refuse_other_scenario(applied, written, data_named(data))
-    return checked_table(profile, data, applied, written, thresholds=thresholds, against=against, against_sample=against_sample, html=html)
+    `thresholds` is a Thresholds, or the file `Thresholds.load` reads. S3 is read with the credentials of the AWS profile
+    `aws_profile` names, else of AWS_PROFILE and boto3's default chain.
+
+    A check that fails once it has begun reading raises an error led by `E-DATA-024`, which exits 3, then the issue that
+    stopped it, so a failure is never read as data that missed its profile. A refusal of the arguments raises as it is.
+    """
+    if not isinstance(profile, Profile | Bundle | str | os.PathLike):
+        message = f'check takes a Profile, a Bundle, or a file or example name holding one, not {type(profile).__name__}'
+        raise UnsupportedArgument(issue_codes.UNSUPPORTED_PROFILE_SOURCE, message, field='profile', value=type(profile).__name__)
+    found = profile_or_bundle(profile)
+    if isinstance(found, Bundle) and (against is not None or against_sample is not None or html is not None):
+        message = 'against scores one table against its real data; check a table of the bundle on its own to score it'
+        raise InvalidArgument(issue_codes.AGAINST_NEEDED, message, field='against')
+    chosen = thresholds_of(thresholds)
+    with aws_profile_chosen(aws_profile), stopped(issue_codes.DATA_CHECK_STOPPED, 'data check'):
+        if isinstance(found, Bundle):
+            from doppeldata.profile_comparison import bundle_checks
+
+            return bundle_checks.check_bundle(found, data, thresholds=chosen, scenario=scenario)
+        applied = composed(scenario)
+        written = written_manifest(data)
+        if written is not None:
+            refuse_other_scenario(applied, written, data_named(data))
+        return checked_table(found, data, applied, written, thresholds=chosen, against=against, against_sample=against_sample, html=html)
+
+
+def thresholds_of(thresholds: Thresholds | str | os.PathLike[str] | None) -> Thresholds | None:
+    """The thresholds given, or read from the file named, each refusal naming no place in the file put at `thresholds`."""
+    if thresholds is None or isinstance(thresholds, Thresholds):
+        return thresholds
+    try:
+        return Thresholds.load(Path(thresholds))
+    except InvalidThresholds as error:
+        issues = [issue if issue.field is not None else dc.replace(issue, field='thresholds') for issue in error.issues]
+        raise InvalidThresholds(issues, headline=error.headline) from error
+
+
+@contextlib.contextmanager
+def stopped(code: str, verb: str) -> Iterator[None]:
+    """Lead a failure inside a check with `code`, which exits 3, so the check's own verdicts keep their exit statuses. A
+    refusal that exits 2 or 4 raises as it is. Any other exception is a bug in doppeldata, logged with its traceback."""
+    stop = Issue(code, None, f'{verb} stopped before it finished')
+    try:
+        yield
+    except DoppeldataError as error:
+        if error.exit_code != 1:
+            raise
+        raise CheckStopped([stop, *error.issues], headline=stop.message) from error
+    except OSError as error:
+        unread = Issue(issue_codes.LOCAL_IO, None, error.strerror or str(error), value=error.filename)
+        raise CheckStopped([stop, unread], headline=stop.message) from error
+    except Exception as error:
+        log.exception('%s stopped on %s', verb, type(error).__name__)
+        raise CheckStopped([dc.replace(stop, message=f'{verb} stopped on {type(error).__name__}, which is a bug in doppeldata')]) from error
 
 
 def checked_table(
@@ -208,8 +275,7 @@ def checked_table(
         # The report states both in its own terms: a fit's looseness through `ks`, and a missing column as a change.
         warnings.simplefilter('ignore', PoorFits)
         warnings.simplefilter('ignore', ColumnsNotFrozen)
-        # Generated data is never the data the profile was made from, so the profile is always made again.
-        warnings.simplefilter('ignore', EarlierProfileNotReused)
+        # A check measures the data, so it profiles it even where the profile was made from these very files.
         checked = profile_in_dialect(
             data,
             dialect,
@@ -218,6 +284,7 @@ def checked_table(
             edges_from=effective,
             packs=[each.pack.name for each in packs],
             type_mix_columns=type_mix_column_names(source, planned if planned is not None else source_plan(source)),
+            reuse_unchanged=False,
         )
     observed = checked.to_plain()
     fingerprint = (observed.get('generated') or {}).get('source_fingerprint')
@@ -469,19 +536,49 @@ def metric_row(
     )
 
 
-def diff(a: Profile, b: Profile, *, thresholds: Thresholds | None = None) -> DiffReport:
+def diff(
+    a: Profile | str | os.PathLike[str],
+    b: Profile | str | os.PathLike[str],
+    *,
+    thresholds: Thresholds | str | os.PathLike[str] | None = None,
+) -> DiffReport:
     """Measure every metric of `b` against `a`, and list every field that changed between them.
 
-    Overflow is measured where `b` was profiled with `a`'s edges frozen, as `profile(..., edges_from=a)` does.
+    Each of `a` and `b` is a Profile, or a file or example name holding one. Overflow is measured where `b` was profiled
+    with `a`'s edges frozen, as `profile(..., edges_from=a)` does. A metric `b` holds nothing to measure with passes
+    unmeasured, and the `doppeldata` logger warns how many did. `thresholds` is a Thresholds, or the file `Thresholds.load`
+    reads. A diff that fails once it has begun raises an error led by `E-PROFILE-031`, which exits 3, then the issue that
+    stopped it.
     """
+    a, b = one_table(a, 'a'), one_table(b, 'b')
+    chosen = thresholds_of(thresholds) or Thresholds()
     earlier, later = a.to_plain(), b.to_plain()
-    thresholds = thresholds or Thresholds()
-    thresholds.check_columns(earlier)
-    thresholds.check_scores(scoring=False, refusing='a diff compares two profiles and reads no data')
-    changes = column_changes(earlier, later, writer_changes_pass=False, declaring={}, listing={})
-    changes += overflow_changes(earlier, later) + source_changes(earlier, later)
-    # A diff reports what changed between two profiles, and B binned afresh supplies no overflow, so an unmeasured metric passes.
-    return DiffReport(reported(a), reported(b), measured(earlier, later, thresholds, unmeasured_passes=True), changes)
+    chosen.check_columns(earlier)
+    chosen.check_scores(scoring=False, refusing='a diff compares two profiles and reads no data')
+    with stopped(issue_codes.PROFILE_DIFF_STOPPED, 'profile diff'):
+        changes = column_changes(earlier, later, writer_changes_pass=False, declaring={}, listing={})
+        changes += overflow_changes(earlier, later) + source_changes(earlier, later)
+        # A diff reports what changed between two profiles, and B binned afresh supplies no overflow, so an unmeasured metric passes.
+        report = DiffReport(reported(a), reported(b), measured(earlier, later, chosen, unmeasured_passes=True), changes)
+    unmeasured = sum(result.unmeasured is not None for result in report.metrics)
+    if unmeasured:
+        log.warning(
+            '%s unmeasured and passed, because %s holds nothing to compare them with; a profile made with edges_from %s '
+            'carries the overflow boundary_adherence reads',
+            f'{unmeasured} metric{"" if unmeasured == 1 else "s"}',
+            report.b.path or report.b.name,
+            report.a.path or report.a.name,
+        )
+    return report
+
+
+def one_table(source: Profile | str | os.PathLike[str], field: str) -> Profile:
+    """The table profile `source` names for a diff, refused at `field` where it names a bundle."""
+    found = profile_or_bundle(source, field)
+    if isinstance(found, Bundle):
+        message = f'{found.document["name"]} is a bundle, and a diff compares two profiles of one table'
+        raise InvalidArgument(issue_codes.BUNDLE_GIVEN, message, field=field, value=found.document['name'])
+    return found
 
 
 def measured(source: Document, observed: Document, thresholds: Thresholds, *, unmeasured_passes: bool) -> list[MetricResult]:

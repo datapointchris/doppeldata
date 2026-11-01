@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from doppeldata.profile_comparison.reports import BundleCheckReport
     from doppeldata.profile_comparison.reports import CheckReport
     from doppeldata.profile_comparison.reports import DiffReport
+    from doppeldata.scenario_checks import ScenarioCheck
 
 # The accepted values a refusal's text lists before it counts the rest.
 VALID_SHOWN = 10
@@ -183,13 +184,33 @@ class CheckFailed(DoppeldataError):
     error's code.
 
     It is a `CheckReport` where generated data missed its profile on a metric or a column, a `BundleCheckReport` where
-    a bundle's tables missed it on a table or a relationship, and a `ProfileFileCheck` where a profile file breaks its
-    schema or its privacy policy.
+    a bundle's tables missed it on a table or a relationship, a `ProfileFileCheck` where a profile file breaks its
+    schema or its privacy policy, and a `ScenarioCheck` where a scenario does not hold for its profile.
     """
 
-    def __init__(self, report: 'CheckReport | BundleCheckReport | ProfileFileCheck') -> None:
+    def __init__(self, report: 'CheckReport | BundleCheckReport | ProfileFileCheck | ScenarioCheck') -> None:
         self.report = report
         super().__init__(report.failure_code, report.failure_message())
+
+
+class ProfileFailsCheck(DoppeldataError, ValueError):
+    """A write embedding a profile, or an export of one, was refused because a table made from data fails `profile check`,
+    so no file carries a literal the privacy policy did not pass. `report` is that check, and each violation follows the
+    refusal's first issue."""
+
+    def __init__(self, report: 'ProfileFileCheck') -> None:
+        self.report = report
+        message = f'{report.failure_message()}, so no file carries its literals'
+        refusal = Issue(issue_codes.PROFILE_FAILS_CHECK, 'profile', message, report.profile)
+        IssueCarrier.__init__(self, [refusal, *report.violations], headline=message)
+
+
+class CheckStopped(DoppeldataError):
+    """A check or a diff began and could not finish. Its first issue is the check's stop code, which exits 3, and the issues
+    after it say what stopped it, so a check that could not run is never read as one that found nothing."""
+
+    def __init__(self, issues: Sequence[Issue], *, headline: str | None = None) -> None:
+        IssueCarrier.__init__(self, issues, headline=headline)
 
 
 class ProfilesDrifted(DoppeldataError):

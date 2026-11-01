@@ -72,8 +72,8 @@ def test_a_glue_csv_table_imports_its_dialect_header_and_listed_partitions_and_g
             app, ['profile', 'import', '--from', 'glue', 'shop.orders', '--detected-entities', str(entities), '--out', str(seed)]
         )
     assert imported.exit_code == 0, imported.output
-    assert 'payload (binary)' in imported.output
     document = Profile.load(seed).document
+    assert 'payload' not in [column['name'] for column in document['columns']]
     assert document['generated']['imported_from'] == 'glue:eu-west-1/shop/orders'
     assert document['source']['csv'] == {'writer': {'delimiter': ';', 'header': True, 'quote': '"', 'escape': '\\'}}
     out = tmp_path / 'orders'
