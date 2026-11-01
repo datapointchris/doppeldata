@@ -63,3 +63,18 @@ def test_the_orders_example_generated_at_a_tenth_of_its_rows_keeps_every_quantit
     assert len(pc.unique(generated.column('quantity'))) == 10
     report = sd.check(profile, generated)
     assert report.passed, failures(report)
+
+
+def test_a_check_of_a_write_to_one_file_with_its_manifest_leaves_the_layout_unmeasured_in_a_report_its_schema_accepts(tmp_path):
+    """`events-json` records 24 partitioned files, which one file of 2,000 rows would miss were its layout scored."""
+    profile = sd.Profile.example('events-json')
+    written = sd.write(profile, tmp_path / 'events.ndjson', rows=2000, writer={'compression': 'none'}, manifest_beside=True)
+    report = sd.check(profile, tmp_path / 'events.ndjson')
+    jsonschema.Draft202012Validator(json.loads(schema_text('check'))).validate(report.to_plain())
+    assert (report.data.dataset_sha256, report.data.one_file) == (written.dataset_sha256, 'events.ndjson')
+    layout = [result for result in report.metrics if result.metric in ('files_delta', 'rows_per_file_delta')]
+    assert [(result.metric, result.value, result.decides) for result in layout] == [
+        ('files_delta', None, False),
+        ('rows_per_file_delta', None, False),
+    ]
+    assert all('one file, events.ndjson' in (result.unmeasured or '') for result in layout)
