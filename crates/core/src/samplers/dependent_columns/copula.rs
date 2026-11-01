@@ -1,9 +1,9 @@
 //! A Gaussian copula over a group of numeric columns. The profile's Spearman values become Pearson
 //! correlations, and each pair the profile leaves out is filled as conditionally independent given
-//! the stated ones. Only where no such matrix exists is it repaired, to the valid matrix whose Spearman
-//! values lie nearest the stated ones. Each row's correlated normals become one uniform level per
-//! column. Every operation is IEEE arithmetic, `sqrt` or a libm function, so the levels are the same
-//! bits on every platform.
+//! the stated ones. Only where no such matrix exists is it repaired, to a valid matrix fitted toward
+//! the stated Spearman values. Each row's correlated normals become one uniform level per column.
+//! Every operation is IEEE arithmetic, `sqrt` or a libm function, so the levels are the same bits on
+//! every platform.
 //!
 //! Two continuous columns hold the Spearman value `ρ` under the Pearson `2·sin(πρ/6)`. A column
 //! many of whose rows hold one value ties their ranks, which lowers the Spearman value its pairs
@@ -33,14 +33,18 @@ const COMPLETION_TOLERANCE: f64 = 1e-12;
 const REPAIR_SWEEPS: usize = 2000;
 const REPAIR_TOLERANCE: f64 = 1e-10;
 /// The most Levenberg–Marquardt steps the fit of a repaired group's Spearman values takes, the damping it starts from,
-/// the factor that damping moves by, its least and most values, and the share of the squared misses a step must remove
-/// for the fit to go on.
+/// the factor that damping moves by, and its least and most values.
 const FIT_STEPS: usize = 200;
 const FIT_DAMPING: f64 = 1e-3;
 const FIT_DAMPING_STEP: f64 = 10.0;
 const FIT_DAMPING_LEAST: f64 = 1e-12;
 const FIT_DAMPING_MOST: f64 = 1e8;
-const FIT_TOLERANCE: f64 = 1e-12;
+/// A step moving no stated pair's Spearman value further than this settles the fit. It is far under the spread of a
+/// Spearman value measured on a sample.
+const FIT_SETTLED: f64 = 1e-5;
+/// The work the fit may spend, counting each system it solves as the cube of the stated pairs, so a large group takes
+/// fewer steps rather than more time.
+const FIT_WORK: u64 = 2_000_000_000;
 /// The normals a column's rank scores are integrated over: this many points, evenly spaced across ±`LATENT_REACH`.
 const LATENT_POINTS: usize = 4001;
 const LATENT_REACH: f64 = 8.0;
@@ -260,6 +264,19 @@ pub(crate) fn calibrated(rho: f64, series: &PairSeries) -> Option<f64> {
     Some((low + high) / 2.0)
 }
 
+/// How a group came by its Pearson matrix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Repair {
+    /// Its stored pairs complete to a valid matrix.
+    Unneeded,
+    /// No valid matrix holds its stored pairs, so it was projected to one, then fitted toward the stated Spearman values.
+    Fitted,
+    /// Projected as a fitted group is, where no step of the fit lowered its Spearman misses.
+    Projected,
+    /// No valid matrix was found near the stored pairs either, so every member draws its level alone.
+    Abandoned,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct CopulaGroup {
     /// The members' column indices, in the order of their sorted names.
@@ -268,10 +285,7 @@ pub(crate) struct CopulaGroup {
     /// The lower-triangular Cholesky factor of the members' Pearson matrix, row by row.
     factor: Vec<f64>,
     key: u64,
-    /// Whether no valid matrix holds every stored pair, so the group holds the one nearest them.
-    pub(crate) repaired: bool,
-    /// Whether no valid matrix was found near the stored pairs either, so every member draws its level alone.
-    pub(crate) independent: bool,
+    pub(crate) repair: Repair,
     /// The stored pairs, by the members' names, whose Spearman value their ties hold under no Pearson. Each enters the
     /// matrix at [`PEARSON_REACH`] with its value's sign, which a repaired group's fit moves.
     pub(crate) unreachable: Vec<(String, String)>,
@@ -314,21 +328,24 @@ impl CopulaGroup {
                 });
             }
         }
-        let (factor, repaired) = match completed(&matrix, &stated, k).and_then(|filled| cholesky(&filled, k)) {
-            Some(factor) => (Some(factor), false),
-            None => {
-                let projected = cholesky(&nearest_on_stated(&matrix, &stated, k), k);
-                (projected.map(|factor| spearman_fitted(factor, &pairs, k)), true)
-            }
+        let completed = completed(&matrix, &stated, k).and_then(|filled| cholesky(&filled, k, EIGEN_FLOOR / 2.0));
+        let (factor, repair) = match completed {
+            Some(factor) => (factor, Repair::Unneeded),
+            None => match cholesky(&nearest_on_stated(&matrix, &stated, k), k, EIGEN_FLOOR / 2.0) {
+                Some(projected) => match spearman_fitted(&projected, &pairs, k) {
+                    Some(fitted) => (fitted, Repair::Fitted),
+                    None => (projected, Repair::Projected),
+                },
+                None => (identity(k), Repair::Abandoned),
+            },
         };
         let names: Vec<String> = members.iter().map(|(_, name)| name.clone()).collect();
         Self {
             key: stream_key(table, &names.join("\0"), "copula"),
             members: members.into_iter().map(|(index, _)| index).collect(),
             names,
-            independent: factor.is_none(),
-            factor: factor.unwrap_or_else(|| identity(k)),
-            repaired,
+            factor,
+            repair,
             unreachable,
         }
     }
@@ -362,15 +379,15 @@ fn identity(k: usize) -> Vec<f64> {
     matrix
 }
 
-/// The lower-triangular factor `L` with `L·Lᵀ = matrix`, or `None` where the matrix is not positive definite or holds
-/// a value that is not finite.
-fn cholesky(matrix: &[f64], k: usize) -> Option<Vec<f64>> {
+/// The lower-triangular factor `L` with `L·Lᵀ = matrix`, or `None` where a pivot is at most `floor` or a value is not
+/// finite.
+fn cholesky(matrix: &[f64], k: usize, floor: f64) -> Option<Vec<f64>> {
     let mut factor = vec![0.0; k * k];
     for i in 0..k {
         for j in 0..=i {
             let sum = matrix[i * k + j] - (0..j).map(|m| factor[i * k + m] * factor[j * k + m]).sum::<f64>();
             if i == j {
-                if sum.is_nan() || sum <= EIGEN_FLOOR / 2.0 {
+                if sum.is_nan() || sum <= floor {
                     return None;
                 }
                 factor[i * k + i] = sum.sqrt();
@@ -516,19 +533,21 @@ fn unit_rows(free: &[f64], k: usize) -> (Vec<f64>, Vec<f64>) {
     (rows, lengths)
 }
 
-/// The factor whose unit rows put the stated pairs' Spearman values nearest those stated, by least squares through
-/// each pair's series, which is what `data check` measures. Each row is a point on a sphere, as Rebonato and Jäckel
-/// (1999) parametrize a correlation matrix, so every step stays a valid matrix and the factor needs no repair after.
-/// Levenberg–Marquardt steps from `factor`, the projection's, in the pairs' space: `(J·Jᵀ + λ·I)·y = −e` and `δ = Jᵀ·y`,
-/// since the stated pairs are fewer than the factor's entries. `factor` itself where no step improves on it.
-fn spearman_fitted(factor: Vec<f64>, pairs: &[StatedPair], k: usize) -> Vec<f64> {
+/// A factor from `factor`, the projection's, whose unit rows lower the stated pairs' Spearman misses in least squares,
+/// each read through its pair's series. The residual is each stated pair's Spearman miss, the quantity `data check`
+/// bounds on the pair that misses most. Each row is a point on a sphere, as Rebonato and Jäckel (1999) parametrize a
+/// correlation matrix, so every step stays a valid matrix and the factor needs no repair after. Levenberg–Marquardt
+/// steps in the pairs' space, `(J·Jᵀ + λ·I)·y = −e` and `δ = Jᵀ·y`, since the stated pairs are fewer than the factor's
+/// entries. `None` where no step lowers the misses.
+fn spearman_fitted(factor: &[f64], pairs: &[StatedPair], k: usize) -> Option<Vec<f64>> {
     let squared = |misses: &[f64]| misses.iter().map(|miss| miss * miss).sum::<f64>();
-    let (mut free, mut rows, mut lengths) = (factor.clone(), factor.clone(), vec![1.0; k]);
+    let (mut free, mut rows, mut lengths) = (factor.to_vec(), factor.to_vec(), vec![1.0; k]);
     let mut misses = spearman_misses(&rows, pairs, k);
     let mut cost = squared(&misses);
     let (mut damping, mut best) = (FIT_DAMPING, None);
     let n = pairs.len();
-    for _ in 0..FIT_STEPS {
+    let (solve_work, mut work) = ((n as u64).pow(3), 0_u64);
+    'steps: for _ in 0..FIT_STEPS {
         // Each pair's misses move with its two members' rows alone, so its gradient is kept as those two rows.
         let jacobian: Vec<[(usize, Vec<f64>); 2]> = pairs
             .iter()
@@ -564,6 +583,10 @@ fn spearman_fitted(factor: Vec<f64>, pairs: &[StatedPair], k: usize) -> Vec<f64>
         }
         let mut stepped = None;
         while damping <= FIT_DAMPING_MOST {
+            work += solve_work;
+            if work > FIT_WORK {
+                break 'steps;
+            }
             let mut damped = system.clone();
             for p in 0..n {
                 damped[p * n + p] += damping;
@@ -594,33 +617,23 @@ fn spearman_fitted(factor: Vec<f64>, pairs: &[StatedPair], k: usize) -> Vec<f64>
         let Some((moved, moved_rows, moved_lengths, moved_misses, moved_cost)) = stepped else {
             break;
         };
-        let settled = cost - moved_cost <= FIT_TOLERANCE * cost;
+        let settled = moved_misses
+            .iter()
+            .zip(&misses)
+            .all(|(after, before)| (after - before).abs() <= FIT_SETTLED);
         (free, rows, lengths, misses, cost) = (moved, moved_rows, moved_lengths, moved_misses, moved_cost);
         best = Some(rows.clone());
         if settled {
             break;
         }
     }
-    best.unwrap_or(factor)
+    best
 }
 
 /// The `x` with `system·x = target`, `system` being symmetric positive definite and `n × n` row by row, by its Cholesky
 /// factor. `None` where a pivot is not positive.
 fn positive_definite_solved(system: &[f64], target: &[f64], n: usize) -> Option<Vec<f64>> {
-    let mut factor = vec![0.0; n * n];
-    for i in 0..n {
-        for j in 0..=i {
-            let sum = system[i * n + j] - (0..j).map(|m| factor[i * n + m] * factor[j * n + m]).sum::<f64>();
-            if i == j {
-                if sum.is_nan() || sum <= 0.0 {
-                    return None;
-                }
-                factor[i * n + i] = sum.sqrt();
-            } else {
-                factor[i * n + j] = sum / factor[j * n + j];
-            }
-        }
-    }
+    let factor = cholesky(system, n, 0.0)?;
     let mut forward = vec![0.0; n];
     for i in 0..n {
         let known: f64 = (0..i).map(|m| factor[i * n + m] * forward[m]).sum();

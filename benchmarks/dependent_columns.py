@@ -7,7 +7,8 @@
 # doppeldata = { path = "../library", editable = true }
 # ///
 """The dependent-columns arms: the bundled eight-columns profile with one column added, drawn independently and then
-through a 4-column Spearman copula or a conditional table, all through `sd.generate`.
+through a 4-column Spearman copula or a conditional table, all through `sd.generate`. Then a 40-column copula group
+whose stated pairs no valid matrix holds, planned and drawn for 10 rows.
 
 Prints one Markdown table row per arm, then one row per copula pair, measured on 1M rows of the copula arm.
 """
@@ -16,6 +17,7 @@ import argparse
 import copy
 import importlib.metadata
 import os
+import random
 import time
 from typing import Any
 
@@ -33,6 +35,15 @@ COPULA = {
     ('score', 'discount'): 0.2,
 }
 SPEARMAN_ROWS = 1_000_000
+# Every pair of the repaired group stated, half its members tying most of their rows at one value.
+REPAIRED_MEMBERS = 40
+REPAIRED_TIED = {
+    'quantiles': {'p01': -1.0, 'p05': 1.0, 'p50': 1.0, 'p99': 1.0},
+    'extremes': {'low': -1.0, 'high': 1.0},
+    'top_values': [{'value': 1.0, 'fraction': 0.95}, {'value': -1.0, 'fraction': 0.03}, {'value': 0.0, 'fraction': 0.02}],
+    'other_fraction': 0.0,
+}
+REPAIRED_CONTINUOUS = {'quantiles': {'p01': -3.0, 'p25': 1.0, 'p50': 2.5, 'p75': 4.0, 'p99': 9.0}, 'extremes': {'low': -5.0, 'high': 12.0}}
 DISCOUNT = {
     'name': 'discount',
     'physical_type': 'float64',
@@ -97,6 +108,28 @@ def conditional_arms() -> tuple[sd.Profile, sd.Profile]:
     return sd.Profile(document), sd.Profile(conditioned)
 
 
+def repaired_group() -> sd.Profile:
+    """`REPAIRED_MEMBERS` columns, each pair stated at a Spearman value drawn from ±0.8, which no valid matrix holds."""
+    draws = random.Random(7)
+    names = [f'member_{at:02d}' for at in range(REPAIRED_MEMBERS)]
+    columns = [
+        {'name': name, 'physical_type': 'double', 'numeric': REPAIRED_TIED if at % 2 else REPAIRED_CONTINUOUS}
+        for at, name in enumerate(names)
+    ]
+    correlations = [
+        {'a': a, 'b': b, 'method': 'spearman', 'value': round(draws.uniform(-0.8, 0.8), 3)}
+        for at, a in enumerate(names)
+        for b in names[at + 1 :]
+    ]
+    return sd.Profile({'kind': 'table', 'name': 'repaired_group', 'columns': columns, 'dataset': {'correlations': correlations}})
+
+
+def plans_per_second(profile: sd.Profile, args: argparse.Namespace) -> float:
+    start = time.perf_counter()
+    sd.generate(profile, rows=10, seed=args.seed, threads=1)
+    return 1 / (time.perf_counter() - start)
+
+
 def row(*cells: object, load_before: float | None = None) -> None:
     load = '—' if load_before is None else f'{load_before:.1f} to {os.getloadavg()[0]:.1f}'
     print('| ' + ' | '.join(str(cell) for cell in (*cells, load)) + ' |', flush=True)
@@ -129,6 +162,13 @@ def main() -> None:
             rates = [rows_per_second(profile, args, threads) for _ in range(args.runs)]
             low, high = min(rates) / 1e6, max(rates) / 1e6
             row(f'engine {version}, `sd.generate`', threads, f'{work}, {rows}', f'{low:.3g}M to {high:.3g}M', '—', load_before=load_before)
+    repaired = repaired_group()
+    load_before = os.getloadavg()[0]
+    plans_per_second(repaired, args)
+    rates = [plans_per_second(repaired, args) for _ in range(args.runs)]
+    pairs = REPAIRED_MEMBERS * (REPAIRED_MEMBERS - 1) // 2
+    work = f'plan and draw 10 rows of a {REPAIRED_MEMBERS}-column copula group, its {pairs} stated pairs held by no valid matrix'
+    row(f'engine {version}, `sd.generate`', 1, work, f'{min(rates):.3g} to {max(rates):.3g}', '—', load_before=load_before)
     measured = pl.DataFrame(pa.table(sd.generate(copula, rows=SPEARMAN_ROWS, seed=args.seed)))
     for (a, b), value in COPULA.items():
         spearman = measured.select(a, b).drop_nulls().select(pl.corr(a, b, method='spearman')).item()

@@ -66,26 +66,41 @@ dataset:
 - **A pair whose ties hold its value under no Pearson takes the Pearson nearest it.** Two columns
   each holding one value on most rows reach a Spearman value near their comonotone bound only as
   the Pearson nears 1. The plan names such a pair: `its ties holding no copula at its Spearman
-  with congestion_surcharge`.
-- **Where no matrix holds every stated pair, the group holds the valid one whose Spearman values
-  lie nearest those stated.** Ties raise the Pearson a pair needs. So Spearman values that a valid
-  matrix of ranks holds can still ask for Pearsons no valid matrix holds. A column that is the sum
-  of others, such as a fare total, gives such a group. So do three columns each holding one value
-  on most rows. The plan says `its correlations repaired to the nearest valid matrix`.
+  with congestion_surcharge`. No matrix lifts the pair past what it holds at that Pearson. So
+  where that sits further under the stated value than `correlation_max_abs_diff` allows, `data
+  check` fails the pair.
+- **A group draws each member's nulls apart from the other members.** So the rows holding a pair
+  keep each column's own margins. In the New York yellow taxi trips, every `congestion_surcharge`
+  null falls on a row whose `improvement_surcharge` is 1.0. The rows holding both then carry more
+  refunds than either margin says. So their Spearman value is higher than any coupling of the
+  margins reaches. Profiled from April 2024 or January 2025, that pair fails `data check`. In April the privacy
+  floor also folds the −2.5 refunds into the other share, whose curve spreads them.
+- **Where no matrix holds every stated pair, the group holds a valid one fitted toward the stated
+  Spearman values.** Ties raise the Pearson a pair needs. So Spearman values that a valid matrix of
+  ranks holds can still ask for Pearsons no valid matrix holds. A column that is the sum of others,
+  such as a fare total, gives such a group. So do three columns each holding one value on most
+  rows. The plan says `its correlations repaired to a valid matrix fitted toward the stated
+  Spearman values`. Where no step of the fit lowers the misses, it says `repaired to a valid matrix
+  by projection, which no fitted step improved`.
 - **The repair first projects, then fits the Spearman values.** Alternating projections between
-  the positive definite matrices and those holding each stated Pearson find the valid matrix
-  nearest those Pearsons, as Higham (2002) finds a nearest correlation matrix. Levenberg–Marquardt
-  then moves it to the matrix whose stated pairs' Spearman values, read through each pair's
-  series, lie nearest those stated in least squares. That is what `data check` measures. Each
-  member's row of the factor is a unit vector, as Rebonato and Jäckel (1999) parametrize a
-  correlation matrix, so every step is a valid matrix. Where no step improves on the projection,
-  the projection stands. Each unstated pair stays free. The fit takes a fixed number of steps at
-  most, on a fixed damping schedule, in IEEE arithmetic, `sqrt` and `libm`. So a repaired group
-  draws the same bits on every platform, and the fixture's repaired group pins it.
+  the positive definite matrices and those holding each stated Pearson find a valid matrix near
+  those Pearsons, as Higham (2002) finds a nearest correlation matrix. Levenberg–Marquardt then
+  lowers the stated pairs' Spearman misses in least squares, each read through its pair's series.
+  `data check` bounds the same misses, on the pair that misses most. Each member's row of the factor
+  is a unit vector, as Rebonato and Jäckel (1999) parametrize a correlation matrix, so every step
+  is a valid matrix. Where no step lowers the misses, the projection stands. Each unstated pair
+  stays free.
+- **The fit stops on a fixed rule, in IEEE arithmetic, `sqrt` and `libm`.** It stops once a step
+  moves no stated pair's Spearman value further than a sample could measure, or after a fixed
+  number of steps. It also stops once its work passes a fixed budget, each system it solves
+  counting as the cube of the stated pairs. So a larger group takes fewer steps rather than more
+  time. A repaired group draws the same bits on every platform, and the fixture's repaired group
+  pins it.
 
 `cargo test --test dependent_columns`, run from `crates/`, draws rows from the fixture. It holds
-each stated Spearman value within the tolerance it sets, and a repaired group's within the 0.05
-`data check` sets. [performance.md](performance.md) gives the copula's speed.
+each stated Spearman value within the tolerance it sets. Through the projection alone, the
+fixture's repaired group misses the bound the test holds it to. Through the fit, it holds.
+[performance.md](performance.md) gives the copula's speed.
 
 *Rejected:* the plain `2·sin(πρ/6)` for a tied column. Ties lower the Spearman value a Pearson
 holds, so each tied pair drew under its stated value.
@@ -94,20 +109,19 @@ holds, so each tied pair drew under its stated value.
 matrix. Clipping shrinks every pair toward 0, the stated ones too.
 
 *Rejected:* the projection alone. It weighs every pair's Pearson alike. But near a Pearson of 1, a
-step moves a tied pair's Spearman value twice as far as a continuous pair's, or more. The
-fixture's repaired group drew one pair 0.075 under its stated value through the projection, and
-0.015 under through the fit.
+step moves a tied pair's Spearman value twice as far as a continuous pair's, or more. So the
+projection spends its error on the steepest pair.
 
 *Rejected:* an H-weighted nearest correlation matrix, each pair weighted by the square of its
 Spearman value's slope, as Qi and Sun (2011) solve one. It is the fit's first-order form.
 Elementwise weights have no closed-form projection onto the positive definite matrices, so
 alternating projections cannot take them. Qi and Sun's semismooth Newton method is the larger
-build. On a ten-column group of fares and surcharges, its largest miss was 0.0265 and the fit's
-0.0252.
+build.
 
 *Rejected:* the minimax fit, holding the largest miss as low as it goes, which
-`correlation_max_abs_diff` measures. It needs a constrained solver, and on that group it gained
-0.003 over least squares.
+`correlation_max_abs_diff` measures. It needs a constrained solver. In the New York yellow taxi
+trips of March 2024, April 2024 and January 2025, each group's largest miss is a pair no Pearson
+holds. Minimax only moves that pair nearer its value at the cap, a few thousandths in each month.
 
 ## A conditional table draws a categorical column from the row its parent's value picks
 

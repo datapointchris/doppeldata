@@ -14,7 +14,7 @@ use rayon::prelude::*;
 const PROFILE_SHA256: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ROWS: u64 = 100_000;
 const CORRELATION_TOLERANCE: f64 = 0.01;
-/// A repaired group holds its pairs as near as a valid matrix allows, within the bound `data check` sets by default.
+/// The fixture's repaired group holds its pairs within this through the fit, and misses it through the projection alone.
 const REPAIRED_TOLERANCE: f64 = 0.05;
 const SHARE_TOLERANCE: f64 = 0.01;
 
