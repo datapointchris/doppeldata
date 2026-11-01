@@ -36,8 +36,13 @@ def described(path: tuple[str, ...], command: Any) -> dict[str, Any]:
     }
 
 
+def flag_names(option: Any) -> list[str]:
+    """An option's names, the one it is listed and refused by first: its first long name, else its first short one."""
+    return sorted(option.opts, key=lambda name: (not name.startswith('--'), name))
+
+
 def flag(option: Any) -> dict[str, Any]:
-    names = sorted(option.opts, key=lambda name: (not name.startswith('--'), name))
+    names = flag_names(option)
     choices = getattr(option.type, 'choices', None)
     return {
         'name': names[0],

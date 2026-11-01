@@ -10,7 +10,6 @@ are each imported only when a test asks for the type it makes.
 
 import argparse
 import dataclasses as dc
-import difflib
 import hashlib
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -146,7 +145,6 @@ def scenario_of(given: 'str | Scenario', directories: Sequence[Path]) -> 'Scenar
         field='scenario',
         value=given,
         valid=examples,
-        closest=difflib.get_close_matches(given, examples, n=3),
     )
 
 

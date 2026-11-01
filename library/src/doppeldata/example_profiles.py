@@ -1,6 +1,5 @@
 """The hand-written example profiles and bundles the library ships under `doppeldata/examples/`."""
 
-import difflib
 import importlib.resources
 from importlib.resources.abc import Traversable
 
@@ -28,18 +27,14 @@ def bundle_example_names() -> list[str]:
 
 def example_resource(name: str) -> Traversable:
     if name not in example_names():
-        message = f'{name!r} is not an example profile doppeldata ships; choose from {", ".join(example_names())}'
-        raise InvalidArgument(
-            PROFILE_NOT_FOUND, message, value=name, valid=example_names(), closest=difflib.get_close_matches(name, example_names())
-        )
+        raise InvalidArgument(PROFILE_NOT_FOUND, f'{name!r} is not an example profile doppeldata ships', value=name, valid=example_names())
     return importlib.resources.files('doppeldata').joinpath('examples', name + EXAMPLE_SUFFIX)
 
 
 def bundle_example_resource(name: str) -> Traversable:
     if name not in bundle_example_names():
-        examples = bundle_example_names()
-        message = f'{name!r} is not an example bundle doppeldata ships; choose from {", ".join(examples)}'
-        raise InvalidArgument(PROFILE_NOT_FOUND, message, value=name, valid=examples, closest=difflib.get_close_matches(name, examples))
+        message = f'{name!r} is not an example bundle doppeldata ships'
+        raise InvalidArgument(PROFILE_NOT_FOUND, message, value=name, valid=bundle_example_names())
     return importlib.resources.files('doppeldata').joinpath('examples', name + BUNDLE_SUFFIX)
 
 

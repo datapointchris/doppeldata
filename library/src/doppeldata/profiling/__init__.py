@@ -376,9 +376,8 @@ def profiled_tables(
 def available_engine(engine: str) -> Engine:
     """The engine named, refused with ProfilingEnginesMissing where a package every source needs is not installed."""
     if engine not in ENGINES:
-        message = f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}'
-        closest = difflib.get_close_matches(engine, list(ENGINES))
-        raise InvalidArgument(issue_codes.UNKNOWN_ENGINE, message, field='engine', value=engine, valid=list(ENGINES), closest=closest)
+        message = f'{engine!r} is not a profiling engine'
+        raise InvalidArgument(issue_codes.UNKNOWN_ENGINE, message, field='engine', value=engine, valid=list(ENGINES))
     chosen = ENGINES[engine]
     refuse_uninstalled(engine, [package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
     return chosen
@@ -498,14 +497,11 @@ def refuse_uninstalled(engine: str, packages: Sequence[EnginePackage]) -> None:
 def applied_policy(policy: str, k_min: int | None) -> Policy:
     """The policy named, refused with an `InvalidArgument` where the profiler cannot apply it or `k_min` does not fit it."""
     names = [applied.value for applied in APPLIED_POLICIES]
-    choices = ', '.join(names)
     if policy == Policy.DP:
-        message = f'policy dp is reserved for differential privacy, which doppeldata does not apply; choose from {choices}'
+        message = 'policy dp is reserved for differential privacy, which doppeldata does not apply'
         raise InvalidArgument(issue_codes.POLICY_DP_RESERVED, message, field='policy', value=policy, valid=names)
     if policy not in APPLIED_POLICIES:
-        closest = difflib.get_close_matches(policy, names) if isinstance(policy, str) else []
-        message = f'{policy!r} is not a privacy policy; choose from {choices}'
-        raise InvalidArgument(issue_codes.UNKNOWN_POLICY, message, field='policy', value=policy, valid=names, closest=closest)
+        raise InvalidArgument(issue_codes.UNKNOWN_POLICY, f'{policy!r} is not a privacy policy', field='policy', value=policy, valid=names)
     if policy == Policy.NONE and k_min is not None:
         message = f'policy none keeps every value, so it takes no k_min, and {k_min} was given'
         raise InvalidArgument(issue_codes.K_MIN_WITH_POLICY_NONE, message, field='k_min', value=k_min)

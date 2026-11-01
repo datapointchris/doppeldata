@@ -80,7 +80,7 @@ class TableCheck:
 class ProfileFileCheck:
     """A profile file checked against its schema and privacy policy: the file as named, whether it passed, and each table's check."""
 
-    failure_code: ClassVar[str] = issue_codes.PROFILE_BREAKS_POLICY
+    failure_code: ClassVar[str] = issue_codes.PROFILE_CHECK_FAILED
 
     profile: str
     passed: bool

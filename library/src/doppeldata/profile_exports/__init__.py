@@ -78,11 +78,8 @@ def export(profile: Profile | Bundle | str | os.PathLike[str], format: str, *, t
     """
     exporter = EXPORTERS.get(format)
     if exporter is None:
-        closest = difflib.get_close_matches(format, EXPORT_FORMATS, n=3)
         message = f'{format!r} is not an export format'
-        raise InvalidArgument(
-            issue_codes.UNKNOWN_EXPORT_FORMAT, message, field='format', value=format, valid=EXPORT_FORMATS, closest=closest
-        )
+        raise InvalidArgument(issue_codes.UNKNOWN_EXPORT_FORMAT, message, field='format', value=format, valid=EXPORT_FORMATS)
     found = loaded(profile)
     type_mix = None
     if table is not None:
@@ -110,8 +107,7 @@ def one_table(found: Profile | Bundle, table: str) -> Profile:
         if table not in found.tables:
             names = list(found.tables)
             message = f'{found.document["name"]} holds no table {table}'
-            closest = difflib.get_close_matches(table, names, n=3)
-            raise InvalidArgument(issue_codes.EXPORT_TABLE_UNKNOWN, message, field='table', value=table, valid=names, closest=closest)
+            raise InvalidArgument(issue_codes.EXPORT_TABLE_UNKNOWN, message, field='table', value=table, valid=names)
         return found.tables[table]
     if found.document['name'] != table:
         message = f'the profile is of {found.document["name"]}, not {table}; table= names one table of a bundle'

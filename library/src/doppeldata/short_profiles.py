@@ -107,8 +107,7 @@ def file_profile(source: str | os.PathLike[str]) -> Profile:
         named = os.fspath(source)
         examples = example_names()
         message = f'{named} is neither a profile file nor an example; name a file, or an example'
-        closest = difflib.get_close_matches(named, examples, n=CLOSEST_FAKES)
-        raise ProfileNotFound(issue_codes.PROFILE_NOT_FOUND, message, value=named, valid=examples, closest=closest)
+        raise ProfileNotFound(issue_codes.PROFILE_NOT_FOUND, message, value=named, valid=examples)
     metadata = data_file_metadata(path)
     if metadata is not None:
         return data_file_profile(path, metadata)

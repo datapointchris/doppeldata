@@ -22,7 +22,8 @@ VALID_SHOWN = 10
 
 class IssueCarrier(BaseException):
     """The base of every doppeldata error and stopped write. `issues` names each reason, at least one, and the first gives
-    `code` and `exit_code`, the status a command ends on. `headline` leads the text where it lists the issues beneath it.
+    `code` and `exit_code`, the status a command ends on. `headline` leads the text where it lists the issues beneath it,
+    and a first issue whose message is the headline is the one it lists none of.
 
     The text leads with the code, as `E-PROFILE-012: <message>`, then a line for each issue a headline leads, then each hint.
     """
@@ -32,12 +33,15 @@ class IssueCarrier(BaseException):
             raise ValueError('an error carries at least one issue')
         self.issues = tuple(issues)
         self.headline = headline
-        self.exit_code = issue_codes.issue_code(self.issues[0].code).exit_code
         super().__init__(self.message)
 
     @property
     def code(self) -> str:
         return self.issues[0].code
+
+    @property
+    def exit_code(self) -> int:
+        return issue_codes.issue_code(self.code).exit_code
 
     @property
     def message(self) -> str:
@@ -54,7 +58,8 @@ class IssueCarrier(BaseException):
                 if len(only.valid) > VALID_SHOWN:
                     lines.append(f'    and {len(only.valid) - VALID_SHOWN} more')
         else:
-            lines = [f'{self.code}: {self.message}:', *(f'  {issue.field or "/"}: {issue.message} [{issue.code}]' for issue in self.issues)]
+            beneath = self.issues[1:] if self.headline == self.issues[0].message else self.issues
+            lines = [f'{self.code}: {self.message}:', *(f'  {issue.field or "/"}: {issue.message} [{issue.code}]' for issue in beneath)]
         lines += [f'  hint: {hint}' for hint in dict.fromkeys(issue.hint for issue in self.issues if issue.hint)]
         return '\n'.join(lines)
 
@@ -106,8 +111,7 @@ class SourceError(DoppeldataError, ValueError):
 
 class StoppedWrite(IssueCarrier):
     """A write that did not finish, the base of WriteFailed and WriteInterrupted. `code` names why, as `E-WRITE-213` names
-    a cancelled one, and `exit_code` is 2 when the call must change and nothing was written, 4 when the store never
-    answered, and 1 otherwise.
+    a cancelled one, and its exit status is the code's, as docs/issue-codes.md lists them.
 
     `manifest` is the record of what a run that claimed its destination wrote, marked partial when it stopped early, and
     None for a refusal before the claim. `manifest_stored` says whether that record is in the store.

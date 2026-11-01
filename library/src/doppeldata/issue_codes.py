@@ -2,11 +2,11 @@
 
 A code is `E-<AREA>-<NNN>` and keeps its meaning across releases. The engine and the writers declare theirs in Rust, and
 each is bound here by its static's name, so the library raises the code the engine would for the same fault. Its exit
-status is the one a command ends on: 1 for a failure, 2 for a call or file that must change, 3 for a finding a person
-acts on, and 4 when no answer came.
+status is the one a command ends on where it is the first issue, as `EXIT_STATUSES` names them.
 """
 
 import dataclasses as dc
+import difflib
 import re
 from collections.abc import Sequence
 from typing import Any
@@ -15,7 +15,14 @@ from doppeldata import _core
 
 AREAS = ('PROFILE', 'SCENARIO', 'POLICY', 'DATA', 'WRITE', 'IMPORT', 'EXPORT', 'IO', 'USAGE')
 CODE_FORM = re.compile(r'E-(?P<area>[A-Z]+)-\d{3}')
-EXIT_CODES = (1, 2, 3, 4)
+# The only statuses a code ends a command on. docs/issue-codes.md says which one each kind of refusal takes.
+EXIT_STATUSES = {
+    1: 'the work was attempted and failed: a write stopped, the data changed while it was read, or two profiles drifted',
+    2: 'the call must change, and nothing was written',
+    3: 'a check found what a person must act on, or stopped before it finished',
+    4: 'a store or service never answered',
+}
+CLOSEST_SHOWN = 3
 
 
 @dc.dataclass(frozen=True)
@@ -46,8 +53,8 @@ def declare(code: str, raised_when: str, *, exit_code: int, hint: str | None = N
         raise TypeError(f'{code} is not E-<AREA>-<NNN> in one of the areas {", ".join(AREAS)}')
     if code in REGISTERED:
         raise TypeError(f'{code} is declared twice: {REGISTERED[code].raised_when!r} and {raised_when!r}')
-    if exit_code not in EXIT_CODES:
-        raise TypeError(f'{code} exits {exit_code}, and a command exits 1, 2, 3 or 4')
+    if exit_code not in EXIT_STATUSES:
+        raise TypeError(f'{code} exits {exit_code}, and a command exits {", ".join(map(str, EXIT_STATUSES))}')
     REGISTERED[code] = IssueCode(code, raised_when, exit_code, hint)
     return code
 
@@ -72,7 +79,7 @@ class Issue:
 
     `field` is an RFC 6901 JSON Pointer into the document refused, `''` for its root, or the argument or input refused,
     and None where the refusal names neither. `value` is what was given there. `valid` lists what would have been taken,
-    and `closest` the nearest of it to `value`, nearest first.
+    and `closest` the nearest of it to `value`, nearest first, filled from `valid` where the raiser gives none.
     """
 
     code: str
@@ -89,6 +96,9 @@ class Issue:
             raise ValueError(f'{self.code} is no registered issue code')
         if self.hint is None and declared.hint is not None:
             object.__setattr__(self, 'hint', declared.hint)
+        object.__setattr__(self, 'valid', tuple(self.valid))
+        if not self.closest and self.valid and isinstance(self.value, str):
+            object.__setattr__(self, 'closest', tuple(difflib.get_close_matches(self.value, self.valid, n=CLOSEST_SHOWN)))
 
     def to_json(self) -> dict[str, Any]:
         """The issue as one JSON object with every key present, null or empty where it names nothing."""
@@ -250,6 +260,11 @@ PROFILE_NOT_FOUND = declare(
     exit_code=2,
     hint='doppeldata profile list names every example',
 )
+PROFILE_CHECK_FAILED = declare('E-PROFILE-029', 'a profile file breaks its schema or its privacy policy', exit_code=3)
+PROFILE_FAILS_CHECK = declare(
+    'E-PROFILE-030', 'a profile whose literals a write would embed, or an export would carry, fails profile check', exit_code=2
+)
+PROFILE_DIFF_STOPPED = declare('E-PROFILE-031', 'profile diff stopped before it compared the two profiles', exit_code=3)
 
 UNKNOWN_SCENARIO_COLUMN = engine('UNKNOWN_SCENARIO_COLUMN')
 INVALID_PARAMETER = engine('INVALID_PARAMETER')
@@ -284,6 +299,9 @@ SCENARIO_NOT_FOUND = declare(
     'a scenario named is neither a file nor an example doppeldata ships',
     exit_code=2,
     hint='doppeldata scenario list names every example',
+)
+SCENARIO_CHECK_FAILED = declare(
+    'E-SCENARIO-019', 'a scenario breaks its schema, or asks of its profile or its files what they cannot give', exit_code=3
 )
 
 UNAUDITED_LITERAL = declare('E-POLICY-001', 'a literal value the policy holds to k_min has no audit entry', exit_code=3)
@@ -322,7 +340,6 @@ POLICY_DP_RESERVED = declare(
 )
 K_MIN_WITH_POLICY_NONE = declare('E-POLICY-031', 'k_min was given with policy none, which keeps every value', exit_code=2)
 INVALID_K_MIN = declare('E-POLICY-032', 'k_min is under 1', exit_code=2)
-PROFILE_BREAKS_POLICY = declare('E-POLICY-033', 'a profile file breaks its schema or its privacy policy', exit_code=3)
 
 DATA_NOT_NAMED = declare('E-DATA-001', 'no data was named', exit_code=2)
 DATA_MISSING = declare('E-DATA-002', 'a file or directory named as data does not exist', exit_code=2)
@@ -358,6 +375,7 @@ DETECTOR_PACK_MISSING = declare('E-DATA-022', 'a detector pack named is not inst
 DETECTOR_PACK_BROKEN = declare(
     'E-DATA-023', 'an installed detector pack does not load, clashes with another, or holds or returns what doppeldata refuses', exit_code=1
 )
+DATA_CHECK_STOPPED = declare('E-DATA-024', 'data check stopped before it measured the data against its profile', exit_code=3)
 
 DESTINATION_NOT_EMPTY = engine('DESTINATION_NOT_EMPTY')
 RANGES_UNRECORDED = engine('RANGES_UNRECORDED')
@@ -383,6 +401,13 @@ BUNDLE_PARTITIONS_BY_TABLE = declare(
 BUNDLE_EMBEDS_NO_PROFILE = declare('E-WRITE-011', 'a bundle write was asked to embed its profile, which no bundle file holds', exit_code=2)
 OUT_UNWRITABLE = declare(
     'E-WRITE-012', 'a file named to write a profile, seed or export to lies in no directory, or cannot be written', exit_code=2
+)
+UNKNOWN_FORMAT = engine('UNKNOWN_FORMAT')
+UNKNOWN_PARTITION_STYLE = declare(
+    'E-WRITE-013',
+    'a partition style named is not one doppeldata writes',
+    exit_code=2,
+    hint='doppeldata capabilities show lists the partition styles',
 )
 
 NO_CREDENTIALS = engine('NO_CREDENTIALS')
@@ -411,6 +436,7 @@ NO_DRAWABLE_COLUMN = declare('E-IMPORT-007', 'a schema holds no column of a type
 GLUE_REGION = declare('E-IMPORT-008', "the Glue Data Catalog's region is not named, or names none AWS has", exit_code=2)
 GLUE_TABLE_UNKNOWN = declare('E-IMPORT-009', 'the Glue Data Catalog holds no table of the name given', exit_code=2)
 DETECTED_ENTITIES_UNMATCHED = declare('E-IMPORT-010', 'the detected entities name a column the Glue table lacks', exit_code=2)
+UNKNOWN_IMPORT_KIND = declare('E-IMPORT-011', 'an import names a kind of schema doppeldata does not read', exit_code=2)
 
 UNKNOWN_EXPORT_FORMAT = declare(
     'E-EXPORT-001',
@@ -461,4 +487,7 @@ TOO_MANY_ROWS_FOR_DRIVER = declare(
     'to_spark was given more rows than it builds on the driver',
     exit_code=2,
     hint='generate it with doppeldata.spark.generate, whose rows the executors make',
+)
+UNKNOWN_SCHEMA = declare(
+    'E-USAGE-023', 'a schema named is not one doppeldata ships', exit_code=2, hint='doppeldata schemas list names every schema'
 )

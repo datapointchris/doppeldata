@@ -8,7 +8,6 @@ applies the patch, so the stream version governs how it merges.
 
 import copy
 import dataclasses as dc
-import difflib
 import functools
 import importlib
 import importlib.resources
@@ -141,9 +140,8 @@ def check(plain: Any) -> list[Issue]:
 
 
 def unknown_name(code: str, name: str, known: list[str], at: PointerParts, noun: str) -> Issue:
-    """A name doppeldata does not know, with every one it knows and the closest of them."""
-    closest = tuple(difflib.get_close_matches(name, known, n=3))
-    return Issue(code, pointer(at), f'{name!r} is not {noun} doppeldata knows', name, tuple(known), closest)
+    """A name doppeldata does not know, with every one it knows."""
+    return Issue(code, pointer(at), f'{name!r} is not {noun} doppeldata knows', name, tuple(known))
 
 
 @dc.dataclass(frozen=True)
@@ -235,10 +233,9 @@ def patched_profile(profile: dict[str, Any], scenario: dict[str, Any]) -> tuple[
         Issue(
             issue_codes.UNKNOWN_SCENARIO_COLUMN,
             pointer(('patch', 'columns', name)),
-            f'{name} is not a column of {profile["name"]}: {", ".join(names)}',
+            f'{name} is not a column of {profile["name"]}',
             name,
             tuple(names),
-            tuple(difflib.get_close_matches(name, names, n=3)),
         )
         for name in unknown
     ]
@@ -297,9 +294,8 @@ class Scenario:
         taken = [key for key in op_schemas()[entry['op']]['properties'] if key != 'op']
         unknown = sorted(set(parameters) - set(taken))
         if unknown:
-            message = f'the {name} example applies {entry["op"]}, which takes {", ".join(taken)}, not {", ".join(unknown)}'
-            closest = tuple(difflib.get_close_matches(unknown[0], taken, n=3))
-            raise UnsupportedArgument(SCENARIO_DOCUMENT.unknown_field, message, field=unknown[0], valid=taken, closest=closest)
+            message = f'the {name} example applies {entry["op"]}, which takes no {", ".join(unknown)}'
+            raise UnsupportedArgument(SCENARIO_DOCUMENT.unknown_field, message, field=unknown[0], value=unknown[0], valid=taken)
         if any(entry.get(key) != value for key, value in parameters.items()):
             document.pop('description', None)
         if any(entry.get(key) != value for key, value in parameters.items() if key != 'column'):

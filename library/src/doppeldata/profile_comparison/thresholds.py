@@ -1,7 +1,6 @@
 """The thresholds a check and a diff hold each metric to: each metric's default, overridden for every column or for one."""
 
 import dataclasses as dc
-import difflib
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -109,7 +108,6 @@ class Thresholds:
                     f'{name} is no column the source profile holds',
                     name,
                     known,
-                    tuple(difflib.get_close_matches(name, known, n=3)),
                 )
                 for name in unknown
             ]
@@ -131,8 +129,7 @@ def metric_faults(metrics: Any, at: str, *, for_column: bool) -> list[Issue]:
     names = tuple(THRESHOLDED)
     for name, value in metrics.items():
         if name not in THRESHOLDED:
-            closest = tuple(difflib.get_close_matches(str(name), names, n=3))
-            faults.append(Issue(code, f'{at}/{name}', f'{name!r} is not a metric', name, names, closest))
+            faults.append(Issue(code, f'{at}/{name}', f'{name!r} is not a metric', name, names))
         elif for_column and THRESHOLDED[name].pairs:
             faults.append(Issue(code, f'{at}/{name}', f'{name} measures a pair of columns; set it under `defaults`', name))
         elif for_column and name in RELATIONSHIP_METRICS_BY_NAME:

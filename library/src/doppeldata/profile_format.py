@@ -8,7 +8,6 @@ SHA-256 of its RFC 8785 canonical JSON, which the library alone computes and han
 import copy
 import dataclasses as dc
 import datetime as dt
-import difflib
 import hashlib
 import importlib.resources
 import io
@@ -375,15 +374,13 @@ def tag_of(schema: Any) -> tuple[Any, ...]:
 
 
 def unknown_field(key: str, known: list[str], at: PointerParts, codes: DocumentCodes = PROFILE_DOCUMENT) -> Issue:
-    closest = tuple(difflib.get_close_matches(key, known, n=3))
-    return Issue(codes.unknown_field, pointer(at), f'{key!r} is not a field here', key, tuple(known), closest)
+    return Issue(codes.unknown_field, pointer(at), f'{key!r} is not a field here', key, tuple(known))
 
 
 def tag_issue(value: Any, tags: list[Any], at: PointerParts, codes: DocumentCodes) -> Issue:
-    """A tag field holding none of the tags its branches take, naming the closest."""
+    """A tag field holding none of the tags its branches take."""
     names = [str(tag) for tag in tags]
-    closest = tuple(difflib.get_close_matches(value, names, n=1)) if isinstance(value, str) else ()
-    return Issue(codes.not_one_of, pointer(at), f'{value!r} is not a {at[-1]} here', value, tuple(names), closest)
+    return Issue(codes.not_one_of, pointer(at), f'{value!r} is not a {at[-1]} here', value, tuple(names))
 
 
 def unrepresentable_numbers(value: Any, at: PointerParts, codes: DocumentCodes) -> Iterator[Issue]:

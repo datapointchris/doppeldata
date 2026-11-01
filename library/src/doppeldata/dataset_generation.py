@@ -6,7 +6,6 @@ stop between blocks on Ctrl-C.
 """
 
 import dataclasses as dc
-import difflib
 import json
 import os
 import re
@@ -42,6 +41,7 @@ from doppeldata.profile_format import UngenerableProfile
 from doppeldata.profile_sources import ProfileSource
 from doppeldata.profile_sources import profile_from
 from doppeldata.published_schemas import output_formats
+from doppeldata.published_schemas import partition_styles
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
@@ -150,6 +150,17 @@ class WriteChoices:
     partition_style: str | None = None
     writer: dict[str, Any] | None = None
     embed_profile: bool = False
+
+    def __post_init__(self) -> None:
+        if self.format is not None and self.format not in output_formats():
+            message = f'{self.format!r} is not a format doppeldata writes'
+            raise InvalidArgument(issue_codes.UNKNOWN_FORMAT, message, field='format', value=self.format, valid=output_formats())
+        if self.partition_style is not None and self.partition_style not in partition_styles():
+            message = f'{self.partition_style!r} is not a partition style doppeldata writes'
+            valid = partition_styles()
+            raise InvalidArgument(
+                issue_codes.UNKNOWN_PARTITION_STYLE, message, field='partition_style', value=self.partition_style, valid=valid
+            )
 
     def engine_json(self, profile: Profile, scenario: Scenario | None = None) -> str:
         chosen = {key: value for key, value in dc.asdict(self).items() if value is not None and key != 'embed_profile'}
@@ -404,7 +415,7 @@ def named_columns(issue: Issue, scenario: Any, columns: list[str]) -> Issue:
         given = given[int(part)] if isinstance(given, list) else given.get(part)
     if not isinstance(given, str):
         return issue
-    return dc.replace(issue, value=given, valid=tuple(columns), closest=tuple(difflib.get_close_matches(given, columns, n=3)))
+    return dc.replace(issue, value=given, valid=tuple(columns))
 
 
 def engine_arguments(

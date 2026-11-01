@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from doppeldata import _core
+from doppeldata.issue_codes import EXIT_STATUSES
 from doppeldata.issue_codes import registered
 from doppeldata.privacy_policy import APPLIED_POLICIES
 from doppeldata.privacy_policy import DEFAULT_K_MIN
@@ -29,13 +30,7 @@ from doppeldata.short_profiles import providers
 
 # A key removed or a meaning changed raises this. A key added does not.
 SCHEMA_VERSION = 1
-EXIT_CODES = {
-    '0': 'it ran, and any check it ran passed',
-    '1': 'the work was attempted and failed: a write stopped, the data changed while it was read, or two profiles drifted',
-    '2': 'the call must change, and nothing was written',
-    '3': 'a check found what a person must act on',
-    '4': 'a store or service never answered',
-}
+EXIT_CODES = {'0': 'it ran, and any check it ran passed', **{str(status): meaning for status, meaning in EXIT_STATUSES.items()}}
 
 
 def capabilities(commands: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:

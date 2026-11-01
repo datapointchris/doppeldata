@@ -1,6 +1,5 @@
 import contextlib
 import dataclasses as dc
-import difflib
 import importlib.metadata
 import importlib.resources
 import itertools
@@ -75,10 +74,9 @@ from doppeldata.profile_exports import export
 from doppeldata.profile_sources import bundle_from
 from doppeldata.profiling import ENGINES
 from doppeldata.profiling import applied_policy
+from doppeldata.profiling import available_engine
 from doppeldata.published_schemas import enum_values
 from doppeldata.published_schemas import output_formats
-from doppeldata.published_schemas import partition_styles
-from doppeldata.published_schemas import schema_names
 from doppeldata.published_schemas import schema_summaries
 from doppeldata.published_schemas import schema_text
 from doppeldata.scenario_format import composed
@@ -95,6 +93,7 @@ from typer._click.exceptions import UsageError
 from typer.core import TyperGroup
 
 from doppeldata_cli.command_surface import command_surface
+from doppeldata_cli.command_surface import flag_names
 
 
 def beside(destination: str, name: str) -> str:
@@ -161,9 +160,21 @@ class DoppeldataGroup(TyperGroup):
 
 
 def refused(code: str, message: str, parameter: str, *, value: Any = None, valid: Sequence[str] = ()) -> InvalidArgument:
-    """The refusal of what `parameter` was given, naming the values it takes and the nearest of them to `value`."""
-    closest = difflib.get_close_matches(value, list(valid), n=3) if isinstance(value, str) else []
-    return InvalidArgument(code, message, field=parameter, value=value, valid=valid, closest=closest)
+    """The refusal of what `parameter` was given, naming the values it takes."""
+    return InvalidArgument(code, message, field=parameter, value=value, valid=valid)
+
+
+@contextlib.contextmanager
+def refused_at(parameters: dict[str, str]) -> Iterator[None]:
+    """Report each issue of a library refusal whose field is a keyword of `parameters` at the parameter it maps to, as
+    `{'format': '--format'}` reports `format=` at `--format`."""
+    try:
+        yield
+    except DoppeldataError as error:
+        if not any(issue.field in parameters for issue in error.issues):
+            raise
+        issues = [dc.replace(issue, field=parameters.get(issue.field or '', issue.field)) for issue in error.issues]
+        raise IssueCarrier(issues, headline=error.headline) from error
 
 
 def parameter_named(error: UsageError) -> str | None:
@@ -178,7 +189,7 @@ def parameter_named(error: UsageError) -> str | None:
     if parameter is None:
         return None
     if parameter.param_type_name == 'option':
-        return max(parameter.opts, key=len)
+        return flag_names(parameter)[0]
     return parameter.human_readable_name
 
 
@@ -187,9 +198,7 @@ def parameter_refusal(error: UsageError) -> IssueCarrier | None:
     cause, parameter = error.__cause__, parameter_named(error)
     if isinstance(cause, IssueCarrier):
         issues = [issue if is_pointer(issue.field) or parameter is None else dc.replace(issue, field=parameter) for issue in cause.issues]
-        located = IssueCarrier(issues, headline=cause.headline)
-        located.exit_code = cause.exit_code
-        return located
+        return IssueCarrier(issues, headline=cause.headline)
     if isinstance(cause, OSError):
         return IssueCarrier([Issue(issue_codes.FILE_UNREADABLE, parameter, error.format_message(), cause.filename)])
     return None
@@ -237,11 +246,21 @@ app.add_typer(scenario_app, name='scenario')
 schemas_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas of the files doppeldata reads and writes.')
 app.add_typer(schemas_app, name='schemas')
 capabilities_app = typer.Typer(
-    no_args_is_help=True, help='What a program or an agent can name: every command, format, op, fake, semantic type, policy and issue code.'
+    no_args_is_help=True,
+    help='What a program or an agent can name: everything this install takes, read from the registries that refuse a value outside them.',
 )
 app.add_typer(capabilities_app, name='capabilities')
 
 JsonOption = Annotated[bool, typer.Option('--json', help='Print JSON instead of a table.')]
+ProfileJsonOption = Annotated[
+    bool, typer.Option('--json', help='Print each refusal as a line of JSON, and without --out the profile as JSON instead of YAML.')
+]
+ManifestJsonOption = Annotated[
+    bool, typer.Option('--json', help="Print each refusal as a line of JSON, and the manifest's JSON instead of a summary.")
+]
+ExportJsonOption = Annotated[
+    bool, typer.Option('--json', help='Print each refusal as a line of JSON. The export prints in its own format.')
+]
 # capabilities show wraps each list at this width, and never inside an item.
 LISTED_WIDTH = 120
 PROFILE_HELP = (
@@ -504,6 +523,7 @@ def profile_create(
             ),
         ),
     ] = False,
+    as_json: ProfileJsonOption = False,
 ) -> None:
     """Profile a dataset into a file holding no rows: doppeldata profile create data/orders/ --out orders.profile.yaml
 
@@ -514,8 +534,8 @@ def profile_create(
     if tables and edges_from is not None:
         raise typer.BadParameter("--edges-from is one table's profile, so it cannot be given with --tables", param_hint='--edges-from')
     writable_out(out)
-    if engine not in ENGINES:
-        raise refused(issue_codes.UNKNOWN_ENGINE, f'{engine!r} is not a profiling engine', '--engine', value=engine, valid=list(ENGINES))
+    with refused_at({'engine': '--engine'}):
+        available_engine(engine)
     try:
         applied_policy(policy, k_min)
     except ValueError as error:
@@ -559,9 +579,14 @@ def profile_create(
     if earlier is not None and profiled is earlier:
         typer.echo(f'doppeldata: {edges_from} was made from these files with these settings, so it is written unchanged', err=True)
     if out is None:
-        typer.echo(profiled.to_yaml(), nl=False)
+        typer.echo(profile_text(profiled, as_json=as_json), nl=False)
         return
     profiled.save(out)
+
+
+def profile_text(found: Profile | Bundle, *, as_json: bool) -> str:
+    """A profile or bundle as the file `save` writes for a `.json` path where `as_json`, else for a YAML one."""
+    return json.dumps(found.to_plain(), indent=2, allow_nan=False) + '\n' if as_json else found.to_yaml()
 
 
 def named_files(pairs: list[str], option: str) -> dict[str, Path]:
@@ -685,21 +710,23 @@ def bundle_named(profile_name: str | None, columns: str | None, rows: int | None
 
 
 @contextlib.contextmanager
-def failure_exits_3() -> Iterator[None]:
-    """End a check verb on 3 when what it wraps fails, so its 1 means drift and nothing else. A usage error keeps 2, and no answer 4."""
+def stopped_check(code: str, verb: str) -> Iterator[None]:
+    """Lead a failure inside a check with `code`, which exits 3, so the check's 1 means drift and nothing else. A refusal
+    that exits 2 or 4 is left as it is."""
+    stopped = Issue(code, None, f'{verb} stopped before it finished')
     try:
         yield
     except DoppeldataError as error:
-        if error.exit_code == 1:
-            error.exit_code = 3
-        raise
+        if error.exit_code != 1:
+            raise
+        raise IssueCarrier([stopped, *error.issues], headline=stopped.message) from error
     except OSError as error:
-        typer.echo(f'doppeldata: the comparison stopped: {error}', err=True)
-        raise typer.Exit(3) from error
+        unread = Issue(issue_codes.LOCAL_IO, None, error.strerror or str(error), value=error.filename)
+        raise IssueCarrier([stopped, unread], headline=stopped.message) from error
     except Exception as error:
         traceback.print_exc()
-        typer.echo(f'doppeldata: the comparison stopped on {type(error).__name__}, which is a bug in doppeldata', err=True)
-        raise typer.Exit(3) from error
+        bug = dc.replace(stopped, message=f'{verb} stopped on {type(error).__name__}, which is a bug in doppeldata')
+        raise IssueCarrier([bug]) from error
 
 
 def loaded_thresholds(path: Path | None) -> Thresholds | None:
@@ -723,7 +750,7 @@ def profile_diff(
     earlier, later = loaded_profile(a, 'A'), loaded_profile(b, 'B')
     chosen = loaded_thresholds(thresholds)
     try:
-        with failure_exits_3():
+        with stopped_check(issue_codes.PROFILE_DIFF_STOPPED, 'profile diff'):
             report = diff(earlier, later, thresholds=chosen)
             shown = report.to_json() if as_json else report.to_markdown()
     except InvalidThresholds as error:
@@ -798,7 +825,7 @@ def data_check(
             raise refused(issue_codes.AGAINST_NEEDED, message, '--against')
         chosen = loaded_thresholds(thresholds)
         try:
-            with failure_exits_3(), warnings.catch_warnings(record=True) as caught:
+            with stopped_check(issue_codes.DATA_CHECK_STOPPED, 'data check'), warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter('always', ProfilingWarning)
                 bundle_report = check(bundle, data, thresholds=chosen, scenario=loaded_scenarios(scenario))
                 shown = bundle_report.to_json() if as_json else bundle_report.to_markdown()
@@ -826,7 +853,7 @@ def data_check(
     if unwritten is not None:
         raise refused(issue_codes.HTML_UNWRITABLE, unwritten, '--html', value=str(html))
     try:
-        with failure_exits_3(), warnings.catch_warnings(record=True) as caught:
+        with stopped_check(issue_codes.DATA_CHECK_STOPPED, 'data check'), warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always', ProfilingWarning)
             report = check(source, data, thresholds=chosen, scenario=applied, against=against, against_sample=against_sample, html=html)
             shown = report.to_json() if as_json else report.to_markdown()
@@ -850,6 +877,7 @@ def profile_expand(
         int | None, typer.Option('--rows', metavar='N', min=0, help='Record N as the row count, which data generate defaults to.')
     ] = None,
     out: Annotated[Path | None, typer.Option('--out', metavar='FILE', help='Write the profile to FILE rather than print its YAML.')] = None,
+    as_json: ProfileJsonOption = False,
 ) -> None:
     """Print the full profile a short YAML or --columns stands for: doppeldata profile expand people.yaml > people.profile.yaml
 
@@ -860,7 +888,7 @@ def profile_expand(
     if rows is not None:
         expanded = Profile.expand(expanded, rows=rows)
     if out is None:
-        typer.echo(expanded.to_yaml(), nl=False)
+        typer.echo(profile_text(expanded, as_json=as_json), nl=False)
         return
     try:
         expanded.save(out)
@@ -947,6 +975,7 @@ def profile_import(
         ),
     ] = None,
     out: Annotated[Path | None, typer.Option('--out', metavar='FILE', help='Write the seed to FILE rather than print its YAML.')] = None,
+    as_json: ProfileJsonOption = False,
 ) -> None:
     """Import a seed profile from a schema a project already has: doppeldata profile import --from odcs orders.odcs.yaml
 
@@ -956,7 +985,7 @@ def profile_import(
     """
     importer = IMPORTERS.get(kind)
     if importer is None:
-        raise refused(issue_codes.COMMAND_LINE, f'{kind!r} is not a source to import', '--from', value=kind, valid=list(IMPORTERS))
+        raise refused(issue_codes.UNKNOWN_IMPORT_KIND, f'{kind!r} is not a source to import', '--from', value=kind, valid=list(IMPORTERS))
     if table is not None and not importer.several_tables:
         raise typer.BadParameter(f'a {kind} source holds one table, so --table picks nothing', param_hint='--table')
     for given, flag in ((region, '--region'), (detected_entities, '--detected-entities')):
@@ -975,7 +1004,7 @@ def profile_import(
         raise typer.BadParameter(str(error), param_hint=IMPORT_ROLE_OPTIONS[error.role]) from error
     print_notices(caught)
     if out is None:
-        typer.echo(seed.to_yaml(), nl=False)
+        typer.echo(profile_text(seed, as_json=as_json), nl=False)
         return
     try:
         seed.save(out)
@@ -1024,6 +1053,7 @@ def profile_export(
         ),
     ] = None,
     out: Annotated[Path | None, typer.Option('--out', metavar='FILE', help='Write the export to FILE rather than print it.')] = None,
+    as_json: ExportJsonOption = False,
 ) -> None:
     """Export a profile's contract for another tool to validate data with: doppeldata profile export orders.profile.yaml --format dqdl
 
@@ -1034,17 +1064,12 @@ def profile_export(
 
     A profile made from data that fails profile check is refused, so no export carries a literal the privacy policy did not pass.
     """
-    if export_format not in EXPORT_FORMATS:
-        message = f'{export_format!r} is not an export format'
-        raise refused(issue_codes.UNKNOWN_EXPORT_FORMAT, message, '--format', value=export_format, valid=EXPORT_FORMATS)
     writable_out(out)
     try:
-        with refused_as_profile(profile_name):
+        with refused_at({'format': '--format', 'table': '--table'}), refused_as_profile(profile_name):
             text = export(profile_name, export_format, table=table)
     except (OSError, InvalidProfile, SourceError) as error:
         raise typer.BadParameter(str(error), param_hint='PROFILE') from error
-    except ValueError as error:
-        raise typer.BadParameter(str(error), param_hint='--table') from error
     if out is None:
         typer.echo(text, nl=False)
         return
@@ -1143,8 +1168,8 @@ def data_choices(
 
 @contextlib.contextmanager
 def refused_as_profile(name: str | None) -> Iterator[None]:
-    """Refuse PROFILE with exit 2 where the library refuses the data file it names, or a profile `name` that fails its check
-    where its literals would leave it."""
+    """Refuse PROFILE where the library refuses the data file it names, or a profile `name` that fails its check where its
+    literals would leave it, leading each violation with E-PROFILE-030."""
     try:
         yield
     except SourceError as error:
@@ -1153,10 +1178,10 @@ def refused_as_profile(name: str | None) -> Iterator[None]:
         raise typer.BadParameter(str(error), param_hint='PROFILE') from error
     except CheckFailed as error:
         hint = f'doppeldata profile check {name} names each violation' if name is not None else None
-        refusal = InvalidArgument(error.code, error.message, field='PROFILE', value=name, hint=hint)
-        # The profile named cannot be used, so the command ends as a refused argument does, not as a failed check.
-        refusal.exit_code = 2
-        raise refusal from error
+        message = f'{error.message}, so no file carries its literals'
+        refused_profile = Issue(issue_codes.PROFILE_FAILS_CHECK, 'PROFILE', message, value=name, hint=hint)
+        violations = error.report.violations if isinstance(error.report, ProfileFileCheck) else []
+        raise IssueCarrier([refused_profile, *violations], headline=message) from error
 
 
 def write_choices(
@@ -1168,13 +1193,7 @@ def write_choices(
     writer: str | None,
     embed_profile: bool = False,
 ) -> WriteChoices:
-    """What the write flags lay over the profile, each refused with exit 2 when it names nothing doppeldata writes."""
-    if file_format is not None and file_format not in output_formats():
-        message = f'{file_format!r} is not a format doppeldata writes'
-        raise refused(issue_codes.COMMAND_LINE, message, '--format', value=file_format, valid=output_formats())
-    if partition_style is not None and partition_style not in partition_styles():
-        message = f'{partition_style!r} is not a partition style doppeldata writes'
-        raise refused(issue_codes.COMMAND_LINE, message, '--partition-style', value=partition_style, valid=partition_styles())
+    """What the write flags lay over the profile, each refused when it names nothing doppeldata writes."""
     if no_partitions and partition_by:
         raise typer.BadParameter('--no-partitions writes no partitions, so it takes no --partition-by', param_hint='--no-partitions')
     settings = None
@@ -1186,7 +1205,8 @@ def write_choices(
         if not isinstance(settings, dict):
             raise typer.BadParameter(f'{writer!r} is not a JSON object', param_hint='--writer')
     keys = [] if no_partitions else partition_by or None
-    return WriteChoices(file_format, file_rows, keys, partition_style, settings, embed_profile)
+    with refused_at({'format': '--format', 'partition_style': '--partition-style'}):
+        return WriteChoices(file_format, file_rows, keys, partition_style, settings, embed_profile)
 
 
 def size(count: int) -> str:
@@ -1345,6 +1365,7 @@ def data_generate(
         typer.Option('--manifest', help='Write _manifest.json beside a one-file --out. A directory or S3 write always writes one.'),
     ] = False,
     scale: ScaleOption = None,
+    as_json: ManifestJsonOption = False,
 ) -> None:
     """Write a dataset, as data plan prints it: doppeldata data generate --columns name,email,zip --rows 1000 --out people.csv
 
@@ -1381,6 +1402,9 @@ def data_generate(
             )
         finally:
             signal.signal(signal.SIGTERM, terminate)
+        if as_json:
+            typer.echo(json.dumps(stored_bundle.document, indent=2, ensure_ascii=False))
+            return
         width = max(len(name) for name in stored_bundle.tables)
         for name, table in stored_bundle.tables.items():
             stored = size(sum(file['bytes'] for file in table.files))
@@ -1408,6 +1432,9 @@ def data_generate(
     finally:
         signal.signal(signal.SIGTERM, terminate)
     document = manifest.document
+    if as_json:
+        typer.echo(json.dumps(document, indent=2, ensure_ascii=False))
+        return
     generated = int(manifest.identity['dataset_rows'])
     rows_written = sum(file['rows'] for file in manifest.files)
     copies = f' ({generated:,} generated, the rest copies)' if rows_written != generated else ''
@@ -1495,7 +1522,7 @@ def scenario_show(name: Annotated[str, typer.Argument(metavar='NAME', help='An o
     if name not in op_schemas():
         known = [*op_schemas(), *example_scenarios.example_names()]
         issue = unknown_name(issue_codes.UNKNOWN_OP, name, known, (), 'an op or an example scenario')
-        raise InvalidArgument(issue.code, issue.message, field='NAME', value=name, valid=issue.valid, closest=issue.closest)
+        raise InvalidArgument(issue.code, issue.message, field='NAME', value=name, valid=issue.valid)
     branch = op_schemas()[name]
     parameters = {key: value for key, value in branch['properties'].items() if key != 'op'}
     width = max(len(key) for key in parameters)
@@ -1535,7 +1562,8 @@ def scenario_check(
         prepared.engine.ranges_json(prepared.options)
     except InvalidScenario as error:
         echo_scenario_check(error.source, source.document['name'], as_json, issues=error.issues)
-        raise typer.Exit(3) from error
+        failed = f'{error.source} does not hold for profile {source.document["name"]} in {counted(len(error.issues), "place")}'
+        raise DoppeldataError(issue_codes.SCENARIO_CHECK_FAILED, failed, field='SCENARIO', value=scenario_name) from error
     plain = scenario.to_plain()
     held = f'{counted(len(plain.get("perturbations") or []), "perturbation")} and {counted(len(plain.get("expect") or []), "expectation")}'
     echo_scenario_check(scenario.source, source.document['name'], as_json, held=f'{held}, scenario {scenario.digest}')
@@ -1569,17 +1597,17 @@ def schemas_list(as_json: JsonOption = False) -> None:
 @schemas_app.command('show', no_args_is_help=True)
 def schemas_show(name: Annotated[str, typer.Argument(metavar='NAME', help='A schema name, as schemas list prints it.')]) -> None:
     """Print a JSON Schema (Draft 2020-12)."""
-    if name not in schema_names():
-        raise refused(issue_codes.COMMAND_LINE, f'{name!r} is not a schema doppeldata ships', 'NAME', value=name, valid=schema_names())
-    typer.echo(schema_text(name), nl=False)
+    with refused_at({'name': 'NAME'}):
+        text = schema_text(name)
+    typer.echo(text, nl=False)
 
 
 @capabilities_app.command('show')
 def capabilities_show(ctx: typer.Context, as_json: JsonOption = False) -> None:
-    """List every command, format, op, fake, semantic type, policy and issue code this install takes.
+    """List everything this install takes, read from the registries that refuse a value outside them.
 
-    It is read from the installed doppeldata, so it matches this version exactly. --json adds each command's flags, each
-    op's fields and each issue code's exit status and hint.
+    It is read from the installed doppeldata, so it matches this version exactly. --json prints each list whole, with every
+    field of each row the text leaves out.
     """
     held = capabilities(command_surface(ctx))
     if as_json:

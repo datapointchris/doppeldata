@@ -187,12 +187,8 @@ def load(name: str) -> EnabledPack:
     found = list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP, name=name))
     if not found:
         installed = sorted({*BUILT_IN, *(entry.name for entry in importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))})
-        message = (
-            f'no detector pack named {name!r} is installed; installed packs: {", ".join(installed)}. '
-            f'A pack registers under the {ENTRY_POINT_GROUP!r} entry-point group'
-        )
-        closest = difflib.get_close_matches(name, installed)
-        raise DetectorPackError(issue_codes.DETECTOR_PACK_MISSING, message, field='packs', value=name, valid=installed, closest=closest)
+        message = f'no detector pack named {name!r} is installed. A pack registers under the {ENTRY_POINT_GROUP!r} entry-point group'
+        raise DetectorPackError(issue_codes.DETECTOR_PACK_MISSING, message, field='packs', value=name, valid=installed)
     if len(found) > 1:
         sources = ', '.join(f'{entry.value} from {provider(entry)}' for entry in found)
         message = f'more than one installed distribution registers a detector pack named {name!r}: {sources}'
