@@ -24,16 +24,22 @@ use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::Distribution;
 use rand_distr::weighted::WeightedAliasIndex;
+use regex_syntax::hir::Capture;
 use regex_syntax::hir::Class;
+use regex_syntax::hir::ClassBytes;
+use regex_syntax::hir::ClassBytesRange;
 use regex_syntax::hir::Hir;
 use regex_syntax::hir::HirKind;
+use regex_syntax::hir::Repetition;
 
 use super::BlockPosition;
+use super::PATTERN_MAX_REPEAT;
 use super::StreamKeys;
 use super::distinct_values::Stratum;
 use super::distinct_values::ValueIndex;
 use super::distinct_values::Variety;
 use super::inverse_cdf::InverseCdf;
+use super::unbounded_most;
 use super::unique_pattern_key::UniquePatternKey;
 use crate::profile::CharClass;
 use crate::profile::CheckDigit;
@@ -302,7 +308,8 @@ pub(crate) fn push_uuid(rng: &mut ChaCha8Rng, out: &mut String) {
 pub(crate) struct Pattern {
     regex: rand_regex::Regex,
     pub(crate) strings: f64,
-    /// The pattern with its anchors dropped, as `regex` generates it.
+    /// The pattern as `regex` generates it: its anchors dropped and each unbounded repetition
+    /// bounded at [`unbounded_most`], so its strings are finitely many.
     pub(crate) hir: Hir,
 }
 
@@ -315,7 +322,7 @@ impl Pattern {
 
 /// A stored pattern compiled for generation. A line anchor is dropped, because a generated value is
 /// the whole line. `\d` and the other classes are ASCII, as the profiler's patterns mean them.
-pub(crate) fn compile_pattern(pattern: &str, max_repeat: u32) -> Result<Pattern, String> {
+pub(crate) fn compile_pattern(pattern: &str) -> Result<Pattern, String> {
     let ascii = regex_syntax::ParserBuilder::new().unicode(false).build().parse(pattern);
     let hir = match ascii {
         Ok(hir) => hir,
@@ -323,16 +330,38 @@ pub(crate) fn compile_pattern(pattern: &str, max_repeat: u32) -> Result<Pattern,
             .parse(pattern)
             .map_err(|error| format!("pattern {pattern:?} does not parse: {error}"))?,
     };
-    let hir = without_anchors(&hir);
-    let strings = pattern_strings(&hir, max_repeat);
-    let regex =
-        rand_regex::Regex::with_hir(hir.clone(), max_repeat).map_err(|error| format!("pattern {pattern:?} cannot generate: {error}"))?;
+    let hir = bounded(&without_anchors(&hir));
+    let strings = pattern_strings(&hir);
+    let regex = rand_regex::Regex::with_hir(hir.clone(), PATTERN_MAX_REPEAT)
+        .map_err(|error| format!("pattern {pattern:?} cannot generate: {error}"))?;
     Ok(Pattern { regex, strings, hir })
 }
 
-/// The strings `hir` generates, counting each alternative apart even where two overlap. An
-/// unbounded repetition runs to `max_repeat` extra repeats, as rand_regex generates it.
-fn pattern_strings(hir: &Hir, max_repeat: u32) -> f64 {
+/// `hir` with each unbounded repetition bounded at [`unbounded_most`], the bound rand_regex draws it
+/// to.
+fn bounded(hir: &Hir) -> Hir {
+    match hir.kind() {
+        HirKind::Repetition(repetition) => Hir::repetition(Repetition {
+            min: repetition.min,
+            max: Some(repetition.max.unwrap_or(unbounded_most(repetition.min))),
+            greedy: repetition.greedy,
+            sub: Box::new(bounded(&repetition.sub)),
+        }),
+        HirKind::Capture(capture) => Hir::capture(Capture {
+            index: capture.index,
+            name: capture.name.clone(),
+            sub: Box::new(bounded(&capture.sub)),
+        }),
+        HirKind::Concat(parts) => Hir::concat(parts.iter().map(bounded).collect()),
+        HirKind::Alternation(branches) => Hir::alternation(branches.iter().map(bounded).collect()),
+        _ => hir.clone(),
+    }
+}
+
+/// The strings a bounded `hir` generates, counting each alternative apart even where two overlap,
+/// as rand_regex draws each alternative apart. So it counts what the fresh draw draws among, where
+/// a unique key counts the distinct strings alone.
+fn pattern_strings(hir: &Hir) -> f64 {
     match hir.kind() {
         HirKind::Empty | HirKind::Look(_) | HirKind::Literal(_) => 1.0,
         HirKind::Class(Class::Unicode(class)) => class
@@ -345,10 +374,10 @@ fn pattern_strings(hir: &Hir, max_repeat: u32) -> f64 {
             .iter()
             .map(|range| f64::from(range.end() - range.start()) + 1.0)
             .sum(),
-        HirKind::Capture(capture) => pattern_strings(&capture.sub, max_repeat),
+        HirKind::Capture(capture) => pattern_strings(&capture.sub),
         HirKind::Repetition(repetition) => {
-            let each = pattern_strings(&repetition.sub, max_repeat);
-            let most = repetition.max.unwrap_or(repetition.min.saturating_add(max_repeat));
+            let each = pattern_strings(&repetition.sub);
+            let most = repetition.max.unwrap_or(unbounded_most(repetition.min));
             let (mut power, mut total) = (1.0_f64, 0.0_f64);
             for repeats in 0..=most {
                 if repeats >= repetition.min {
@@ -361,8 +390,8 @@ fn pattern_strings(hir: &Hir, max_repeat: u32) -> f64 {
             }
             total
         }
-        HirKind::Concat(parts) => parts.iter().map(|part| pattern_strings(part, max_repeat)).product(),
-        HirKind::Alternation(branches) => branches.iter().map(|branch| pattern_strings(branch, max_repeat)).sum(),
+        HirKind::Concat(parts) => parts.iter().map(pattern_strings).product(),
+        HirKind::Alternation(branches) => branches.iter().map(pattern_strings).sum(),
     }
 }
 
@@ -423,6 +452,22 @@ impl Shape {
 
     fn strings(&self) -> f64 {
         self.leading_strings(self.chars.len())
+    }
+
+    /// The shape's strings as one regular expression, each character class an ASCII range.
+    fn hir(&self) -> Hir {
+        let range = |low: u8, high: u8| Hir::class(Class::Bytes(ClassBytes::new([ClassBytesRange::new(low, high)])));
+        Hir::concat(
+            self.chars
+                .iter()
+                .map(|&c| match c {
+                    ShapeChar::Upper => range(b'A', b'Z'),
+                    ShapeChar::Lower => range(b'a', b'z'),
+                    ShapeChar::Digit => range(b'0', b'9'),
+                    ShapeChar::Literal(literal) => Hir::literal(literal.encode_utf8(&mut [0; 4]).as_bytes()),
+                })
+                .collect(),
+        )
     }
 
     /// The distinct strings the shape's first `chars` characters can hold.
@@ -487,6 +532,16 @@ pub(crate) enum TextSource {
 }
 
 impl TextSource {
+    /// The strings the source draws as one regular expression, which a key stated unique ranks: a
+    /// pattern's, bounded as it draws them, or every stored shape's. None for any other source.
+    pub(crate) fn key_language(&self) -> Option<Hir> {
+        match self {
+            Self::Pattern(pattern) => Some(pattern.hir.clone()),
+            Self::Shapes { shapes, .. } => Some(Hir::alternation(shapes.iter().map(Shape::hir).collect())),
+            _ => None,
+        }
+    }
+
     /// How many strings the source draws. A pattern's strings are counted as drawn equally often,
     /// though an alternation or a ranged repetition draws some more often than others.
     pub(crate) fn variety(&self) -> Variety {
@@ -599,10 +654,17 @@ impl CheckDigitDraw {
     }
 }
 
-/// Where `value`'s check digit sits, which is its last ASCII digit, and the digit `kind` computes
-/// there from the ASCII digits before it. None for a value holding no digit.
+/// Whether `kind`'s check digit can be written over `byte`. A value's last such byte holds it.
+pub(crate) fn holds_check_digit(kind: CheckDigit, byte: u8) -> bool {
+    match kind {
+        CheckDigit::Luhn | CheckDigit::Npi | CheckDigit::Dea => byte.is_ascii_digit(),
+    }
+}
+
+/// Where `value`'s check digit sits, its last byte [`holds_check_digit`] admits, and the digit
+/// `kind` computes there from the ASCII digits before it. None for a value holding no such byte.
 fn check_digit_site(kind: CheckDigit, value: &str) -> Option<(usize, u8)> {
-    let last = value.bytes().rposition(|b| b.is_ascii_digit())?;
+    let last = value.bytes().rposition(|b| holds_check_digit(kind, b))?;
     let payload = value.as_bytes()[..last].iter().filter(|b| b.is_ascii_digit()).map(|b| b - b'0');
     let right = match kind {
         CheckDigit::Luhn => luhn_check_digit(payload),
@@ -625,8 +687,8 @@ pub(crate) struct TextSampler {
     pub(crate) index: Option<ValueIndex>,
     /// Each row's value is the one at its own row's index, so a child can read it at any row.
     pub(crate) by_row: bool,
-    /// Where set, the column is a key stated unique, and each row holds the pattern's string its
-    /// row's rank names, which no other row holds. A child reads it at any row too.
+    /// Where set, the column is a key stated unique, and each row holds the string of its pattern or
+    /// shapes its row's rank names, which no other row holds. A child reads it at any row too.
     pub(crate) unique: Option<Arc<UniquePatternKey>>,
     pub(crate) output: StringOutput,
 }

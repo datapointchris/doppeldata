@@ -54,7 +54,7 @@ def table_source(table: ContractTable, notes: list[str], bundle: bool) -> str:
             for inner in nested(column)
             if inner.holds_constraint()
         )
-    whole = [key for key in table.stated_keys() if key.uniqueness.whole]
+    whole = [key for key in table.stated_keys() if key.whole]
     notes.extend(f'{prefix}{", ".join(key.columns)}: the key, as pandera checks no uniqueness on PySpark' for key in whole)
     return '\n'.join(lines) + '\n'
 

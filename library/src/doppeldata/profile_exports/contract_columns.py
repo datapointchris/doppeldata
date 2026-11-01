@@ -7,12 +7,14 @@ quality checks carry a share as a floor `STANDARD_ERRORS` standard errors below 
 """
 
 import dataclasses as dc
+import json
 import math
 import re
 from collections.abc import Iterator
 from collections.abc import Mapping
 from typing import Any
 
+from doppeldata import _core
 from doppeldata.bundle_generation import bundle_arguments
 from doppeldata.privacy_policy import DEFAULT_K_MIN
 from doppeldata.profile_exports.type_names import SEMANTIC_FORMATS
@@ -265,10 +267,12 @@ def percent(share: float) -> str:
 
 @dc.dataclass(frozen=True)
 class Key:
-    """Columns whose values no two rows share, in `uniqueness` of the rows."""
+    """Columns whose values no two rows share, in `uniqueness` of the rows. `whole` says they hold for every row, as the
+    engine reads a key it refuses to draw a value of twice."""
 
     columns: tuple[str, ...]
     uniqueness: Share
+    whole: bool
 
 
 @dc.dataclass(frozen=True)
@@ -321,7 +325,7 @@ class ContractTable:
     def unique_columns(self) -> set[str]:
         """Each column a whole key of one column makes unique."""
         keys = [self.primary_key, *self.unique_keys] if self.primary_key else list(self.unique_keys)
-        return {key.columns[0] for key in keys if len(key.columns) == 1 and key.uniqueness.whole}
+        return {key.columns[0] for key in keys if len(key.columns) == 1 and key.whole}
 
     def stated_keys(self) -> list[Key]:
         return [self.primary_key, *self.unique_keys] if self.primary_key else list(self.unique_keys)
@@ -330,7 +334,7 @@ class ContractTable:
         """What a strict format leaves out of this table, and why."""
         notes = [note for column in self.columns for note in column.left_out()]
         for key in self.stated_keys():
-            if not key.uniqueness.whole:
+            if not key.whole:
                 unique = f'{percent(key.uniqueness.value)} of rows hold uniquely{key.uniqueness.caveat()}'
                 notes.append(LeftOut('key', f'{", ".join(key.columns)}: the key, which {unique}'))
         for reference in self.foreign_keys:
@@ -416,6 +420,9 @@ def contract_table(profile: Profile, type_mix: frozenset[str] | None) -> Contrac
         type_mix_pointers=type_mix,
     )
     keys = (document.get('dataset') or {}).get('keys') or {}
+    wholes = iter(_core.whole_keys(json.dumps(document, allow_nan=False)))
+    primary_key = table_key(keys['primary'], facts, next(wholes)) if keys.get('primary') else None
+    unique_keys = tuple(table_key(key, facts, next(wholes)) for key in keys.get('candidates') or [])
     partitioning = (source.get('layout') or {}).get('partitioning') or {}
     return ContractTable(
         name=str(document['name']),
@@ -426,8 +433,8 @@ def contract_table(profile: Profile, type_mix: frozenset[str] | None) -> Contrac
         source_format=source.get('format'),
         csv_null=((source.get('csv') or {}).get('writer') or {}).get('null'),
         profile_sha256=profile.sha256,
-        primary_key=table_key(keys['primary'], facts) if keys.get('primary') else None,
-        unique_keys=tuple(table_key(key, facts) for key in keys.get('candidates') or []),
+        primary_key=primary_key,
+        unique_keys=unique_keys,
         partition_keys=tuple(key['name'] for key in partitioning.get('keys') or []),
         profile=profile,
         sample=facts.sample,
@@ -474,12 +481,13 @@ def floored_share(value: float, rows: int | None, rounding: float, floor: int | 
     return Share(value, rows, rounding + (floor - 1) / rows, sample or unstated)
 
 
-def table_key(key: Mapping[str, Any], facts: 'TableFacts') -> Key:
+def table_key(key: Mapping[str, Any], facts: 'TableFacts', whole: bool) -> Key:
     uniqueness = key.get('uniqueness')
     if uniqueness is None:
-        return Key(tuple(key['columns']), Share(1.0, None))
+        return Key(tuple(key['columns']), Share(1.0, None), whole)
     rounding = half_unit(1 - uniqueness, RATE_DIGITS)
-    return Key(tuple(key['columns']), floored_share(uniqueness, facts.rows, rounding, facts.floor, facts.sample, 'sharing a value'))
+    share = floored_share(uniqueness, facts.rows, rounding, facts.floor, facts.sample, 'sharing a value')
+    return Key(tuple(key['columns']), share, whole)
 
 
 def foreign_key(relationship: StatedRelationship, child: ContractTable) -> ForeignKey:

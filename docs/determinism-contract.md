@@ -98,9 +98,9 @@ table, and its rows are the sum of its tables'.
 - **A parent key is addressed at its row, never read back.** A `sequence` key is its formula, and a
   uuid key seeks its stream to the row. A key that is itself a foreign key takes its own
   relationship's draw. Any other integer key is a sequence across its profiled extremes. A string
-  key stated unique and drawn from a pattern holds the string its row's rank names, and any other
-  string key draws from its `indexed_values` stream at the row. Any other key is refused as
-  `E-PROFILE-120`.
+  key stated unique and drawn from a pattern or shapes holds the string its row's rank names, and
+  any other string key draws from its `indexed_values` stream at the row. Any other key is refused
+  as `E-PROFILE-120`.
 - **An inherited column copies its parent row's value.** The child block generates the parent
   blocks its rows touch, cached per thread, so the copy is the value the parent's table writes.
 

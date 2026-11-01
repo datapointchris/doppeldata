@@ -1,10 +1,11 @@
-//! A key stated unique, drawn from its pattern with no string twice: rank, encipher, unrank, as
+//! A key stated unique, drawn from its pattern or shapes with no string twice: rank, encipher, unrank, as
 //! format-preserving encryption builds a cipher over a regular language. A keyed permutation takes
 //! each row to a rank among the pattern's strings. The rank is read off a DFA of the pattern, which
 //! holds one path per string, by counting the strings past each transition. So two rows never hold
 //! one string, however ambiguous the pattern is.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use regex_automata::Anchored;
 use regex_automata::MatchKind;
@@ -14,11 +15,11 @@ use regex_automata::dfa::dense;
 use regex_automata::nfa::thompson;
 use regex_automata::util::start;
 use regex_syntax::hir::Hir;
-use regex_syntax::hir::HirKind;
 use regex_syntax::hir::Look;
-use regex_syntax::hir::Repetition;
 
+use super::text::holds_check_digit;
 use crate::keyed_permutation::KeyedPermutation;
+use crate::profile::CheckDigit;
 use crate::rng::splitmix;
 
 /// The bytes the automaton may take, and the bytes the table counting its strings may take.
@@ -32,9 +33,10 @@ const SATURATED: u128 = u128::MAX;
 pub(crate) enum KeyEnd {
     /// Each whole string.
     Whole,
-    /// Each string ending in an ASCII digit, counted by what precedes the digit, because a check
-    /// digit is written over it. So two rows differ before their check digit.
-    BeforeCheckDigit,
+    /// Each string counted by what precedes its check digit's site, the last byte the kind can be
+    /// written over, because the digit is written there. A string closes on the site and a tail
+    /// holding no other site, so two rows differ before their check digit.
+    BeforeCheckDigit(CheckDigit),
 }
 
 /// A run of consecutive bytes a state reads into one live state.
@@ -45,6 +47,13 @@ struct ByteRun {
     next: u32,
 }
 
+impl ByteRun {
+    fn each(&self) -> impl Iterator<Item = u8> + use<> {
+        let first = self.first;
+        (0..self.bytes).map(move |at| first + at as u8)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct UniquePatternKey {
     end: KeyEnd,
@@ -52,8 +61,11 @@ pub(crate) struct UniquePatternKey {
     runs: Vec<Vec<ByteRun>>,
     /// Whether a string the key holds ends at each state.
     ends: Vec<bool>,
-    /// The digit closing a string at each state that ends one, where the key ends before a check digit.
-    closing_digit: Vec<u8>,
+    /// Where the key ends before a check digit, the site byte closing a string at each state that
+    /// ends one, and the state it reads into.
+    closing: Vec<Option<(u8, u32)>>,
+    /// The next step of each state's shortest tail holding no site to the end of a string.
+    tail_steps: Vec<Option<(u8, u32)>>,
     /// The bytes the longest string takes.
     budget: usize,
     /// `within[left · states + state]`: the strings ending within `left` bytes of `state`.
@@ -62,16 +74,15 @@ pub(crate) struct UniquePatternKey {
 }
 
 impl UniquePatternKey {
-    /// The key drawing `hir`'s strings, each unbounded repetition run to `max_repeat` extra repeats,
-    /// as rand_regex runs it. An error where the automaton passes [`AUTOMATON_BYTES`].
-    pub(crate) fn new(hir: &Hir, max_repeat: u32, end: KeyEnd) -> Result<Self, String> {
+    /// The key drawing `hir`'s strings. `hir` bounds every repetition, as a compiled pattern's
+    /// does. An error where the automaton passes [`AUTOMATON_BYTES`].
+    pub(crate) fn new(hir: &Hir, end: KeyEnd) -> Result<Self, String> {
         let too_large = |error: String| format!("its automaton cannot be built within {AUTOMATON_BYTES} bytes: {error}");
-        let bounded = bounded(hir, max_repeat);
-        let budget = bounded
+        let budget = hir
             .properties()
             .maximum_len()
             .ok_or_else(|| too_large("its longest string is longer than a usize counts".to_string()))?;
-        let whole = Hir::concat(vec![bounded, Hir::look(Look::End)]);
+        let whole = Hir::concat(vec![hir.clone(), Hir::look(Look::End)]);
         let nfa = thompson::Compiler::new()
             .configure(
                 thompson::Config::new()
@@ -132,23 +143,21 @@ impl UniquePatternKey {
         }
         let accepts: Vec<bool> = order.iter().map(|&id| dfa.is_match_state(dfa.next_eoi_state(id))).collect();
         let states = order.len();
-        let (ends, closing_digit) = match end {
-            KeyEnd::Whole => (accepts, vec![0; states]),
-            KeyEnd::BeforeCheckDigit => {
-                let closing: Vec<Option<u8>> = runs
+        let (ends, closing, tail_steps) = match end {
+            KeyEnd::Whole => (accepts, Vec::new(), Vec::new()),
+            KeyEnd::BeforeCheckDigit(kind) => {
+                let tail_steps = tails_holding_no_site(&runs, &accepts, kind);
+                let closes = |state: usize| accepts[state] || tail_steps[state].is_some();
+                let closing: Vec<Option<(u8, u32)>> = runs
                     .iter()
                     .map(|state_runs| {
-                        state_runs.iter().find_map(|run| {
-                            (run.first..=run.first.saturating_add((run.bytes - 1) as u8))
-                                .find(|byte| byte.is_ascii_digit())
-                                .filter(|_| accepts[run.next as usize])
+                        state_runs.iter().filter(|run| closes(run.next as usize)).find_map(|run| {
+                            let site = run.each().find(|&byte| holds_check_digit(kind, byte))?;
+                            Some((site, run.next))
                         })
                     })
                     .collect();
-                (
-                    closing.iter().map(Option::is_some).collect(),
-                    closing.iter().map(|digit| digit.unwrap_or(0)).collect(),
-                )
+                (closing.iter().map(Option::is_some).collect(), closing, tail_steps)
             }
         };
         let mut within = vec![0u128; (budget + 1) * states];
@@ -169,7 +178,8 @@ impl UniquePatternKey {
             end,
             runs,
             ends,
-            closing_digit,
+            closing,
+            tail_steps,
             budget,
             within,
             strings,
@@ -189,7 +199,7 @@ impl UniquePatternKey {
         };
         match self.end {
             KeyEnd::Whole => format!("{count} strings"),
-            KeyEnd::BeforeCheckDigit => format!("{count} strings before their check digit"),
+            KeyEnd::BeforeCheckDigit(_) => format!("{count} strings before their check digit"),
         }
     }
 
@@ -209,8 +219,8 @@ impl UniquePatternKey {
 
     /// The string `rank` names, written to `out`. Where more strings lie past some transition than
     /// any rank reaches, the transition is picked by a hash of the rank, and the rank stays whole for
-    /// what follows. Whether that happens depends on the state alone, so two ranks reaching one
-    /// string would have walked one path, losing the same counts, and so are one rank.
+    /// what follows. Whether that happens depends only on the state and the bytes left, so two ranks
+    /// reaching one string walked one path, lost the same counts, and are one rank.
     fn push_rank(&self, mut rank: u128, mix: u64, out: &mut Vec<u8>) {
         let states = self.runs.len();
         let (mut state, mut left) = (0usize, self.budget);
@@ -258,10 +268,41 @@ impl UniquePatternKey {
             state = next as usize;
             left -= 1;
         }
-        if self.end == KeyEnd::BeforeCheckDigit {
-            out.push(self.closing_digit[state]);
+        if let Some(&Some((site, mut at))) = self.closing.get(state) {
+            out.push(site);
+            while let Some((byte, next)) = self.tail_steps[at as usize] {
+                out.push(byte);
+                at = next;
+            }
         }
     }
+}
+
+/// Each state's first step on its shortest tail of bytes `kind` is never written over that ends a
+/// string. None where the state ends one, or no such tail does. Found breadth first, back from the
+/// states a string ends at.
+fn tails_holding_no_site(runs: &[Vec<ByteRun>], accepts: &[bool], kind: CheckDigit) -> Vec<Option<(u8, u32)>> {
+    let mut into: Vec<Vec<(u32, u8)>> = vec![Vec::new(); runs.len()];
+    for (from, state_runs) in runs.iter().enumerate() {
+        for run in state_runs {
+            if let Some(byte) = run.each().find(|&byte| !holds_check_digit(kind, byte)) {
+                into[run.next as usize].push((from as u32, byte));
+            }
+        }
+    }
+    let mut found = accepts.to_vec();
+    let mut steps = vec![None; runs.len()];
+    let mut queue: VecDeque<u32> = (0..runs.len() as u32).filter(|&state| accepts[state as usize]).collect();
+    while let Some(state) = queue.pop_front() {
+        for &(from, byte) in &into[state as usize] {
+            if !found[from as usize] {
+                found[from as usize] = true;
+                steps[from as usize] = Some((byte, state));
+                queue.push_back(from);
+            }
+        }
+    }
+    steps
 }
 
 /// A key's draw under one seed: the permutation of its rows and the hash spreading them.
@@ -290,23 +331,6 @@ impl SeededPatternKey<'_> {
     }
 }
 
-/// `hir` with each unbounded repetition bounded at `max_repeat` repeats past its least, and its
-/// capture groups dropped, so its strings are finitely many.
-fn bounded(hir: &Hir, max_repeat: u32) -> Hir {
-    match hir.kind() {
-        HirKind::Repetition(repetition) => Hir::repetition(Repetition {
-            min: repetition.min,
-            max: Some(repetition.max.unwrap_or(repetition.min.saturating_add(max_repeat))),
-            greedy: repetition.greedy,
-            sub: Box::new(bounded(&repetition.sub, max_repeat)),
-        }),
-        HirKind::Capture(capture) => bounded(&capture.sub, max_repeat),
-        HirKind::Concat(parts) => Hir::concat(parts.iter().map(|part| bounded(part, max_repeat)).collect()),
-        HirKind::Alternation(branches) => Hir::alternation(branches.iter().map(|branch| bounded(branch, max_repeat)).collect()),
-        _ => hir.clone(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -318,13 +342,14 @@ mod tests {
     #[test]
     fn every_row_holds_a_string_of_the_pattern_no_other_row_holds() {
         // `\d{1,2}\d{1,2}` writes "123" two ways, so only a count of distinct strings holds it once.
+        // `[AB]\d{1,2}\d[XY]` takes its check digit before a letter, so each key is what surrounds it.
         let cases = [
             (r"\d{1,2}\d{1,2}", KeyEnd::Whole, 11_100),
-            (r"[AB]\d{1,2}\d", KeyEnd::BeforeCheckDigit, 220),
+            (r"[AB]\d{1,2}\d[XY]", KeyEnd::BeforeCheckDigit(CheckDigit::Luhn), 220),
         ];
         for (pattern, end, strings) in cases {
             let hir = regex_syntax::ParserBuilder::new().unicode(false).build().parse(pattern).unwrap();
-            let key = UniquePatternKey::new(&hir, 16, end).unwrap();
+            let key = UniquePatternKey::new(&hir, end).unwrap();
             assert_eq!(key.strings(), strings, "{pattern}");
             let matches = Regex::new(&format!("^(?:{pattern})$")).unwrap();
             let seeded = key.seeded(7, 11);
@@ -333,11 +358,14 @@ mod tests {
                 let mut value = String::new();
                 seeded.push(row, &mut value);
                 assert!(matches.is_match(&value), "{pattern} drew {value:?}");
-                let before_check_digit = match end {
-                    KeyEnd::Whole => value.as_str(),
-                    KeyEnd::BeforeCheckDigit => &value[..value.len() - 1],
+                let around_check_digit = match end {
+                    KeyEnd::Whole => value.clone(),
+                    KeyEnd::BeforeCheckDigit(_) => {
+                        let site = value.bytes().rposition(|byte| byte.is_ascii_digit()).unwrap();
+                        format!("{}_{}", &value[..site], &value[site + 1..])
+                    }
                 };
-                assert!(held.insert(before_check_digit.to_string()), "{pattern} drew {value:?} twice");
+                assert!(held.insert(around_check_digit), "{pattern} drew {value:?} twice");
             }
         }
     }

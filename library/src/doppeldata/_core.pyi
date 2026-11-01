@@ -454,3 +454,9 @@ def top_share_ranks() -> list[tuple[str, int]]:
     Each ``fanout.top_fractions`` field's name and the rank, at scale 1, its share is held at,
     busiest first.
     """
+
+def whole_keys(profile_json: str) -> list[bool]:
+    """
+    Whether each key the table profile states, its primary key first, holds for every row, as
+    the engine reads a key it refuses to draw a value of twice.
+    """

@@ -35,6 +35,7 @@ use super::Block;
 use super::Planning;
 use super::ScenarioFault;
 use crate::manifest::ChangeCounts;
+use crate::plan::ColumnFault;
 use crate::plan::Plan;
 use crate::plan::PlanError;
 use crate::profile::Rate;
@@ -132,15 +133,17 @@ pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan], fo
         }
     };
     let (key_index, _) = planning.column(&key, "/key")?;
-    let unique = columns.get(key_index).is_some_and(ColumnPlan::draws_unique_values);
-    if !unique {
+    let Some(unique_rows) = columns.get(key_index).and_then(ColumnPlan::unique_rows) else {
         let drawn = columns.get(key_index).map_or("an op's values", |column| column.sampler.as_str());
         return Err(planning.refuse(
             ScenarioFault::OpNotForColumn,
             "/key",
-            format!("{key:?} draws {drawn}, and a key holds a value no other row holds: a sequence or a uuid, with no nulls"),
+            format!(
+                "{key:?} draws {drawn}, and a key holds a value no other row holds: a sequence, a uuid, or a key stated unique \
+                 drawn from a pattern or shapes, with no nulls"
+            ),
         ));
-    }
+    };
     let timestamp_column = op.timestamp_column().to_string();
     if timestamp_column == OPERATION_COLUMN || planning.schema.index_of(&timestamp_column).is_ok() {
         return Err(invalid(
@@ -213,6 +216,18 @@ pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan], fo
             "a change takes one fault at most, so duplicate_delivery_fraction and out_of_order_fraction sum to 1 at most".into(),
         ));
     }
+    // An insert's key is drawn at the row past the full load it takes, so every one counts against the key.
+    let insert_rows = libm::round(inserts * planning.rows as f64) as u64;
+    if u128::from(planning.rows) + u128::from(insert_rows) > unique_rows {
+        return Err(PlanError::Column {
+            code: ColumnFault::KeyWiderThanPattern,
+            field: format!("/columns/{key_index}"),
+            message: format!(
+                "{key:?} is a key stated unique over a full load of {} rows and {insert_rows} inserts, and it draws {}",
+                planning.rows, columns[key_index].sampler
+            ),
+        });
+    }
     Ok(CdcPlan {
         index: planning.index,
         style: op.style,
@@ -224,7 +239,7 @@ pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan], fo
         text_drawn,
         full_load_rows: planning.rows,
         block_count: planning.block_count,
-        insert_rows: libm::round(inserts * planning.rows as f64) as u64,
+        insert_rows,
         updates,
         deletes,
         mean_updates,

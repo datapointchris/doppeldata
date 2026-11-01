@@ -64,7 +64,7 @@ def schema_object(table: ContractTable, examples: dict[str, list[Any]]) -> dict[
     ]
     if references:
         entry['relationships'] = references
-    composite = [key for key in table.stated_keys() if len(key.columns) > 1 and not key.uniqueness.whole]
+    composite = [key for key in table.stated_keys() if len(key.columns) > 1 and not key.whole]
     quality = [duplicates(key.uniqueness, list(key.columns)) for key in composite]
     if quality:
         entry['quality'] = quality
@@ -75,7 +75,7 @@ def table_property(table: ContractTable, column: ContractColumn, examples: list[
     """A top-level column's property, with its key, partition, foreign key and examples."""
     prop = column_property(column)
     primary = table.primary_key
-    if primary is not None and primary.uniqueness.whole and column.name in primary.columns:
+    if primary is not None and primary.whole and column.name in primary.columns:
         prop |= {'primaryKey': True, 'primaryKeyPosition': primary.columns.index(column.name) + 1}
     elif column.name in table.unique_columns():
         prop['unique'] = True
@@ -88,7 +88,7 @@ def table_property(table: ContractTable, column: ContractColumn, examples: list[
         prop['relationships'] = references
     quality = list(prop.pop('quality', []))
     for key in table.stated_keys():
-        if key.columns == (column.name,) and not key.uniqueness.whole:
+        if key.columns == (column.name,) and not key.whole:
             quality.append(duplicates(key.uniqueness))
     if quality:
         prop['quality'] = quality
