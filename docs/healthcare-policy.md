@@ -114,27 +114,9 @@ that redistributing it requires WHO's permission.
 
 ## A list the caller supplies types only the codes it holds
 
-`--code-list NAME=FILE` hands a detector a list of one code a line. The profile records the list's
-name and sha256, never its path. Each list is written from the file its publisher issues:
-
-| List | Typed where FILE holds it | Written by |
-| --- | --- | --- |
-| `icd10cm` | the code, with or without its dot | `awk '{ print $2 }' icd10cm-order-2027.txt`, from NCHS's code descriptions zip |
-| `hcpcs_level2` | the code | `awk 'substr($0, 11, 1) == 3 { print substr($0, 1, 5) }' HCPC2026_OCT_ANWEB_09232026.txt`, from CMS's quarterly alphanumeric zip |
-| `ndc` | a package code as the FDA's directory writes it, or as HIPAA's 11 digits | `cut -f3 package.txt \| tail -n +2`, from the directory's package file |
-
-```bash
-awk '{ print $2 }' icd10cm-order-2027.txt > icd10cm.txt
-doppeldata profile create claims.parquet --policy healthcare --code-list icd10cm=icd10cm.txt --out claims.profile.yaml
-```
-
-- **NCHS's order file holds every header and billable code**, without dots. Its third field is 1
-  for a billable code, so `awk '$3 == 1 { print $2 }'` writes the billable codes alone.
-- **CMS's file holds each procedure code on a record whose 11th character is 3.** A record
-  starting with three blanks is a modifier's. Terminated codes stay in the file, because historical
-  claims carry them.
-- **The NDC directory lists marketed products**, so a claim naming a withdrawn NDC needs a list
-  holding it.
+`--code-list NAME=FILE` hands a detector a list of one code a line, written from the file its
+publisher issues. [Profile healthcare data](how-to/profile-healthcare-data.md) gives the command
+that writes each list.
 
 The list types the source and never the generated data. A generated code is drawn by its format,
 so `data check` profiles it without the list.

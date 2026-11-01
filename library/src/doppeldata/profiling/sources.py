@@ -1,38 +1,21 @@
 """The data a profile describes: files on disk or under an `s3://` prefix, or a table already in memory."""
 
-import contextlib
-import logging
 import os
-from collections.abc import Iterator
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
-import botocore.exceptions
-
 from doppeldata import issue_codes
-from doppeldata.aws_access import AWS_ERRORS
-from doppeldata.aws_access import CREDENTIAL_ADVICE
-from doppeldata.aws_access import CREDENTIAL_ERRORS
-from doppeldata.aws_access import answered
-from doppeldata.aws_access import no_answer
-from doppeldata.aws_access import unanswered
-from doppeldata.errors import InvalidArgument
+from doppeldata.aws_sessions import require_boto3
 from doppeldata.errors import SourceError
-from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import PARTIAL_MANIFEST_FILE_NAME
-from doppeldata.manifest import Manifest
 from doppeldata.manifest import unfinished
 from doppeldata.profiling.backend import FORMAT_TRAITS
 from doppeldata.profiling.backend import TEXT_CODEC_SUFFIXES
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFile
 from doppeldata.profiling.backend import SourceFormat
-from doppeldata.s3_access import endpoint_named
-from doppeldata.s3_access import s3_session
-
-log = logging.getLogger(__name__)
 
 SUFFIX_FORMATS = {suffix: source_format for source_format, traits in FORMAT_TRAITS.items() for suffix in traits.suffixes}
 # The format of a text file compressed with one of these is the suffix before it.
@@ -50,7 +33,7 @@ def resolve(data: Any) -> Source:
     items = [s3_url(os.fspath(item)) for item in ([data] if isinstance(data, str | os.PathLike) else data)]
     if not items:
         raise SourceError(issue_codes.DATA_NOT_NAMED, 'no data was named; name a file, a directory or an s3:// prefix')
-    files = tuple(file for item in items for file in (s3_files(item) if item.startswith('s3://') else local_files(Path(item))))
+    files = tuple(file for item in items for file in listed_files(item))
     formats = sorted({found.value for found in map(format_of, (file.path for file in files)) if found})
     if len(formats) > 1:
         message = f'{", ".join(items)} holds files of {len(formats)} formats, {", ".join(formats)}; profile one format at a time'
@@ -60,6 +43,17 @@ def resolve(data: Any) -> Source:
         message = f'{files[0].path} is not a format doppeldata reads; name a file ending in one of {", ".join(SUFFIX_FORMATS)}'
         raise SourceError(issue_codes.NO_READABLE_FILE, message, value=files[0].path, valid=list(SUFFIX_FORMATS))
     return Source(format=source_format, files=files, name=name_of(items[0]), roots=tuple(items))
+
+
+def listed_files(item: str) -> list[SourceFile]:
+    """The files `item` names: a local file's or directory's, or the objects under an `s3://` prefix, refused where boto3,
+    which lists them, is not installed."""
+    if not item.startswith('s3://'):
+        return local_files(Path(item))
+    require_boto3(f'listing {item}')
+    from doppeldata.profiling import s3_sources
+
+    return s3_sources.s3_files(item)
 
 
 def s3_url(item: str) -> str:
@@ -123,86 +117,6 @@ def local_file(path: Path, relative: PurePosixPath) -> SourceFile:
     return SourceFile(str(path.resolve()), stat.st_size, str(stat.st_mtime_ns), partition_keys(relative))
 
 
-@contextlib.contextmanager
-def s3_errors(url: str, endpoint: str, *, doing: str = 'listed') -> Iterator[None]:
-    """Each boto3 failure under `url` as a SourceError naming the endpoint, and exiting 4 when no answer came. `doing` says
-    what could not be done to `url`, such as `read`.
-    """
-    try:
-        yield
-    except CREDENTIAL_ERRORS as error:
-        raise SourceError(issue_codes.NO_CREDENTIALS, f'{url} could not be {doing}: {error}; {CREDENTIAL_ADVICE}') from error
-    except AWS_ERRORS as error:
-        if unanswered(error):
-            raise SourceError(issue_codes.NO_ANSWER, no_answer(endpoint, 'S3', error)) from error
-        if isinstance(error, botocore.exceptions.ClientError):
-            raise SourceError(issue_codes.STORE, f'{url} could not be {doing}: {endpoint} answered {answered(error)}') from error
-        raise SourceError(issue_codes.STORE, f'{url} could not be {doing} through {endpoint}: {error}') from error
-
-
-def s3_files(url: str) -> list[SourceFile]:
-    """The objects at an `s3://` URL, listed with the credentials and endpoint boto3 resolves from the environment."""
-    parsed = urlparse(url)
-    bucket, key = parsed.netloc, parsed.path.lstrip('/')
-    try:
-        _, client = s3_session()
-    except InvalidArgument as error:
-        raise SourceError(error.code, f'{url} could not be listed: {error.message}', role='environment') from error
-    log.debug(f'{url}: listing through {endpoint_named(client)}')
-    with s3_errors(url, endpoint_named(client)):
-        # Spark writes a table as a `name.parquet/` directory, so a key with a suffix may still be a prefix.
-        if format_of(key) and not key.endswith('/') and (head := object_head(client, bucket, key)):
-            return [SourceFile(url, head['ContentLength'], head['ETag'])]
-        prefix = key.rstrip('/') + '/' if key else ''
-        found = sorted(s3_objects(client, bucket, prefix), key=lambda file: file.path)
-    if not found:
-        message = f'{url} holds no object doppeldata reads, one ending in {", ".join(SUFFIX_FORMATS)}'
-        raise SourceError(issue_codes.NO_READABLE_FILE, message, value=url, valid=list(SUFFIX_FORMATS))
-    return found
-
-
-def s3_manifest(url: str) -> Manifest | None:
-    """The manifest a doppeldata write left under the `s3://` prefix `url`, or None where it holds none."""
-    parsed = urlparse(url)
-    prefix = parsed.path.strip('/')
-    key = f'{prefix}/{MANIFEST_FILE_NAME}' if prefix else MANIFEST_FILE_NAME
-    try:
-        _, client = s3_session()
-    except InvalidArgument as error:
-        raise SourceError(error.code, f'{url} could not be read: {error.message}', role='environment') from error
-    with s3_errors(url, endpoint_named(client), doing='read'):
-        try:
-            body: bytes = client.get_object(Bucket=parsed.netloc, Key=key)['Body'].read()
-        except botocore.exceptions.ClientError as error:
-            if error.response.get('ResponseMetadata', {}).get('HTTPStatusCode') == 404:
-                return None
-            raise
-    return Manifest.from_json(body.decode('utf-8'))
-
-
-def s3_holds(url: str, name: str) -> bool:
-    """Whether the `s3://` prefix `url` holds an object named `name` at its root."""
-    parsed = urlparse(url)
-    prefix = parsed.path.strip('/')
-    try:
-        _, client = s3_session()
-    except InvalidArgument as error:
-        raise SourceError(error.code, f'{url} could not be read: {error.message}', role='environment') from error
-    with s3_errors(url, endpoint_named(client), doing='read'):
-        return object_head(client, parsed.netloc, f'{prefix}/{name}' if prefix else name) is not None
-
-
-def object_head(client: Any, bucket: str, key: str) -> dict[str, Any] | None:
-    """The object's metadata, or None when no object has that key."""
-    try:
-        head: dict[str, Any] = client.head_object(Bucket=bucket, Key=key)
-    except botocore.exceptions.ClientError as error:
-        if error.response.get('ResponseMetadata', {}).get('HTTPStatusCode') == 404:
-            return None
-        raise
-    return head
-
-
 def check_unchanged(source: Source) -> None:
     """Raise when a file of `source` changed, appeared or went away while it was profiled."""
     if not source.roots:
@@ -211,13 +125,3 @@ def check_unchanged(source: Source) -> None:
     if changed:
         listed = ', '.join(changed[:5]) + (f' and {len(changed) - 5} more' if len(changed) > 5 else '')
         raise SourceError(issue_codes.DATA_CHANGED, f'{listed} changed while it was profiled; profile it again once it stops changing')
-
-
-def s3_objects(client: Any, bucket: str, prefix: str) -> Iterator[SourceFile]:
-    for page in client.get_paginator('list_objects_v2').paginate(Bucket=bucket, Prefix=prefix):
-        for entry in page.get('Contents', []):
-            relative = PurePosixPath(entry['Key'].removeprefix(prefix))
-            if relative == UNFINISHED_WRITE:
-                raise SourceError(issue_codes.DATA_UNFINISHED, unfinished(f's3://{bucket}/{prefix}'), value=f's3://{bucket}/{prefix}')
-            if format_of(entry['Key']) and not is_hidden(relative):
-                yield SourceFile(f's3://{bucket}/{entry["Key"]}', entry['Size'], entry['ETag'], partition_keys(relative))

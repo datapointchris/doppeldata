@@ -3,6 +3,8 @@ a call names, else from the AWS environment.
 
 Profiling lists and reads S3 with boto3 itself. A write uploads through the engine's object store, which takes its credentials
 from a callable over boto3's, so an SSO profile or any other source boto3 reads works for both.
+
+This module imports botocore, so only S3 work imports it, after `aws_sessions.require_boto3` has refused a missing boto3.
 """
 
 import datetime as dt
@@ -11,6 +13,7 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
+from urllib.parse import urlparse
 from urllib.parse import urlsplit
 
 import botocore.credentials
@@ -30,6 +33,7 @@ from doppeldata.aws_access import unanswered
 from doppeldata.aws_sessions import aws_session
 from doppeldata.aws_sessions import profile_in_force
 from doppeldata.errors import InvalidArgument
+from doppeldata.errors import SourceError
 from doppeldata.errors import WriteFailed
 
 log = logging.getLogger(__name__)
@@ -92,6 +96,68 @@ class Boto3Credentials:
             'token': frozen.token,
             'expires_at': dt.datetime.now(dt.UTC) + REFRESH_EVERY if refreshable else None,
         }
+
+
+@contextmanager
+def read_errors(url: str, endpoint: str, *, doing: str = 'listed') -> Iterator[None]:
+    """Each boto3 failure under `url` as a SourceError naming the endpoint, and exiting 4 when no answer came. `doing` says
+    what could not be done to `url`, such as `read`.
+    """
+    try:
+        yield
+    except CREDENTIAL_ERRORS as error:
+        raise SourceError(issue_codes.NO_CREDENTIALS, f'{url} could not be {doing}: {error}; {CREDENTIAL_ADVICE}') from error
+    except AWS_ERRORS as error:
+        if unanswered(error):
+            raise SourceError(issue_codes.NO_ANSWER, no_answer(endpoint, 'S3', error)) from error
+        if isinstance(error, botocore.exceptions.ClientError):
+            raise SourceError(issue_codes.STORE, f'{url} could not be {doing}: {endpoint} answered {answered(error)}') from error
+        raise SourceError(issue_codes.STORE, f'{url} could not be {doing} through {endpoint}: {error}') from error
+
+
+def reading_client(url: str, *, doing: str = 'read') -> Any:
+    """The S3 client reading `url`, refused as a SourceError naming the setting boto3 cannot use. `doing` says what could
+    not be done to `url`, such as `listed`."""
+    try:
+        _, client = s3_session()
+    except InvalidArgument as error:
+        raise SourceError(error.code, f'{url} could not be {doing}: {error.message}', role='environment') from error
+    return client
+
+
+def object_head(client: Any, bucket: str, key: str) -> dict[str, Any] | None:
+    """The object's metadata, or None when no object has that key."""
+    try:
+        head: dict[str, Any] = client.head_object(Bucket=bucket, Key=key)
+    except botocore.exceptions.ClientError as error:
+        if http_status(error) == 404:
+            return None
+        raise
+    return head
+
+
+def s3_holds(url: str, name: str) -> bool:
+    """Whether the `s3://` prefix `url` holds an object named `name` at its root."""
+    parsed = urlparse(url)
+    prefix = parsed.path.strip('/')
+    client = reading_client(url)
+    with read_errors(url, endpoint_named(client), doing='read'):
+        return object_head(client, parsed.netloc, f'{prefix}/{name}' if prefix else name) is not None
+
+
+def s3_object_text(url: str, name: str) -> str | None:
+    """The text of the object named `name` at the root of the `s3://` prefix `url`, or None where it holds none."""
+    parsed = urlparse(url)
+    prefix = parsed.path.strip('/')
+    client = reading_client(url)
+    with read_errors(url, endpoint_named(client), doing='read'):
+        try:
+            body: bytes = client.get_object(Bucket=parsed.netloc, Key=f'{prefix}/{name}' if prefix else name)['Body'].read()
+        except botocore.exceptions.ClientError as error:
+            if http_status(error) == 404:
+                return None
+            raise
+    return body.decode('utf-8')
 
 
 @contextmanager

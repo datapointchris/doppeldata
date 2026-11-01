@@ -1,15 +1,9 @@
 # Generating inside Spark executors
 
 `doppeldata.spark` runs the same wheel inside Spark's executors, so a billion rows are made where the
-cluster reads them and never cross the driver. Both of its calls give the values a local run gives:
-
-```python
-import doppeldata as sd
-
-profile = sd.Profile.load('orders.profile.yaml')
-frame = sd.spark.generate(spark, profile, rows=10**9, seed=7)                  # a DataFrame, for any Spark writer
-manifest = sd.spark.write(spark, profile, 's3://bucket/orders/', rows=10**9, seed=7)   # the files sd.write writes
-```
+cluster reads them and never cross the driver. Both of its calls give the values a local run gives.
+[Generate inside Spark or AWS Glue](how-to/generate-inside-spark-or-glue.md) runs each call, and a
+Glue job.
 
 ## Each task generates whole chunks of engine blocks, so the partition count moves no value
 
@@ -69,8 +63,6 @@ driver   commit ─── _faults.jsonl, _manifest.json, claim removed
 - **A path naming one file, such as `people.csv`, is refused with `E-WRITE-008`.** A
   local write stages that file and moves it into place, and no task can move what another wrote.
   `people.csv/`, with the trailing slash, names a directory.
-- **The profile may be a list of column names, a dict of fakes and ranges, or a short YAML**, as
-  for `sd.write`. The driver expands it before it plans.
 - **A retried or speculative task writes the same names with the same bytes.** An object is
   either whole or absent, because an unfinished upload is aborted.
 - **A failed Spark job stores a partial manifest recording no object.** The driver learns of a
@@ -87,12 +79,6 @@ driver   commit ─── _faults.jsonl, _manifest.json, claim removed
 
 ## A bundle generates one DataFrame per table, and writes each table as its own job, parents first
 
-```python
-bundle = sd.Bundle.example('orders-customers')
-frames = sd.spark.generate(spark, bundle, scale=0.1, seed=7)                    # {'customers': DataFrame, 'orders': DataFrame}
-manifest = sd.spark.write(spark, bundle, 's3://bucket/shop/', scale=0.1, seed=7)   # a BundleManifest
-```
-
 - **Each executor process plans the whole bundle once.** A task carries `BundleTableArguments`,
   the bundle's arguments and one table's name. `built_bundle_plan` caches the plan per process.
   A foreign key is drawn from its parent's keys by formula, so no table's tasks read another's rows.
@@ -107,11 +93,6 @@ manifest = sd.spark.write(spark, bundle, 's3://bucket/shop/', scale=0.1, seed=7)
   table's 1 file and the orders table's 6 matched a local bundle write's SHA-256.
 
 ## `to_spark` builds a DataFrame on the driver from a local table, and every Spark version gives back the same values
-
-```python
-rows = sd.sample('eight-columns', rows=50, seed=1, overrides={'category': 'A'})
-frame = sd.spark.to_spark(spark, rows, schema=sd.spark.struct_type('eight-columns'))
-```
 
 `to_spark` takes any Arrow table, such as `sd.sample` or `sd.generate` returns, for a test or a small lookup table. Without
 `schema`, the Spark schema is the table's own Arrow schema as `struct_type` maps it. So no type is inferred, and a column

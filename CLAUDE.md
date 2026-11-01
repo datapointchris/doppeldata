@@ -40,6 +40,10 @@ malformed-file-readers/
   `crates/core` lists each one with its file name, and `task generate` writes them into
   `library/src/doppeldata/schemas/`. `task check-generated` fails when a schema or the stub differs
   from what the crates generate, and runs in the hooks.
+- **serde_json keeps insertion order across the workspace**, because schemars' `preserve_order`
+  turns it on. So a `Value` or `Map` that reaches written bytes, a SHA-256 or Python is held as
+  `crates/core`'s `SortedKeys`, which sorts its keys when serialized. Every binding returning a
+  `Value` it built returns it through `json_text` in `crates/python`.
 - **A library dependency lands on every consumer's Glue job.** Add one only if the library cannot do
   without it. It must install on CPython 3.11 from a wheel. It arrives in the change that first
   imports it. A heavy engine used by one feature, such as pyspark or scipy, is imported lazily and

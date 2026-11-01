@@ -41,11 +41,17 @@ def aws_profile_chosen(aws_profile: str | None) -> Iterator[None]:
         CHOSEN_PROFILE.reset(token)
 
 
+def require_boto3(doing: str) -> None:
+    """Refuse `doing`, such as `listing s3://bucket/orders/`, where boto3 is not installed. Each call that reaches AWS asks
+    this before it imports a module that imports boto3, so work that reaches no AWS service never imports botocore."""
+    if uninstalled({'boto3': 'boto3'}):
+        raise PackagesMissing('aws', ['boto3'], doing=doing, installed_by=', or install doppeldata-cli, which declares it')
+
+
 def refuse_unknown_profile(aws_profile: str) -> None:
     """Refuse `aws_profile` where the AWS config and credentials files hold no profile of that name. It reads those files
     alone, so it sends nothing."""
-    if uninstalled({'boto3': 'boto3'}):
-        raise PackagesMissing('aws_profile', ['boto3'], doing='naming an AWS profile')
+    require_boto3('naming an AWS profile')
     boto3 = importlib.import_module('boto3')
     exceptions = importlib.import_module('botocore.exceptions')
     try:

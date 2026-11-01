@@ -2,7 +2,6 @@
 
 import concurrent.futures
 import contextlib
-import importlib
 import tempfile
 from collections.abc import Iterator
 from collections.abc import Sequence
@@ -29,7 +28,7 @@ def first_block(path: str) -> bytes:
     """The file's first bytes, decompressed by its suffix. One that cannot be read or decompressed raises a SourceError
     naming it."""
     if path.startswith('s3://'):
-        return s3_first_block(path, s3_client())
+        return s3_first_block(path, s3_client(path))
     try:
         with pa.input_stream(path, compression='detect') as stream:
             return bytes(stream.read(FIRST_BLOCK_BYTES))
@@ -41,25 +40,26 @@ def first_blocks(paths: Sequence[str]) -> list[bytes]:
     """Each file's first block, as `first_block` reads it, those on S3 through one client on `BLOCK_THREADS` threads."""
     if not any(path.startswith('s3://') for path in paths):
         return [first_block(path) for path in paths]
-    client = s3_client()
+    client = s3_client(next(path for path in paths if path.startswith('s3://')))
     with concurrent.futures.ThreadPoolExecutor(BLOCK_THREADS) as pool:
         return list(pool.map(lambda path: s3_first_block(path, client) if path.startswith('s3://') else first_block(path), paths))
 
 
-def s3_client() -> Any:
-    _, client = importlib.import_module('doppeldata.s3_access').s3_session()
-    return client
+def s3_client(url: str) -> Any:
+    from doppeldata import s3_access
+
+    return s3_access.reading_client(url)
 
 
 def s3_first_block(url: str, client: Any) -> bytes:
     """An S3 object's first bytes, read in one ranged request through a boto3 client of the AWS environment's, as the
     listing's is."""
-    sources = importlib.import_module('doppeldata.profiling.sources')
-    s3_access = importlib.import_module('doppeldata.s3_access')
+    from doppeldata import s3_access
+
     bucket, key = url.removeprefix('s3://').split('/', 1)
     codec = CODECS.get(PurePosixPath(key).suffix.lower())
     end = (COMPRESSED_BYTES_READ if codec else FIRST_BLOCK_BYTES) - 1
-    with sources.s3_errors(url, s3_access.endpoint_named(client), doing='read'):
+    with s3_access.read_errors(url, s3_access.endpoint_named(client), doing='read'):
         raw: bytes = client.get_object(Bucket=bucket, Key=key, Range=f'bytes=0-{end}')['Body'].read()
     if codec is None:
         return raw

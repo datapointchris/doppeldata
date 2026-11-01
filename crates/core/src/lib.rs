@@ -17,6 +17,7 @@ mod related_tables;
 mod rng;
 mod samplers;
 pub mod scenario;
+mod sorted_keys;
 mod values_digest;
 
 pub use identity::DatasetIdentity;
@@ -63,6 +64,7 @@ pub use samplers::pattern_within_lengths;
 pub use samplers::provider_lengths;
 pub use samplers::raw_type_name;
 pub use samplers::shape_of;
+pub use sorted_keys::SortedKeys;
 pub use values_digest::bundle_values_digest;
 pub use values_digest::plan_values_digest;
 pub use values_digest::values_digest;

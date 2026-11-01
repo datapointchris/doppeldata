@@ -6,7 +6,6 @@ the source profile's edges frozen, so histograms and value lists compare bin for
 
 import contextlib
 import dataclasses as dc
-import importlib.util
 import logging
 import os
 import warnings
@@ -391,9 +390,6 @@ def unreadable(kinds: Iterable[str], data_format: str) -> list[str]:
 
 def format_of_data(data: Any) -> str | None:
     """The format of the files `data` names, or None where it names none, leaving the profiler to say why."""
-    # Listing the files imports boto3, and without it profiling the data refuses next, naming boto3.
-    if importlib.util.find_spec('boto3') is None:
-        return None
     from doppeldata.profiling import sources
 
     try:

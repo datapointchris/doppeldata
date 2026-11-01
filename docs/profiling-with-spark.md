@@ -5,51 +5,13 @@ only the statistics reach the driver. The profile is the one Polars writes: the 
 the same privacy policy, with exact counts and extremes, and estimated distinct counts and
 quantiles.
 
-## Profile a table on a Glue 5.1 job
+[Profile with Spark or AWS Glue](how-to/profile-with-spark-or-glue.md) runs it locally, over Spark
+Connect and as a Glue job, and lists what each installs.
 
-The job's script profiles a prefix and stores the YAML beside the data:
+## Over Spark Connect, the client builds the profile and the session computes every statistic
 
-```python
-# profile_table.py
-import sys
-
-import boto3
-from awsglue.utils import getResolvedOptions
-from pyspark.sql import SparkSession
-
-import doppeldata as sd
-
-args = getResolvedOptions(sys.argv, ['source', 'out_bucket', 'out_key'])
-spark = SparkSession.builder.getOrCreate()
-profile = sd.profile(args['source'], engine='spark', spark=spark)
-boto3.client('s3').put_object(Bucket=args['out_bucket'], Key=args['out_key'], Body=profile.to_yaml().encode())
-```
-
-Upload the script and the library's wheel, then create and run the job. The README's Glue section
-gives the wheel's download command.
-
-```bash
-aws s3 cp profile_table.py s3://your-bucket/glue/
-aws glue create-job --name profile-claims --role your-glue-role --glue-version 5.1 \
-  --worker-type G.1X --number-of-workers 2 \
-  --command Name=glueetl,ScriptLocation=s3://your-bucket/glue/profile_table.py,PythonVersion=3 \
-  --default-arguments '{"--additional-python-modules": "s3://your-bucket/glue/doppeldata-<version>-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl,scipy,duckdb==2.0.0,clevercsv==0.8.5,charset-normalizer"}'
-aws glue start-job-run --job-name profile-claims \
-  --arguments '{"--source": "s3://your-bucket/claims/", "--out_bucket": "your-bucket", "--out_key": "profiles/claims.profile.yaml"}'
-```
-
-A DataFrame the job already holds is profiled in its own session, with `sd.profile(frame,
-engine='spark')`.
-
-The `==` versions are the ones `uv.lock` resolves, which the parity check below measured.
-`generated.readers` records each reader's version, so a profile read with another version is never
-reused as one read with these.
-
-## Profile over a Spark Connect session
-
-Over Spark Connect, the client runs the profiler and the session computes every statistic. The
-client lists the source, sniffs a CSV's dialect and builds the profile. The client reads S3 with its
-own credentials to list and sniff, and the session reads the rows with its role.
+The client lists the source, sniffs a CSV's dialect and builds the profile. The client reads S3 with
+its own credentials to list and sniff, and the session reads the rows with its role.
 
 - **The executors run each pass's code as their own.** The client pickles the `mapInArrow` passes
   by reference, so the executors need the client's Python minor version and the client's
@@ -58,32 +20,18 @@ own credentials to list and sniff, and the session reads the rows with its role.
   `CONNECT_ATTEMPTS` tries of `CONNECT_TIMEOUT_SECONDS` each. The client's own retries would wait
   about ten minutes before failing.
 
-From Python, the client holds the library at the session wheel's version, its CSV packages and
-`pyspark[connect]` at the server's Spark version. `pyspark[connect]` 3.5 pins a numpy below 2,
-which pyarrow 26 refuses, so the client holds pyarrow 22:
+## A Glue 5.1 Spark Connect session profiles once each result stream ends within 10 seconds
+
+The client below profiled the carrier claims from a Glue 5.1 session. It held `pyspark[connect]`
+3.5.6, the session's Spark. `pyspark[connect]` 3.5 pins a numpy below 2, which pyarrow 26 refuses,
+so the client held pyarrow 22. It calls boto3 itself, to start the session:
 
 ```bash
 uv pip install --index https://pypi.ichrisbirch.com/simple/ 'doppeldata==<version>' 'pyspark[connect]==3.5.6' pyarrow==22.0.0 boto3 scipy duckdb clevercsv charset-normalizer
 ```
 
-```python
-spark = SparkSession.builder.remote('sc://spark-host:15002').getOrCreate()
-profile = sd.profile('s3://your-bucket/claims/', engine='spark', spark=spark)
-profile.save('claims.profile.yaml')
-```
-
-The CLI needs Python 3.13 or later, so it profiles over a server whose executors run that Python.
-Glue 5.x executors run Python 3.11, so a Glue 5.1 session is profiled from Python, as below.
-
-```bash
-uv tool install --index https://pypi.ichrisbirch.com/simple/ 'doppeldata-cli==<version>' --with 'pyspark[connect]==<server Spark version>'
-SPARK_REMOTE=sc://spark-host:15002 doppeldata profile create s3://your-bucket/claims/ --engine spark --out claims.profile.yaml
-```
-
-## Profile over a Glue 5.1 Spark Connect session
-
-A Glue 5.1 session names the wheel alone, because the client sniffs and fits. It also sets a
-10-second sender stream, and the client runs its first query with reattachable execution off:
+The session names the wheel alone, because the client sniffs and fits. It also sets a 10-second
+sender stream, and the client runs its first query with reattachable execution off:
 
 ```python
 import time
@@ -99,7 +47,7 @@ glue.create_session(
     Id='profile-claims', Role='your-glue-role', GlueVersion='5.1', SessionType='SPARK_CONNECT',
     Command={'Name': 'glueetl', 'PythonVersion': '3'}, WorkerType='G.1X', NumberOfWorkers=2, IdleTimeout=15,
     DefaultArguments={
-        '--additional-python-modules': 's3://your-bucket/glue/doppeldata-<version>-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl',
+        '--additional-python-modules': 's3://your-bucket/glue/doppeldata-<version>-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl',
         '--conf': 'spark.connect.execute.reattachable.senderMaxStreamDuration=10s',
     },
 )
@@ -133,31 +81,6 @@ finally:
   token.
 - [generating-inside-spark.md](generating-inside-spark.md) holds what else a Glue 5.1 Connect
   session showed.
-
-## Profile locally with `--engine spark`
-
-With no `SPARK_REMOTE`, `--engine spark` starts a session on `local[*]`. That needs Java and pyspark
-beside the CLI:
-
-```bash
-uv tool install --index https://pypi.ichrisbirch.com/simple/ doppeldata-cli --with pyspark==3.5.6
-doppeldata profile create data/claims/ --engine spark --out claims.profile.yaml
-```
-
-## What `--additional-python-modules` names
-
-| Source | Glue job | Glue Spark Connect session |
-| --- | --- | --- |
-| Parquet | the wheel, `scipy` | the wheel |
-| CSV or TSV | the wheel, `scipy`, `duckdb`, `clevercsv`, `charset-normalizer` | the wheel |
-
-- **The executors import the library for the `mapInArrow` passes**, so the wheel is named in every
-  case.
-- **Every supported Glue preinstalls pyarrow, pandas and boto3**, which the profiler also reads.
-- **No Glue preinstalls scipy**, which fits each numeric column's family on the driver. A job
-  without it fits no column, writes each `fit` as null and warns `FitsSkipped`.
-- **Over Spark Connect the client builds the profile**, so the client holds scipy and the CSV
-  packages, and the session holds the wheel alone.
 
 ## Spark's profile matches Polars' within its bars, and is the same on Spark 3.5, Spark 4 and Glue
 
@@ -228,7 +151,7 @@ of 4 vCPUs and a 10 GB heap beside the driver.
 
 | Run | Profile | Billed |
 | --- | --- | --- |
-| job, the recipe above | 1,103 s of a 1,172 s run | 2,345 DPU-seconds, 0.65 DPU-hours |
+| job, [the how-to's](how-to/profile-with-spark-or-glue.md#a-glue-job-profiles-a-prefix-and-stores-the-yaml-beside-the-data) script on the claims, with `duckdb==2.0.0`, `clevercsv==0.8.5` and `charset-normalizer` beside `scipy` | 1,103 s of a 1,172 s run | 2,345 DPU-seconds, 0.65 DPU-hours |
 | Spark Connect session, the recipe above | 1,158 s | 3,386 DPU-seconds, 0.94 DPU-hours, over 1,693 s |
 
 - **The two profiles match each other in all 10,945 fields.** Each matches the profile from the

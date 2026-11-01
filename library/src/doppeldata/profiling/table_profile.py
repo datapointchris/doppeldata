@@ -12,9 +12,6 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 from typing import Any
 
-from ruamel.yaml.comments import CommentedMap
-from ruamel.yaml.comments import CommentedSeq
-
 from doppeldata import _core
 from doppeldata.errors import FitsSkipped
 from doppeldata.errors import PoorFits
@@ -290,7 +287,7 @@ def profile_table(
         document['source'] = file_traits.source_section(backend, source, read, profiled, rows, k_min)
     document['dataset'] = dataset
     document['columns'] = profiled.columns
-    return ProfiledTable(reviewable(withheld(document, policy, k_min, cell_floors)), full, profiled.specs)
+    return ProfiledTable(withheld(document, policy, k_min, cell_floors), full, profiled.specs)
 
 
 def dataset_sections(
@@ -1290,18 +1287,3 @@ def has_trimmed_extremes(values: int, k_min: int) -> bool:
 
 def is_finite(value: Any) -> bool:
     return value is not None and math.isfinite(value)
-
-
-def reviewable(value: Any) -> Any:
-    """The document as ruamel types, with each collection of plain values on one line, as a reviewer reads them."""
-    if isinstance(value, dict):
-        mapping = CommentedMap((key, reviewable(item)) for key, item in value.items())
-        if all(not isinstance(item, dict | list) for item in value.values()):
-            mapping.fa.set_flow_style()
-        return mapping
-    if isinstance(value, list):
-        sequence = CommentedSeq(reviewable(item) for item in value)
-        if all(not isinstance(item, dict | list) for item in value):
-            sequence.fa.set_flow_style()
-        return sequence
-    return value

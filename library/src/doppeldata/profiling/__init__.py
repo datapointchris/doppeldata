@@ -33,6 +33,7 @@ from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
 from doppeldata.profiling import foreign_keys
+from doppeldata.profiling import sources
 from doppeldata.profiling import table_grouping
 from doppeldata.profiling import table_profile
 from doppeldata.profiling.backend import Backend
@@ -119,9 +120,6 @@ ENGINES = {
         sessioned=True,
     ),
 }
-# The module that lists what was named, and the packages it imports to list S3, which profiling needs whatever the engine.
-SOURCES_MODULE = 'doppeldata.profiling.sources'
-LISTING_PACKAGES = (EnginePackage('boto3', 'boto3', frozenset()),)
 
 
 def profile(
@@ -254,7 +252,7 @@ def profile_in_dialect(
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=3)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
     only = profiled_tables(backend, [(source, readers)], settings, frozen, type_mix_columns=frozenset(type_mix_columns))[0][source.name]
-    importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
+    sources.check_unchanged(listed)
     issues = only.validate()
     if issues:
         log.error(f'the profile written of {", ".join(source.roots)} fails its own schema, which is a bug in doppeldata')
@@ -333,8 +331,8 @@ def profiled_bundle(
     tables = [(source, session_readers(backend, reading)) for source, reading in grouped]
     profiled, relationships = profiled_tables(backend, tables, settings, None, related=True)
     for listed, _ in listings:
-        importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
-    bundle = Bundle.of(bundle_name([listed for listed, _ in listings]), profiled, table_profile.reviewable(relationships))
+        sources.check_unchanged(listed)
+    bundle = Bundle.of(bundle_name([listed for listed, _ in listings]), profiled, relationships)
     issues = bundle.validate()
     if issues:
         raise InvalidProfile(f'the profile of {data!r}', issues)
@@ -440,7 +438,7 @@ def available_engine(engine: str) -> Engine:
         message = f'{engine!r} is not a profiling engine'
         raise InvalidArgument(issue_codes.UNKNOWN_ENGINE, message, field='engine', value=engine, valid=list(ENGINES))
     chosen = ENGINES[engine]
-    refuse_uninstalled(engine, [package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
+    refuse_uninstalled(engine, [package for package in chosen.packages if package.everywhere])
     return chosen
 
 
@@ -459,7 +457,6 @@ def listed_source(data: Any, engine: str = 'polars') -> tuple[Source, list[Engin
     """`data` listed as one source, and the engine's packages that read its format, refused where the engine reads no such
     source or one of those packages is not installed."""
     chosen = ENGINES[engine]
-    sources = importlib.import_module(SOURCES_MODULE)
     source: Source = sources.resolve(data)
     if source.format is not None:
         files = counted(len(source.files), f'{source.format.value} file')
@@ -503,7 +500,7 @@ def sampled_table(data: Any, rows: int, *, engine: str = 'polars', seed: int = t
         table = table_profile.typed_table(backend, source)
         held = table_profile.answered(backend, table, [Request(None, 'rows')])[(None, 'rows')]
         sampled = SampledTable(backend.sample(table, rows, seed), held, source.fingerprint)
-    importlib.import_module(SOURCES_MODULE).check_unchanged(source)
+    sources.check_unchanged(source)
     return sampled
 
 
@@ -532,7 +529,7 @@ def relationship_counts(
             for child, columns, parent, keys in relationships
         ]
     for source in listed.values():
-        importlib.import_module(SOURCES_MODULE).check_unchanged(source)
+        sources.check_unchanged(source)
     return counts
 
 

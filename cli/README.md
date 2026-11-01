@@ -11,4 +11,12 @@ doppeldata --version     # prints the installed release
 Every release is published to that package index, and nothing else is. The command needs Python
 3.13 or later. It pins the `doppeldata` library to its own release, so the two always match.
 
-Source, documentation and issues: <https://github.com/datapointchris/doppeldata>.
+It also installs every package the Polars engine needs, and boto3 to reach S3. So `profile create` reads Parquet and
+Arrow locally or on S3, and CSV, TSV and JSON locally, with nothing more installed. Two features
+need one package more, added with `--with`:
+
+- `--engine spark` needs `pyspark`;
+- `data check --html` needs `sweetviz`.
+
+The README walks up from column names to a profile of real data, and links a page for every task:
+<https://github.com/datapointchris/doppeldata#readme>. Source and issues live there too.

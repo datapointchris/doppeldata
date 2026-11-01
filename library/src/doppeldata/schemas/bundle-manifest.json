@@ -4,30 +4,21 @@
   "description": "The record written at a bundle's destination once every table is whole. Each table is written\nunder `<table>/` with a manifest of its own, which this names rather than holds.",
   "type": "object",
   "properties": {
-    "dataset_digest": {
-      "description": "`sha256:` and the hex SHA-256 of `identity`'s RFC 8785 canonical JSON.",
-      "type": "string"
-    },
-    "destination": {
-      "description": "Where the bundle was written, as the caller named it.",
-      "type": "string"
-    },
-    "elapsed_ms": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
-    },
-    "identity": {
-      "description": "The bundle's own identity: no table, and `dataset_rows` every table's rows summed.",
-      "$ref": "#/$defs/ManifestIdentity"
-    },
     "kind": {
       "description": "Always `bundle`: the manifest naming each table's own.",
       "$ref": "#/$defs/BundleManifestKind"
     },
-    "partial": {
-      "description": "True until every table is whole. Such a manifest is stored as `_manifest.partial.json`.",
-      "type": "boolean"
+    "tool": {
+      "description": "The tool that wrote the files, as `doppeldata <version>`.",
+      "type": "string"
+    },
+    "dataset_digest": {
+      "description": "`sha256:` and the hex SHA-256 of `identity`'s RFC 8785 canonical JSON.",
+      "type": "string"
+    },
+    "identity": {
+      "description": "The bundle's own identity: no table, and `dataset_rows` every table's rows summed.",
+      "$ref": "#/$defs/ManifestIdentity"
     },
     "profile": {
       "$ref": "#/$defs/ManifestProfile"
@@ -43,12 +34,9 @@
         }
       ]
     },
-    "set_aside": {
-      "description": "The pointer of each relationship and `inherited` entry the bundle states and does not draw,\nsuch as one whose columns another relationship with more of them draws.",
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
+    "destination": {
+      "description": "Where the bundle was written, as the caller named it.",
+      "type": "string"
     },
     "tables": {
       "description": "Every table, each parent before its children.",
@@ -57,15 +45,16 @@
         "$ref": "#/$defs/BundleTable"
       }
     },
-    "tasks": {
-      "description": "The tasks a write split across processes divided each table's ranges among, or null for a\nwrite in one process.",
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint32",
-      "default": null,
-      "minimum": 0
+    "set_aside": {
+      "description": "The pointer of each relationship and `inherited` entry the bundle states and does not draw,\nsuch as one whose columns another relationship with more of them draws.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "partial": {
+      "description": "True until every table is whole. Such a manifest is stored as `_manifest.partial.json`.",
+      "type": "boolean"
     },
     "threads": {
       "description": "The threads that generated and encoded in each process that wrote.",
@@ -73,9 +62,20 @@
       "format": "uint32",
       "minimum": 0
     },
-    "tool": {
-      "description": "The tool that wrote the files, as `doppeldata <version>`.",
-      "type": "string"
+    "tasks": {
+      "description": "The tasks a write split across processes divided each table's ranges among, or null for a\nwrite in one process.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "default": null
+    },
+    "elapsed_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
     },
     "written_at": {
       "description": "When the write finished, in RFC 3339.",
@@ -103,43 +103,6 @@
       "enum": [
         "bundle"
       ]
-    },
-    "BundleTable": {
-      "description": "One table of a bundle's write.",
-      "type": "object",
-      "properties": {
-        "dataset_digest": {
-          "description": "The table's manifest's `dataset_digest`.",
-          "type": "string"
-        },
-        "dataset_rows": {
-          "description": "The rows the table's identity names, in decimal.",
-          "$ref": "#/$defs/Decimal"
-        },
-        "manifest": {
-          "description": "The table's manifest under the destination, `/`-separated, such as `orders/_manifest.json`.",
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "partial": {
-          "description": "True until the table's own manifest is stored whole as `manifest`.",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "name",
-        "manifest",
-        "dataset_digest",
-        "dataset_rows",
-        "partial"
-      ]
-    },
-    "Decimal": {
-      "description": "A 64-bit unsigned integer in decimal, because a JSON number is exact only to 2^53.",
-      "type": "string",
-      "pattern": "^(0|[1-9][0-9]{0,19})$"
     },
     "ManifestIdentity": {
       "description": "The values a dataset's rows are a pure function of, keyed and written as the identity's canonical\nJSON, so a reader rebuilds `dataset_digest` from them with no mapping.",
@@ -192,13 +155,14 @@
         "stream_version"
       ]
     },
+    "Decimal": {
+      "description": "A 64-bit unsigned integer in decimal, because a JSON number is exact only to 2^53.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
     "ManifestProfile": {
       "type": "object",
       "properties": {
-        "embedded": {
-          "description": "Whether each file `files` and `cdc.expected` list holds the whole profile's canonical JSON,\nunder the metadata key `doppeldata.profile`, and the scenario's document under\n`doppeldata.scenario` where one applies. A `cdc` change file never holds either. Left out\nwhen false.",
-          "type": "boolean"
-        },
         "name": {
           "description": "The profile's `name`.",
           "type": "string"
@@ -209,6 +173,10 @@
             "string",
             "null"
           ]
+        },
+        "embedded": {
+          "description": "Whether each file `files` and `cdc.expected` list holds the whole profile's canonical JSON,\nunder the metadata key `doppeldata.profile`, and the scenario's document under\n`doppeldata.scenario` where one applies. A `cdc` change file never holds either. Left out\nwhen false.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -218,21 +186,6 @@
     "ManifestScenario": {
       "type": "object",
       "properties": {
-        "composed_of": {
-          "description": "The scenarios composed, in order, present only for a composition.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/ScenarioMember"
-          }
-        },
-        "document": {
-          "description": "The canonical document `identity.scenario_digest` is taken over, so the dataset regenerates\nwith no scenario file.",
-          "type": "object",
-          "additionalProperties": true
-        },
         "name": {
           "description": "The scenario's name. A composition's joins its members' names with `+`.",
           "type": "string"
@@ -243,6 +196,21 @@
             "string",
             "null"
           ]
+        },
+        "document": {
+          "description": "The canonical document `identity.scenario_digest` is taken over, so the dataset regenerates\nwith no scenario file.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "composed_of": {
+          "description": "The scenarios composed, in order, present only for a composition.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ScenarioMember"
+          }
         }
       },
       "required": [
@@ -254,10 +222,6 @@
       "description": "One scenario of a composition.",
       "type": "object",
       "properties": {
-        "digest": {
-          "description": "The scenario's own digest, taken as `identity.scenario_digest` is.",
-          "type": "string"
-        },
         "name": {
           "type": "string"
         },
@@ -267,11 +231,47 @@
             "string",
             "null"
           ]
+        },
+        "digest": {
+          "description": "The scenario's own digest, taken as `identity.scenario_digest` is.",
+          "type": "string"
         }
       },
       "required": [
         "name",
         "digest"
+      ]
+    },
+    "BundleTable": {
+      "description": "One table of a bundle's write.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "manifest": {
+          "description": "The table's manifest under the destination, `/`-separated, such as `orders/_manifest.json`.",
+          "type": "string"
+        },
+        "dataset_digest": {
+          "description": "The table's manifest's `dataset_digest`.",
+          "type": "string"
+        },
+        "dataset_rows": {
+          "description": "The rows the table's identity names, in decimal.",
+          "$ref": "#/$defs/Decimal"
+        },
+        "partial": {
+          "description": "True until the table's own manifest is stored whole as `manifest`.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "manifest",
+        "dataset_digest",
+        "dataset_rows",
+        "partial"
       ]
     }
   }

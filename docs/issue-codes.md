@@ -84,28 +84,12 @@ what raises it and its hint.
 
 ## The command line prints a refusal as text, or as one JSON line per issue
 
-```text
-$ doppeldata data plan ordres --out out/
-doppeldata: E-PROFILE-028: ordres is neither a profile file nor an example; name a file, or an example
-  closest: orders
-  valid:
-    claims
-    eight-columns
-    events-json
-    orders
-    orders-customers
-  hint: doppeldata profile list names every example
-```
-
-With `--json` anywhere before a `--`, each issue prints on stderr as one line, every key present:
-
-```json
-{"error": {"code": "E-PROFILE-028", "message": "ordres is neither a profile file nor an example; name a file, or an example", "field": "PROFILE", "valid": ["claims", "eight-columns", "events-json", "orders", "orders-customers"], "hint": "doppeldata profile list names every example", "value": "ordres", "closest": ["orders"]}}
-```
+With `--json` anywhere before a `--`, each issue prints on stderr as one line, every key present.
+[Drive doppeldata from a script](how-to/drive-doppeldata-from-a-script.md) shows both forms.
 
 - **The root group reports every refusal**, so a new verb needs no handler of its own.
 - **A parameter refused for what the library refused reports the library's issues.** Each takes
-  the parameter as its field, as `PROFILE` above, unless it already points into a document.
+  the parameter as its field, such as `PROFILE` for a profile name refused, unless it already points into a document.
 - **The field is read from the invoked command's own parameters.** A library issue names its
   argument, such as `aws_profile`. The root renames it to the parameter of that name, else the
   option spelled after it, else the argument it is the metavar of. So a command added or renamed

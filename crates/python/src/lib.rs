@@ -300,7 +300,13 @@ mod _core {
             Some(patch) => doppeldata_core::scenario::patched_profile(&profile, patch),
             None => (profile, Vec::new()),
         };
-        Ok((patched.to_string(), unknown))
+        Ok((json_text(patched), unknown))
+    }
+
+    /// ``value`` as the JSON text a binding hands Python, every object's keys sorted at any depth.
+    /// Every binding returning a ``Value`` it built returns it through this.
+    fn json_text(value: serde_json::Value) -> String {
+        serde_json::to_string(&doppeldata_core::SortedKeys(value)).expect("a JSON value always serializes")
     }
 
     fn read_scenario(scenario_json: &str) -> PyResult<Scenario> {
@@ -597,7 +603,7 @@ mod _core {
                     })
                 })
                 .collect();
-            Ok(serde_json::Value::from(ranges).to_string())
+            Ok(json_text(serde_json::Value::from(ranges)))
         }
 
         /// The change stream a ``cdc`` write makes beside its full load, as a JSON object keyed
@@ -609,15 +615,14 @@ mod _core {
                 .detach(|| doppeldata_writers::planned_stream(plan, options))
                 .map_err(|error| self.refused(py, error))?;
             Ok(stream.map(|stream| {
-                json!({
+                json_text(json!({
                     "style": stream.style,
                     "prefix": stream.prefix,
                     "expected_prefix": stream.expected_prefix,
                     "changes": stream.changes,
                     "change_files_at_most": stream.change_files_at_most,
                     "expected_parts": stream.expected_parts,
-                })
-                .to_string()
+                }))
             }))
         }
 
@@ -633,7 +638,7 @@ mod _core {
             let output = doppeldata_writers::planned_output(&self.plan, &options.options);
             let mut settings = serde_json::to_value(&output).expect("an output always serializes");
             settings["layout"] = serde_json::to_value(&options.options.layout).expect("a layout always serializes");
-            settings.to_string()
+            json_text(settings)
         }
 
         /// The bytes the write would store, its manifest left out, from its first blocks encoded
@@ -837,7 +842,7 @@ mod _core {
                 let scenario_source = source_of(&error);
                 scenario_refused(py, &scenario_source, error.code(), error.field(), &plan_message(&error))
             })?;
-            let patched_json = patched.to_string();
+            let patched_json = json_text(patched.clone());
             let table_documents = patched.get("tables").cloned().unwrap_or_default();
             let Profile::Bundle(bundle) = serde_json::from_value(patched).map_err(not_the_model)? else {
                 return Err(invalid_argument(
@@ -1056,7 +1061,7 @@ mod _core {
         fn settings_json(&self) -> String {
             let mut settings = serde_json::to_value(&self.options.output).expect("an output always serializes");
             settings["layout"] = serde_json::to_value(&self.options.layout).expect("a layout always serializes");
-            settings.to_string()
+            json_text(settings)
         }
     }
 

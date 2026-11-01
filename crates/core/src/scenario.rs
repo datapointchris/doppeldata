@@ -13,6 +13,7 @@ use schemars::Schema;
 use schemars::SchemaGenerator;
 use schemars::json_schema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
@@ -50,10 +51,19 @@ pub struct Scenario {
 /// column name rather than the profile's list, so a patch names only the columns it changes. A
 /// column patched to null is removed. A column the profile does not hold is refused. In a bundle,
 /// `relationships` is a map keyed by the `from` columns, joined by `,` and without their table, of
-/// each relationship drawing a column of the scenario's table.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(transparent)]
+/// each relationship drawing a column of the scenario's table. Its keys are sorted at every depth as
+/// it is read, so each column, field and relationship it names is applied and reported in name order.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProfilePatch(pub Map<String, Value>);
+
+impl<'de> Deserialize<'de> for ProfilePatch {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut patch = Map::deserialize(deserializer)?;
+        patch.sort_keys();
+        patch.values_mut().for_each(Value::sort_all_objects);
+        Ok(Self(patch))
+    }
+}
 
 impl JsonSchema for ProfilePatch {
     fn schema_name() -> Cow<'static, str> {

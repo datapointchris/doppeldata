@@ -29,7 +29,10 @@ rand_chacha = "0.10.0"
 rand_distr = "0.6.0"
 rand_regex = "0.19.0"
 regex-syntax = "0.8.9"
-schemars = "1.2"
+# preserve_order writes each published schema's properties in the model's field order, the order a
+# profile file is written in. It turns on serde_json's preserve_order for the whole workspace, so a
+# Value or Map that reaches bytes, a SHA-256 or Python is held as SortedKeys, which sorts its keys.
+schemars = { version = "1.2", features = ["preserve_order"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"

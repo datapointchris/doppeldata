@@ -22,7 +22,8 @@ table through `createDataFrame`, which ran on Apache's Spark 4.1.3 and 4.2.0 ima
 ## A Glue job adds only the wheel, because Glue installs the pandas and pyarrow `doppeldata.spark` needs
 
 PySpark's `mapInArrow` needs pandas and pyarrow beside Spark, and every supported Glue preinstalls
-both. Glue 5.0 provides pandas 2.2.2, and Glue 5.1 and 6.0 provide 2.3.3. AWS lists each version's modules in
+both. Glue 5.0 provides pandas 2.2.2, and Glue 5.1 and 6.0 provide 2.3.3. Each preinstalls boto3
+too, which a write to S3 and a listing of an `s3://` prefix need. AWS lists each version's modules in
 <https://docs.aws.amazon.com/glue/latest/dg/aws-glue-programming-python-libraries.html#glue-modules-provided>.
 Glue 5.1 ran `sd.spark.generate` and `sd.spark.write` at 1B rows with
 `--additional-python-modules` naming the library's wheel alone. A Glue 5.1 Spark Connect session

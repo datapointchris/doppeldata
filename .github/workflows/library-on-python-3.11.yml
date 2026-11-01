@@ -58,6 +58,30 @@ jobs:
           sys.exit('\n'.join(undeclared) or None)
           EOF
 
+      # A Spark Connect executor or a Glue job holds the wheel and no boto3.
+      # Local work must never import botocore, so a module-level import of it
+      # on the profiling or checking path fails here.
+      - name: Write, profile and check local Parquet without boto3
+        run: |
+          uv pip install --python "$RUNNER_TEMP/library" duckdb polars pyarrow
+          "$RUNNER_TEMP/library/bin/python" - <<'EOF'
+          import importlib.util
+          import sys
+          import tempfile
+
+          import doppeldata as sd
+
+          AWS = ('boto3', 'botocore')
+          if any(importlib.util.find_spec(name) for name in AWS):
+              sys.exit('boto3 or botocore is installed, so this step proves nothing')
+          with tempfile.TemporaryDirectory() as directory:
+              sd.write('orders', f'{directory}/orders', rows=1000, seed=1)
+              profile = sd.profile(f'{directory}/orders')
+              sd.check(profile, f'{directory}/orders')
+          loaded = sorted(name for name in sys.modules if name.split('.')[0] in AWS)
+          sys.exit(f'local work imported {", ".join(loaded)}' if loaded else None)
+          EOF
+
       - name: Install pytest
         run: uv pip install --python "$RUNNER_TEMP/library" pytest
 

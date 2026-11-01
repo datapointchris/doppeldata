@@ -126,8 +126,9 @@ under any policy, and `--policy healthcare` enables it without being named.
   membership where the caller supplies an `icd10cm` or `hcpcs_level2` list.** Most short words pass
   ICD-10-CM's shape, and a product code HCPCS's. The hint must end the name, so `diagnosis_code`
   and `px` hint a code, and `diagnosis_date` hints none. Its generator hint is the `icd10cm` or
-  `hcpcs_level2` provider, which draws a code in the same shape. `healthcare-policy.md` says how
-  each list is written from its publisher's file.
+  `hcpcs_level2` provider, which draws a code in the same shape.
+  [Profile healthcare data](how-to/profile-healthcare-data.md) says how each list is written from
+  its publisher's file.
 - **A CPT code is typed by its shape alone**, and only where the name hints it. Five digits is a ZIP
   code's shape too.
 - **An NDC is typed by its shape, and by membership where the caller supplies an `ndc` list.** An
@@ -159,12 +160,8 @@ profile would not say which list typed it.
 
 A third party adds types without forking by building a `DetectorPack` of `Detector`s, both from
 `doppeldata.profiling.detector_packs`. It registers the pack under the `doppeldata.detector_packs`
-entry-point group, with the pack's name as the entry point's:
-
-```toml
-[project.entry-points."doppeldata.detector_packs"]
-acme = "acme_detectors:PACK"
-```
+entry-point group, with the pack's name as the entry point's. [Write a detector
+pack](how-to/write-a-detector-pack.md) builds one and profiles with it.
 
 - **A pack is code the profiler runs on the data.** Its validators are handed the sampled values of
   every column they may type, so enable only a pack trusted with the data. The profile holds none

@@ -5,31 +5,11 @@ another tool validates data with, and `--embed-profile` writes the profile into 
 generated. Both are opt-in: a write carries neither unless asked, and the library imports none of
 the tools that read them.
 
-## `profile export` writes a profile's contract in each format `--format` takes
+[Export a profile as a data contract](how-to/export-a-profile-as-a-contract.md) runs each format
+and validates data with it. [Reproduce a dataset](how-to/reproduce-a-dataset.md) runs
+`--embed-profile`.
 
-```bash
-doppeldata profile export orders --format pandera --out orders_schemas.py
-doppeldata profile export orders --format dqdl
-```
-
-```python
-import doppeldata as sd
-
-contract = sd.export('orders', 'odcs')
-```
-
-| `--format` | Writes | Read by |
-| --- | --- | --- |
-| `odcs` | an Open Data Contract Standard v3.2.0 contract | datacontract-cli, `profile import --from odcs` |
-| `table-schema` | a Frictionless Table Schema v2, and for a bundle a Data Package v2 | frictionless, `profile import --from table-schema`, and `--from data-package` for a bundle's |
-| `json-schema` | the record schema: a JSON Schema 2020-12 of one record | any JSON Schema validator, `profile import --from json-schema` |
-| `dqdl` | an AWS Glue Data Quality ruleset of each table | Glue Data Quality, Deequ |
-| `pandera` | a module of a `pandera.polars.DataFrameModel` of each table | pandera, `sd.generate` |
-| `dataframely` | a module of a `dataframely.Schema` of each table | dataframely, `sd.generate` |
-| `pyspark-schemas` | a module of each table's `StructType` and `pandera.pyspark.DataFrameModel` | Spark, pandera |
-
-PROFILE is a profile file, a bundle, an example's name, or a data file holding an embedded profile.
-Without `--out` the export prints.
+## Each export states what its profile holds, in the format's own types
 
 - **Each format's type names invert its importer's table**, so an export imports back as the same
   logical type, nullability, listed values and bounds. Table Schema has no integer width, decimal
@@ -50,83 +30,6 @@ Without `--out` the export prints.
   as `ProfileFailsCheck` in Python. An export never carries a literal the privacy policy did not pass.
 - **No validator is a dependency.** The modules import pandera, dataframely or pyspark when they
   run, and doppeldata imports none of them to write one.
-
-The `orders` example exports as these, cut to a few columns:
-
-```python
-# doppeldata profile export orders --format pandera
-class Orders(pa.DataFrameModel):
-    order_id: pl.Int64 = pa.Field(unique=True)
-    amount: Annotated[pl.Decimal, 12, 2] = pa.Field()
-    status: pl.String = pa.Field(isin=['delivered', 'shipped', 'processing', 'cancelled', 'returned'])
-    customer_email: pl.String = pa.Field(nullable=True)
-    ship_zip: pl.String = pa.Field(str_matches='^\\d{5}$')
-```
-
-```python
-# doppeldata profile export orders --format dataframely
-class Orders(dy.Schema):
-    order_id = dy.Int64(nullable=False, primary_key=True)
-    status = dy.String(nullable=False, check=lambda column: column.is_in(['delivered', 'shipped', 'processing', 'cancelled', 'returned']))
-    ship_zip = dy.String(nullable=False, regex='^\\d{5}$')
-```
-
-```python
-# doppeldata profile export orders --format pyspark-schemas
-ORDERS_STRUCT_TYPE = st.StructType(
-    [
-        st.StructField('order_id', st.LongType(), nullable=False),
-        st.StructField('amount', st.DecimalType(12, 2), nullable=False),
-        st.StructField('customer_email', st.StringType(), nullable=True),
-    ]
-)
-```
-
-```yaml
-# doppeldata profile export orders --format odcs
-      - name: ship_zip
-        logicalType: string
-        physicalType: string
-        required: true
-        logicalTypeOptions:
-          pattern: ^\d{5}$
-        classification: confidential
-        tags:
-          - us_zip
-        examples:
-          - '53877'
-          - '63965'
-          - '72296'
-```
-
-```jsonc
-// doppeldata profile export orders --format table-schema
-{"name": "status", "type": "string", "constraints": {"required": true, "enum": ["delivered", "shipped", "processing", "cancelled", "returned"]}}
-{"name": "customer_email", "type": "string", "format": "email"}
-```
-
-```jsonc
-// doppeldata profile export orders --format json-schema
-"customer_email": {"type": ["string", "null"], "format": "email"},
-"ship_zip": {"type": "string", "pattern": "^\\d{5}$"}
-```
-
-```text
-# doppeldata profile export orders --format dqdl
-    ColumnValues "amount" between 0.49 and 4000.01 with threshold >= 0.999665,
-    Mean "amount" between 90.8759 and 94.0241,
-    Completeness "customer_email" >= 0.978666,
-```
-
-Each export passes the tool it is written for:
-
-```bash
-doppeldata data generate orders --rows 10000 --out orders.csv
-doppeldata profile export orders --format table-schema --out orders.schema.json
-uvx frictionless validate orders.csv --schema orders.schema.json
-doppeldata profile export orders --format odcs --out orders.odcs.yaml
-uvx --from datacontract-cli datacontract lint orders.odcs.yaml
-```
 
 ## A strict format carries a fact only where the profile states it of every row
 
@@ -184,47 +87,20 @@ them, 1 − 2(`k_min` − 1)/n. So `orders`' `amount` range, over 100,000 rows, 
   has no rule for an email format.
 - **A mean that would overflow is left out.** Spark sums a 64-bit integer column in 64 bits, so
   the mean of a 15-digit claim id wraps.
-- **Read a CSV with the `pyspark-schemas` `StructType`, never with `inferSchema`.** Inference types
-  a column of digit strings, such as an NPI, as a long, which its `matches` rule then fails.
 - **Deequ ignores `with threshold` on a numeric or string `ColumnValues` rule.** It asserts
   every row and reports the share in its failure reason. The DQDL reference documents the
   threshold as the share of rows that must pass. The carrier claims export passes Deequ on the file
   it was profiled from, once each reported share is compared with its threshold.
 
-```python
-# doppeldata profile export orders --format pyspark-schemas --out orders_spark.py
-from orders_spark import ORDERS_STRUCT_TYPE, Orders
-
-frame = spark.read.option('header', True).schema(ORDERS_STRUCT_TYPE).csv('orders.csv')
-validated = Orders.validate(check_obj=frame)
-dict(validated.pandera.errors)   # empty where every check passes
-```
-
 ## A seed exports only what its schema declared
-
-```bash
-doppeldata profile import --from odcs orders.odcs.yaml --out orders-seed.profile.yaml
-doppeldata profile export orders-seed.profile.yaml --format pandera
-```
 
 A seed's `generated.declared` names each fact its schema stated, as
 [seed-profiles-from-schemas.md](seed-profiles-from-schemas.md) lists. An export of a seed carries
-those facts as exact, and no draw default. So `ordered_at`, which draws inside `DATE_WINDOW`
-because the contract bounds it nowhere, exports unbounded. A seed is exported as it is, without
+those facts as exact, and no draw default. So a date the contract bounds nowhere exports
+unbounded, though the seed draws it inside `DATE_WINDOW`. A seed is exported as it is, without
 `profile check`, which fails every seed.
 
 ## A bundle exports as a Data Package and as DQDL with `ReferentialIntegrity`
-
-```bash
-doppeldata profile create shop/ --tables --out shop.bundle.yaml
-doppeldata profile export shop.bundle.yaml --format table-schema --out datapackage.json
-doppeldata profile export shop.bundle.yaml --format dqdl --out shop.dqdl
-doppeldata profile export shop.bundle.yaml --format json-schema --table orders
-```
-
-```text
-ReferentialIntegrity "customer_id" "customers.customer_id" >= 0.99945,
-```
 
 - **Each table is a resource or a ruleset.**
 - **A seed bundle's relationships are foreign keys.** One imported from a Data Package holding
@@ -233,28 +109,10 @@ ReferentialIntegrity "customer_id" "customers.customer_id" >= 0.99945,
   writes fewer than `k_min` orphans as none, so no relationship of it holds for every row. DQDL
   takes a threshold below the share the profile states, as for any share, less the rows the floor
   may hide.
-- **`ReferentialIntegrity` names the parent by its table name.** A run passes the parent's frame as
-  an additional data source under that alias.
 - **The record schema describes one record, so a bundle takes `--table`**, or `table=` in Python.
   ODCS writes each table as a schema object, and the modules a class each.
 
 ## `--embed-profile` writes the profile into every Parquet and Arrow file it generates
-
-```bash
-doppeldata data generate orders --rows 100000 --seed 7 --format parquet --embed-profile --out orders/
-doppeldata profile export orders/part-00000-fe89a3c3.parquet --format pandera --out orders_schemas.py
-doppeldata profile expand orders/part-00000-fe89a3c3.parquet --out orders.profile.yaml
-doppeldata data generate orders/part-00000-fe89a3c3.parquet --out again/
-```
-
-```python
-sd.write('orders', 'orders/', rows=100_000, seed=7, embed_profile=True)
-profile = sd.Profile.from_data_file('orders/part-00000-fe89a3c3.parquet')
-```
-
-```sql
-select decode(value) from parquet_kv_metadata('orders/*.parquet') where decode(key) = 'doppeldata.profile'
-```
 
 A file read alone then holds the profile and scenario that made it, beside the seed and rows its
 provenance keys already name. Every PROFILE argument takes such a file.
@@ -275,8 +133,8 @@ provenance keys already name. Every PROFILE argument takes such a file.
   2, and Python raises `ProfileFailsCheck`. The file carries every literal the profile holds, so it must
   pass the check an export passes.
 - **`data generate FILE` defaults `--seed`, `--rows` and `--scenario` to what the file's write
-  recorded**, and prints each value it took from the file. So the last command above writes the
-  dataset `orders/` holds. `data plan` takes the same defaults, and `scenario check` takes the
+  recorded**, and prints each value it took from the file. So `data generate FILE` alone writes
+  the dataset FILE came from. `data plan` takes the same defaults, and `scenario check` takes the
   seed and rows. Python's `generate`, `stream`, `plan`, `write` and `spark` verbs take a data file
   the same way, each value left None. A key is read only where its value is left unset, so a
   malformed seed is refused only when the seed is not given.

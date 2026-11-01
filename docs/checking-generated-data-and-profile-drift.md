@@ -1,5 +1,9 @@
 # How generated data is checked against its profile, and two profiles diffed
 
+[Check generated data](how-to/check-generated-data.md) and [Measure drift between two
+profiles](how-to/measure-drift-between-profiles.md) run each command. This page says why each
+measurement is what it is.
+
 ## A check compares two profiles, so the real rows are never read again
 
 `data check PROFILE DATA` profiles DATA with `edges_from=PROFILE` and PROFILE's privacy policy and
@@ -226,27 +230,8 @@ Relative to the whole rate, the same six scored at most 0.04.
 
 ## A bundle is checked table by table, then each relationship by its fan-out, orphans and busiest parents
 
-```bash
-doppeldata data generate orders-customers --scale 0.1 --out shop/
-doppeldata data check orders-customers shop/
-```
-
-```text
-# doppeldata bundle check passed
-
-`shop/`, 59,000 rows in 2 tables, against bundle `orders-customers` (sha256:e8dda4ed…).
-
-0 of 3 relationship metrics failed.
-
-| Metric | Relationship | Value | Threshold | Expected | Observed | Passed |
-| --- | --- | --- | --- | --- | --- | --- |
-| fanout_ks | orders.customer_id → customers.customer_id | 0 | ≤ 0.05 |  |  | yes |
-| orphan_fraction_delta | orders.customer_id → customers.customer_id | 2.002e-06 | ≤ 0.005 | 0.002 | 0.002002 | yes |
-| top_fraction_delta | orders.customer_id → customers.customer_id | 9.02708e-06 | ≤ 0.001 | 0.003 | 0.00300903 | yes |
-```
-
-Each table under `<data>/<table>/` is checked against its own profile, as one table is, parents
-first. The report then counts each relationship's child rows per parent key over the generated
+[Generate related tables](how-to/generate-related-tables.md) runs one. Each table under
+`<data>/<table>/` is checked against its own profile, as one table is, parents first. The report then counts each relationship's child rows per parent key over the generated
 tables, by the join the profiler runs. `check()` takes a `Bundle` and returns a
 `BundleCheckReport`, `doppeldata schemas show bundle-check`.
 
