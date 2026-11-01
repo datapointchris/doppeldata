@@ -104,6 +104,8 @@ LENGTH_LEVELS = tuple(QUANTILES.values())
 DECIMAL_PLACES_TRIED = 9
 # A scipy fit's time grows with its values, so a fit is made on a seeded sample this size, which the correlations read too.
 FIT_SAMPLE_ROWS = 20_000
+# A check measures generated data's dependence on a sample this size, so its spread adds little to the source's own.
+CHECKED_DEPENDENCE_SAMPLE_ROWS = 10 * FIT_SAMPLE_ROWS
 # A strictly monotonic integer column with gaps is a counting sequence where it holds this share of the integers between
 # its trimmed extremes at its least step, so a key some of whose rows were rejected still generates unique.
 SEQUENCE_FILL = 0.5
@@ -250,13 +252,15 @@ def profile_table(
     readers: dict[str, str],
     frozen: FrozenLayout | None = None,
     type_mix_columns: frozenset[str] = frozenset(),
+    dependence_sample_rows: int = FIT_SAMPLE_ROWS,
 ) -> ProfiledTable:
     """The profile of `source`, from every row or from a seeded sample of `sample` rows, written under `policy`.
 
     The detectors of `packs` type each column `semantic_types.detected_columns` names, reading `code_lists`, and the
     type decides which rule of the policy holds the column. With `frozen`, each column it names is counted against the
     earlier profile's edges and value list. Keys and repeated rows are counted over every row, sampled or not. Each
-    string column `type_mix_columns` names is typed by its text, as a text source's columns are.
+    string column `type_mix_columns` names is typed by its text, as a text source's columns are. The correlations read
+    a seeded sample of `dependence_sample_rows` rows, and the fits a sample of `FIT_SAMPLE_ROWS` of those.
     """
     read = backend.read(source)
     table = read.table
@@ -271,7 +275,9 @@ def profile_table(
     if sample is not None and rows > sample:
         table, sampled = backend.sampled(table, sample, SAMPLE_SEED), True
     elements = read.json.elements if read.json else {}
-    settings = ColumnSettings(source.format, k_min, policy, packs, code_lists, frozen or FrozenLayout(), elements, type_mix_columns)
+    settings = ColumnSettings(
+        source.format, k_min, policy, packs, code_lists, frozen or FrozenLayout(), elements, type_mix_columns, dependence_sample_rows
+    )
     json_root = read.json.paths if read.json else None
     profiled = profile_columns(backend, table, settings, rows, whole_distinct, json_root, read.table if sampled else None)
     full = profiled.table if profiled.whole is None else profiled.whole
@@ -334,7 +340,8 @@ def visible_specs(backend: Backend, table: Table) -> list[ColumnSpec]:
 class ColumnSettings:
     """What every table of one source is profiled with: its format, the floor, the privacy policy, the detector packs
     and the code lists they read, an earlier profile's edges and value lists, a JSON source's element tables by
-    array path, and the string columns of a source of another format to type by their text, as a text source's are.
+    array path, the string columns of a source of another format to type by their text, as a text source's are, and
+    the rows of the sample the correlations read.
     """
 
     source_format: SourceFormat | None
@@ -345,6 +352,7 @@ class ColumnSettings:
     frozen: FrozenLayout
     elements: dict[str, Table]
     type_mix_columns: frozenset[str] = frozenset()
+    dependence_sample_rows: int = FIT_SAMPLE_ROWS
 
 
 def profile_columns(
@@ -428,7 +436,7 @@ def profile_columns(
     # A fit's support would reach past what the policy withholds, so a column kept to no value, or an age, is not fitted.
     fitted = [spec for spec in specs if not treatments[spec.name].keeps_no_value and treatments[spec.name] is not Treatment.AGE]
     # The fits and the correlations read one sample, which a record table holds and an array's elements need not.
-    dependence = backend.sampled(table, FIT_SAMPLE_ROWS, SAMPLE_SEED) if json_root is None else None
+    dependence = backend.sampled(table, settings.dependence_sample_rows, SAMPLE_SEED) if json_root is None else None
     fitted = [spec for spec in fitted if spec.name not in sequences]
     fits = column_fits(
         backend, table if dependence is None else dependence, fitted, stats, described, distinct, k_min, fitting, import_error

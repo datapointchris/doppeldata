@@ -582,8 +582,9 @@ which `--sample` makes its sample.
   seeded sample repeats none of its values, then confirmed over the whole table. A pair names its
   columns in table order, so Spark's estimated counts never reorder it.
 - **A correlation is measured on the seeded sample of `FIT_SAMPLE_ROWS` rows the fits read.** A
-  correlation names no value, so a sample costs the floor nothing. The measure follows the
-  columns' roles:
+  correlation names no value, so a sample costs the floor nothing. A check's profile of generated
+  data reads `CHECKED_DEPENDENCE_SAMPLE_ROWS`, ten times as many, and fits 20,000 of them. The
+  measure follows the columns' roles:
 
   | Columns | Written as | Measure |
   | --- | --- | --- |
@@ -626,7 +627,11 @@ which `--sample` makes its sample.
   over the 156 sampled rows holding both, against 0.10 over all 19,394.
 
   A table is given the column holding fewer values, where that holds at most `GIVEN_VALUES`, and
-  only where both columns list their values. Its cells are counted, then floored, and each row
+  only where both columns list their values. A float column listing every value it holds is a
+  given too, of a categorical column holding as many values or more. A copula member then places
+  the rows of a column the engine would otherwise draw apart from it. A table whose given's null or
+  zero rate is stated given its child is refused, because the engine would set the rate aside to
+  break the loop. Its cells are counted, then floored, and each row
   states its kept cells as shares of their rows. The given column's listed counts and the child
   column's both stand beside the table, so the floor holds each difference against them:
   - a cell under `k_min` rows is dropped;
@@ -856,9 +861,9 @@ and the policy's pass then removes what each column's rule withholds:
 - **A rate given another column's value** is written only where the value's rows, the rows the
   rate counts and the rest each number 0 or at least `k_min`. A value breaking that joins `other`.
 - **A lookup table** lists only the `lhs` values `k_min` rows hold.
-- **A top value** is kept only when `k_min` rows hold it. While the remainder holds 1 to `k_min - 1`
-  rows, the smallest kept value folds into it, so `other_fraction` never reveals a small cell. That
-  holds for a numeric column's list as for a string's.
+- **A top value** is kept only when `k_min` rows hold it. A remainder of 1 to `k_min - 1` rows is
+  counted with the most held value, so `other_fraction` is 0 rather than a small cell. Every share
+  stays over the column's rows. That holds for a numeric column's list as for a string's.
 - **A histogram bin** of 1 to `k_min - 1` rows merges into its smaller non-empty neighbor. An empty
   bin discloses no row, so it stays, and frozen edges are kept wherever the floor allows. So a
   re-profile's edges are a subset of the frozen ones, and a diff sums the earlier bins over a merged

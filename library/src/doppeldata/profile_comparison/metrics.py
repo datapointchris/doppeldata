@@ -316,7 +316,9 @@ def distinct_ratio_change(source: Column, observed: Column) -> Compared | Unmeas
     """How far the observed distinct ratio falls outside the range `distinct_ratio_range` allows, relative to its nearer end.
 
     At the source's own row count the range is the source's ratio, so the value is the relative change in ratio. A source
-    with no values has no ratio to measure against.
+    with no values has no ratio to measure against. A source listing every value it draws is measured by its listed
+    values, since the floor counts a remainder under k_min rows with its most held value, and the generator draws
+    none of those few rarest values.
     """
     ours, theirs = ((column.get('distinct') or {}) for column in (source, observed))
     a, b = ours.get('ratio'), theirs.get('ratio')
@@ -326,9 +328,21 @@ def distinct_ratio_change(source: Column, observed: Column) -> Compared | Unmeas
         return Unmeasured('the other profile counts no distinct values for the column, because it holds none', a)
     if not ours.get('approx_values') or not theirs.get('approx_values'):
         return Compared(abs(b - a) / a, a, b)
-    low, high = distinct_ratio_range(ours['approx_values'], a, theirs['approx_values'] / b)
+    count = drawn_values(source, ours['approx_values'])
+    a = a * count / ours['approx_values']
+    low, high = distinct_ratio_range(count, a, theirs['approx_values'] / b)
     outside = (low - b) / low if b < low else (b - high) / high if b > high else 0.0
     return Compared(outside, a, b)
+
+
+def drawn_values(column: Column, count: int) -> int:
+    """The distinct values the generator can draw of a column holding `count`: its listed values where it lists every
+    value it draws, its `other_fraction` 0, else `count`."""
+    for section in ('numeric', 'string'):
+        stated = column.get(section) or {}
+        if stated.get('top_values') and not stated.get('other_fraction'):
+            return min(count, len(stated['top_values']))
+    return count
 
 
 def distinct_ratio_range(count: int, ratio: float, rows: float) -> tuple[float, float]:

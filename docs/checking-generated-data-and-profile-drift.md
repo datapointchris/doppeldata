@@ -137,6 +137,12 @@ toward either reading passes, and only a count outside both fails. A few-valued 
 falls near zero at a small n: a 5-value column in 100,000 rows, checked at 2,000, passes holding
 anywhere from 0.1 to 5 values. `tvd` is what checks its values there.
 
+**A column listing every value it draws is measured by its listed values.** Its `other_fraction`
+is 0, so the generator draws nothing else. The privacy floor counts a remainder under `k_min` rows
+with the most held value, so the source's rarest few values are counted in D but never listed. In
+the April 2024 taxi trips, `congestion_surcharge` holds 5 values and lists 3. Its other 2 sit on 3
+rows. So D is the smaller of the source's count and the values listed.
+
 Every kind of column is measured. A float column whose source holds cents, generated as continuous
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.
@@ -167,6 +173,14 @@ table, naming its columns in `column` and `paired_with`.
   lists leave the check. So no cell's count is written or reported. A frozen value list
   keeps its floor, because a column's `overflow` change reports the share of values outside it.
   `profile diff` reads B's tables as B states them, since B is a file that keeps the floor.
+- **A check measures the generated data's correlations on a sample ten times PROFILE's.** PROFILE
+  states each Spearman value from a seeded sample of 20,000 rows. A second sample that size would
+  double the noise between the two. In the April 2024 taxi trips, `improvement_surcharge` against
+  `congestion_surcharge` moves by a standard deviation of 0.0121 at 20,000 rows. At 200,000 it
+  moves by 0.0041. Two 20,000-row samples differ by about 0.017, so the 0.05 bound sits 2.9 of
+  those away. With 200,000 rows on the check's side the difference spreads by 0.0128. Every
+  generated row would give 0.0121, at a sort of every row per ranked column on a large Spark
+  output. Ten times keeps nearly all of that gain. The fits still read 20,000 of the rows.
 
 300,000 rows generated from the committed fixture pass both:
 

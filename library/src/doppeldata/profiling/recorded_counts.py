@@ -13,13 +13,15 @@ RATE_DIGITS = 4
 
 
 def kept_values(counted: list[tuple[Any, int]], values: int, k_min: int) -> tuple[list[tuple[Any, int]], int]:
-    """The values at least k_min rows hold, and the rows of the rest, which are also never 1 to k_min - 1."""
+    """The values at least k_min rows hold, and the rows of the rest, which are never 1 to k_min - 1. A rest of that
+    many rows is counted with the most held value, the first of them where several tie, so every count stays whole over
+    `values`."""
     kept = [(value, count) for value, count in counted if count >= k_min]
     other = values - sum(count for _, count in kept)
-    while kept and 0 < other < k_min:
-        # The least held value folds in, and the last of them where several tie.
-        smallest = min(range(len(kept)), key=lambda at: (kept[at][1], -at))
-        other += kept.pop(smallest)[1]
+    if kept and 0 < other < k_min:
+        modal = max(range(len(kept)), key=lambda at: (kept[at][1], -at))
+        kept[modal] = (kept[modal][0], kept[modal][1] + other)
+        other = 0
     return kept, other
 
 

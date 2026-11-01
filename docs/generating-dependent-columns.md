@@ -69,12 +69,14 @@ dataset:
   with congestion_surcharge`. No matrix lifts the pair past what it holds at that Pearson. So
   where that sits further under the stated value than `correlation_max_abs_diff` allows, `data
   check` fails the pair.
-- **A group draws each member's nulls apart from the other members.** So the rows holding a pair
-  keep each column's own margins. In the New York yellow taxi trips, every `congestion_surcharge`
-  null falls on a row whose `improvement_surcharge` is 1.0. The rows holding both then carry more
-  refunds than either margin says. So their Spearman value is higher than any coupling of the
-  margins reaches. Profiled from April 2024 or January 2025, that pair fails `data check`. In April the privacy
-  floor also folds the −2.5 refunds into the other share, whose curve spreads them.
+- **A group draws each member's nulls apart from the other members, from the column its null rate
+  is given.** In the New York yellow taxi trips, `congestion_surcharge` is null exactly where
+  `payment_type` is 0, and no refund has type 0. So the rows holding both surcharges carry more
+  refunds than either margin says, and their Spearman value is higher than any coupling of the
+  margins reaches. Drawn apart from the copula, `payment_type` would put 11.6% of refunds on type 0
+  and null their surcharge. So it is drawn from a conditional table given `improvement_surcharge`,
+  a member listing every value it holds. Profiled from April 2024, the pair then holds 0.3976 over
+  every generated row, against the source's 0.4049.
 - **Where no matrix holds every stated pair, the group holds a valid one fitted toward the stated
   Spearman values.** Ties raise the Pearson a pair needs. So Spearman values that a valid matrix of
   ranks holds can still ask for Pearsons no valid matrix holds. A column that is the sum of others,

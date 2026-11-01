@@ -72,6 +72,7 @@ from doppeldata.profiling.backend import CsvDialect
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
 from doppeldata.profiling.file_traits import WRITTEN_ENCODINGS
+from doppeldata.profiling.table_profile import CHECKED_DEPENDENCE_SAMPLE_ROWS
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
@@ -292,6 +293,7 @@ def checked_table(
             type_mix_columns=type_mix_column_names(source, planned if planned is not None else source_plan(source)),
             reuse_unchanged=False,
             count_frozen_conditionals_without_floor=True,
+            dependence_sample_rows=CHECKED_DEPENDENCE_SAMPLE_ROWS,
         )
     observed = checked.to_plain()
     fingerprint = (observed.get('generated') or {}).get('source_fingerprint')
