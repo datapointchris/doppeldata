@@ -144,9 +144,9 @@ def holds_unfinished_write(data: Any) -> bool:
     # Without boto3 nothing reads S3, and reading the tables refuses it next, naming boto3.
     if importlib.util.find_spec('boto3') is None:
         return False
-    from doppeldata.profiling import sources
+    from doppeldata.profiling import s3_sources
 
-    return sources.s3_holds(item, PARTIAL_MANIFEST_FILE_NAME)
+    return s3_sources.s3_holds(item, PARTIAL_MANIFEST_FILE_NAME)
 
 
 def written_document(data: Any) -> dict[str, Any] | None:
@@ -168,7 +168,7 @@ def written_document(data: Any) -> dict[str, Any] | None:
     # Without boto3 nothing reads S3, and profiling the data refuses it next, naming boto3.
     if importlib.util.find_spec('boto3') is None:
         return None
-    from doppeldata.profiling import sources
+    from doppeldata.profiling import s3_sources
 
-    held = sources.s3_manifest(item)
+    held = s3_sources.s3_manifest(item)
     return held.document if held is not None else None

@@ -46,11 +46,11 @@ none of the tools that read them installed.
 `sd.Profile.from_data_file()` reads it back.
 
 The library installs no profiling engine, so a job that only generates carries none.
-`doppeldata.profile()` needs polars, duckdb, pyarrow and boto3 installed beside it, and names any
-that are missing. `profile(data, engine='spark')` computes the profile in Spark instead: of a Spark
-DataFrame in its own session, or of files in the session `spark=` names, else the active one. It
-needs pyspark, pyarrow and boto3, with duckdb, clevercsv and charset-normalizer to sniff a CSV or
-TSV. It estimates distinct counts with a 1% standard error, and quantiles within a rank error of
+`doppeldata.profile()` needs polars, duckdb and pyarrow installed beside it, and boto3 to list an
+`s3://` prefix, and names any that are missing. `profile(data, engine='spark')` computes the profile
+in Spark instead: of a Spark DataFrame in its own session, or of files in the session `spark=`
+names, else the active one. It needs pyspark and pyarrow, boto3 for an `s3://` prefix, and duckdb,
+clevercsv and charset-normalizer to sniff a CSV or TSV. It estimates distinct counts with a 1% standard error, and quantiles within a rank error of
 1/10,000. `profile()` refuses a directory whose folders hold unlike column names, naming each
 table it holds, and `profile_tables()` profiles it to a `Bundle` of one table per kind of folder,
 as an AWS Glue crawler splits one. A list given to `profile_tables()` groups each path on its own,

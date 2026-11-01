@@ -54,12 +54,12 @@ def s3_client() -> Any:
 def s3_first_block(url: str, client: Any) -> bytes:
     """An S3 object's first bytes, read in one ranged request through a boto3 client of the AWS environment's, as the
     listing's is."""
-    sources = importlib.import_module('doppeldata.profiling.sources')
+    s3_sources = importlib.import_module('doppeldata.profiling.s3_sources')
     s3_access = importlib.import_module('doppeldata.s3_access')
     bucket, key = url.removeprefix('s3://').split('/', 1)
     codec = CODECS.get(PurePosixPath(key).suffix.lower())
     end = (COMPRESSED_BYTES_READ if codec else FIRST_BLOCK_BYTES) - 1
-    with sources.s3_errors(url, s3_access.endpoint_named(client), doing='read'):
+    with s3_sources.s3_errors(url, s3_access.endpoint_named(client), doing='read'):
         raw: bytes = client.get_object(Bucket=bucket, Key=key, Range=f'bytes=0-{end}')['Body'].read()
     if codec is None:
         return raw
