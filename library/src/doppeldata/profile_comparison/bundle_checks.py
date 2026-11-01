@@ -102,7 +102,9 @@ def check_bundle(
     scale = written.identity.get('scale') if written is not None else None
     return BundleCheckReport(
         profile=ReportedProfile(bundle.name, bundle.sha256, str(bundle.path) if bundle.path is not None else None),
-        data=CheckedData(named, sum(table.report.data.rows for table in checked), None),
+        data=CheckedData(
+            named, sum(table.report.data.rows for table in checked), None, written.dataset_sha256 if written is not None else None
+        ),
         tables=checked,
         relationships=relationship_rows(plan, relationships, scenarios, held, dialects, thresholds, scale),
         scenario=reported,

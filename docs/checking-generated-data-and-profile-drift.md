@@ -202,6 +202,18 @@ relative change, as `distinct_ratio_delta`'s is, and each defaults to at most 0.
   change is 1.
 - **Data whose profile records no layout leaves each of the three unmeasured**, as a table in
   memory does. A source profile with no layout, as a hand-written one may be, gets none of them.
+- **A write to one file leaves all three unmeasured where its manifest records it.** `--out
+  generated.csv` asks for every row in one file, whatever the source's layout. The manifest beside
+  the file records it under `one_file`. So each of the three decides nothing, and its `unmeasured`
+  names the file. The report's `data` holds the manifest's `dataset_sha256` and `one_file`.
+- **The manifest marks the write, never the path.** One file read with no manifest is scored. A
+  real single file checked against a profile of many files is layout drift. Where a layout metric
+  fails on one file read with no manifest, the report and the refusal both say that
+  `--manifest-beside`, or `manifest_beside=True`, marks a write to one file.
+
+*Rejected:* a `doppeldata.one_file` key in each Parquet and Arrow file's metadata, marking a write
+to one file. The engine writes the file as a staged part, which Python then moves into place. So
+the engine never knows the name the key would record. A CSV has nowhere to carry it either.
 
 ## `malformed_fraction_delta` compares the rejected rows by type, only where the data was written broken
 

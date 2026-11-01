@@ -10,6 +10,8 @@ doppeldata data check orders.profile.yaml generated/
 doppeldata data check orders.profile.yaml generated/ --json | jq -c '.metrics[] | select(.passed | not)'
 doppeldata data check orders.profile.yaml generated/ --thresholds thresholds.yaml
 doppeldata data check orders.profile.yaml generated/ --against s3://your-bucket/orders/ --aws-profile analytics
+doppeldata data generate orders.profile.yaml --rows 100000 --seed 7 --out generated.parquet --manifest-beside
+doppeldata data check orders.profile.yaml generated.parquet
 doppeldata data check --help        # every metric, its summary and its default threshold
 ```
 
@@ -23,6 +25,9 @@ strict = sd.check('orders.profile.yaml', 'generated/', thresholds='thresholds.ya
 # [('ks', 'amount', 0.00525), ('null_fraction_delta', 'customer_email', 0.000562097)]
 scored = sd.check('orders.profile.yaml', 'generated/', against='s3://your-bucket/orders/', aws_profile='analytics')
 print(scored.to_markdown())
+sd.write('orders.profile.yaml', 'generated.parquet', rows=100_000, seed=7, manifest_beside=True)
+one_file = sd.check('orders.profile.yaml', 'generated.parquet')
+one_file.passed, one_file.data.one_file     # (True, 'generated.parquet')
 ```
 
 `orders.profile.yaml` here is the profile [Profile a dataset](profile-a-dataset.md) made of
@@ -171,6 +176,62 @@ Scores that decide nothing, because no thresholds file sets their threshold: 20.
   ```
 
 - **The report holds scores, never a real row.**
+
+## A write to one file passes its layout only with its manifest beside it
+
+A write to one file puts every row in it, whatever layout the profile records. With no manifest
+beside the file, the check scores that layout. The profile's one file of 20,000 rows scales to five
+files at 100,000 rows, so one file misses it:
+
+```text
+$ doppeldata data generate orders.profile.yaml --rows 100000 --seed 7 --out generated.parquet
+$ doppeldata data check orders.profile.yaml generated.parquet
+# doppeldata check failed
+
+`generated.parquet`, 100,000 rows, against profile `orders` (sha256:…).
+
+2 of 31 metrics failed.
+
+| Metric | Column | Value | Threshold | Expected | Observed | Passed |
+| --- | --- | --- | --- | --- | --- | --- |
+| files_delta |  | 0.8 | ≤ 0.1 | 5 | 1 | **no** |
+| rows_per_file_delta |  | 4 | ≤ 0.1 | 20000 | 100000 | **no** |
+...
+
+`generated.parquet` is one file read with no manifest, so its layout was scored. `--manifest-beside`, or `manifest_beside=True` in the SDK, marks a write to one file, and its check then leaves the layout unmeasured.
+
+doppeldata: E-DATA-014: the data missed its profile on 2 of 31 metrics and 0 of 0 field changes: files_delta (5 to 1), rows_per_file_delta (20000 to 100000); --manifest-beside, or manifest_beside=True in the SDK, marks a write to one file, and its check then leaves the layout unmeasured
+```
+
+The same write with `--manifest-beside` passes, its layout unmeasured:
+
+```text
+$ doppeldata data generate orders.profile.yaml --rows 100000 --seed 7 --out generated.parquet --manifest-beside --replace
+$ doppeldata data check orders.profile.yaml generated.parquet
+# doppeldata check passed
+
+`generated.parquet`, 100,000 rows, against profile `orders` (sha256:…).
+
+0 of 29 metrics failed.
+...
+
+`files_delta` decides nothing, unmeasured: the manifest records a write of every row to one file, generated.parquet, whatever layout the source has.
+
+`rows_per_file_delta` decides nothing, unmeasured: the manifest records a write of every row to one file, generated.parquet, whatever layout the source has.
+```
+
+- **The manifest marks the write, never the path.** One file read with no manifest is scored,
+  because a real single file checked against a profile of many files is layout drift.
+- **`partition_fraction_delta` is left unmeasured too**, where the profile lists a partition key's
+  value shares.
+- **`--json` names the manifest the check read under `data`**, by its `dataset_sha256`, and the file
+  under `one_file`. Both are null where the check read no manifest, and `one_file` is null for a
+  directory:
+
+  ```text
+  $ doppeldata data check orders.profile.yaml generated.parquet --json | jq -c '.data'
+  {"path":"generated.parquet","rows":100000,"fingerprint":"sha256:db398dac7585dcc0739e1f1e256feb8e6d3a5ceacef457e72e01cba08fa1077c","dataset_sha256":"sha256:38c09411de822c90d5199412eb8cf75380da2a52fc1b00e8d06ca6d12cc7ee64","one_file":"generated.parquet"}
+  ```
 
 ## A bundle, a scenario or a broken file is checked the same way
 

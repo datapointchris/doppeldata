@@ -7,9 +7,21 @@ from typing import ClassVar
 
 from doppeldata import issue_codes
 from doppeldata.profile_comparison.field_changes import FieldChange
+from doppeldata.profile_comparison.metrics import LAYOUT_METRICS
+from doppeldata.profile_comparison.metrics import METRICS_BY_NAME
 from doppeldata.profile_comparison.metrics import Bound
 
 BOUND_SIGNS = {Bound.AT_MOST: '≤', Bound.AT_LEAST: '≥'}
+# The layout metric whose observed value is the file count read.
+FILE_COUNT_DELTA = METRICS_BY_NAME['files_delta'].name
+
+
+def one_file_mark(quote: str = '') -> str:
+    """How a write to one file is marked, each name between `quote`, a backtick in Markdown."""
+    return (
+        f'{quote}--manifest-beside{quote}, or {quote}manifest_beside=True{quote} in the SDK, marks a write to one file, '
+        'and its check then leaves the layout unmeasured'
+    )
 
 
 OPTIONAL_METRIC_FIELDS = (
@@ -164,11 +176,15 @@ class ReportedScenario:
 
 @dc.dataclass(frozen=True)
 class CheckedData:
-    """The data as the caller named it, the rows profiled, and the listing's fingerprint, None for an in-memory table."""
+    """The data as the caller named it, the rows profiled, and the listing's fingerprint, None for an in-memory table.
+    `dataset_sha256` names the dataset of the manifest the check read with the data, or is None where it read none.
+    `one_file` is the file that manifest records a write to one file put every row in, or None."""
 
     path: str
     rows: int
     fingerprint: str | None
+    dataset_sha256: str | None = None
+    one_file: str | None = None
 
 
 @dc.dataclass(frozen=True)
@@ -207,7 +223,8 @@ class CheckReport:
 
     def failure_message(self) -> str:
         """What `CheckFailed` says of a check the data did not pass."""
-        return f'the data missed its profile on {self.failures().summary()}'
+        marked = f'; {one_file_mark()}' if unmarked_one_file(self.data, self.metrics) else ''
+        return f'the data missed its profile on {self.failures().summary()}{marked}'
 
     @property
     def passed(self) -> bool:
@@ -252,7 +269,10 @@ class CheckReport:
                 f'on a seeded sample of {real.scored_rows:,} rows from each side.',
                 '',
             ]
-        return lines + findings(self.metrics, self.changes, self.failures()) + expected(self.expectations)
+        lines += findings(self.metrics, self.changes, self.failures())
+        if unmarked_one_file(self.data, self.metrics):
+            lines += [f'`{self.data.path}` is one file read with no manifest, so its layout was scored. {one_file_mark("`")}.', '']
+        return lines + expected(self.expectations)
 
 
 @dc.dataclass(frozen=True)
@@ -394,6 +414,13 @@ def findings(metrics: list[MetricResult], changes: list[FieldChange], failures: 
             lines.append(f'| {change.change.value} | {change.column or ""} | {verdict(change.passed)} | {change.message} |')
         lines.append('')
     return lines
+
+
+def unmarked_one_file(data: CheckedData, metrics: list[MetricResult]) -> bool:
+    """Whether a layout metric failed on data of one file, read with no manifest that could record a write to one file."""
+    layout = [result for result in metrics if result.metric in LAYOUT_METRICS]
+    one_file = any(result.metric == FILE_COUNT_DELTA and result.observed == 1 for result in layout)
+    return data.dataset_sha256 is None and one_file and any(result.decides and not result.passed for result in layout)
 
 
 def unvalued(result: MetricResult) -> str:

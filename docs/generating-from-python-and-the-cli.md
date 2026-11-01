@@ -70,7 +70,9 @@ destination always holds one.
   `--replace`.** That directory is their dataset, and a reader of it would count the file's rows
   among theirs. Write the file to another directory.
 - **`data check` finds the manifest beside the file** where it records that file alone, as it finds
-  one in a directory.
+  one in a directory. It then leaves `files_delta`, `rows_per_file_delta` and
+  `partition_fraction_delta` unmeasured, because the caller asked for one file. Without the
+  manifest, the check scores the file against the source's layout.
 - **One file refuses what would split it, exit 2.** That is `--file-rows`, `--partition-by`, a
   `--format` its suffix does not name, and a scenario op that shapes the files. Writer settings
   that change the file's extension are refused too, such as gzip, which writes `.csv.gz`.

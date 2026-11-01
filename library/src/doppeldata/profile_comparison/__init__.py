@@ -41,6 +41,7 @@ from doppeldata.profile_comparison import side_by_side_html
 from doppeldata.profile_comparison.field_changes import column_changes
 from doppeldata.profile_comparison.field_changes import overflow_changes
 from doppeldata.profile_comparison.field_changes import source_changes
+from doppeldata.profile_comparison.metrics import LAYOUT_METRICS
 from doppeldata.profile_comparison.metrics import METRICS
 from doppeldata.profile_comparison.metrics import Compared
 from doppeldata.profile_comparison.metrics import Document
@@ -152,9 +153,13 @@ def check(
     records alone, InvalidScenario refuses a `scenario` other than the one it records, and no `scenario` where it records one.
     InvalidScenario also refuses data holding a fault a check cannot read back in its format, before any row is read.
     `malformed_fraction_delta` decides nothing on data that no malformed_rows asked for malformed rows in. Where the manifest
-    records a `cdc` write, the check reads its full load alone, and a ProfilingWarning says the change files and the
-    expected table went unmeasured. Delimited files a manifest records are read in the dialect it records, never one
-    sniffed from them, and files with no header take their column names from the plan it records.
+    records a write to one file, `files_delta`, `rows_per_file_delta` and `partition_fraction_delta` are unmeasured and
+    decide nothing, because the caller asked for that one file. Where they fail on one file no manifest was read with, the
+    report says a write to one file is marked by writing it with `manifest_beside=True`. Where the manifest records a `cdc`
+    write, the check reads its full load alone, and a ProfilingWarning says the change files and the expected table went
+    unmeasured. Delimited files a manifest records are read in the dialect it records, never one sniffed from them, and
+    files with no header take their column names from the plan it records. The report's `data` names the dataset of the
+    manifest read, and the one file it records.
 
     `against` is the real data, read as `data` is. Each of `SCORES` then scores a seeded sample of `against_sample` rows
     from each side, `DEFAULT_SAMPLE_ROWS` unless given, as SDMetrics defines it. A score decides only where `thresholds`
@@ -302,9 +307,16 @@ def checked_table(
         moved = moves(applied)
         metrics, changes = skipped(metrics, moved), attributed(changes, moved)
         reported_scenario, expectations = ReportedScenario(applied.name, applied.sha256), applied.verify(data)
+    metrics = one_file_layout(metrics, written)
     report = CheckReport(
         profile=reported(profile),
-        data=CheckedData(named, (observed.get('dataset') or {}).get('rows') or 0, fingerprint),
+        data=CheckedData(
+            named,
+            (observed.get('dataset') or {}).get('rows') or 0,
+            fingerprint,
+            written.dataset_sha256 if written is not None else None,
+            written.one_file if written is not None else None,
+        ),
         metrics=metrics,
         changes=changes,
         scenario=reported_scenario,
@@ -314,6 +326,20 @@ def checked_table(
     if html is not None and against_scored is not None:
         side_by_side_html.write_side_by_side(against_scored.real_frame, against_scored.checked_frame, html)
     return report
+
+
+def one_file_layout(results: list[MetricResult], written: Manifest | None) -> list[MetricResult]:
+    """Each layout metric as unmeasured and deciding nothing, where `written` records a write to one file, whose layout is
+    the one file the caller asked for. It replaces a perturbation's skip, so the three rows give one reason."""
+    if written is None or written.one_file is None:
+        return results
+    reason = f'the manifest records a write of every row to one file, {written.one_file}, whatever layout the source has'
+    return [
+        dc.replace(result, value=None, observed=None, passed=True, unmeasured=reason, skipped_by=None, decides=False)
+        if result.metric in LAYOUT_METRICS
+        else result
+        for result in results
+    ]
 
 
 # Each breaks the one dialect and header a check reads every file in.

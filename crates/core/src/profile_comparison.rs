@@ -107,6 +107,13 @@ pub struct CheckedData {
     pub rows: u64,
     /// The profile's `source_fingerprint` of the files read, or null for an in-memory table.
     pub fingerprint: Option<String>,
+    /// The `dataset_sha256` of the manifest the check read with the data, a bundle's for a
+    /// bundle, or null where it read none.
+    pub dataset_sha256: Option<String>,
+    /// The file a write to one file put every row in, as that manifest's `one_file` records it,
+    /// or null. A check of such a write leaves `files_delta`, `rows_per_file_delta` and
+    /// `partition_fraction_delta` unmeasured, because the write chose its own layout.
+    pub one_file: Option<String>,
 }
 
 /// The real data a check scored the data against. The report holds its scores and none of its

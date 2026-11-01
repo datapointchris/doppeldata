@@ -115,6 +115,20 @@
             "string",
             "null"
           ]
+        },
+        "dataset_sha256": {
+          "description": "The `dataset_sha256` of the manifest the check read with the data, a bundle's for a\nbundle, or null where it read none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "one_file": {
+          "description": "The file a write to one file put every row in, as that manifest's `one_file` records it,\nor null. A check of such a write leaves `files_delta`, `rows_per_file_delta` and\n`partition_fraction_delta` unmeasured, because the write chose its own layout.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

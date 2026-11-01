@@ -1224,7 +1224,13 @@ def data_generate(
     scenario: ScenarioOption = None,
     manifest_beside: Annotated[
         bool,
-        typer.Option('--manifest-beside', help='Write _manifest.json beside a one-file --out. A directory or S3 write always writes one.'),
+        typer.Option(
+            '--manifest-beside',
+            help=(
+                'Write _manifest.json beside a one-file --out, so data check leaves its file layout unmeasured. A directory or S3 '
+                'write always writes one.'
+            ),
+        ),
     ] = False,
     manifest: Annotated[
         str | None,

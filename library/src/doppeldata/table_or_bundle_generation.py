@@ -343,7 +343,8 @@ def write(
 
     A local path ending in a format's suffix, such as `people.csv`, is written as that one file in that format, and one
     ending in `/` as a directory. It gets `_manifest.json` beside it only where `manifest_beside` is set, and `replace` writes over
-    either. A directory holding another dataset's manifest refuses it.
+    either. `check` reads that manifest and leaves the file's layout unmeasured. A directory holding another dataset's manifest
+    refuses it.
 
     A write that fails raises WriteFailed, and one a signal stops, such as Ctrl-C, raises WriteInterrupted. Both are a
     StoppedWrite. Once a write to a directory has claimed it, either leaves `_manifest.partial.json` listing the files it

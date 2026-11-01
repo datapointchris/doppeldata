@@ -667,3 +667,7 @@ METRICS = (
     ),
 )
 METRICS_BY_NAME = {metric.name: metric for metric in METRICS}
+# The metrics comparing the files with the source's layout.
+LAYOUT_METRICS = frozenset(
+    metric.name for metric in METRICS if metric.measure in (file_count_change, rows_per_file_change, partition_share_change)
+)
