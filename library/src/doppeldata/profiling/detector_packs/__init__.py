@@ -11,6 +11,7 @@ type. So enable only a pack trusted with the data. The profile holds none of tho
 """
 
 import dataclasses as dc
+import difflib
 import functools
 import hashlib
 import importlib
@@ -25,6 +26,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from doppeldata import _core
+from doppeldata import issue_codes
 from doppeldata.column_name_words import name_words
 from doppeldata.errors import DetectorPackError
 from doppeldata.errors import InvalidCodeList
@@ -115,7 +117,8 @@ def enabled_packs(names: Iterable[str]) -> list[EnabledPack]:
     for each in enabled:
         for kind in dict.fromkeys(detector.type for detector in each.pack.detectors):
             if kind in owners:
-                raise DetectorPackError(f'the detector packs {owners[kind]!r} and {each.pack.name!r} both declare the type {kind}')
+                message = f'the detector packs {owners[kind]!r} and {each.pack.name!r} both declare the type {kind}'
+                raise DetectorPackError(issue_codes.DETECTOR_PACK_BROKEN, message, value=kind)
             owners[kind] = each.pack.name
     return enabled
 
@@ -147,17 +150,21 @@ def read_code_lists(paths: Mapping[str, str | os.PathLike[str]], packs: list[Ena
     supplied = {}
     for name, path in paths.items():
         if name not in readers:
-            raise InvalidCodeList(f'no enabled detector reads a code list named {name!r}; {list_readers(readers)}')
+            message = f'no enabled detector reads a code list named {name!r}; {list_readers(readers)}'
+            raise InvalidCodeList(issue_codes.CODE_LIST_UNREAD, message, field=name, valid=sorted(readers))
         try:
             content = Path(path).read_bytes()
             lines = [line.strip() for line in content.decode('utf-8').splitlines()]
         except OSError as error:
-            raise InvalidCodeList(f'the code list {name!r} cannot be read from {path}: {error.strerror}') from error
+            message = f'the code list {name!r} cannot be read from {path}: {error.strerror}'
+            raise InvalidCodeList(issue_codes.FILE_UNREADABLE, message, field=name, value=os.fspath(path)) from error
         except UnicodeDecodeError as error:
-            raise InvalidCodeList(f'the code list {name!r} at {path} is not UTF-8 text: {error.reason}') from error
+            message = f'the code list {name!r} at {path} is not UTF-8 text: {error.reason}'
+            raise InvalidCodeList(issue_codes.INVALID_CODE_LIST, message, field=name, value=os.fspath(path)) from error
         codes = tuple(line for line in lines if line)
         if not codes:
-            raise InvalidCodeList(f'the code list {name!r} at {path} holds no code; expected one code a line')
+            message = f'the code list {name!r} at {path} holds no code; expected one code a line'
+            raise InvalidCodeList(issue_codes.INVALID_CODE_LIST, message, field=name, value=os.fspath(path))
         supplied[name] = SuppliedCodeList(name, 'sha256:' + hashlib.sha256(content).hexdigest(), codes)
     return supplied
 
@@ -180,19 +187,22 @@ def load(name: str) -> EnabledPack:
     found = list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP, name=name))
     if not found:
         installed = sorted({*BUILT_IN, *(entry.name for entry in importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))})
-        raise DetectorPackError(
+        message = (
             f'no detector pack named {name!r} is installed; installed packs: {", ".join(installed)}. '
-            f'A pack registers under the {ENTRY_POINT_GROUP!r} entry-point group',
-            kind='refused',
+            f'A pack registers under the {ENTRY_POINT_GROUP!r} entry-point group'
         )
+        closest = difflib.get_close_matches(name, installed)
+        raise DetectorPackError(issue_codes.DETECTOR_PACK_MISSING, message, field='packs', value=name, valid=installed, closest=closest)
     if len(found) > 1:
         sources = ', '.join(f'{entry.value} from {provider(entry)}' for entry in found)
-        raise DetectorPackError(f'more than one installed distribution registers a detector pack named {name!r}: {sources}')
+        message = f'more than one installed distribution registers a detector pack named {name!r}: {sources}'
+        raise DetectorPackError(issue_codes.DETECTOR_PACK_BROKEN, message, value=name)
     entry = found[0]
     try:
         pack = entry.load()
     except Exception as error:
-        raise DetectorPackError(f'the detector pack {name!r} ({entry.value} from {provider(entry)}) failed to load: {error}') from error
+        message = f'the detector pack {name!r} ({entry.value} from {provider(entry)}) failed to load: {error}'
+        raise DetectorPackError(issue_codes.DETECTOR_PACK_BROKEN, message, value=name) from error
     return EnabledPack(checked(name, pack), provider(entry))
 
 
@@ -208,7 +218,7 @@ def checked(name: str, pack: Any) -> DetectorPack:
     """
 
     def refuse(problem: str) -> DetectorPackError:
-        return DetectorPackError(f'the detector pack {name!r} {problem}')
+        return DetectorPackError(issue_codes.DETECTOR_PACK_BROKEN, f'the detector pack {name!r} {problem}', value=name)
 
     if not isinstance(pack, DetectorPack):
         raise refuse(f'is a {type(pack).__name__}, not a doppeldata DetectorPack')

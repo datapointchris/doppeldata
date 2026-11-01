@@ -21,11 +21,12 @@ mod _core {
     use doppeldata_core::PlanError;
     use doppeldata_core::PlanInputs;
     use doppeldata_core::column_overrides::ColumnOverride;
+    use doppeldata_core::issue_codes as engine_codes;
+    use doppeldata_core::issue_codes::IssueCode;
     use doppeldata_core::profile::Profile;
     use doppeldata_core::scenario::Scenario;
     use doppeldata_writers::Destination;
     use doppeldata_writers::DestinationUrl;
-    use doppeldata_writers::FailureKind;
     use doppeldata_writers::LayoutError;
     use doppeldata_writers::RangesWritten;
     use doppeldata_writers::RunOptions;
@@ -37,7 +38,7 @@ mod _core {
     use object_store::client::HttpError;
     use object_store::client::HttpErrorKind;
     use object_store::memory::InMemory;
-    use pyo3::exceptions::PyValueError;
+
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
     use pyo3::types::PyString;
@@ -117,6 +118,60 @@ mod _core {
     /// How often a call waiting on the engine checks for a signal, such as the interrupt Ctrl-C sends.
     const SIGNAL_CHECK: Duration = Duration::from_millis(100);
 
+    type DeclaredCode = (&'static str, &'static str, &'static str, Option<&'static str>, u8);
+
+    /// Every code the engine and its writers refuse with, in declaration order: the name the
+    /// library binds it by, the code, what raises it, its hint and its exit status.
+    #[pyfunction]
+    fn issue_codes() -> Vec<DeclaredCode> {
+        doppeldata_core::issue_codes::ALL
+            .iter()
+            .chain(doppeldata_writers::issue_codes::ALL)
+            .map(|declared| {
+                (
+                    declared.name,
+                    declared.code,
+                    declared.raised_when,
+                    declared.hint,
+                    declared.exit_code,
+                )
+            })
+            .collect()
+    }
+
+    /// The library's ``InvalidArgument`` with ``code``, for a call the engine cannot take as given.
+    fn invalid_argument(code: &'static IssueCode, message: String) -> PyErr {
+        Python::attach(|py| {
+            library_error(|| {
+                py.import("doppeldata.errors")?
+                    .getattr("InvalidArgument")?
+                    .call1((code.code, message))
+            })
+        })
+    }
+
+    /// The library's ``InvalidProfile`` for ``source``, which the engine's model does not read.
+    fn not_the_profile_model(source: &str, error: serde_json::Error) -> PyErr {
+        let message = format!("{source} does not match the engine's profile model: {error}");
+        Python::attach(|py| {
+            library_error(|| {
+                let module = py.import("doppeldata.issue_codes")?;
+                let issue = module
+                    .getattr("Issue")?
+                    .call1((engine_codes::PROFILE_MODEL_MISMATCH.code, "", message))?;
+                py.import("doppeldata.profile_format")?
+                    .getattr("InvalidProfile")?
+                    .call1((source, vec![issue]))
+            })
+        })
+    }
+
+    /// The library's ``InvalidScenario`` for ``source``, which the engine's model does not read.
+    fn not_the_scenario_model(source: &str, error: serde_json::Error) -> PyErr {
+        let message = format!("{source} does not match the engine's scenario model: {error}");
+        Python::attach(|py| scenario_refused(py, source, &engine_codes::SCENARIO_MODEL_MISMATCH, "", &message))
+    }
+
     /// The file name under ``doppeldata/schemas/`` of each JSON Schema the library ships, by name.
     #[pyfunction]
     fn schema_file_names() -> BTreeMap<&'static str, &'static str> {
@@ -142,9 +197,10 @@ mod _core {
     #[pyfunction]
     fn perturbation_facts(scenario_json: &str) -> PyResult<Vec<PerturbationFacts>> {
         let scenario = read_scenario(scenario_json)?;
-        let ids = scenario
-            .resolved_ids()
-            .map_err(|duplicate| PyValueError::new_err(format!("two perturbations have the id {:?}", duplicate.id)))?;
+        let ids = scenario.resolved_ids().map_err(|duplicate| {
+            let message = format!("two perturbations have the id {:?}", duplicate.id);
+            Python::attach(|py| scenario_refused(py, "the scenario", &engine_codes::DUPLICATE_PERTURBATION_ID, "", &message))
+        })?;
         Ok(scenario
             .perturbations
             .iter()
@@ -168,7 +224,12 @@ mod _core {
     fn expected_metric_op(metric: &str) -> PyResult<&'static str> {
         serde_json::from_value::<doppeldata_core::scenario::ExpectedMetric>(metric.into())
             .map(|metric| metric.op())
-            .map_err(|_| PyValueError::new_err(format!("{metric:?} is not a metric an expectation can name")))
+            .map_err(|_| {
+                invalid_argument(
+                    &engine_codes::UNKNOWN_METRIC,
+                    format!("{metric:?} is not a metric an expectation can name"),
+                )
+            })
     }
 
     /// The fault list a write to the one file ``file_name`` keeps beside it, such as
@@ -185,7 +246,7 @@ mod _core {
     fn data_file_metadata(path: std::path::PathBuf) -> PyResult<Option<BTreeMap<String, String>>> {
         doppeldata_writers::file_metadata(&path).map_err(|error| match error {
             doppeldata_writers::FileMetadataError::Io(error) => error.into(),
-            other => PyValueError::new_err(other.to_string()),
+            other => invalid_argument(&doppeldata_writers::issue_codes::FILE_METADATA_UNREADABLE, other.to_string()),
         })
     }
 
@@ -194,7 +255,12 @@ mod _core {
     fn expected_metric_takes_column(metric: &str) -> PyResult<bool> {
         serde_json::from_value::<doppeldata_core::scenario::ExpectedMetric>(metric.into())
             .map(|metric| metric.takes_column())
-            .map_err(|_| PyValueError::new_err(format!("{metric:?} is not a metric an expectation can name")))
+            .map_err(|_| {
+                invalid_argument(
+                    &engine_codes::UNKNOWN_METRIC,
+                    format!("{metric:?} is not a metric an expectation can name"),
+                )
+            })
     }
 
     /// Of the fault kind ``kind`` and files written as ``format``: whether the kind breaks whole
@@ -202,10 +268,19 @@ mod _core {
     /// while they hold it.
     #[pyfunction]
     fn fault_kind_facts(kind: &str, format: &str) -> PyResult<(bool, bool, bool)> {
-        let fault = serde_json::from_value::<doppeldata_core::scenario::FaultKind>(kind.into())
-            .map_err(|_| PyValueError::new_err(format!("{kind:?} is not a fault kind malformed_rows writes")))?;
-        let output = serde_json::from_value::<doppeldata_core::format_settings::Output>(json!({"format": format, "writer": {}}))
-            .map_err(|_| PyValueError::new_err(format!("{format:?} is not a format doppeldata writes")))?;
+        let fault = serde_json::from_value::<doppeldata_core::scenario::FaultKind>(kind.into()).map_err(|_| {
+            invalid_argument(
+                &engine_codes::UNKNOWN_FAULT_KIND,
+                format!("{kind:?} is not a fault kind malformed_rows writes"),
+            )
+        })?;
+        let output =
+            serde_json::from_value::<doppeldata_core::format_settings::Output>(json!({"format": format, "writer": {}})).map_err(|_| {
+                invalid_argument(
+                    &engine_codes::UNKNOWN_FORMAT,
+                    format!("{format:?} is not a format doppeldata writes"),
+                )
+            })?;
         Ok((fault.is_file_kind(), fault.formats().hold(&output), fault.check_reads_back(&output)))
     }
 
@@ -214,8 +289,7 @@ mod _core {
     #[pyfunction]
     fn patched_profile(profile_json: &str, scenario_json: &str) -> PyResult<(String, Vec<String>)> {
         let scenario = read_scenario(scenario_json)?;
-        let profile: serde_json::Value =
-            serde_json::from_str(profile_json).map_err(|error| PyValueError::new_err(format!("the profile is not JSON: {error}")))?;
+        let profile: serde_json::Value = serde_json::from_str(profile_json).map_err(|error| not_the_profile_model("the profile", error))?;
         let (patched, unknown) = match &scenario.patch {
             Some(patch) => doppeldata_core::scenario::patched_profile(&profile, patch),
             None => (profile, Vec::new()),
@@ -224,8 +298,7 @@ mod _core {
     }
 
     fn read_scenario(scenario_json: &str) -> PyResult<Scenario> {
-        serde_json::from_str(scenario_json)
-            .map_err(|error| PyValueError::new_err(format!("the scenario does not match the engine's scenario model: {error}")))
+        serde_json::from_str(scenario_json).map_err(|error| not_the_scenario_model("the scenario", error))
     }
 
     /// Whether each scipy.stats family a profile's ``fit`` can name is discrete, by its name. Any
@@ -330,21 +403,22 @@ mod _core {
             let py = profile_json.py();
             let profile_json = profile_json.to_str()?;
             let overrides: Vec<ColumnOverride> = match overrides {
-                Some(json) => serde_json::from_str(json)
-                    .map_err(|error| PyValueError::new_err(format!("the overrides do not match the engine's model: {error}")))?,
+                Some(json) => serde_json::from_str(json).map_err(|error| {
+                    invalid_argument(
+                        &engine_codes::INVALID_OVERRIDE,
+                        format!("the overrides do not match the engine's model: {error}"),
+                    )
+                })?,
                 None => Vec::new(),
             };
             let read: Option<(Scenario, String, String)> = scenario
                 .map(|(json, digest, scenario_source)| {
                     serde_json::from_str(&json)
                         .map(|read| (read, digest, scenario_source.clone()))
-                        .map_err(|error| {
-                            PyValueError::new_err(format!("{scenario_source} does not match the engine's scenario model: {error}"))
-                        })
+                        .map_err(|error| not_the_scenario_model(&scenario_source, error))
                 })
                 .transpose()?;
-            let not_the_model =
-                |error: serde_json::Error| PyValueError::new_err(format!("{source} does not match the engine's profile model: {error}"));
+            let not_the_model = |error: serde_json::Error| not_the_profile_model(source, error);
             let document: serde_json::Value = serde_json::from_str(profile_json).map_err(not_the_model)?;
             let document = match &read {
                 Some((scenario, _, scenario_source)) => scenario
@@ -473,9 +547,10 @@ mod _core {
         fn stream_blocks(&self, start: u64, stop: u64, threads: usize) -> PyResult<PyRecordBatchReader> {
             let count = self.plan.block_count();
             if start > stop || stop > count {
-                return Err(PyValueError::new_err(format!(
-                    "blocks {start} to {stop} are not a run within the plan's {count} blocks"
-                )));
+                return Err(invalid_argument(
+                    &engine_codes::BLOCKS_OUTSIDE_PLAN,
+                    format!("blocks {start} to {stop} are not a run within the plan's {count} blocks"),
+                ));
             }
             Ok(PyRecordBatchReader::new(Box::new(BlockStream::start(
                 self.plan.clone(),
@@ -638,8 +713,10 @@ mod _core {
             let py = options.py();
             let mut files = RangesWritten::default();
             for part in &written {
-                let part: RangesWritten = serde_json::from_str(part)
-                    .map_err(|error| PyValueError::new_err(format!("written holds a string write_ranges did not return: {error}")))?;
+                let part: RangesWritten = serde_json::from_str(part).map_err(|error| {
+                    let message = format!("written holds a string write_ranges did not return: {error}");
+                    invalid_argument(&doppeldata_writers::issue_codes::UNRETURNED_RANGE, message)
+                })?;
                 files.files.extend(part.files);
                 files.faults.extend(part.faults);
             }
@@ -706,23 +783,32 @@ mod _core {
             source: &str,
             scenarios: Option<(Vec<(String, String)>, String)>,
         ) -> PyResult<Self> {
-            let not_the_model =
-                |error: serde_json::Error| PyValueError::new_err(format!("{source} does not match the engine's profile model: {error}"));
+            let not_the_model = |error: serde_json::Error| not_the_profile_model(source, error);
             let document: serde_json::Value = serde_json::from_str(bundle_json).map_err(not_the_model)?;
             let mut read: BTreeMap<String, Scenario> = BTreeMap::new();
             let mut sources: BTreeMap<String, String> = BTreeMap::new();
             let digest = scenarios.as_ref().map(|(_, digest)| digest.clone());
             for (json, scenario_source) in scenarios.map(|(listed, _)| listed).unwrap_or_default() {
-                let scenario: Scenario = serde_json::from_str(&json).map_err(|error| {
-                    PyValueError::new_err(format!("{scenario_source} does not match the engine's scenario model: {error}"))
-                })?;
+                let scenario: Scenario = serde_json::from_str(&json).map_err(|error| not_the_scenario_model(&scenario_source, error))?;
                 let Some(table) = scenario.table.clone() else {
                     let message = "a bundle's scenario names the table it bends";
-                    return Err(scenario_refused(py, &scenario_source, "unknown-table", "/table", message));
+                    return Err(scenario_refused(
+                        py,
+                        &scenario_source,
+                        &engine_codes::UNKNOWN_TABLE,
+                        "/table",
+                        message,
+                    ));
                 };
                 if read.contains_key(&table) {
                     let message = format!("another scenario bends {table}; compose a table's scenarios into one");
-                    return Err(scenario_refused(py, &scenario_source, "unknown-table", "/table", &message));
+                    return Err(scenario_refused(
+                        py,
+                        &scenario_source,
+                        &engine_codes::UNKNOWN_TABLE,
+                        "/table",
+                        &message,
+                    ));
                 }
                 sources.insert(table.clone(), scenario_source);
                 read.insert(table, scenario);
@@ -743,7 +829,10 @@ mod _core {
             })?;
             let patched_json = patched.to_string();
             let Profile::Bundle(bundle) = serde_json::from_value(patched).map_err(not_the_model)? else {
-                return Err(PyValueError::new_err(format!("{source} is a table profile, which Plan plans")));
+                return Err(invalid_argument(
+                    &engine_codes::TABLE_NOT_BUNDLE,
+                    format!("{source} is a table profile, which Plan plans"),
+                ));
             };
             let applied = digest
                 .as_deref()
@@ -811,7 +900,7 @@ mod _core {
         /// numbers where it is drawn.
         #[getter]
         fn relationships_json(&self) -> PyResult<String> {
-            serde_json::to_string(self.plan.relationships()).map_err(|error| PyValueError::new_err(error.to_string()))
+            Ok(serde_json::to_string(self.plan.relationships()).expect("a plan's relationships always serialize"))
         }
 
         /// The pointer of each relationship, ``inherited`` entry and ``ordinal`` the bundle states and
@@ -861,7 +950,12 @@ mod _core {
             elapsed_ms: u64,
             s3_store: Option<Bound<'_, PyDict>>,
         ) -> PyResult<String> {
-            let unreadable = |error: serde_json::Error| PyValueError::new_err(format!("not a manifest commit takes: {error}"));
+            let unreadable = |error: serde_json::Error| {
+                invalid_argument(
+                    &doppeldata_writers::issue_codes::MANIFEST_UNREADABLE,
+                    format!("not a manifest commit takes: {error}"),
+                )
+            };
             let mut claim: doppeldata_core::manifest::BundleManifest = serde_json::from_str(claim_json).map_err(unreadable)?;
             claim.elapsed_ms = elapsed_ms;
             let written: Vec<doppeldata_core::manifest::Manifest> = written
@@ -1113,26 +1207,31 @@ mod _core {
         }
     }
 
-    /// The library's ``UngenerableProfile``, naming the column or section the engine refused.
+    /// The library's ``UngenerableProfile``, naming the column or section the engine refused, or
+    /// its ``InvalidArgument`` where the refusal is of an argument rather than the profile.
     fn plan_refused(py: Python<'_>, source: &str, error: PlanError) -> PyErr {
-        if let PlanError::ProfileDigest { .. } = error {
-            return PyValueError::new_err(error.to_string());
+        if error.code().area() == "USAGE" {
+            return invalid_argument(error.code(), plan_message(&error));
         }
         let message = plan_message(&error);
         library_error(|| {
-            let module = py.import("doppeldata.profile_format")?;
-            let issue = module.getattr("Issue")?.call1((error.code(), error.field(), message))?;
-            module.getattr("UngenerableProfile")?.call1((source, vec![issue]))
+            let issue = py
+                .import("doppeldata.issue_codes")?
+                .getattr("Issue")?
+                .call1((error.code().code, error.field(), message))?;
+            py.import("doppeldata.profile_format")?
+                .getattr("UngenerableProfile")?
+                .call1((source, vec![issue]))
         })
     }
 
     /// The library's ``InvalidScenario`` for ``source``, naming the perturbation refused at ``field``.
-    fn scenario_refused(py: Python<'_>, source: &str, code: &str, field: &str, message: &str) -> PyErr {
+    fn scenario_refused(py: Python<'_>, source: &str, code: &IssueCode, field: &str, message: &str) -> PyErr {
         library_error(|| {
             let issue = py
-                .import("doppeldata.profile_format")?
+                .import("doppeldata.issue_codes")?
                 .getattr("Issue")?
-                .call1((code, field, message))?;
+                .call1((code.code, field, message))?;
             py.import("doppeldata.scenario_format")?
                 .getattr("InvalidScenario")?
                 .call1((source, vec![issue]))
@@ -1163,13 +1262,11 @@ mod _core {
     /// the scenario named ``scenario_source`` cannot hold raises its ``InvalidScenario``.
     fn write_failed(py: Python<'_>, failure: WriteFailure, interrupted: bool, scenario_source: Option<&str>) -> PyErr {
         if let WriteError::Layout(LayoutError::Scenario { field, message, .. }) = &failure.error {
-            let (code, _) = failure.error.code();
-            return scenario_refused(py, scenario_source.unwrap_or("the scenario"), code, field, message);
+            return scenario_refused(py, scenario_source.unwrap_or("the scenario"), failure.error.code(), field, message);
         }
-        let (code, kind) = match failure.error.code() {
-            _ if unanswered(&failure.error) => ("no-answer", "unanswered"),
-            (code, FailureKind::Refused) => (code, "refused"),
-            (code, FailureKind::Failed) => (code, "failed"),
+        let code = match unanswered(&failure.error) {
+            true => &doppeldata_writers::issue_codes::NO_ANSWER,
+            false => failure.error.code(),
         };
         let mut message = match failure.error {
             WriteError::Cancelled if interrupted => "interrupted, so the write stopped before every file was written".to_string(),
@@ -1183,14 +1280,15 @@ mod _core {
             .map(|manifest| serde_json::to_string(&manifest).expect("a manifest always serializes"));
         library_error(|| {
             let kwargs = PyDict::new(py);
-            kwargs.set_item("kind", kind)?;
             kwargs.set_item("manifest_json", manifest)?;
             kwargs.set_item("manifest_stored", failure.manifest_stored)?;
             let class = match interrupted {
                 true => "WriteInterrupted",
                 false => "WriteFailed",
             };
-            py.import("doppeldata.errors")?.getattr(class)?.call((code, message), Some(&kwargs))
+            py.import("doppeldata.errors")?
+                .getattr(class)?
+                .call((code.code, message), Some(&kwargs))
         })
     }
 
@@ -1249,7 +1347,9 @@ mod _core {
     /// writes one: its last digit, computed from the digits before it.
     #[pyfunction]
     fn check_digits_hold(kind: &str, values: Vec<String>) -> PyResult<Vec<bool>> {
-        let kind: doppeldata_core::profile::CheckDigit = kind.parse().map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let kind: doppeldata_core::profile::CheckDigit = kind
+            .parse()
+            .map_err(|error: String| invalid_argument(&engine_codes::UNKNOWN_CHECK_DIGIT, error))?;
         Ok(values.iter().map(|value| doppeldata_core::check_digit_holds(kind, value)).collect())
     }
 }

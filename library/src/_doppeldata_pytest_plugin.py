@@ -10,6 +10,7 @@ are each imported only when a test asks for the type it makes.
 
 import argparse
 import dataclasses as dc
+import difflib
 import hashlib
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -133,10 +134,19 @@ def scenario_of(given: 'str | Scenario', directories: Sequence[Path]) -> 'Scenar
         return Scenario.example(given)
     if Path(given).is_file():
         return Scenario.load(given)
+    from doppeldata import issue_codes
+    from doppeldata.errors import InvalidArgument
+
     searched = ', '.join(str(directory) for directory in directories) or f'no directory, since {SCENARIOS_INI} is not set'
-    raise ValueError(
-        f'scenario {given!r} is no file in {searched}, nor an example; name a file, or one of '
-        f'{", ".join(example_scenarios.example_names())}'
+    examples = example_scenarios.example_names()
+    message = f'scenario {given!r} is no file in {searched}, nor an example; name a file, or an example'
+    raise InvalidArgument(
+        issue_codes.SCENARIO_NOT_FOUND,
+        message,
+        field='scenario',
+        value=given,
+        valid=examples,
+        closest=difflib.get_close_matches(given, examples, n=3),
     )
 
 
@@ -179,11 +189,14 @@ class SyntheticTables:
         profile, scenario, rows, scale, seed and overrides: once a test from the test's own seed, and once a session from a seed
         tests share. Each call converts it afresh, so a test editing what it got changes no other test's.
         """
+        from doppeldata import issue_codes
         from doppeldata.bundle_generation import BundleRun
         from doppeldata.bundle_generation import run_of
         from doppeldata.column_overrides import materialized
         from doppeldata.column_overrides import overrides_json
+        from doppeldata.errors import InvalidArgument
         from doppeldata.errors import PackagesMissing
+        from doppeldata.errors import UnsupportedArgument
         from doppeldata.errors import uninstalled
         from doppeldata.profile_sources import bundle_from
         from doppeldata.profile_sources import profile_from
@@ -193,7 +206,8 @@ class SyntheticTables:
         from doppeldata.table_or_bundle_generation import sample
 
         if as_ not in RETURN_TYPES:
-            raise ValueError(f'as_ is one of {", ".join(RETURN_TYPES)}, not {as_!r}')
+            message = f'as_ is one of {", ".join(RETURN_TYPES)}, not {as_!r}'
+            raise InvalidArgument(issue_codes.INVALID_RETURN_TYPE, message, field='as_', value=as_, valid=list(RETURN_TYPES))
         missing = uninstalled(RETURN_TYPES[as_])
         if missing:
             raise PackagesMissing(as_, missing, doing=f'synthetic(as_={as_!r})')
@@ -205,7 +219,8 @@ class SyntheticTables:
         used = self.seed if seed is None else seed
         run = run_of(bundle if bundle is not None else profile, rows, used, scale)
         if isinstance(run, BundleRun) and overrides is not None:
-            raise TypeError("overrides pin one table's columns, and a bundle holds several; ask synthetic for the table's profile")
+            message = "overrides pin one table's columns, and a bundle holds several; ask synthetic for the table's profile"
+            raise UnsupportedArgument(issue_codes.BUNDLE_GIVEN, message, field='overrides')
         self.record(seed)
         scenarios = None if scenario is None else [scenario] if isinstance(scenario, str | Scenario) else list(scenario)
         applied = composed([scenario_of(each, config.getini(SCENARIOS_INI)) for each in scenarios] if scenarios else None)
@@ -251,9 +266,11 @@ class SyntheticTables:
         try:
             session = self.request.getfixturevalue('spark')
         except pytest.FixtureLookupError as error:
-            raise LookupError(
-                "synthetic(as_='spark') builds the DataFrame on the session a fixture named spark gives; define one"
-            ) from error
+            from doppeldata import issue_codes
+            from doppeldata.errors import InvalidArgument
+
+            message = "synthetic(as_='spark') builds the DataFrame on the session a fixture named spark gives; define one"
+            raise InvalidArgument(issue_codes.SPARK_FIXTURE_MISSING, message, field='as_', value=as_) from error
         from doppeldata.spark import to_spark
 
         return to_spark(session, table)

@@ -9,7 +9,7 @@ is accepted on input. One JSON Schema validates both.
 - **Every section refuses a key it does not declare.** A reviewer hand-edits the file, so a
   misspelled key must fail rather than be read as absent. serde's `deny_unknown_fields` refuses it
   in the engine, listing the fields its section takes. The schema's `additionalProperties: false`
-  refuses it in the library, as an `unknown-field` at the key's JSON Pointer naming the closest
+  refuses it in the library, as an `E-PROFILE-006` at the key's JSON Pointer naming the closest
   field its section takes. The tool that wrote the profile records its version under
   `generated.tool`.
 - **Every section is optional.** A profile imported from a data catalog or a data contract has types
@@ -216,7 +216,7 @@ writer withholds every literal an element holds. Every literal field must have a
 whose column, pointer, rule and value count match it, and must meet that rule. A dataset-level
 field's entry is in `dataset_audit`, matched by its pointer. A column the policy withholds from
 must hold nothing withheld, and an audit entry naming no literal field is reported too. Keys on a
-table of fewer than `k_min` rows are reported as `keys-under-k-min`.
+table of fewer than `k_min` rows are reported as `E-POLICY-004`.
 
 A conditional table's cells are the literal the check cannot recompute, so it trusts the entry's
 `min_rows` for them. A cell is a share of the rows its row's kept cells hold, and the file states

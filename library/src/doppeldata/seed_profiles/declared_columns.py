@@ -26,6 +26,7 @@ from typing import Any
 from typing import TypeVar
 
 from doppeldata import _core
+from doppeldata import issue_codes
 from doppeldata.errors import DoppeldataError
 from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
@@ -196,9 +197,8 @@ class DeclaredColumn(InlineColumn):
             raise
         except (TypeError, ValueError) as error:
             # Every value drawn reads is one the schema declared, such as a bound written as text.
-            raise SourceError(
-                f'{name}: the schema declares what no {self.logical_type} column draws from: {error}', role='schema'
-            ) from error
+            message = f'{name}: the schema declares what no {self.logical_type} column draws from: {error}'
+            raise SourceError(issue_codes.SCHEMA_UNDRAWABLE, message, role='schema', value=name) from error
         column |= {key: value for key, value in drawn.items() if key not in ('name', 'physical_type', 'logical_type')}
         held = dict(self.semantic or {})
         if self.logical_type == 'string' and not self.values:

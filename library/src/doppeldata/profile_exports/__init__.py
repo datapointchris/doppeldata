@@ -1,10 +1,13 @@
 """A profile's contract written in a format other tools validate data with. `export` documents each format."""
 
+import difflib
 import os
 from collections.abc import Callable
 from pathlib import Path
 
+from doppeldata import issue_codes
 from doppeldata.embedded_profiles import data_file_metadata
+from doppeldata.errors import InvalidArgument
 from doppeldata.privacy_policy.file_check import refuse_failed_check
 from doppeldata.profile_exports.contract_columns import ContractDocument
 from doppeldata.profile_exports.contract_columns import bundle_type_mix_pointers
@@ -30,8 +33,9 @@ def odcs(document: ContractDocument) -> str:
 
 def json_schema(document: ContractDocument) -> str:
     if document.bundle:
-        tables = ', '.join(table.name for table in document.tables)
-        raise ValueError(f'the record schema describes one table, and {document.name} holds {tables}; name one with table=, or --table')
+        names = [table.name for table in document.tables]
+        message = f'the record schema describes one table, and {document.name} holds {", ".join(names)}; name one with table=, or --table'
+        raise InvalidArgument(issue_codes.EXPORT_NEEDS_ONE_TABLE, message, field='table', valid=names)
     return record_schema(document.tables[0])
 
 
@@ -69,12 +73,16 @@ def export(profile: Profile | Bundle | str | os.PathLike[str], format: str, *, t
     the engine's plan. A sampled profile's types are the sample's.
 
     Raises CheckFailed where a profile made from data fails its schema or privacy policy, because an export never carries a
-    literal the policy did not pass. SourceError names a data file holding no profile, and ValueError an unknown format or
-    table.
+    literal the policy did not pass. SourceError names a data file holding no profile, and InvalidArgument an unknown format
+    or table.
     """
     exporter = EXPORTERS.get(format)
     if exporter is None:
-        raise ValueError(f'{format!r} is not an export format; choose from {", ".join(EXPORT_FORMATS)}')
+        closest = difflib.get_close_matches(format, EXPORT_FORMATS, n=3)
+        message = f'{format!r} is not an export format'
+        raise InvalidArgument(
+            issue_codes.UNKNOWN_EXPORT_FORMAT, message, field='format', value=format, valid=EXPORT_FORMATS, closest=closest
+        )
     found = loaded(profile)
     type_mix = None
     if table is not None:
@@ -100,8 +108,12 @@ def loaded(source: Profile | Bundle | str | os.PathLike[str]) -> Profile | Bundl
 def one_table(found: Profile | Bundle, table: str) -> Profile:
     if isinstance(found, Bundle):
         if table not in found.tables:
-            raise ValueError(f'{found.document["name"]} holds no table {table}; it holds {", ".join(found.tables)}')
+            names = list(found.tables)
+            message = f'{found.document["name"]} holds no table {table}'
+            closest = difflib.get_close_matches(table, names, n=3)
+            raise InvalidArgument(issue_codes.EXPORT_TABLE_UNKNOWN, message, field='table', value=table, valid=names, closest=closest)
         return found.tables[table]
     if found.document['name'] != table:
-        raise ValueError(f'the profile is of {found.document["name"]}, not {table}; table= names one table of a bundle')
+        message = f'the profile is of {found.document["name"]}, not {table}; table= names one table of a bundle'
+        raise InvalidArgument(issue_codes.EXPORT_TABLE_UNKNOWN, message, field='table', value=table, valid=[found.document['name']])
     return found

@@ -351,6 +351,12 @@ def generalize_pattern(values: SupportsGetItem[int, str]) -> str |None:
     class, or None when it would hold a literal or a character class only some values have.
     """
 
+def issue_codes() -> list[tuple[str, str, str, str |None, int]]:
+    """
+    Every code the engine and its writers refuse with, in declaration order: the name the
+    library binds it by, the code, what raises it, its hint and its exit status.
+    """
+
 def one_file_faults_name(file_name: str) -> str:
     """
     The fault list a write to the one file ``file_name`` keeps beside it, such as

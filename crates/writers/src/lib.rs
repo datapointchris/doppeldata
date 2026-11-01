@@ -12,6 +12,7 @@ mod cdc;
 mod destination;
 mod encoders;
 mod file_metadata;
+pub mod issue_codes;
 mod layout;
 mod partition;
 mod planned_ranges;
@@ -22,6 +23,7 @@ mod write_options;
 use arrow_schema::ArrowError;
 use arrow_schema::DataType;
 use doppeldata_core::BlockOutOfRange;
+use doppeldata_core::issue_codes::IssueCode;
 
 pub use bundle::bundle_manifest;
 pub use bundle::claim_bundle;
@@ -122,46 +124,37 @@ pub enum WriteError {
     ClaimNotRemoved { url: String, error: Box<WriteError> },
 }
 
-/// What a failed write tells its caller to do about it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FailureKind {
-    /// The arguments cannot be written as given, so the call must change. Nothing was written.
-    Refused,
-    /// The write was attempted and failed.
-    Failed,
-}
-
 impl WriteError {
-    /// The kebab-case code a caller branches on, and what kind of failure it is.
-    pub fn code(&self) -> (&'static str, FailureKind) {
-        use FailureKind::Failed;
-        use FailureKind::Refused;
+    /// The code a caller branches on. Its exit status says what kind of failure it is: 2 where
+    /// the arguments cannot be written as given, so nothing was written, and 1 where the write was
+    /// attempted and failed.
+    pub fn code(&self) -> &'static IssueCode {
         match self {
-            Self::Layout(LayoutError::Scenario { fault, .. }) => (fault.code(), Refused),
-            Self::Layout(_) => ("invalid-layout", Refused),
-            Self::Settings(_) => ("invalid-settings", Refused),
-            Self::UnsupportedColumn { .. } => ("unsupported-column", Refused),
-            Self::DestinationNotEmpty { .. } => ("destination-not-empty", Refused),
-            Self::ForeignObject { .. } => ("foreign-object", Refused),
-            Self::Unclaimable { .. } => ("unclaimable", Refused),
-            Self::ObjectName { .. } => ("invalid-object-name", Refused),
-            Self::DestinationClaimed { .. } => ("destination-claimed", Failed),
-            Self::CurrentThreadRuntime => ("current-thread-runtime", Failed),
-            Self::IdentityMismatch { .. } => ("identity-mismatch", Failed),
-            Self::PartialManifest => ("partial-manifest", Failed),
-            Self::RegeneratedFilesDiffer { .. } => ("regenerated-files-differ", Failed),
-            Self::Cancelled => ("cancelled", Failed),
-            Self::RangeOutOfLayout { .. } => ("range-out-of-layout", Refused),
-            Self::RangesUnrecorded { .. } => ("ranges-unrecorded", Failed),
-            Self::Format { .. } => ("unformattable-value", Failed),
-            Self::Block(_) => ("block-out-of-range", Failed),
-            Self::Store(object_store::Error::Unauthenticated { .. }) => ("no-credentials", Failed),
-            Self::Store(object_store::Error::PermissionDenied { .. }) => ("store-refused", Failed),
-            Self::Store(_) => ("store", Failed),
-            Self::Arrow(_) => ("arrow", Failed),
-            Self::Parquet(_) => ("parquet", Failed),
-            Self::Io(_) => ("io", Failed),
-            Self::ClaimNotRemoved { .. } => ("claim-not-removed", Failed),
+            Self::Layout(LayoutError::Scenario { fault, .. }) => fault.code(),
+            Self::Layout(_) => &issue_codes::INVALID_LAYOUT,
+            Self::Settings(_) => &issue_codes::INVALID_SETTINGS,
+            Self::UnsupportedColumn { .. } => &issue_codes::UNSUPPORTED_COLUMN,
+            Self::DestinationNotEmpty { .. } => &issue_codes::DESTINATION_NOT_EMPTY,
+            Self::ForeignObject { .. } => &issue_codes::FOREIGN_OBJECT,
+            Self::Unclaimable { .. } => &issue_codes::UNCLAIMABLE,
+            Self::ObjectName { .. } => &issue_codes::INVALID_OBJECT_NAME,
+            Self::DestinationClaimed { .. } => &issue_codes::DESTINATION_CLAIMED,
+            Self::CurrentThreadRuntime => &issue_codes::CURRENT_THREAD_RUNTIME,
+            Self::IdentityMismatch { .. } => &issue_codes::IDENTITY_MISMATCH,
+            Self::PartialManifest => &issue_codes::PARTIAL_MANIFEST,
+            Self::RegeneratedFilesDiffer { .. } => &issue_codes::REGENERATED_FILES_DIFFER,
+            Self::Cancelled => &issue_codes::CANCELLED,
+            Self::RangeOutOfLayout { .. } => &issue_codes::RANGE_OUT_OF_LAYOUT,
+            Self::RangesUnrecorded { .. } => &issue_codes::RANGES_UNRECORDED,
+            Self::Format { .. } => &issue_codes::UNFORMATTABLE_VALUE,
+            Self::Block(_) => &issue_codes::BLOCK_OUT_OF_RANGE,
+            Self::Store(object_store::Error::Unauthenticated { .. }) => &issue_codes::NO_CREDENTIALS,
+            Self::Store(object_store::Error::PermissionDenied { .. }) => &issue_codes::STORE_REFUSED,
+            Self::Store(_) => &issue_codes::STORE,
+            Self::Arrow(_) => &issue_codes::ARROW,
+            Self::Parquet(_) => &issue_codes::PARQUET,
+            Self::Io(_) => &issue_codes::LOCAL_IO,
+            Self::ClaimNotRemoved { .. } => &issue_codes::CLAIM_NOT_REMOVED,
         }
     }
 }

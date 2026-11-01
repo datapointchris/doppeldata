@@ -6,12 +6,18 @@ withholds from must hold nothing it withholds, and must meet each rule of its tr
 """
 
 import dataclasses as dc
+import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from typing import ClassVar
 
+from doppeldata import issue_codes
 from doppeldata.embedded_profiles import data_file_metadata
 from doppeldata.embedded_profiles import embedded_document
 from doppeldata.errors import CheckFailed
+from doppeldata.issue_codes import PROFILE_DOCUMENT
+from doppeldata.issue_codes import Issue
 from doppeldata.privacy_policy.column_treatment import CHECKED_POLICIES
 from doppeldata.privacy_policy.column_treatment import ColumnFacts
 from doppeldata.privacy_policy.column_treatment import Policy
@@ -43,18 +49,18 @@ CHECKABLE = ', '.join(policy.value for policy in CHECKED_POLICIES)
 
 
 @dc.dataclass(frozen=True)
-class Violation:
-    """One place a profile breaks its schema or its policy. `field` is an RFC 6901 pointer.
+class Violation(Issue):
+    """One place a profile breaks its schema or its policy, at `field`, an RFC 6901 pointer.
 
     `rule` is the `AuditRule` a literal broke, and `treatment` the `privacy.suppressed` reason whose rule a column broke.
     Each is null where the violation is of another kind, which `code` names.
     """
 
-    code: str
-    field: str
-    rule: str | None
-    treatment: str | None
-    detail: str
+    rule: str | None = None
+    treatment: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return {**super().to_json(), 'rule': self.rule, 'treatment': self.treatment}
 
 
 @dc.dataclass(frozen=True)
@@ -73,6 +79,8 @@ class TableCheck:
 class ProfileFileCheck:
     """A profile file checked against its schema and privacy policy: the file as named, whether it passed, and each table's check."""
 
+    failure_code: ClassVar[str] = issue_codes.PROFILE_BREAKS_POLICY
+
     profile: str
     passed: bool
     tables: list[TableCheck]
@@ -84,6 +92,20 @@ class ProfileFileCheck:
     @property
     def violations(self) -> list[Violation]:
         return [violation for check in self.tables for violation in check.violations]
+
+    def to_json(self) -> str:
+        """The check as `profile check --json` prints it: each table's name, policy, `k_min` and literal fields, and its issues."""
+        tables = [
+            {
+                'table': check.table,
+                'policy': check.policy,
+                'k_min': check.k_min,
+                'literal_fields': check.literal_fields,
+                'issues': [violation.to_json() for violation in check.violations],
+            }
+            for check in self.tables
+        ]
+        return json.dumps({'profile': self.profile, 'passed': self.passed, 'tables': tables}, indent=2, ensure_ascii=False) + '\n'
 
     def failure_message(self) -> str:
         """What `CheckFailed` says of a profile file that breaks its schema or policy."""
@@ -119,21 +141,27 @@ def member_check(member: Path, name: str) -> TableCheck:
     at = pointer(('tables', name))
 
     def refusal(code: str, detail: str) -> TableCheck:
-        return TableCheck(name, None, None, 0, [Violation(code, at, None, None, detail)])
+        return TableCheck(name, None, None, 0, [Violation(code, at, detail)])
 
     if not member.is_file():
-        return refusal('table-file-missing', f'{member} is not a file; expected the table profile the bundle names')
+        return refusal(issue_codes.TABLE_FILE_MISSING, f'{member} is not a file; expected the table profile the bundle names')
     try:
         document = to_plain(read_document(member))
     except OSError as error:
-        return refusal('not-readable', f'{member} cannot be read: {error.strerror}; expected a readable table profile')
+        return refusal(issue_codes.FILE_UNREADABLE, f'{member} cannot be read: {error.strerror}; expected a readable table profile')
     except InvalidProfile as error:
         return TableCheck(member.name, None, None, 0, schema_violations(error.issues))
     if not isinstance(document, dict) or document.get('kind') != 'table':
         kind = document.get('kind') if isinstance(document, dict) else type(document).__name__
-        return refusal('not-a-table', f'{member} is a {kind}; expected a table profile')
+        if not isinstance(document, dict):
+            code = PROFILE_DOCUMENT.not_a_mapping
+        else:
+            code = issue_codes.BUNDLE_GIVEN if kind == 'bundle' else PROFILE_DOCUMENT.not_one_of
+        return refusal(code, f'{member} is a {kind}; expected a table profile')
     if document.get('name') != name:
-        return refusal('table-name-mismatch', f'{member} is named {document.get("name")!r}; expected {name!r}, as the bundle names it')
+        return refusal(
+            issue_codes.TABLE_NAME_MISMATCH, f'{member} is named {document.get("name")!r}; expected {name!r}, as the bundle names it'
+        )
     return table_check(document, ())
 
 
@@ -160,9 +188,9 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
     privacy = table.get('privacy') or {}
     policy = Policy(privacy.get('policy') or Policy.DEFAULT)
     if not policy.checked:
-        code = 'policy-none' if policy is Policy.NONE else 'policy-not-checkable'
+        code = issue_codes.POLICY_NONE if policy is Policy.NONE else issue_codes.POLICY_NOT_CHECKABLE
         found = 'policy is none' if policy is Policy.NONE else f'policy is {policy.value}, which doppeldata reserves and does not apply'
-        violation = Violation(code, pointer((*at, 'privacy', 'policy')), None, None, f'{found}; expected one of {CHECKABLE}')
+        violation = Violation(code, pointer((*at, 'privacy', 'policy')), f'{found}; expected one of {CHECKABLE}')
         return TableCheck(name, policy.value, privacy.get('k_min'), 0, [violation])
     k_min = policy.k_min(privacy.get('k_min')) or 1
     birth_floor = oldest_birth_year(table)
@@ -177,31 +205,31 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
         if treatment is Treatment.AGE:
             ages.add(column.name)
         for fault in treatment_faults(column, treatment, birth_floor):
-            violations.append(Violation(fault.code, pointer((*at, *fault.path)), None, treatment.value, fault.detail))
+            violations.append(Violation(fault.code, pointer((*at, *fault.path)), fault.message, treatment=treatment.value))
         for field in column.fields:
             fields += 1
             refusals = [found for found in [refused(field, column, treatment)] if found]
             if field.kind is FieldKind.LAG:
                 refusals += lag_faults(table, column, policy)
             for refusal in refusals:
-                violations.append(Violation(refusal.code, pointer((*at, *refusal.path)), None, treatment.value, refusal.detail))
+                violations.append(Violation(refusal.code, pointer((*at, *refusal.path)), refusal.message, treatment=treatment.value))
             if refusals:
                 continue
             index = audited.get((column.name, column.within(field)))
             if index is None:
                 expected = f'expected one with column {column.name} and field {column.within(field)}'
                 detail = f'no privacy.audit entry for the {field.kind.label} of {column.name}; {expected}'
-                violations.append(Violation('unaudited-literal', pointer((*at, *field.path)), field.kind.rule, None, detail))
+                violations.append(Violation(issue_codes.UNAUDITED_LITERAL, pointer((*at, *field.path)), detail, rule=field.kind.rule))
             else:
                 seen.add(index)
                 violations += audit_faults(audit[index], (*at, 'privacy', 'audit', index), field, k_min)
             for fault in faults(field, column, k_min):
-                violations.append(Violation(fault.code, pointer((*at, *fault.path)), field.kind.rule, None, fault.detail))
+                violations.append(Violation(fault.code, pointer((*at, *fault.path)), fault.message, rule=field.kind.rule))
     for index, entry in enumerate(audit):
         if index not in seen:
             named = f'{entry.get("column")} holds no literal at {entry.get("field")}'
             detail = f'{named}; expected the column and pointer of a field this file holds'
-            violations.append(Violation('stale-audit-entry', pointer((*at, 'privacy', 'audit', index)), None, None, detail))
+            violations.append(Violation(issue_codes.STALE_AUDIT_ENTRY, pointer((*at, 'privacy', 'audit', index)), detail))
     dataset_audit = privacy.get('dataset_audit') or []
     dataset_audited = {entry.get('field'): index for index, entry in enumerate(dataset_audit)}
     dataset_seen: set[int] = set()
@@ -213,32 +241,34 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
         else:
             keyed = lookup_faults(table, index, policy)
         for keyed_fault in keyed:
-            violations.append(Violation(keyed_fault.code, pointer((*at, *keyed_fault.path)), field.kind.rule, None, keyed_fault.detail))
+            violations.append(Violation(keyed_fault.code, pointer((*at, *keyed_fault.path)), keyed_fault.message, rule=field.kind.rule))
         audited_at = dataset_audited.get(field.pointer)
         if audited_at is None:
             detail = f'no privacy.dataset_audit entry for the {field.kind.label} at {field.pointer}; expected one with that field'
-            violations.append(Violation('unaudited-literal', pointer((*at, *field.path)), field.kind.rule, None, detail))
+            violations.append(Violation(issue_codes.UNAUDITED_LITERAL, pointer((*at, *field.path)), detail, rule=field.kind.rule))
             continue
         dataset_seen.add(audited_at)
         entry_at = (*at, 'privacy', 'dataset_audit', audited_at)
         violations += audit_faults(dataset_audit[audited_at], entry_at, field, k_min)
         if dataset_audit[audited_at].get('min_rows') is None:
             detail = f'the entry states no min_rows, which is all that holds the {field.kind.label} to k_min; expected at least {k_min}'
-            violations.append(Violation('rows-not-stated', pointer(entry_at), field.kind.rule, None, detail))
+            violations.append(Violation(issue_codes.ROWS_NOT_STATED, pointer(entry_at), detail, rule=field.kind.rule))
     for index, entry in enumerate(dataset_audit):
         if index not in dataset_seen:
             detail = f'the file holds no dependence between columns at {entry.get("field")}; expected the pointer of one it holds'
-            violations.append(Violation('stale-audit-entry', pointer((*at, 'privacy', 'dataset_audit', index)), None, None, detail))
+            violations.append(Violation(issue_codes.STALE_AUDIT_ENTRY, pointer((*at, 'privacy', 'dataset_audit', index)), detail))
     dataset = table.get('dataset') or {}
     rows = dataset.get('rows') or 0
     if dataset.get('keys') and rows < k_min:
         detail = f'the table holds {rows} rows, and a key is stated only over {k_min}; expected no keys'
-        violations.append(Violation('keys-under-k-min', pointer((*at, 'dataset', 'keys')), ROWS_AT_LEAST_K_MIN, None, detail))
+        violations.append(Violation(issue_codes.KEYS_UNDER_K_MIN, pointer((*at, 'dataset', 'keys')), detail, rule=ROWS_AT_LEAST_K_MIN))
     return TableCheck(name, policy.value, k_min, fields, violations)
 
 
-def schema_violations(issues: list[Any], at: PointerParts = ()) -> list[Violation]:
-    return [Violation(issue.code, pointer(at) + issue.field, None, None, issue.message) for issue in issues]
+def schema_violations(issues: Sequence[Issue], at: PointerParts = ()) -> list[Violation]:
+    return [
+        Violation(issue.code, pointer(at) + (issue.field or ''), issue.message, issue.value, issue.valid, issue.closest) for issue in issues
+    ]
 
 
 def audit_faults(entry: dict[str, Any], at: PointerParts, field: LiteralField, k_min: int) -> list[Violation]:
@@ -246,11 +276,13 @@ def audit_faults(entry: dict[str, Any], at: PointerParts, field: LiteralField, k
     rule = field.kind.rule
     found = []
     if entry.get('rule') != rule:
-        found.append(Violation('audit-rule-mismatch', pointer((*at, 'rule')), rule, None, f'rule is {entry.get("rule")}; expected {rule}'))
+        found.append(
+            Violation(issue_codes.AUDIT_RULE_MISMATCH, pointer((*at, 'rule')), f'rule is {entry.get("rule")}; expected {rule}', rule=rule)
+        )
     if entry.get('values') is not None and entry['values'] != field.values:
         detail = f'values is {entry["values"]}; the field holds {field.values}'
-        found.append(Violation('audit-values-mismatch', pointer((*at, 'values')), rule, None, detail))
+        found.append(Violation(issue_codes.AUDIT_VALUES_MISMATCH, pointer((*at, 'values')), detail, rule=rule))
     if entry.get('min_rows') is not None and entry['min_rows'] < k_min:
         detail = f'min_rows is {entry["min_rows"]}; expected at least {k_min}'
-        found.append(Violation('below-k-min', pointer((*at, 'min_rows')), rule, None, detail))
+        found.append(Violation(issue_codes.BELOW_K_MIN, pointer((*at, 'min_rows')), detail, rule=rule))
     return found

@@ -237,7 +237,7 @@ select count(*) from read_parquet('orders-cdc/sales/orders/**/[0-9]*.parquet', u
 
 - **The stream is built whole before the claim.** It orders the table's changes by commit time, so
   one process holds every change. The split writes `claim`, `write_ranges` and `commit` refuse it as
-  `op-needs-one-process`, as they refuse any op `Perturbation::needs_one_process` names. Every draw
+  `E-SCENARIO-107`, as they refuse any op `Perturbation::needs_one_process` names. Every draw
   is keyed by block, so the bytes are the same at any thread count.
 - **The manifest's `cdc` records what lies beside the full load.** It holds the `style`, the
   `prefix` and `expected_prefix`, and the `changes` counted by operation, a second delivery left

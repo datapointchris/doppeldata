@@ -130,7 +130,7 @@ def test_a_commit_order_merge_of_the_cdc_dms_stream_is_its_expected_table_and_a_
     merged.write_bytes(b'a merge job writes its output beside the stream it read')
     with pytest.raises(sd.WriteFailed) as refused:
         sd.write(sd.Profile.example('orders'), f'{tmp_path}/', rows=20_000, format='parquet', scenario=cdc, replace=True)
-    assert refused.value.code == 'foreign-object'
+    assert refused.value.code == 'E-WRITE-205'
     assert merged.exists()
 
 

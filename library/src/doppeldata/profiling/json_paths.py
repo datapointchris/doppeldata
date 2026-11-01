@@ -9,6 +9,7 @@ each object its fields and their presence, and each array its length and element
 import dataclasses as dc
 from typing import Any
 
+from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 from doppeldata.profiling.backend import HIDDEN_COLUMN_PREFIX
 from doppeldata.profiling.backend import JsonNode
@@ -53,7 +54,7 @@ def tree_of(structure: Any, column: str = '', path: str = '') -> JsonNode:
 def record_tree(structure: Any) -> JsonNode:
     tree = tree_of(structure)
     if tree.kind != 'object':
-        raise SourceError('every JSON record must be an object, whose keys are the columns', exit_code=1)
+        raise SourceError(issue_codes.DATA_UNREADABLE, 'every JSON record must be an object, whose keys are the columns')
     return tree
 
 

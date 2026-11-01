@@ -24,7 +24,7 @@ So a dataset regenerates with no scenario file, and an edited member shows which
 
 *Rejected:* a patched column the profile does not hold being added, as RFC 7396 would add it. A
 misspelled column would then generate a new column from a fragment. It is refused as
-`unknown-column`.
+`E-SCENARIO-101`.
 
 ## A bundle's scenario names the table it bends, and may patch the relationships drawing it
 
@@ -46,14 +46,14 @@ The busiest of 40,000 customers then holds 0.05 of the 550,000 orders, the top 1
 top 100 hold 0.3. `data check` measures `top_fraction_delta` against the patched shares.
 
 - **`table` names the bundle table the patch and every perturbation apply to.** A bundle refuses a
-  scenario naming no table, or one it lacks, as `unknown-table`. A lone profile takes a scenario
+  scenario naming no table, or one it lacks, as `E-SCENARIO-108`. A lone profile takes a scenario
   naming its own table, or none.
 - **Several scenarios bend several tables, one each.** Scenarios naming one table compose as they
   do on a lone profile. One composition naming two tables is refused.
 - **`patch.relationships` is keyed by a relationship's `from` columns, without their table**,
   joined by `,`, so a composite key is `product_code,supplier_id`. The name every output prints,
   such as `orders.customer_id → customers.customer_id`, is the same key. It patches a relationship
-  drawing a column of the scenario's table. Any other key is refused as `unknown-relationship`,
+  drawing a column of the scenario's table. Any other key is refused as `E-SCENARIO-109`,
   which lists the keys the table takes, and so is the key on a lone profile.
 - **`hot_keys` on a foreign-key column takes its `keys` busiest parents.** `fraction` of the rows
   take one of them, every column of the key with it. Each inherited column copies the hot
@@ -70,7 +70,7 @@ A pipeline's bad-row handling is tested against files broken on purpose. The `ba
 writes a profile like `orders` as CSV. It breaks the share of rows its `fraction` sets with ragged,
 quoting, encoding and type faults. It gives the share of files its `files_fraction` sets a byte order
 mark or a cut last line. A profile with no string column, or none of another type, is refused as
-`op-not-for-column`:
+`E-SCENARIO-102`:
 
 ```bash
 doppeldata data generate orders --scenario bad-csv --out orders-bad/
@@ -201,16 +201,16 @@ sets. It then prints, per kind, what each reader caught of what `_faults.jsonl` 
   byte for byte the same at any thread count and any Spark partition count.
 - **A row takes at most one fault, and a file at most one file fault.** A copy `duplicates` adds is
   broken as any row is, and its record has no `row`.
-- **A kind a format cannot hold is refused as `op-not-for-format` before any row is written.** CSV
+- **A kind a format cannot hold is refused as `E-SCENARIO-105` before any row is written.** CSV
   and TSV hold every row kind and every file kind but the JSON and Parquet ones. JSON and NDJSON
   hold `type_invalid`, `truncated_line` and the `json_` kinds. Parquet holds the `parquet_` kinds,
   and Arrow none. A kind a column must exist for, such as `embedded_newline` on a table with no
-  string column, is refused as `op-not-for-column`.
+  string column, is refused as `E-SCENARIO-102`.
 - **An `invalid_utf8` fault never starts in a file's first block.** doppeldata's profiler guesses
   the encoding from that block, as many readers do. One invalid byte there reads the file as
   Latin-1, where nothing is rejected. A fault drawn there is written clean and not listed. So a
   file of a few hundred rows holds none, and a write whose largest file ends inside the first
-  block is refused as `invalid-parameter`, naming the rows a file needs.
+  block is refused as `E-SCENARIO-103`, naming the rows a file needs.
 - **`truncated_line` cuts the file's last record mid-field**, as a cut-off upload leaves it.
 - **A `latin1_file` holding only ASCII is not listed.** windows-1252 writes ASCII as UTF-8 does,
   so the file is unchanged.
@@ -236,7 +236,7 @@ Each reason in `source.csv.malformed.type_fractions` becomes the kind DuckDB rej
   every reader opens. `kinds: [mixed_line_endings]` writes the fault where a test asks for it.
 - **`invalid_state` is not reproduced.** No bytes were found that DuckDB stores as an
   `invalid_state` reject rather than refusing the whole read.
-- **A profile recording none of these is refused** as `invalid-parameter`, because the op would
+- **A profile recording none of these is refused** as `E-SCENARIO-103`, because the op would
   write nothing. So is one whose only rejects are `cast` rows a text column already holds, and the
   refusal names the column.
 
@@ -387,7 +387,7 @@ inserting a perturbation leaves every other one's rows unchanged, compared by Ar
 - **The id defaults to `<op>:<column, or table>:<n>`.** n counts earlier entries of that op and
   column. So inserting a `noise` moves no `missingness`, while a second `hot_keys` on one column
   numbers after the first. An entry that must stay put under any edit names its own `id`.
-- **Two entries sharing an id are refused** as `duplicate-perturbation-id`, because they would
+- **Two entries sharing an id are refused** as `E-SCENARIO-104`, because they would
   share a stream.
 - **A scenario's digest is the SHA-256 of its RFC 8785 canonical JSON, with every id resolved and
   no `description` or `expect`.** So naming a default id, rewording the description or moving a
@@ -410,7 +410,7 @@ generates what a local run does.
 - **An `across_files` copy comes from the block half the dataset away**, and is homed to a row of
   its own block. So with two files, the copy lands in the file its source does not.
 - **A write is refused when a file holds more rows than the half-dataset reach**, or the dataset is
-  one block. A copy could then share its source's file, so `invalid-parameter` names the op's
+  one block. A copy could then share its source's file, so `E-SCENARIO-103` names the op's
   `scope`.
 - **`exact: false` varies one column of each copy**, taking that column's value from another row.
   A primary key column is never the one varied.
@@ -419,19 +419,19 @@ generates what a local run does.
 
 `schema_drift`, `small_files`, `malformed_rows` and `cdc` change the files rather than the rows.
 `generate`, `stream` and `doppeldata.spark.generate` write no files, so each refuses them as
-`op-needs-files`, naming the write that takes them. A write to one file refuses `schema_drift`,
+`E-SCENARIO-014`, naming the write that takes them. A write to one file refuses `schema_drift`,
 `small_files` and `cdc`, which act across files.
 
-- **`doppeldata.spark` refuses `cdc` as `op-needs-one-process`**, from `generate`, `struct_type`
+- **`doppeldata.spark` refuses `cdc` as `E-SCENARIO-107`**, from `generate`, `struct_type`
   and `write` alike, as it refuses any op the engine says orders the whole table. The stream orders
   the whole table's changes by commit time, so one process writes it, and the refusal names
   `doppeldata.write`.
-- **A `cdc` write refuses a format other than CSV or Parquet** as `op-not-for-format`, and
-  `timestamp_unit` on CSV the same way. It refuses `partition_by` as `invalid-parameter`, because
+- **A `cdc` write refuses a format other than CSV or Parquet** as `E-SCENARIO-105`, and
+  `timestamp_unit` on CSV the same way. It refuses `partition_by` as `E-SCENARIO-103`, because
   the change files are filed by commit date.
 - **A Parquet writer's `timestamp_unit` of `ms` or `us` sets the stream's where the op sets none.**
   The writer's `s` or `ns`, and a writer's unit apart from the op's, are refused as
-  `invalid-parameter`, since DMS stores every timestamp at one unit.
+  `E-SCENARIO-103`, since DMS stores every timestamp at one unit.
 - **A file drifts when its first row lies at or past `after_fraction` of the rows.** Beside `cdc`,
   the cut is that fraction of the period instead. The writers apply the drift to the whole block
   before a range takes its rows. Its steps run as drop, widen, rename, add, then reorder.
@@ -439,7 +439,7 @@ generates what a local run does.
   nothing, which would leave the scenario silently unapplied.
 - **A partition key the drift drops or renames is refused**, because a drifted file could not be
   filed under it.
-- **A drift written as CSV, TSV or Arrow is refused** as `op-not-for-format`. Their files must
+- **A drift written as CSV, TSV or Arrow is refused** as `E-SCENARIO-105`. Their files must
   share one header or schema to read as one table. Parquet, JSON and NDJSON read back as the union.
   A `cdc` stream is the exception, because a CSV change stream changes shape as DMS writes one.
 - **An added column is drawn per written row**, so a copy and its source differ in it.
@@ -466,17 +466,17 @@ generates what a local run does.
 - **`partition_skew` gives each value named its share**, so a write partitioned by the column fills
   its directories in those shares.
 - **An op on numbers or times refuses a column drawn as text from its type mix**, as
-  `op-not-for-column`. `noise`, `scaling`, `outliers`, `out_of_range` and `late_arrival` rewrite a
+  `E-SCENARIO-102`. `noise`, `scaling`, `outliers`, `out_of_range` and `late_arrival` rewrite a
   typed array, and that column holds strings in every write. The refusal names the type its profile
   states, beside the string it generates as.
 - **A `cdc` update recomputes a derived or looked-up column from a column drawn as text**, read
   back as the profile's type. A row holding another type reads as null, so the recomputed value is
   null there.
 - **`cdc` keys every change by `key`, else the profile's one-column `dataset.keys.primary`.** A
-  profile stating neither, or a primary key of several columns, is refused as `no-primary-key`. A
+  profile stating neither, or a primary key of several columns, is refused as `E-SCENARIO-106`. A
   key column must draw unique values, such as a sequence or a UUID with no nulls, or it is refused
-  as `op-not-for-column`.
-- **`cdc` refuses `duplicates` and `malformed_rows` beside it**, as `invalid-parameter`. A copied
+  as `E-SCENARIO-102`.
+- **`cdc` refuses `duplicates` and `malformed_rows` beside it**, as `E-SCENARIO-103`. A copied
   row would hold its key twice in the full load, and the stream's own faults are its two rates. An
   op writing the key, a `keys.primary` column, `Op` or the commit column is refused too, since
   every change holds those as they are.
@@ -487,9 +487,10 @@ A refusal is an `InvalidScenario` whose issues each carry a `code` and a `field`
 RFC 6901 pointer into the scenario, such as `/perturbations/2/keys`. `doppeldata scenario check
 --json` prints them.
 
-- **A code names what it refuses**, such as `unknown-column` or `op-not-for-format`.
-  `invalid-parameter` says least: a parameter out of range, or one the files cannot hold, such as
-  a drift no file reaches. The format's own faults carry the profile's codes.
+- **Each refusal has its own code**, such as `E-SCENARIO-101` for an unknown column or
+  `E-SCENARIO-105` for a kind the format cannot hold. `E-SCENARIO-103` says least: a parameter out
+  of range, or one the files cannot hold, such as a drift no file reaches. The format's own faults
+  carry the profile's codes.
 - **An unknown op or metric lists every one doppeldata knows**, and its issue's `closest` holds the
   nearest names.
 - **`doppeldata scenario check FILE PROFILE` exits 3 on a refusal.** It validates the scenario,
@@ -503,8 +504,8 @@ The data is measured against the effective profile, so a patched null rate is th
 
 - **`data check` refuses a scenario other than the one the data was written under.** Where DATA
   holds the `_manifest.json` a write left, a `--scenario` of another digest is refused as
-  `scenario-differs-from-data`. No `--scenario` on data whose manifest records one is refused as
-  `data-has-scenario`. Both exit 2. A scenario's skips would otherwise pass data it never touched.
+  `E-SCENARIO-016`. No `--scenario` on data whose manifest records one is refused as
+  `E-SCENARIO-015`. Both exit 2. A scenario's skips would otherwise pass data it never touched.
 - **A metric a perturbation moves is a row with no value and `skipped_by` naming it.** It passes. A
   perturbation moves every metric on a column it writes, as the engine reports its columns. So it
   moves each `--against` score on that column too, and each pair score holding it.

@@ -93,7 +93,7 @@ table, and its rows are the sum of its tables'.
   uuid key seeks its stream to the row. A key that is itself a foreign key takes its own
   relationship's draw. Any other integer key is a sequence across its profiled extremes, and any
   other string key draws from its `indexed_values` stream at the row. Any other key is refused as
-  `parent-key-unaddressable`.
+  `E-PROFILE-120`.
 - **An inherited column copies its parent row's value.** The child block generates the parent
   blocks its rows touch, cached per thread, so the copy is the value the parent's table writes.
 

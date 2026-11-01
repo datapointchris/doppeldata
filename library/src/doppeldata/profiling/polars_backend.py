@@ -16,6 +16,7 @@ import polars as pl
 import polars.selectors as cs
 import pyarrow as pa
 
+from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 from doppeldata.profiling import json_paths
 from doppeldata.profiling import parquet_footers
@@ -645,7 +646,8 @@ def read_files(source: Source) -> SourceRead:
         # Counting rows reads every file's footer, so a corrupt file fails here rather than mid-profile.
         table.select(pl.len()).collect(engine='streaming')
     except (pl.exceptions.PolarsError, duckdb.Error, OSError, pa.ArrowException) as error:
-        raise SourceError(f'{", ".join(source.roots)} could not be read as {format_name}: {first_line(error)}', exit_code=1) from error
+        message = f'{", ".join(source.roots)} could not be read as {format_name}: {first_line(error)}'
+        raise SourceError(issue_codes.DATA_UNREADABLE, message) from error
     return dc.replace(read, table=table)
 
 

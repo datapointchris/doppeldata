@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from doppeldata import _core
+from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
@@ -43,7 +44,8 @@ class WrittenDataFile:
         if value is None:
             return None
         if not (value.isascii() and value.isdecimal()):
-            raise SourceError(f'{self.path} holds {key} as {value!r}, which is not a whole number', role='profile')
+            message = f'{self.path} holds {key} as {value!r}, which is not a whole number'
+            raise SourceError(issue_codes.EMBEDDED_PROFILE_UNREADABLE, message, role='profile', value=value)
         return int(value)
 
     def identity_differences(self, identity: dict[str, Any]) -> list[str]:
@@ -62,7 +64,8 @@ def data_file_metadata(path: str | os.PathLike[str]) -> dict[str, str] | None:
     try:
         return _core.data_file_metadata(Path(path))
     except ValueError as error:
-        raise SourceError(f'{os.fspath(path)} could not be read: {error}', role='profile') from error
+        message = f'{os.fspath(path)} could not be read: {error}'
+        raise SourceError(issue_codes.FILE_METADATA_UNREADABLE, message, role='profile', value=os.fspath(path)) from error
 
 
 def written_data_file(path: str | os.PathLike[str], metadata: dict[str, str] | None = None) -> WrittenDataFile:
@@ -75,7 +78,8 @@ def written_data_file(path: str | os.PathLike[str], metadata: dict[str, str] | N
     if metadata is None:
         metadata = data_file_metadata(path)
     if metadata is None:
-        raise SourceError(f'{name} is neither a Parquet nor an Arrow IPC file, so it holds no profile', role='profile')
+        message = f'{name} is neither a Parquet nor an Arrow IPC file, so it holds no profile'
+        raise SourceError(issue_codes.NOT_A_DATA_FILE, message, role='profile', value=name)
     profile = Profile(embedded_document(path, metadata))
     issues = profile.validate()
     if issues:
@@ -94,11 +98,7 @@ def written_data_file(path: str | os.PathLike[str], metadata: dict[str, str] | N
 def embedded_document(path: str | os.PathLike[str], metadata: dict[str, str]) -> Any:
     """The profile document a data file's `metadata` holds, unvalidated, raising SourceError where it holds none."""
     if _core.PROFILE_KEY not in metadata:
-        raise SourceError(
-            f'{os.fspath(path)} holds no profile; a Parquet or Arrow write embeds one with embed_profile=True, '
-            'or data generate --embed-profile',
-            role='profile',
-        )
+        raise SourceError(issue_codes.NO_EMBEDDED_PROFILE, f'{os.fspath(path)} holds no profile', role='profile', value=os.fspath(path))
     return embedded_json(os.fspath(path), metadata, _core.PROFILE_KEY)
 
 
@@ -106,15 +106,15 @@ def embedded_json(name: str, metadata: dict[str, str], key: str) -> Any:
     try:
         return json.loads(metadata[key])
     except json.JSONDecodeError as error:
-        raise SourceError(f'{name} holds {key} as text that is not JSON: {error}', role='profile') from error
+        message = f'{name} holds {key} as text that is not JSON: {error}'
+        raise SourceError(issue_codes.EMBEDDED_PROFILE_UNREADABLE, message, role='profile', value=name) from error
 
 
 def matching_digest(name: str, document: str, digest: str, recorded: str | None) -> None:
     """Refuse an embedded document whose digest is not the one its write recorded beside it."""
     if digest != recorded:
-        raise SourceError(
-            f'{name} holds a {document} whose digest is {digest}, not the {recorded} its write recorded beside it', role='profile'
-        )
+        message = f'{name} holds a {document} whose digest is {digest}, not the {recorded} its write recorded beside it'
+        raise SourceError(issue_codes.EMBEDDED_DIGEST_MISMATCH, message, role='profile', value=digest)
 
 
 def data_file_profile(path: str | os.PathLike[str], metadata: dict[str, str] | None = None) -> Profile:

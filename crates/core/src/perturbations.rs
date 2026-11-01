@@ -46,6 +46,8 @@ pub use self::malformed_rows::MalformedPlan;
 pub use self::malformed_rows::RowFault;
 pub use self::malformed_rows::RowFaults;
 pub use self::schema_drift::SchemaDriftPlan;
+use crate::issue_codes;
+use crate::issue_codes::IssueCode;
 use crate::physical_type::physical_type_name;
 use crate::plan::Plan;
 use crate::plan::PlanError;
@@ -91,17 +93,17 @@ pub enum ScenarioFault {
 }
 
 impl ScenarioFault {
-    pub fn code(self) -> &'static str {
+    pub fn code(self) -> &'static IssueCode {
         match self {
-            Self::UnknownTable => "unknown-table",
-            Self::UnknownRelationship => "unknown-relationship",
-            Self::UnknownColumn => "unknown-column",
-            Self::OpNotForColumn => "op-not-for-column",
-            Self::InvalidParameter => "invalid-parameter",
-            Self::DuplicatePerturbationId => "duplicate-perturbation-id",
-            Self::OpNotForFormat => "op-not-for-format",
-            Self::NoPrimaryKey => "no-primary-key",
-            Self::OpNeedsOneProcess => "op-needs-one-process",
+            Self::UnknownTable => &issue_codes::UNKNOWN_TABLE,
+            Self::UnknownRelationship => &issue_codes::UNKNOWN_RELATIONSHIP,
+            Self::UnknownColumn => &issue_codes::UNKNOWN_SCENARIO_COLUMN,
+            Self::OpNotForColumn => &issue_codes::OP_NOT_FOR_COLUMN,
+            Self::InvalidParameter => &issue_codes::INVALID_PARAMETER,
+            Self::DuplicatePerturbationId => &issue_codes::DUPLICATE_PERTURBATION_ID,
+            Self::OpNotForFormat => &issue_codes::OP_NOT_FOR_FORMAT,
+            Self::NoPrimaryKey => &issue_codes::NO_PRIMARY_KEY,
+            Self::OpNeedsOneProcess => &issue_codes::OP_NEEDS_ONE_PROCESS,
         }
     }
 }

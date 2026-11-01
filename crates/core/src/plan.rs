@@ -19,6 +19,8 @@ use crate::column_overrides::ColumnOverride;
 use crate::column_overrides::PinnedColumn;
 use crate::identity::DatasetIdentity;
 use crate::identity::is_sha256_digest;
+use crate::issue_codes;
+use crate::issue_codes::IssueCode;
 use crate::perturbations;
 use crate::perturbations::Block;
 use crate::perturbations::BlockPerturbation;
@@ -90,7 +92,7 @@ pub enum PlanError {
     },
     /// An override naming a column the table lacks, or giving a value its column cannot hold.
     /// `field` is the column's JSON pointer, empty for a column the table lacks.
-    #[error("{message} [invalid-override]")]
+    #[error("{message} [{}]", issue_codes::INVALID_OVERRIDE)]
     Override { field: String, message: String },
 }
 
@@ -123,37 +125,37 @@ pub enum ColumnFault {
 }
 
 impl ColumnFault {
-    /// The kebab-case code, in the form of the library's issue codes.
-    pub fn code(self) -> &'static str {
+    /// The code a caller branches on.
+    pub fn code(self) -> &'static IssueCode {
         match self {
-            Self::UnsupportedType => "unsupported-type",
-            Self::NotGeneratedYet => "not-generated-yet",
-            Self::InvalidFit => "invalid-fit",
-            Self::InvalidPattern => "invalid-pattern",
-            Self::InvalidQuantiles => "invalid-quantiles",
-            Self::UnusableRates => "unusable-rates",
-            Self::InvalidExtreme => "invalid-extreme",
-            Self::StructWithoutFields => "struct-without-fields",
-            Self::TokensExceedNullRate => "tokens-exceed-null-rate",
-            Self::UnknownColumn => "unknown-column",
-            Self::InvalidDependence => "invalid-dependence",
+            Self::UnsupportedType => &issue_codes::UNSUPPORTED_TYPE,
+            Self::NotGeneratedYet => &issue_codes::NOT_GENERATED_YET,
+            Self::InvalidFit => &issue_codes::INVALID_FIT,
+            Self::InvalidPattern => &issue_codes::INVALID_PATTERN,
+            Self::InvalidQuantiles => &issue_codes::INVALID_QUANTILES,
+            Self::UnusableRates => &issue_codes::UNUSABLE_FRACTIONS,
+            Self::InvalidExtreme => &issue_codes::INVALID_EXTREME,
+            Self::StructWithoutFields => &issue_codes::STRUCT_WITHOUT_FIELDS,
+            Self::TokensExceedNullRate => &issue_codes::TOKENS_EXCEED_NULL_FRACTION,
+            Self::UnknownColumn => &issue_codes::UNKNOWN_COLUMN,
+            Self::InvalidDependence => &issue_codes::INVALID_DEPENDENCE,
         }
     }
 }
 
 impl PlanError {
-    /// The kebab-case code a caller branches on, in the form of the library's issue codes.
-    pub fn code(&self) -> &'static str {
+    /// The code a caller branches on.
+    pub fn code(&self) -> &'static IssueCode {
         match self {
-            Self::Bundle { .. } => "bundle",
-            Self::NoColumns { .. } => "no-columns",
-            Self::DuplicateColumn { .. } => "duplicate-column",
-            Self::ProfileDigest { .. } => "invalid-profile-digest",
+            Self::Bundle { .. } => &issue_codes::BUNDLE_GIVEN,
+            Self::NoColumns { .. } => &issue_codes::NO_COLUMNS,
+            Self::DuplicateColumn { .. } => &issue_codes::DUPLICATE_COLUMN,
+            Self::ProfileDigest { .. } => &issue_codes::INVALID_PROFILE_DIGEST,
             Self::Column { code, .. } => code.code(),
             Self::Scenario { code, .. } => code.code(),
-            Self::ScenarioDigest { .. } => "invalid-scenario-digest",
+            Self::ScenarioDigest { .. } => &issue_codes::INVALID_SCENARIO_DIGEST,
             Self::Relationship { code, .. } => code.code(),
-            Self::Override { .. } => "invalid-override",
+            Self::Override { .. } => &issue_codes::INVALID_OVERRIDE,
         }
     }
 
@@ -190,13 +192,13 @@ impl PlanError {
 
 impl std::fmt::Display for ScenarioFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.code())
+        f.write_str(self.code().code)
     }
 }
 
 impl std::fmt::Display for ColumnFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.code())
+        f.write_str(self.code().code)
     }
 }
 

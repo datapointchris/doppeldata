@@ -18,22 +18,24 @@ from typing import Protocol
 import rfc8785
 
 from doppeldata import _core
+from doppeldata import issue_codes
 from doppeldata.column_overrides import Overrides
 from doppeldata.column_overrides import overrides_json
 from doppeldata.embedded_profiles import WrittenDataFile
 from doppeldata.embedded_profiles import data_file_metadata
 from doppeldata.embedded_profiles import written_data_file
+from doppeldata.errors import InvalidArgument
 from doppeldata.errors import SourceError
 from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
 from doppeldata.errors import not_installed
 from doppeldata.errors import uninstalled
+from doppeldata.issue_codes import Issue
 from doppeldata.manifest import FAULTS_FILE_NAME
 from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import Manifest
 from doppeldata.name_hinted_types import with_type_hints
 from doppeldata.privacy_policy.file_check import refuse_failed_check
-from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import UngenerableProfile
 from doppeldata.profile_sources import ProfileSource
@@ -146,11 +148,11 @@ def destination_of(out: str | os.PathLike[str]) -> tuple[str, str, str | None]:
     destination = os.fspath(out)
     if not isinstance(out, str) and COLLAPSED_URL.match(destination):
         message = f'{destination} is a Path, which collapses a URL\'s //; pass the URL as a str, such as "s3://bucket/prefix/"'
-        raise WriteFailed('url-in-a-path', message, kind='refused')
+        raise WriteFailed(issue_codes.URL_IN_A_PATH, message)
     scheme, bucket = _core.destination_scheme(destination)
     # boto3 resolves the credentials an S3 write signs with.
     if scheme == 's3' and uninstalled({'boto3': 'boto3'}):
-        raise WriteFailed('boto3-missing', not_installed('writing to s3://', ['boto3']), kind='refused')
+        raise WriteFailed(issue_codes.PACKAGES_MISSING, not_installed('writing to s3://', ['boto3']))
     return destination, scheme, bucket
 
 
@@ -175,11 +177,11 @@ def one_file_choices(choices: WriteChoices, target: Path) -> WriteChoices:
     named = target.suffix.lower().removeprefix('.')
     if choices.format not in (None, named):
         message = f'{target.name} names the {named} format, not {choices.format}; name the file for its format, or write to a directory'
-        raise WriteFailed('suffix-names-another-format', message, kind='refused')
+        raise WriteFailed(issue_codes.SUFFIX_NAMES_ANOTHER_FORMAT, message)
     held = [name for name, value in (('partition_by', choices.partition_by), ('file_rows', choices.file_rows)) if value]
     if held:
         message = f'{target.name} is one file holding every row, so it takes no {" or ".join(held)}; write to a directory for those'
-        raise WriteFailed('one-file-holds-every-row', message, kind='refused')
+        raise WriteFailed(issue_codes.ONE_FILE_HOLDS_EVERY_ROW, message)
     return dc.replace(choices, format=named, file_rows=EVERY_ROW, partition_by=[])
 
 
@@ -190,7 +192,7 @@ def refuse_other_extension(target: Path, ranges_json: str) -> None:
         written = planned['path'].partition('.')[2]
         if written != named:
             message = f'{target.name} names a .{named} file, and the writer settings given write .{written}; write to a directory for those'
-            raise WriteFailed('suffix-names-another-format', message, kind='refused')
+            raise WriteFailed(issue_codes.SUFFIX_NAMES_ANOTHER_FORMAT, message)
 
 
 def one_file_scenario(scenario: Scenario | Sequence[Scenario] | None) -> Scenario | None:
@@ -216,13 +218,13 @@ def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, rep
     """
     if target.is_dir():
         message = f'{target} is a directory; end the path with / to write the dataset into it'
-        raise WriteFailed('destination-is-a-directory', message, kind='refused')
+        raise WriteFailed(issue_codes.DESTINATION_IS_A_DIRECTORY, message)
     recorded = target.parent / MANIFEST_FILE_NAME
     listed = [file['path'] for file in Manifest.from_json(recorded.read_text()).files] if recorded.is_file() else None
     others = sorted(set(listed or ()) - {target.name})
     if others:
         message = f'{recorded} records {", ".join(others)} as its dataset, so {target.name} cannot join it; write it to another directory'
-        raise WriteFailed('manifest-records-another-file', message, kind='refused')
+        raise WriteFailed(issue_codes.MANIFEST_RECORDS_ANOTHER_FILE, message)
     staging = target.parent / f'.{target.name}{STAGING_SUFFIX}'
     # Each record the engine leaves beside the data, as it is staged and where it lands beside `target`.
     sidecars = [
@@ -236,7 +238,7 @@ def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, rep
     ]
     refusals = [message for message, holds in held if holds]
     if refusals and not replace:
-        raise WriteFailed('destination-not-empty', refusals[0], kind='refused')
+        raise WriteFailed(issue_codes.DESTINATION_NOT_EMPTY, refusals[0])
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.rmtree(staging, ignore_errors=True)
@@ -279,8 +281,8 @@ def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, rep
 
 def unwritable(target: Path, error: OSError) -> WriteFailed:
     """A one-file write's failure on the local filesystem, coded as the writers code a directory write's."""
-    code = 'store-refused' if isinstance(error, PermissionError) else 'io'
-    return WriteFailed(code, f'{target} could not be written: {error.strerror or error}', kind='failed')
+    code = issue_codes.STORE_REFUSED if isinstance(error, PermissionError) else issue_codes.LOCAL_IO
+    return WriteFailed(code, f'{target} could not be written: {error.strerror or error}')
 
 
 @dc.dataclass(frozen=True)
@@ -307,11 +309,11 @@ class GenerationSource:
         if engine.dataset_digest == recorded:
             return engine
         differing = self.written.identity_differences(json.loads(engine.identity_json)) or [_core.DATASET_DIGEST_KEY]
-        raise SourceError(
+        message = (
             f'{self.written.path} names dataset {recorded}, but this release plans {engine.dataset_digest} from it, '
-            f'because its {", ".join(differing)} differs; give a seed, rows or a scenario to generate another dataset from it',
-            role='profile',
+            f'because its {", ".join(differing)} differs; give a seed, rows or a scenario to generate another dataset from it'
         )
+        raise SourceError(issue_codes.DATASET_IDENTITY_CHANGED, message, role='profile', value=recorded)
 
 
 def generation_source(
@@ -373,12 +375,12 @@ def engine_arguments(
     if rows is None:
         rows = (effective.document.get('dataset') or {}).get('rows')
         if rows is None:
-            issue = Issue('no-row-count', '/dataset/rows', 'the profile records no row count, so rows must be given')
+            issue = Issue(issue_codes.NO_ROWS, '/dataset/rows', 'the profile records no row count, so rows must be given')
             raise UngenerableProfile(source, [issue])
     if rows < 0:
-        raise ValueError(f'rows must be zero or more, not {rows}')
+        raise InvalidArgument(issue_codes.INVALID_ROWS, f'rows must be zero or more, not {rows}', field='rows', value=rows)
     if not 0 <= seed <= LARGEST_SEED:
-        raise ValueError(f'seed must be between 0 and 2^64 - 1, not {seed}')
+        raise InvalidArgument(issue_codes.INVALID_SEED, f'seed must be between 0 and 2^64 - 1, not {seed}', field='seed', value=seed)
     applied = (json.dumps(scenario.to_plain(), allow_nan=False), scenario.digest, scenario.source) if scenario is not None else None
     profile_json = json.dumps(with_type_hints(profile.to_plain()), allow_nan=False)
     return EngineArguments(profile_json, profile.digest, seed, rows, source, applied, overrides_json(overrides))

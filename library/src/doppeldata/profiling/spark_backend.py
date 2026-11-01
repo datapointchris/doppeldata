@@ -33,7 +33,9 @@ from pyspark.sql import DataFrame
 from pyspark.sql import SparkSession
 from pyspark.sql import Window
 
+from doppeldata import issue_codes
 from doppeldata._core import VERSION
+from doppeldata.errors import IncompatibleInstall
 from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
 from doppeldata.profiling import parquet_footers
@@ -319,7 +321,9 @@ def raw_type_code(c: Column, layouts: tuple[tuple[str, str], ...], major: int) -
 def reads(c: Column, parsed_type: ParsedType, major: int) -> Column:
     """Whether each value parses as its column's type, or one the type folds in."""
     if parsed_type.json_type_column:
-        raise SourceError('engine spark profiles no JSON source; profile it with engine polars')
+        raise SourceError(
+            issue_codes.ENGINE_DOES_NOT_READ, 'engine spark profiles no JSON source; profile it with engine polars', value='json'
+        )
     raw, layout = parsed_type.raw_type, parsed_type.format
     read = TEXT_MATCHERS[raw](c, layout, major)
     for folded in RAW_TYPE_FOLDS.get(raw, ()):
@@ -534,7 +538,8 @@ class DriverBuild:
         for _ in batches:
             pass
         if self.version != VERSION:
-            raise RuntimeError(f'this executor runs doppeldata {VERSION}, and the driver {self.version}; install one build on both')
+            message = f'this executor runs doppeldata {VERSION}, and the driver {self.version}; install one build on both'
+            raise IncompatibleInstall(issue_codes.BUILDS_DIFFER, message, value=VERSION)
         yield from ()
 
 
@@ -643,7 +648,7 @@ def refuse_silent_server(remote: str) -> None:
         except OSError as error:
             failure = error
     message = f'no answer from the Spark Connect server at {host}:{port}, which SPARK_REMOTE names, in {CONNECT_ATTEMPTS} tries: {failure}'
-    raise SourceError(message, exit_code=4)
+    raise SourceError(issue_codes.NO_ANSWER, message, value=f'{host}:{port}')
 
 
 class SparkBackend:
@@ -712,7 +717,7 @@ class SparkBackend:
         except Exception as error:
             causes = PYTHON_ERROR_LINE.findall(str(error))
             cause = ': '.join(causes[-1]) if causes else next(iter(str(error).strip().splitlines()), type(error).__name__)
-            raise SourceError(f'the Spark executors cannot run the profiling passes: {cause}', exit_code=1) from error
+            raise SourceError(issue_codes.SPARK_PASSES_FAILED, f'the Spark executors cannot run the profiling passes: {cause}') from error
 
     def scan(self, source: Source) -> DataFrame:
         return self.read(source).table
@@ -720,9 +725,8 @@ class SparkBackend:
     def read(self, source: Source) -> SourceRead:
         if source.table is not None:
             if not is_spark_frame(source.table):
-                raise SourceError(
-                    'engine spark profiles a Spark DataFrame, files or an s3:// prefix; profile an in-memory table with engine polars'
-                )
+                message = 'engine spark profiles a Spark DataFrame, files or an s3:// prefix; profile an in-memory table with engine polars'
+                raise SourceError(issue_codes.ENGINE_DOES_NOT_READ, message, value=type(source.table).__name__)
             return SourceRead(source.table)
         self.listing = {listed_path(file.path): index for index, file in enumerate(source.files)}
         match source.format:
@@ -732,9 +736,8 @@ class SparkBackend:
                 read = self.read_delimited(source)
             case _:
                 format_name = source.format.value if source.format else 'a table'
-                raise SourceError(
-                    f'engine spark reads Parquet, CSV and TSV, and {format_name} is none of them; profile it with engine polars'
-                )
+                message = f'engine spark reads Parquet, CSV and TSV, and {format_name} is none of them; profile it with engine polars'
+                raise SourceError(issue_codes.ENGINE_DOES_NOT_READ, message, value=format_name)
         return read
 
     def read_parquet(self, source: Source) -> SourceRead:
@@ -757,7 +760,7 @@ class SparkBackend:
         try:
             pa.unify_schemas([schema for schema, _ in groups], promote_options='permissive')
         except pa.ArrowException as error:
-            raise SourceError(f'{", ".join(source.roots)} could not be read as Parquet: {error}', exit_code=1) from error
+            raise SourceError(issue_codes.DATA_UNREADABLE, f'{", ".join(source.roots)} could not be read as Parquet: {error}') from error
         frames = [self.with_split_columns(self.reader(source).parquet(*paths)) for _, paths in groups]
         frame = frames[0]
         for later in frames[1:]:
@@ -847,7 +850,9 @@ class SparkBackend:
         answers: dict[Request, Any] = {}
         refused = [request for request in requests if request.statistic in REFUSED]
         if refused:
-            raise SourceError('engine spark profiles no JSON source; profile it with engine polars')
+            raise SourceError(
+                issue_codes.ENGINE_DOES_NOT_READ, 'engine spark profiles no JSON source; profile it with engine polars', value='json'
+            )
         compiled = [request for request in requests if request.statistic in AGGREGATED and request.statistic not in SKETCHED]
         sketched = [request for request in requests if request.statistic in SKETCHED]
         for aggregated in [*column_chunks(compiled), sketched]:

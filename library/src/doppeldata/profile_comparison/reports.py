@@ -3,7 +3,9 @@
 import dataclasses as dc
 import json
 from typing import Any
+from typing import ClassVar
 
+from doppeldata import issue_codes
 from doppeldata.profile_comparison.field_changes import FieldChange
 from doppeldata.profile_comparison.metrics import Bound
 
@@ -198,6 +200,7 @@ class CheckReport:
     scenario: ReportedScenario | None = None
     expectations: list[ExpectationResult] = dc.field(default_factory=list)
     against: RealData | None = None
+    failure_code: ClassVar[str] = issue_codes.DATA_MISSED_PROFILE
 
     def failures(self) -> Failures:
         return Failures.of(self.metrics, self.changes, self.expectations)
@@ -272,6 +275,7 @@ class BundleCheckReport:
     tables: list[CheckedTable]
     relationships: list[MetricResult]
     scenario: ReportedScenario | None = None
+    failure_code: ClassVar[str] = issue_codes.BUNDLE_MISSED_PROFILE
 
     def failures(self) -> Failures:
         """What failed across the bundle: the relationship metrics, then each table's in order."""

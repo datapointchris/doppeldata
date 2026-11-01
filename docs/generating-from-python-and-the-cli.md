@@ -28,8 +28,8 @@ doppeldata data generate --columns name,email,city,zip --rows 1000 --out people.
   command line.
 
   ```text
-  /columns/zipp: 'zipp' names no fake; give it one from sd.fakes, sd.integers, sd.decimals, sd.dates or sd.choice in a dict; the closest are zip_code [no-fake-for-name]
-  Invalid value for --columns: 'age' names no fake; give it a fake, a low..high range such as 18..90, or a list of values, in a short YAML
+  /columns/zipp: 'zipp' names no fake; give it one from sd.fakes, sd.integers, sd.decimals, sd.dates or sd.choice in a dict; the closest are zip_code [E-PROFILE-021]
+  doppeldata: E-PROFILE-021: 'age' names no fake; give it a fake, a low..high range such as 18..90, or a list of values, in a short YAML
   ```
 
 - **Expanding the names imports no profiling engine.** The table of name hints sits in
@@ -97,7 +97,7 @@ destination always holds one.
 - **The path alone decides.** A suffixed path with no trailing `/` is one file, and
   `--out events.parquet/` is a directory. A path with no format suffix, such as `--out people`, is
   a directory too. An existing directory at a one-file path is refused as
-  `destination-is-a-directory`, exit 2, and `--replace` does not remove it.
+  `E-WRITE-004`, exit 2, and `--replace` does not remove it.
 - **The file is staged in `.people.csv.doppeldata-staging` beside it, then moved into place
   whole.** A write that fails, or that Ctrl-C or SIGTERM stops, removes the staging directory. A
   write killed outright leaves it. The next write to the file then refuses, and `--replace`
@@ -114,7 +114,7 @@ destination always holds one.
 - **One file refuses what would split it, exit 2.** That is `--file-rows`, `--partition-by`, a
   `--format` its suffix does not name, and a scenario op that shapes the files. Writer settings
   that change the file's extension are refused too, such as gzip, which writes `.csv.gz`.
-- **`sd.spark.write` refuses one file**, with `one-file-from-executors`. Its executors write their
+- **`sd.spark.write` refuses one file**, with `E-WRITE-008`. Its executors write their
   own objects, and none of them can move a staged file into place.
 - **No rows write no file**, as they write none in a directory.
 
@@ -229,7 +229,7 @@ store    0.0          2025-03-01  2025-03-05
 - **Each value is the column's own type**: a str, int, float, Decimal, bool, date, datetime, time, or None for a null. A
   float column takes an int, and a decimal column an int or a float with no more places than its scale. A Python type
   outside this list raises TypeError. A value whose kind the column does not take, or that the column cannot hold, raises
-  `UngenerableProfile`, a ValueError whose issue is `invalid-override` at the column's pointer. So does a list, struct or
+  `UngenerableProfile`, a ValueError whose issue is `E-USAGE-104` at the column's pointer. So does a list, struct or
   type-mix column, which no value pins:
 
   ```text
@@ -309,7 +309,7 @@ the uploads alike.
   of doppeldata's takes.
 - **A write through boto3's chain stores the same bytes as a local write with the same flags.**
 - **boto3 is imported only for an S3 destination**, and declared nowhere. Without it, `plan` and
-  `write` both refuse with `boto3-missing`, exit 2.
+  `write` both refuse with `E-USAGE-019`, exit 2.
 - *Rejected:* obstore. pyo3-object_store builds the same `S3Store` inside doppeldata's own extension,
   from the object_store the writers already link. obstore would be a second compiled copy in every
   job, and it takes credentials through the same callable.
@@ -418,22 +418,23 @@ and `write`. [scenario-overlays.md](scenario-overlays.md) holds the format and w
   so it refuses what `data generate` would with the same flags. A refusal exits 3, and `--json`
   prints each issue's `code`, `field`, message and `closest` names.
 
-## A stopped write's kind decides its exit status
+## A stopped write's code decides its exit status
 
-The engine names each failure with a code, such as `destination-not-empty`, and a kind.
-`errors.py` alone turns the kind into the exit status:
+The engine names each failure with a code, such as `E-WRITE-204`. The registry declares each code
+with its exit status, so `exit_code` is read from the code and nothing else:
 
-| Kind | Exit | Meaning |
+| Exit | Meaning | Such as |
 | --- | --- | --- |
-| `refused` | 2 | The call must change. Nothing was written. |
-| `failed` | 1 | The write was attempted and failed. |
-| `unanswered` | 4 | The store stopped answering, before the write or during it. |
+| 2 | The call must change. Nothing was written. | `E-WRITE-204`, the destination holds objects |
+| 1 | The write was attempted and failed. | `E-IO-203`, the store answered with an error |
+| 4 | The store stopped answering, before the write or during it. | `E-IO-204` |
 
-- **A 5xx or 429 on every retry during the write reads as `failed`.** object_store keeps the status
-  inside an error type it does not export. Before the write, boto3's bucket check reads it as
-  `unanswered`.
+- **A 5xx or 429 on every retry during the write reads as `E-IO-203`, exit 1.** object_store keeps
+  the status inside an error type it does not export. Before the write, boto3's bucket check reads
+  it as `E-IO-204`, exit 4.
 - **The CLI reports every doppeldata error in its root group.** So each verb exits on the same
-  table, and a new verb needs no handler of its own.
+  table, and a new verb needs no handler of its own. [issue-codes.md](issue-codes.md) gives the
+  text and JSON it prints.
 
 ## The size estimate fits fixed and per-row bytes from the first encoded blocks
 

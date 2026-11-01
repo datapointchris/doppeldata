@@ -67,7 +67,7 @@ doppeldata data generate orders-customers --scale 0.1 --out shop/
 ## A relationship is edited in the bundle, or bent by a scenario without editing it
 
 - **Every field above is read as written.** Each `top_fractions` counts the busiest parents' rows
-  together, so `top10` below `top1` is refused as `invalid-fanout`.
+  together, so `top10` below `top1` is refused as `E-PROFILE-122`.
 - **Deleting an `inherited` entry or an `ordinal` draws the column from its own profile.** Deleting
   a relationship draws its foreign key from its column's profile too, so its values join only by
   chance.
@@ -160,7 +160,7 @@ records why:
 
 With no key, nothing refers to it, so `nation.n_regionkey → region.r_regionkey` is not found.
 `--policy none` keeps the key and finds it, at 5 nations to a region. `profile check` reports a key
-on a table under `k_min` rows as `keys-under-k-min`.
+on a table under `k_min` rows as `E-POLICY-004`.
 
 ## `data check` measures each relationship by its fan-out, its orphans and its busiest parents
 

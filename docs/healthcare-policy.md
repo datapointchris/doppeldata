@@ -57,7 +57,7 @@ way to one last bin from 89.5 to 90.5, and the rows above that bin are counted i
 from an earlier profile by `--edges-from` keep those below 89.5 and end in the same bin. Its
 extremes and quantiles are capped at 90, and so are its quantiles given a category. So no
 diagnosis or other group states an age over 89, and `profile check` reports one that does as
-`age-over-89`. It holds no fitted family, whose support could reach past 90. An age held as text keeps no top values, which would list each age over 89 alone. The numeric
+`E-POLICY-020`. It holds no fitted family, whose support could reach past 90. An age held as text keeps no top values, which would list each age over 89 alone. The numeric
 sampler draws a histogram's bins only between the outermost quantiles, and its tail ends at the
 extremes, so no generated age exceeds 90.
 
@@ -73,12 +73,12 @@ extremes in days. The month, weekday and hour shares stay, each cell held to `k_
 A date of birth is a column whose name holds `birth`, or a word ending in `dob`. Its low year is
 raised to the year of `generated.at` less 90, so no birth year names an age over 89. Safe Harbor
 treats a birth year as an element of an age. `profile check` reports a date of birth in a file that
-states no `generated.at` as `birth-date-unanchored`, because nothing then bounds its years.
+states no `generated.at` as `E-POLICY-022`, because nothing then bounds its years.
 
 A lag between two dates, such as a discharge's days after its admission, is kept. It is a span,
 and names neither date. Its quantiles and ends are held to `k_min` rows from each end, as a
 column's are. A lag from or to a date of birth is an age at the other date, and an age over 89 is
-what Safe Harbor removes. So it is withheld, and `profile check` reports one as `birth-date-lag`.
+what Safe Harbor removes. So it is withheld, and `profile check` reports one as `E-POLICY-023`.
 A lag counting from a quasi-identifier is withheld too, as `strict` withholds it.
 
 ## A place below a state is an identifier

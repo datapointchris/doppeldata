@@ -56,4 +56,4 @@ def test_a_list_of_names_takes_each_names_fake_and_a_name_hinting_none_is_refuse
     with pytest.raises(sd.InvalidProfile) as raised:
         sd.generate(['name', 'zipp'], rows=10)
     [issue] = raised.value.issues
-    assert (issue.code, issue.closest[0]) == ('no-fake-for-name', 'zip_code')
+    assert (issue.code, issue.closest[0]) == ('E-PROFILE-021', 'zip_code')

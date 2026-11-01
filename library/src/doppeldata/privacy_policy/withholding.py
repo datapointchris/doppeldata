@@ -128,7 +128,7 @@ def withheld(
     document['privacy'] = privacy
     broken = table_check(document, ()).violations
     if broken:
-        listed = '; '.join(f'{violation.field}: {violation.detail}' for violation in broken)
+        listed = '; '.join(f'{violation.field}: {violation.message}' for violation in broken)
         raise RuntimeError(f'the {policy} profile of {document.get("name")} breaks its own policy: {listed}')
     return document
 

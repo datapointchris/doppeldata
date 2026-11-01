@@ -31,6 +31,8 @@ use self::fanout_counts::RankedCounts;
 use self::keyed_permutation::KeyedPermutation;
 use crate::identity::DatasetIdentity;
 use crate::identity::is_sha256_digest;
+use crate::issue_codes;
+use crate::issue_codes::IssueCode;
 use crate::plan::Plan;
 use crate::plan::PlanError;
 use crate::plan::TableInputs;
@@ -78,25 +80,25 @@ pub enum RelationshipFault {
 }
 
 impl RelationshipFault {
-    pub fn code(self) -> &'static str {
+    pub fn code(self) -> &'static IssueCode {
         match self {
-            Self::TableNotInline => "table-not-inline",
-            Self::NoRowCount => "no-row-count",
-            Self::UnknownColumn => "unknown-column",
-            Self::MismatchedColumns => "mismatched-columns",
-            Self::SelfReference => "self-reference",
-            Self::Cycle => "relationship-cycle",
-            Self::ParentKeyUnaddressable => "parent-key-unaddressable",
-            Self::IncompatibleTypes => "incompatible-types",
-            Self::InvalidFanout => "invalid-fanout",
-            Self::InvalidScale => "invalid-scale",
+            Self::TableNotInline => &issue_codes::TABLE_NOT_INLINE,
+            Self::NoRowCount => &issue_codes::NO_ROWS,
+            Self::UnknownColumn => &issue_codes::UNKNOWN_COLUMN,
+            Self::MismatchedColumns => &issue_codes::MISMATCHED_COLUMNS,
+            Self::SelfReference => &issue_codes::SELF_REFERENCE,
+            Self::Cycle => &issue_codes::RELATIONSHIP_CYCLE,
+            Self::ParentKeyUnaddressable => &issue_codes::PARENT_KEY_UNADDRESSABLE,
+            Self::IncompatibleTypes => &issue_codes::INCOMPATIBLE_TYPES,
+            Self::InvalidFanout => &issue_codes::INVALID_FANOUT,
+            Self::InvalidScale => &issue_codes::INVALID_SCALE,
         }
     }
 }
 
 impl std::fmt::Display for RelationshipFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.code())
+        f.write_str(self.code().code)
     }
 }
 

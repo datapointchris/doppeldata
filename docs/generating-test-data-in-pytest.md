@@ -86,7 +86,7 @@ pytest --doppeldata-seed 9
   synthetic(as_='spark') needs pyspark, pyarrow, pandas, which doppeldata does not install; run `pip install pyspark pyarrow pandas`
   ```
 
-- **`as_='spark'` needs a fixture named `spark` that returns a SparkSession.** Without one it raises LookupError saying so.
+- **`as_='spark'` needs a fixture named `spark` that returns a SparkSession.** Without one it raises InvalidArgument, `E-USAGE-015`, saying so.
   [generating-inside-spark.md](generating-inside-spark.md) says how `to_spark` builds the frame on each Spark version.
 - **A table from the test's own seed generates once a test, and one from a shared seed once a session.** The cache holds
   the engine's Arrow table, keyed by the profile's or bundle's digest, the scenario's digest, the rows, the scale, the seed

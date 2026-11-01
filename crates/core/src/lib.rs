@@ -5,6 +5,7 @@ pub mod column_overrides;
 pub mod format_settings;
 pub mod generalized_pattern;
 mod identity;
+pub mod issue_codes;
 pub mod manifest;
 mod perturbations;
 mod physical_type;

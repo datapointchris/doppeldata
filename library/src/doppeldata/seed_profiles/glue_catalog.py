@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
 
+from doppeldata import issue_codes
 from doppeldata.errors import PackagesMissing
 from doppeldata.errors import SourceError
 from doppeldata.errors import uninstalled
@@ -97,19 +98,24 @@ def glue_client(region: str | None) -> Any:
         return boto3.Session().client('glue', region_name=region, config=CLIENT_CONFIG)
     except exceptions.NoRegionError as error:
         message = "the Glue Data Catalog is regional, and the AWS environment names no region; give the catalog's, or set AWS_REGION"
-        raise SourceError(message, role='region') from error
+        raise SourceError(issue_codes.GLUE_REGION, message, role='region') from error
     except exceptions.InvalidRegionError as error:
-        raise SourceError(f"{str(error).rstrip('.')}; give the catalog's region, such as eu-west-1", role='region') from error
+        message = f"{str(error).rstrip('.')}; give the catalog's region, such as eu-west-1"
+        raise SourceError(issue_codes.GLUE_REGION, message, role='region', value=region) from error
     except exceptions.ProfileNotFound as error:
-        raise SourceError(f'{error}; set AWS_PROFILE to a profile the AWS config holds', role='environment') from error
+        raise SourceError(
+            issue_codes.AWS_SETTINGS, f'{error}; set AWS_PROFILE to a profile the AWS config holds', role='environment'
+        ) from error
     except ValueError as error:
         # botocore refuses an endpoint that is no URL with a bare ValueError.
-        raise SourceError(f'{error}, from AWS_ENDPOINT_URL_GLUE, AWS_ENDPOINT_URL or the AWS profile', role='environment') from error
+        message = f'{error}, from AWS_ENDPOINT_URL_GLUE, AWS_ENDPOINT_URL or the AWS profile'
+        raise SourceError(issue_codes.AWS_SETTINGS, message, role='environment') from error
 
 
 @contextlib.contextmanager
 def catalog_errors(named: str, endpoint: str) -> Iterator[None]:
-    """Each boto3 failure reading `named` as a SourceError: exit 2 for a table the catalog lacks, 4 when no answer came."""
+    """Each boto3 failure reading `named` as a SourceError: one coded to exit 2 for a table the catalog lacks, and 4 when no
+    answer came."""
     from doppeldata.aws_access import AWS_ERRORS
     from doppeldata.aws_access import CREDENTIAL_ADVICE
     from doppeldata.aws_access import CREDENTIAL_ERRORS
@@ -122,15 +128,16 @@ def catalog_errors(named: str, endpoint: str) -> Iterator[None]:
     try:
         yield
     except CREDENTIAL_ERRORS as error:
-        raise SourceError(f'{named} could not be read: {error}; {CREDENTIAL_ADVICE}', exit_code=1, role='schema') from error
+        raise SourceError(issue_codes.NO_CREDENTIALS, f'{named} could not be read: {error}; {CREDENTIAL_ADVICE}', role='schema') from error
     except AWS_ERRORS as error:
         if unanswered(error):
-            raise SourceError(no_answer(endpoint, 'Glue', error), exit_code=4, role='schema') from error
+            raise SourceError(issue_codes.NO_ANSWER, no_answer(endpoint, 'Glue', error), role='schema') from error
         if not isinstance(error, exceptions.ClientError):
-            raise SourceError(f'{named} could not be read through {endpoint}: {error}', exit_code=1, role='schema') from error
+            raise SourceError(issue_codes.STORE, f'{named} could not be read through {endpoint}: {error}', role='schema') from error
         if error_code(error) == 'EntityNotFoundException':
-            raise SourceError(f'{named} names no table the catalog holds: {answered(error)}', exit_code=2, role='schema') from error
-        raise SourceError(f'{named} could not be read: {endpoint} answered {answered(error)}', exit_code=1, role='schema') from error
+            message = f'{named} names no table the catalog holds: {answered(error)}'
+            raise SourceError(issue_codes.GLUE_TABLE_UNKNOWN, message, role='schema', value=named) from error
+        raise SourceError(issue_codes.STORE, f'{named} could not be read: {endpoint} answered {answered(error)}', role='schema') from error
 
 
 def catalog_table(
@@ -166,7 +173,8 @@ def catalog_table(
         warn_left_out(f'{named}: columns of types the engine draws nothing of are left out: {", ".join(unread)}')
     if not columns:
         listed = ', '.join(unread) or 'it lists none'
-        raise SourceError(f'{named} holds no column of a type the engine draws, so it makes no seed: {listed}', role='schema')
+        message = f'{named} holds no column of a type the engine draws, so it makes no seed: {listed}'
+        raise SourceError(issue_codes.NO_DRAWABLE_COLUMN, message, role='schema', value=named)
     if defaulted:
         warn_left_out(
             f'{named}: no value of the partition keys {", ".join(defaulted)} is listed or projected, so each draws its '
@@ -300,9 +308,11 @@ def typed(columns: list[DeclaredColumn], detected_entities: Mapping[str, Sequenc
     names = {column.name for column in columns}
     unmatched = [column for column in detected_entities if column not in names]
     if unmatched:
+        message = (
+            f'the detected entities name {", ".join(unmatched)}, which {named} holds no column of; it holds {", ".join(sorted(names))}'
+        )
         raise SourceError(
-            f'the detected entities name {", ".join(unmatched)}, which {named} holds no column of; it holds {", ".join(sorted(names))}',
-            role='detected-entities',
+            issue_codes.DETECTED_ENTITIES_UNMATCHED, message, role='detected-entities', value=unmatched[0], valid=sorted(names)
         )
     ignored: list[str] = []
     found = []

@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from doppeldata import _core
+from doppeldata import issue_codes
 from doppeldata.profile_format import GIVEN_LISTS
 from doppeldata.profile_format import PointerParts
 from doppeldata.profile_format import pointer
@@ -179,12 +180,12 @@ class ColumnLiterals:
 
 
 @dc.dataclass(frozen=True)
-class Fault:
-    """A literal that breaks its rule: where, a short code, and what was found against what was expected."""
+class RuleBreak:
+    """A literal that breaks its rule: its issue code, where, and what was found against what was expected."""
 
     code: str
     path: PointerParts
-    detail: str
+    message: str
 
 
 def described_rows(table: dict[str, Any]) -> float | None:
@@ -348,14 +349,16 @@ def quantile_field(at: PointerParts, quantiles: dict[str, Any], held: float | No
     return LiteralField(at, FieldKind.QUANTILES, len(cells), tuple(cells))
 
 
-def faults(field: LiteralField, column: ColumnLiterals, k_min: int) -> list[Fault]:
+def faults(field: LiteralField, column: ColumnLiterals, k_min: int) -> list[RuleBreak]:
     """How the field breaks the rule its kind is admitted by, recomputed from the file. Empty when it meets it."""
     kind = field.kind
     if field.cells:
         if any(cell.rows is None for cell in field.cells):
             return [
-                Fault(
-                    'rows-not-stated', field.path, f'the {kind.label} of {column.name} hold rates of no stated row count; {ROWS_EXPECTED}'
+                RuleBreak(
+                    issue_codes.ROWS_NOT_STATED,
+                    field.path,
+                    f'the {kind.label} of {column.name} hold rates of no stated row count; {ROWS_EXPECTED}',
                 )
             ]
         found = []
@@ -364,22 +367,28 @@ def faults(field: LiteralField, column: ColumnLiterals, k_min: int) -> list[Faul
             if (rows == 0 and cell.may_be_empty) or rows >= k_min:
                 continue
             if kind is FieldKind.QUANTILES:
-                found.append(Fault('below-k-min', cell.path, f'sits {rows} rows from an end; expected at least {k_min}'))
+                found.append(RuleBreak(issue_codes.BELOW_K_MIN, cell.path, f'sits {rows} rows from an end; expected at least {k_min}'))
             else:
                 floor = f'0 or at least {k_min}' if cell.may_be_empty else f'at least {k_min}'
-                found.append(Fault('below-k-min', cell.path, f'holds {rows} rows; expected {floor}'))
+                found.append(RuleBreak(issue_codes.BELOW_K_MIN, cell.path, f'holds {rows} rows; expected {floor}'))
         return found
     if kind in (FieldKind.NUMERIC_EXTREMES, FieldKind.TEMPORAL_EXTREMES):
         found = []
         method = ((column.column.get('numeric') or {}).get('extremes') or {}).get('method')
         if kind is FieldKind.NUMERIC_EXTREMES and method != TRIMMED_K:
-            found.append(Fault('extremes-not-trimmed', (*field.path, 'method'), f'method is {method or "absent"}; expected trimmed_k'))
+            found.append(
+                RuleBreak(issue_codes.EXTREMES_NOT_TRIMMED, (*field.path, 'method'), f'method is {method or "absent"}; expected trimmed_k')
+            )
         if column.held is None:
             found.append(
-                Fault('rows-not-stated', field.path, f'the extremes of {column.name} rest on no stated row count; {ROWS_EXPECTED}')
+                RuleBreak(
+                    issue_codes.ROWS_NOT_STATED, field.path, f'the extremes of {column.name} rest on no stated row count; {ROWS_EXPECTED}'
+                )
             )
         elif round(column.held) < 2 * k_min - 1:
-            found.append(Fault('below-k-min', field.path, f'rest on {round(column.held)} values; expected at least {2 * k_min - 1}'))
+            found.append(
+                RuleBreak(issue_codes.BELOW_K_MIN, field.path, f'rest on {round(column.held)} values; expected at least {2 * k_min - 1}')
+            )
         return found
     numeric = column.column.get('numeric') or {}
     trimmed = (numeric.get('extremes') or {}).get('method') == TRIMMED_K
@@ -387,20 +396,22 @@ def faults(field: LiteralField, column: ColumnLiterals, k_min: int) -> list[Faul
         pattern = (column.column.get('string') or {}).get('pattern')
         if not isinstance(pattern, str) or not _core.pattern_is_generalized(pattern):
             expected = 'expected one with no alternation, optional part, or class narrower than whole digit and letter ranges'
-            return [Fault('pattern-not-generalized', field.path, f'pattern is {pattern}; {expected}')]
+            return [RuleBreak(issue_codes.PATTERN_NOT_GENERALIZED, field.path, f'pattern is {pattern}; {expected}')]
         return []
     if kind in (FieldKind.FIT, FieldKind.SEQUENCE) and not trimmed:
         method = (numeric.get('extremes') or {}).get('method') or 'absent'
-        code = 'fit-without-trimmed-extremes' if kind is FieldKind.FIT else 'sequence-without-trimmed-extremes'
-        return [Fault(code, field.path, f'{column.name} stores its {kind.label}, and its extremes method is {method}; expected trimmed_k')]
+        code = issue_codes.FIT_WITHOUT_TRIMMED_EXTREMES if kind is FieldKind.FIT else issue_codes.SEQUENCE_WITHOUT_TRIMMED_EXTREMES
+        return [
+            RuleBreak(code, field.path, f'{column.name} stores its {kind.label}, and its extremes method is {method}; expected trimmed_k')
+        ]
     if kind is FieldKind.SEQUENCE:
         sequence, extremes = numeric['sequence'], numeric['extremes']
         end = extremes.get('low') if sequence['step'] > 0 else extremes.get('high')
         derived = sequence_start(end, sequence['step'], k_min) if end is not None else None
         if sequence['start'] != derived:
             return [
-                Fault(
-                    'sequence-start-not-derived',
+                RuleBreak(
+                    issue_codes.SEQUENCE_START_NOT_DERIVED,
                     (*field.path, 'start'),
                     f'start is {sequence["start"]}; expected {derived}, the trimmed extreme less {k_min - 1} steps',
                 )

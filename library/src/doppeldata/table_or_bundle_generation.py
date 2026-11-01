@@ -21,6 +21,10 @@ from doppeldata.dataset_generation import rows_plan
 from doppeldata.dataset_generation import s3_store_of
 from doppeldata.dataset_generation import write_one_file
 from doppeldata.dataset_generation import write_plan_of
+from doppeldata.errors import InvalidArgument
+from doppeldata.errors import UnsupportedArgument
+from doppeldata.issue_codes import BUNDLE_GIVEN
+from doppeldata.issue_codes import MANIFEST_ON_BUNDLE
 from doppeldata.manifest import BundleManifest
 from doppeldata.manifest import Manifest
 from doppeldata.profile_format import Bundle
@@ -114,7 +118,9 @@ def sample(
     `rows`, `seed`, `threads` and `scenario` are taken as `generate` takes them. A Bundle is refused.
     """
     if isinstance(profile, Bundle):
-        raise TypeError("sample takes one table's profile, and a bundle holds several; generate the bundle")
+        raise UnsupportedArgument(
+            BUNDLE_GIVEN, "sample takes one table's profile, and a bundle holds several; generate the bundle", field='profile'
+        )
     table: ArrowStreamExportable = rows_plan(profile, rows, seed, scenario, 'sample', overrides).generate(threads=threads)
     return table
 
@@ -135,7 +141,9 @@ def stream(
     are taken as `generate` takes them. A Bundle is refused, because a stream holds one table.
     """
     if isinstance(profile, Bundle):
-        raise TypeError('a stream holds one table, and a bundle holds several; generate or write the bundle')
+        raise UnsupportedArgument(
+            BUNDLE_GIVEN, 'a stream holds one table, and a bundle holds several; generate or write the bundle', field='profile'
+        )
     reader: ArrowStreamExportable = rows_plan(profile, rows, seed, scenario, 'stream').stream(threads=threads)
     return reader
 
@@ -300,7 +308,8 @@ def write(
     run = run_of(profile, rows, seed, scale)
     if isinstance(run, BundleRun):
         if manifest:
-            raise ValueError('a bundle always writes its manifests, and manifest asks for one beside a single file')
+            message = 'a bundle always writes its manifests, and manifest asks for one beside a single file'
+            raise InvalidArgument(MANIFEST_ON_BUNDLE, message, field='manifest', value=manifest)
         return write_bundle(run, out, choices=choices, threads=threads, replace=replace, scenario=scenario)
     prepared = prepared_write(run.profile, out, run.rows, run.seed, choices, scenario)
     if prepared.one_file is not None:

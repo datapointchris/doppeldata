@@ -25,8 +25,8 @@ which task makes them.
   digest, the scenario, the seed and the row count. It builds it once per Python worker process.
 - **A scenario's perturbations apply inside each block, so `scenario=` moves no value with the
   partition count either.** `generate` refuses `schema_drift`, `small_files` and `malformed_rows`
-  as `op-needs-files`, because they shape files and a DataFrame has none. `write` applies them.
-- **`generate`, `struct_type` and `write` refuse `cdc` as `op-needs-one-process`.** A change
+  as `E-SCENARIO-014`, because they shape files and a DataFrame has none. `write` applies them.
+- **`generate`, `struct_type` and `write` refuse `cdc` as `E-SCENARIO-107`.** A change
   stream orders the whole table's changes by commit time, so no task can write its share alone.
   The refusal names `doppeldata.write`, which writes the stream from one process.
 - **An executor running another doppeldata release or stream version than the driver refuses the
@@ -62,11 +62,11 @@ driver   commit ─── _faults.jsonl, _manifest.json, claim removed
   holding several ranges writes them in turn on one thread, because Spark already gives each task
   a core. So the manifest records the task count in `tasks`, and `threads` is 1.
 - **The destination must be one store the driver and every executor see**: an S3 URL, or
-  `memory://`, which keeps nothing. A local directory is refused with code `destination-not-shared`
+  `memory://`, which keeps nothing. A local directory is refused with code `E-WRITE-006`
   unless the session is classic with a `local` master. That refuses a cluster whose executors share
   a POSIX mount too, and a Spark Connect client, whose disk is never the cluster's. Write to
   `s3://` there.
-- **A path naming one file, such as `people.csv`, is refused with `one-file-from-executors`.** A
+- **A path naming one file, such as `people.csv`, is refused with `E-WRITE-008`.** A
   local write stages that file and moves it into place, and no task can move what another wrote.
   `people.csv/`, with the trailing slash, names a directory.
 - **The profile may be a list of column names, a dict of fakes and ranges, or a short YAML**, as
@@ -77,8 +77,8 @@ driver   commit ─── _faults.jsonl, _manifest.json, claim removed
   task's objects only when the whole job returns. `replace` then deletes every part the run stored,
   because each part's name carries the dataset's `identity8`.
 - **A failed job raises `WriteFailed` with the code and kind of the task's own `StoppedWrite`**,
-  such as `no-credentials`. A task's error reaches the driver inside Spark's, as a marked line the
-  driver reads. Any other failure, such as an executor on another build, is `spark-job-failed`. The
+  such as `E-IO-201`. A task's error reaches the driver inside Spark's, as a marked line the
+  driver reads. Any other failure, such as an executor on another build, is `E-WRITE-007`. The
   message names the cause and ends by saying to rerun with `replace=True`.
 - *Rejected:* one `write(mode=...)` for both ways. Writing the DataFrame takes Spark's writer
   options, such as Delta, Iceberg or a `partitionBy`. Writing the files takes doppeldata's format and

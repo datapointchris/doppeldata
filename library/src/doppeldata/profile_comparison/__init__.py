@@ -16,12 +16,16 @@ from typing import Any
 from typing import overload
 
 from doppeldata import _core
+from doppeldata import issue_codes
 from doppeldata.dataset_generation import engine_plan
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
+from doppeldata.errors import InvalidArgument
 from doppeldata.errors import PoorFits
 from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
+from doppeldata.errors import UnsupportedArgument
+from doppeldata.issue_codes import Issue
 from doppeldata.manifest import Manifest
 from doppeldata.manifest import written_manifest
 from doppeldata.privacy_policy import Policy
@@ -136,12 +140,14 @@ def check(
     `BundleCheckReport`, and a bundle takes no `against`.
     """
     if not isinstance(profile, Profile | Bundle):
-        raise TypeError(f'check takes a Profile or a Bundle, as Profile.load and Bundle.load read them, not {type(profile).__name__}')
+        message = f'check takes a Profile or a Bundle, as Profile.load and Bundle.load read them, not {type(profile).__name__}'
+        raise UnsupportedArgument(issue_codes.UNSUPPORTED_PROFILE_SOURCE, message, field='profile', value=type(profile).__name__)
     if isinstance(profile, Bundle):
         from doppeldata.profile_comparison import bundle_checks
 
         if against is not None or against_sample is not None or html is not None:
-            raise ValueError('against scores one table against its real data; check a table of the bundle on its own to score it')
+            message = 'against scores one table against its real data; check a table of the bundle on its own to score it'
+            raise InvalidArgument(issue_codes.AGAINST_NEEDED, message, field='against')
         return bundle_checks.check_bundle(profile, data, thresholds=thresholds, scenario=scenario)
     applied = composed(scenario)
     written = written_manifest(data)
@@ -166,12 +172,15 @@ def checked_table(
     `planned` is the engine's plan of the table where a bundle's plan holds it, else the table's own plan is read."""
     unreadable = unreadable_refusal(applied, written, data)
     if unreadable is not None:
-        raise InvalidScenario(data_named(data), [], refusal=unreadable)
+        named = data_named(data)
+        raise InvalidScenario(
+            named, [Issue(issue_codes.UNCHECKABLE_FAULTS, None, f'{named} {unreadable}', value=named)], refusal=unreadable
+        )
     effective = applied.apply(profile) if applied is not None else profile
     source = effective.to_plain()
     refusal = refused(source, against, against_sample, html)
     if refusal is not None:
-        raise ValueError(refusal)
+        raise refusal
     if html is not None:
         side_by_side_html.missing_packages()
     thresholds = thresholds or Thresholds()
@@ -325,15 +334,18 @@ def format_of_data(data: Any) -> str | None:
     return found.value if found is not None else None
 
 
-def refused(source: Document, against: Any, against_sample: int | None, html: str | Path | None) -> str | None:
-    """Why a check cannot take these arguments, before any row is read, or None."""
+def refused(source: Document, against: Any, against_sample: int | None, html: str | Path | None) -> InvalidArgument | None:
+    """The refusal of arguments a check cannot take, before any row is read, or None."""
     if against is None and (html is not None or against_sample is not None):
-        return 'html and against_sample read the real data, so each needs against'
+        given = 'html' if html is not None else 'against_sample'
+        return InvalidArgument(issue_codes.AGAINST_NEEDED, 'html and against_sample read the real data, so each needs against', field=given)
     if against_sample is not None and against_sample < 1:
-        return f'against_sample must be a positive number of rows, not {against_sample}'
+        message = f'against_sample must be a positive number of rows, not {against_sample}'
+        return InvalidArgument(issue_codes.INVALID_SAMPLE, message, field='against_sample', value=against_sample)
     if against is not None and not real_data_scores.scored_columns(source).ordered:
-        return NOTHING_SCORED
-    return side_by_side_html.unwritable(Path(html)) if html is not None else None
+        return InvalidArgument(issue_codes.NOTHING_SCORED, NOTHING_SCORED, field='against')
+    unwritten = side_by_side_html.unwritable(Path(html)) if html is not None else None
+    return InvalidArgument(issue_codes.HTML_UNWRITABLE, unwritten, field='html', value=str(html)) if unwritten is not None else None
 
 
 NOTHING_SCORED = (
@@ -356,10 +368,13 @@ def real_sample(against: Any, rows: int, columns: real_data_scores.ScoredColumns
     try:
         real = sampled_table(against, rows)
         if not set(columns.ordered) & set(real.table.column_names):
-            raise SourceError(f'{data_named(against)} holds none of the columns a score reads: {", ".join(columns.ordered)}')
+            message = f'{data_named(against)} holds none of the columns a score reads: {", ".join(columns.ordered)}'
+            raise SourceError(issue_codes.NOTHING_SCORED, message, valid=list(columns.ordered))
     except SourceError as error:
-        error.role = 'against'
-        raise
+        if error.role == 'against':
+            raise
+        first = error.issues[0]
+        raise SourceError(first.code, first.message, role='against', value=first.value, valid=first.valid) from error
     return real
 
 
@@ -386,7 +401,8 @@ def scored(
     """
     checked = sampled_table(data, rows)
     if checked.fingerprint != fingerprint:
-        raise SourceError(f'{named} changed between its profile and its sample; check it again once it stops changing', exit_code=1)
+        message = f'{named} changed between its profile and its sample; check it again once it stops changing'
+        raise SourceError(issue_codes.DATA_CHANGED, message, value=named)
     scored_rows = min(real.table.num_rows, checked.table.num_rows)
     real_frame, checked_frame = (real_data_scores.frame(side, columns, scored_rows) for side in (real, checked))
     results = []

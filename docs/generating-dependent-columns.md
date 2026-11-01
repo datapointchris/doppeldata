@@ -104,7 +104,7 @@ matrix. Clipping shrinks every pair toward 0, the stated ones too.
 - **Each row of `fractions` sums to 1 at most, and `other_fractions` covers every value of `given`
   the table does not list.** Without `other_fractions`, such a row draws from the column's own
   values. A null parent
-  does too. `profile check` refuses a row over 1 as `rates-over-one`.
+  does too. `profile check` refuses a row over 1 as `E-PROFILE-015`.
 - **The share a row leaves short of 1 is the rows of child values it does not state.** The
   profiler leaves out a cell under `k_min` rows. Each child value the column lists takes as much of
   that share as no row states of it, each row weighted by its given value's share. That is one step
@@ -244,7 +244,7 @@ would draw a column from itself:
 /columns/13/derived/expr: "total" would be drawn from "quantity", which is drawn from it [invalid-dependence]
 ```
 
-`invalid-dependence` also names an expression that does not parse or reads a column that is not
+`E-PROFILE-114` also names an expression that does not parse or reads a column that is not
 numeric, a lag on or from a column that is not a date or timestamp, and a lookup or table value
 its column's type cannot hold.
 
@@ -274,9 +274,9 @@ shows both on generated and on shuffled rows.
 A parent's values are written as keys, so a table given a ZIP code or a birth date would list
 them. Under `strict` and `healthcare`, `profile check` refuses a conditional table, quantiles,
 rates or lookup given a quasi-identifier, and a lag counting from one, as
-`dependence-quasi-identifier`. The policy pass withholds each such entry. Under `healthcare` a
-lag from or to a birth date is an age, so it is refused as `birth-date-lag` and withheld. An
+`E-POLICY-024`. The policy pass withholds each such entry. Under `healthcare` a
+lag from or to a birth date is an age, so it is refused as `E-POLICY-023` and withheld. An
 age's quantiles given a category are capped at 90, as its own are. `profile check` refuses one
-above 90 as `age-over-89`.
+above 90 as `E-POLICY-020`.
 [profile-format-and-privacy-floor.md](profile-format-and-privacy-floor.md) says how each entry is
 audited.

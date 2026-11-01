@@ -1,9 +1,13 @@
-"""The errors doppeldata raises for a caller to report, each with the exit status a command ends on, and the warnings it issues."""
+"""The errors doppeldata raises for a caller to report, each carrying the issues that say why, and the warnings it issues."""
 
 import importlib.util
 from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
+from typing import Any
 
+from doppeldata import issue_codes
+from doppeldata.issue_codes import Issue
 from doppeldata.manifest import Manifest
 
 if TYPE_CHECKING:
@@ -12,48 +16,105 @@ if TYPE_CHECKING:
     from doppeldata.profile_comparison.reports import CheckReport
     from doppeldata.profile_comparison.reports import DiffReport
 
+# The accepted values a refusal's text lists before it counts the rest.
+VALID_SHOWN = 10
 
-class DoppeldataError(Exception):
-    """A failure the caller can act on.
 
-    `exit_code` is 1 for a failure or a drift, 2 for a usage error, 3 for a check that found what a person must act on,
-    and 4 when no answer came.
+class IssueCarrier(BaseException):
+    """The base of every doppeldata error and stopped write. `issues` names each reason, at least one, and the first gives
+    `code` and `exit_code`, the status a command ends on. `headline` leads the text where it lists the issues beneath it.
+
+    The text leads with the code, as `E-PROFILE-012: <message>`, then a line for each issue a headline leads, then each hint.
     """
 
-    exit_code = 1
+    def __init__(self, issues: Sequence[Issue], *, headline: str | None = None) -> None:
+        if not issues:
+            raise ValueError('an error carries at least one issue')
+        self.issues = tuple(issues)
+        self.headline = headline
+        self.exit_code = issue_codes.issue_code(self.issues[0].code).exit_code
+        super().__init__(self.message)
+
+    @property
+    def code(self) -> str:
+        return self.issues[0].code
+
+    @property
+    def message(self) -> str:
+        return self.headline if self.headline is not None else self.issues[0].message
+
+    def __str__(self) -> str:
+        if len(self.issues) == 1 and self.headline in (None, self.issues[0].message):
+            only = self.issues[0]
+            lines = [f'{self.code}: {self.message}']
+            if only.closest:
+                lines.append(f'  closest: {", ".join(only.closest)}')
+            if only.valid:
+                lines += ['  valid:', *(f'    {value}' for value in only.valid[:VALID_SHOWN])]
+                if len(only.valid) > VALID_SHOWN:
+                    lines.append(f'    and {len(only.valid) - VALID_SHOWN} more')
+        else:
+            lines = [f'{self.code}: {self.message}:', *(f'  {issue.field or "/"}: {issue.message} [{issue.code}]' for issue in self.issues)]
+        lines += [f'  hint: {hint}' for hint in dict.fromkeys(issue.hint for issue in self.issues if issue.hint)]
+        return '\n'.join(lines)
+
+
+class DoppeldataError(IssueCarrier, Exception):
+    """A failure the caller can act on, raised as one issue: its code, its message, and what it names."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        field: str | None = None,
+        value: Any = None,
+        valid: Sequence[str] = (),
+        closest: Sequence[str] = (),
+        hint: str | None = None,
+    ) -> None:
+        super().__init__([Issue(code, field, message, value, tuple(valid), tuple(closest), hint)])
+
+
+class InvalidArgument(DoppeldataError, ValueError):
+    """An argument holds a value the call does not take."""
+
+
+class UnsupportedArgument(DoppeldataError, TypeError):
+    """An argument is of a type the call does not take."""
+
+
+class ProfileNotFound(DoppeldataError, FileNotFoundError):
+    """A profile named is neither a file nor an example doppeldata ships."""
+
+
+class IncompatibleInstall(DoppeldataError, RuntimeError):
+    """What is installed beside doppeldata, or on Spark's executors, is not what it runs with."""
 
 
 class SourceError(DoppeldataError, ValueError):
-    """The data named cannot be read as one table. `role` is the input it was named as: `data`, `against` for a check's real
-    data, `schema` for a seed's schema, `profile` for a Parquet or Arrow IPC file named as a profile, `region` for the Glue
-    catalog's region, `detected-entities` for the entities given a Glue table's columns, or `environment` for the AWS settings.
+    """The data named cannot be read as one table. `role` is the input it was named as, and the issue's field: `data`,
+    `against` for a check's real data, `schema` for a seed's schema, `profile` for a Parquet or Arrow IPC file named as a
+    profile, `region` for the Glue catalog's region, `detected-entities` for the entities given a Glue table's columns, or
+    `environment` for the AWS settings.
     """
 
-    def __init__(self, message: str, *, exit_code: int = 2, role: str = 'data') -> None:
-        super().__init__(message)
-        self.exit_code = exit_code
+    def __init__(self, code: str, message: str, *, role: str = 'data', value: Any = None, valid: Sequence[str] = ()) -> None:
+        super().__init__(code, message, field=role, value=value, valid=valid)
         self.role = role
 
 
-# Each kind of failure, such as a stopped write's, and the exit status a command ends on for it.
-EXIT_CODES = {'failed': 1, 'refused': 2, 'unanswered': 4}
+class StoppedWrite(IssueCarrier):
+    """A write that did not finish, the base of WriteFailed and WriteInterrupted. `code` names why, as `E-WRITE-213` names
+    a cancelled one, and `exit_code` is 2 when the call must change and nothing was written, 4 when the store never
+    answered, and 1 otherwise.
 
-
-class StoppedWrite(BaseException):
-    """A write that did not finish, the base of WriteFailed and WriteInterrupted. `code` names why, such as `cancelled`.
-
-    `kind` is `refused` when the call must change and nothing was written, `unanswered` when the store never answered, and
-    `failed` otherwise. `manifest` is the record of what a run that claimed its destination wrote, marked partial when it
-    stopped early, and None for a refusal before the claim. `manifest_stored` says whether that record is in the store.
+    `manifest` is the record of what a run that claimed its destination wrote, marked partial when it stopped early, and
+    None for a refusal before the claim. `manifest_stored` says whether that record is in the store.
     """
 
-    def __init__(
-        self, code: str, message: str, *, kind: str = 'failed', manifest_json: str | None = None, manifest_stored: bool = False
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.kind = kind
-        self.exit_code = EXIT_CODES[kind]
+    def __init__(self, code: str, message: str, *, manifest_json: str | None = None, manifest_stored: bool = False) -> None:
+        IssueCarrier.__init__(self, [Issue(code, None, message)])
         self.manifest = Manifest.from_json(manifest_json) if manifest_json is not None else None
         self.manifest_stored = manifest_stored
 
@@ -82,13 +143,10 @@ class PackagesMissing(DoppeldataError, ImportError):
     `doing` says what needed them, and the message names the `pip install` line and `installed_by`'s route.
     """
 
-    kind = 'refused'
-    exit_code = EXIT_CODES['refused']
-
     def __init__(self, feature: str, missing: list[str], *, doing: str, installed_by: str = '') -> None:
         self.feature = feature
         self.missing = missing
-        super().__init__(not_installed(doing, missing, installed_by))
+        super().__init__(issue_codes.PACKAGES_MISSING, not_installed(doing, missing, installed_by), value=list(missing))
 
 
 class ProfilingEnginesMissing(PackagesMissing):
@@ -101,52 +159,42 @@ class ProfilingEnginesMissing(PackagesMissing):
 
 
 class DetectorPackError(DoppeldataError):
-    """A detector pack named for a run is not installed, does not load, or holds what the profile format refuses.
-
-    `kind` is `refused` for a pack that is not installed, and `failed` for any other.
-    """
-
-    def __init__(self, message: str, *, kind: str = 'failed') -> None:
-        super().__init__(message)
-        self.kind = kind
-        self.exit_code = EXIT_CODES[kind]
+    """A detector pack named for a run is not installed, does not load, or holds what the profile format refuses."""
 
 
 class InvalidCodeList(DoppeldataError, ValueError):
     """A code list named for a run is read by no enabled detector, or its file cannot be read or holds no code."""
 
-    exit_code = 2
-
 
 class InvalidThresholds(DoppeldataError, ValueError):
-    """A thresholds file names a metric no check measures, a column the source profile lacks, or a value that is not a number."""
+    """A thresholds file names a metric no check measures, a column the source profile lacks, or a value that is not a
+    number. Each issue's field points into the file, and `headline` names the file where several are listed."""
 
-    exit_code = 2
+    def __init__(self, issues: Sequence[Issue], *, headline: str | None = None) -> None:
+        IssueCarrier.__init__(self, issues, headline=headline)
 
 
 class CheckFailed(DoppeldataError):
-    """A check found what a person must act on. `report` is the check, naming each finding.
+    """A check found what a person must act on. `report` is the check, naming each finding, and its `failure_code` is the
+    error's code.
 
     It is a `CheckReport` where generated data missed its profile on a metric or a column, a `BundleCheckReport` where
     a bundle's tables missed it on a table or a relationship, and a `ProfileFileCheck` where a profile file breaks its
     schema or its privacy policy.
     """
 
-    exit_code = 3
-
     def __init__(self, report: 'CheckReport | BundleCheckReport | ProfileFileCheck') -> None:
         self.report = report
-        super().__init__(report.failure_message())
+        super().__init__(report.failure_code, report.failure_message())
 
 
 class ProfilesDrifted(DoppeldataError):
     """The later of two profiles drifted from the earlier on a metric or a field. `report` is the diff, naming each one."""
 
-    exit_code = 1
-
     def __init__(self, report: 'DiffReport') -> None:
         self.report = report
-        super().__init__(f'{report.b.path or report.b.name} drifted from {report.a.path or report.a.name} on {report.failures().summary()}')
+        drifted = f'{report.b.path or report.b.name} drifted from {report.a.path or report.a.name} on {report.failures().summary()}'
+        super().__init__(issue_codes.PROFILES_DRIFTED, drifted)
 
 
 class ProfilingWarning(UserWarning):

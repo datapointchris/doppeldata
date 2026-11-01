@@ -1,6 +1,7 @@
 """Profiling a dataset into a profile. The library declares no engine, so a job that only generates installs none."""
 
 import dataclasses as dc
+import difflib
 import importlib
 import importlib.metadata
 import os
@@ -14,8 +15,10 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from doppeldata import errors
+from doppeldata import issue_codes
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
+from doppeldata.errors import InvalidArgument
 from doppeldata.errors import ProfilingEnginesMissing
 from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
@@ -254,16 +257,17 @@ def profile_tables(
     settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
     named = list(data) if isinstance(data, list | tuple) else [data]
     if not named:
-        raise SourceError('no data was named; name a file, a directory or an s3:// prefix')
+        raise SourceError(issue_codes.DATA_NOT_NAMED, 'no data was named; name a file, a directory or an s3:// prefix')
     listings = [listed_source(item, engine) for item in named]
     grouped = [(table.source, reading) for listed, reading in listings for table in table_grouping.grouped(listed)]
     names = [source.name for source, _ in grouped]
     alike = sorted({name for name in names if names.count(name) > 1})
     if alike:
-        raise SourceError(
+        message = (
             f'{", ".join(map(str, named))} hold more than one table named {", ".join(alike)}. Name each by its own folder, '
             'or read them as one table, as profile() and profile create without --tables do'
         )
+        raise SourceError(issue_codes.TABLES_ALIKE, message, value=alike)
     backend = engine_backend(engine, named[0], spark)
     tables = [(source, session_readers(backend, reading)) for source, reading in grouped]
     profiled, relationships = profiled_tables(backend, tables, settings, None, related=True)
@@ -312,10 +316,13 @@ def run_settings(
     code_lists: Mapping[str, str | os.PathLike[str]] | None,
 ) -> RunSettings:
     if sample is not None and sample < 1:
-        raise ValueError(f'sample must be a positive number of rows, not {sample}')
+        raise InvalidArgument(
+            issue_codes.INVALID_SAMPLE, f'sample must be a positive number of rows, not {sample}', field='sample', value=sample
+        )
     chosen = available_engine(engine)
     if spark is not None and not chosen.sessioned:
-        raise ValueError(f'spark names the session engine spark profiles in, and engine {engine} takes none')
+        message = f'spark names the session engine spark profiles in, and engine {engine} takes none'
+        raise InvalidArgument(issue_codes.SPARK_SESSION_UNUSED, message, field='spark')
     applied = applied_policy(policy, k_min)
     named = [*packs, HEALTHCARE] if applied is Policy.HEALTHCARE and HEALTHCARE not in packs else list(packs)
     enabled = enabled_packs(named)
@@ -369,7 +376,9 @@ def profiled_tables(
 def available_engine(engine: str) -> Engine:
     """The engine named, refused with ProfilingEnginesMissing where a package every source needs is not installed."""
     if engine not in ENGINES:
-        raise ValueError(f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}')
+        message = f'{engine!r} is not a profiling engine; choose from {", ".join(ENGINES)}'
+        closest = difflib.get_close_matches(engine, list(ENGINES))
+        raise InvalidArgument(issue_codes.UNKNOWN_ENGINE, message, field='engine', value=engine, valid=list(ENGINES), closest=closest)
     chosen = ENGINES[engine]
     refuse_uninstalled(engine, [package for package in (*chosen.packages, *LISTING_PACKAGES) if package.everywhere])
     return chosen
@@ -393,7 +402,8 @@ def listed_source(data: Any, engine: str = 'polars') -> tuple[Source, list[Engin
     sources = importlib.import_module(SOURCES_MODULE)
     source: Source = sources.resolve(data)
     if source.table is not None and sources.is_spark_frame(source.table) and not chosen.sessioned:
-        raise SourceError(f"a Spark DataFrame is profiled with engine='spark', and this run chose {engine}")
+        message = f"a Spark DataFrame is profiled with engine='spark', and this run chose {engine}"
+        raise SourceError(issue_codes.ENGINE_DOES_NOT_READ, message, value=engine, valid=['spark'])
     refuse_unread_format(engine, source)
     reading = [package for package in chosen.packages if source.format in package.reads]
     refuse_uninstalled(engine, reading)
@@ -419,7 +429,7 @@ def sampled_table(data: Any, rows: int, *, engine: str = 'polars', seed: int = t
     the `SourceError` `profile` raises.
     """
     if rows < 1:
-        raise ValueError(f'rows must be a positive number of rows, not {rows}')
+        raise InvalidArgument(issue_codes.INVALID_ROWS, f'rows must be a positive number of rows, not {rows}', field='rows', value=rows)
     listed, _ = listed_source(data, engine)
     source = table_grouping.only_table(listed)
     backend = engine_backend(engine, data)
@@ -470,10 +480,12 @@ def refuse_unread_format(engine: str, source: Source) -> None:
     where = ' on S3' if remote else ''
     readers = [name for name, other in ENGINES.items() if source.format in (other.reads_remote if remote else other.reads)]
     if readers:
-        raise SourceError(f'engine {engine} does not read {source.format.value}{where}; profile it with engine {" or ".join(readers)}')
+        message = f'engine {engine} does not read {source.format.value}{where}; profile it with engine {" or ".join(readers)}'
+        raise SourceError(issue_codes.ENGINE_DOES_NOT_READ, message, value=engine, valid=readers)
     local = ' or '.join(name for name, other in ENGINES.items() if source.format in other.reads)
     copy = f'`aws s3 cp --recursive {source.roots[0]} <dir>`'
-    raise SourceError(f'no engine reads {source.format.value} on S3; copy it down with {copy}, and profile the copy with engine {local}')
+    message = f'no engine reads {source.format.value} on S3; copy it down with {copy}, and profile the copy with engine {local}'
+    raise SourceError(issue_codes.ENGINE_DOES_NOT_READ, message, value=source.format.value)
 
 
 def refuse_uninstalled(engine: str, packages: Sequence[EnginePackage]) -> None:
@@ -484,16 +496,21 @@ def refuse_uninstalled(engine: str, packages: Sequence[EnginePackage]) -> None:
 
 
 def applied_policy(policy: str, k_min: int | None) -> Policy:
-    """The policy named, refused with a `ValueError` where the profiler cannot apply it or `k_min` does not fit it."""
-    choices = ', '.join(applied.value for applied in APPLIED_POLICIES)
+    """The policy named, refused with an `InvalidArgument` where the profiler cannot apply it or `k_min` does not fit it."""
+    names = [applied.value for applied in APPLIED_POLICIES]
+    choices = ', '.join(names)
     if policy == Policy.DP:
-        raise ValueError(f'policy dp is reserved for differential privacy, which doppeldata does not apply; choose from {choices}')
+        message = f'policy dp is reserved for differential privacy, which doppeldata does not apply; choose from {choices}'
+        raise InvalidArgument(issue_codes.POLICY_DP_RESERVED, message, field='policy', value=policy, valid=names)
     if policy not in APPLIED_POLICIES:
-        raise ValueError(f'{policy!r} is not a privacy policy; choose from {choices}')
+        closest = difflib.get_close_matches(policy, names) if isinstance(policy, str) else []
+        message = f'{policy!r} is not a privacy policy; choose from {choices}'
+        raise InvalidArgument(issue_codes.UNKNOWN_POLICY, message, field='policy', value=policy, valid=names, closest=closest)
     if policy == Policy.NONE and k_min is not None:
-        raise ValueError(f'policy none keeps every value, so it takes no k_min, and {k_min} was given')
+        message = f'policy none keeps every value, so it takes no k_min, and {k_min} was given'
+        raise InvalidArgument(issue_codes.K_MIN_WITH_POLICY_NONE, message, field='k_min', value=k_min)
     if k_min is not None and k_min < 1:
-        raise ValueError(f'k_min must be at least 1, not {k_min}')
+        raise InvalidArgument(issue_codes.INVALID_K_MIN, f'k_min must be at least 1, not {k_min}', field='k_min', value=k_min)
     return Policy(policy)
 
 

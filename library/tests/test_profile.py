@@ -49,10 +49,10 @@ def test_saving_changes_only_the_edited_value(tmp_path):
 @pytest.mark.parametrize(
     ('edit', 'expected'),
     [
-        (lambda p: p['columns'][1].update(null_fraction=1.5), {('schema-maximum', '/columns/1/null_fraction')}),
-        (lambda p: p['dataset']['keys'].update(primary={'uniqueness': 1.0}), {('schema-required', '/dataset/keys/primary')}),
-        (lambda p: p['columns'][1]['numeric'].update(skew=math.nan), {('not-finite', '/columns/1/numeric/skew')}),
-        (lambda p: p['columns'][1]['numeric']['quantiles'].update(p5=1.0), {('schema-pattern', '/columns/1/numeric/quantiles')}),
+        (lambda p: p['columns'][1].update(null_fraction=1.5), {('E-PROFILE-009', '/columns/1/null_fraction')}),
+        (lambda p: p['dataset']['keys'].update(primary={'uniqueness': 1.0}), {('E-PROFILE-005', '/dataset/keys/primary')}),
+        (lambda p: p['columns'][1]['numeric'].update(skew=math.nan), {('E-PROFILE-003', '/columns/1/numeric/skew')}),
+        (lambda p: p['columns'][1]['numeric']['quantiles'].update(p5=1.0), {('E-PROFILE-010', '/columns/1/numeric/quantiles')}),
         (
             lambda p: (
                 p['columns'][1]['numeric']['quantiles'].update(p95=50.0),
@@ -60,9 +60,9 @@ def test_saving_changes_only_the_edited_value(tmp_path):
                 p['columns'][1]['numeric']['histogram'].update(bin_rows=[1, 2, 3]),
             ),
             {
-                ('quantiles-not-rising', '/columns/1/numeric/quantiles/p95'),
-                ('rates-not-summing-to-one', '/columns/3/temporal/weekday_fractions'),
-                ('histogram-bins-mismatch', '/columns/1/numeric/histogram'),
+                ('E-PROFILE-108', '/columns/1/numeric/quantiles/p95'),
+                ('E-PROFILE-014', '/columns/3/temporal/weekday_fractions'),
+                ('E-PROFILE-016', '/columns/1/numeric/histogram'),
             },
         ),
     ],
