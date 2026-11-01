@@ -240,6 +240,9 @@ the order they were inserted, and an unrelated change to the code building it ca
   however it was built. `rg -n 'SortedKeys<' crates` lists the fields.
 - **Every binding returning a `Value` it built returns it through `json_text`** in
   `crates/python`, which serializes through `SortedKeys`.
-- **A struct needs neither.** Its fields serialize in declaration order.
+- **A struct whose maps are `BTreeMap`s needs neither.** Its fields serialize in declaration
+  order, and a `BTreeMap` in key order. serde writes a `HashMap` field in hash order, so a struct
+  that is serialized holds no `HashMap`. `rg -n '^\s+(pub(\(\w+\))? )?\w+: HashMap<' crates`
+  lists the fields. Each is a lookup a sampler or perturbation builds, and none is serialized.
 - **A scenario's `patch` is sorted as it is read.** Its key order decides the order each column,
   field and relationship is applied in. A sort when it is written cannot reach that.
