@@ -631,12 +631,16 @@ which `--sample` makes its sample.
   given too, of a categorical column holding as many values or more. Its values must be finite.
   Each key is written as Python writes the float, the shortest text that reads back as it, whichever
   engine counted the cells. A copula member then places the rows of a column the engine would
-  otherwise draw apart from it.
-  Such a table can close a loop, as where its given's null rate is stated given its child. The
-  engine breaks a loop by setting an entry aside. So the profiler plans the draft with and without
-  each float-given table, and refuses one whose adding sets an entry aside. The child then takes
-  its next strongest given. A table's cells are counted, then floored, and each row
-  states its kept cells as shares of their rows. The given column's listed counts and the child
+  otherwise draw apart from it. The profiler plans the draft without float-given tables, then
+  with each one, and refuses a table two ways:
+  - **its child is in a copula group without it.** Drawn from the table, the child would leave the
+    copula. In the March 2024 taxi trips, `RatecodeID` given `Airport_fee` would split the
+    surcharges' group from the fares'.
+  - **adding it sets an entry aside.** That is a loop through the table, as where its given's null
+    rate is stated given its child, which the engine breaks by setting an entry aside.
+
+  The child then takes its next strongest given. A table's cells are counted, then floored, and
+  each row states its kept cells as shares of their rows. The given column's listed counts and the child
   column's both stand beside the table, so the floor holds each difference against them:
   - a cell under `k_min` rows is dropped;
   - a given value left with no cell joins `other`, beside the given values the column does not

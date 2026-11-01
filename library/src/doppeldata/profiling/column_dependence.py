@@ -182,10 +182,10 @@ def column_dependence(
             'conditional_fractions': rates,
             'dependencies': dependencies,
         }
-        looped = looped_float_tables(columns, derived, sections)
-        if not looped:
+        refusing = refused_float_tables(columns, derived, sections)
+        if not refusing:
             break
-        refused |= looped
+        refused |= refusing
     sections = without_set_aside(sections, draft_plan(columns, derived, sections).set_aside())
     floors: dict[tuple[str, str, str], int] = {}
     for name, floored in (('conditionals', table_floors), ('conditional_quantiles', quantile_floors)):
@@ -200,24 +200,31 @@ def column_dependence(
     return Dependence(sections, floors)
 
 
-def looped_float_tables(
+def refused_float_tables(
     columns: list[DependenceColumn], derived: dict[str, dict[str, Any]], sections: dict[str, Any]
 ) -> frozenset[tuple[str, str]]:
-    """Each table given a float column, by its given and child, whose adding makes the engine's plan of the draft set
-    aside an entry the draft without such tables keeps. That is a loop through the table, such as its given's null rate
-    stated given its child, which the engine breaks by setting the later entry aside and losing what it places. So
-    the table is refused instead, and its child takes its next strongest given."""
+    """Each table given a float column, by its given and child, that the engine's plan of the draft without such tables
+    draws in a copula group, or whose adding makes the plan set aside an entry that draft keeps. The first would take
+    its child out of the copula, splitting the group where the child joined two of its parts. The second is a loop
+    through the table, such as its given's null rate stated given its child, which the engine breaks by setting the
+    later entry aside and losing what it places. So the table is refused, and its child takes its next strongest
+    given."""
     floats = {column.name for column in columns if listed_float(column)}
     tables = sections['conditionals']
     plain = [table for table in tables if table['given'] not in floats]
     if len(plain) == len(tables):
         return frozenset()
     without = sections | {'conditionals': plain}
-    kept = set(draft_plan(columns, derived, without).set_aside())
+    plan = draft_plan(columns, derived, without)
+    members = {name for group in plan.copula_groups() for name in group}
+    kept = set(plan.set_aside())
     return frozenset(
         (table['given'], table['column'])
         for table in tables
-        if table['given'] in floats and set(draft_plan(columns, derived, without | {'conditionals': [*plain, table]}).set_aside()) - kept
+        if table['given'] in floats
+        and (
+            table['column'] in members or set(draft_plan(columns, derived, without | {'conditionals': [*plain, table]}).set_aside()) - kept
+        )
     )
 
 
