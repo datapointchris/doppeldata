@@ -19,12 +19,12 @@ def registered(*names: str) -> frozenset[str]:
 # metric is named for its column, so an op writing the key moves it.
 MOVED_METRICS = {
     'duplicates': registered('distinct_ratio_delta', 'rows_per_file_delta'),
-    'small_files': registered('file_count_delta', 'rows_per_file_delta'),
+    'small_files': registered('files_delta', 'rows_per_file_delta'),
 }
 # Given `kinds`, malformed_rows replaces the rejected rows the profile records, and adds values to the columns it breaks,
 # such as a status cut by an embedded line break, which moves the column's distinct values and its category shares.
-NAMED_MALFORMED_METRICS = registered('malformed_rate_delta', 'distinct_ratio_delta', 'tvd')
-MALFORMED_RATE_DELTA = METRICS_BY_NAME['malformed_rate_delta'].name
+NAMED_MALFORMED_METRICS = registered('malformed_fraction_delta', 'distinct_ratio_delta', 'tvd')
+MALFORMED_RATE_DELTA = METRICS_BY_NAME['malformed_fraction_delta'].name
 NOT_ASKED = 'no malformed_rows perturbation asked for malformed rows, so the malformed rates were not compared'
 
 
@@ -55,7 +55,7 @@ def moved_metrics(entry: dict[str, Any]) -> frozenset[str]:
 
 
 def uncompared_malformed_rates(results: list[MetricResult], scenario: Scenario | None) -> list[MetricResult]:
-    """Each `malformed_rate_delta` row as unmeasured and deciding nothing, where no malformed_rows asked for malformed rows."""
+    """Each `malformed_fraction_delta` row as unmeasured and deciding nothing, where no malformed_rows asked for malformed rows."""
     entries = (scenario.to_plain().get('perturbations') or []) if scenario is not None else []
     if any(entry['op'] == 'malformed_rows' for entry in entries):
         return results

@@ -95,15 +95,16 @@ matrix. Clipping shrinks every pair toward 0, the stated ones too.
   conditionals:
     - given: region
       column: channel
-      table:
+      fractions:
         north: {web: 0.7, store: 0.2, phone: 0.1}
         south: {web: 0.3, store: 0.5, phone: 0.2}
-      other: {web: 0.4, store: 0.3, phone: 0.3}
+      other_fractions: {web: 0.4, store: 0.3, phone: 0.3}
 ```
 
-- **Each row of `table` sums to 1 at most, and `other` covers every value of `given` the table
-  does not list.** Without `other`, such a row draws from the column's own values. A null parent
-  does too. `profile check` refuses a row over 1 as `rates-over-one`.
+- **Each row of `fractions` sums to 1 at most, and `other_fractions` covers every value of `given`
+  the table does not list.** Without `other_fractions`, such a row draws from the column's own
+  values. A null parent
+  does too. `profile check` refuses a row over 1 as `E-PROFILE-015`.
 - **The share a row leaves short of 1 is the rows of child values it does not state.** The
   profiler leaves out a cell under `k_min` rows. Each child value the column lists takes as much of
   that share as no row states of it, each row weighted by its given value's share. That is one step
@@ -137,12 +138,12 @@ under 1% of its own takes none.
         web: {p25: 10.0, p50: 30.0, p75: 70.0}
         store: {p25: 2.0, p50: 8.0, p75: 20.0}
       other: {p25: 5.0, p50: 15.0, p75: 40.0}
-  conditional_rates:
+  conditional_fractions:
     - given: channel
       column: paid_amount
-      zero_rate: {web: 0.02, store: 0.2}
-      null_rate: {phone: 0.15}
-      other: {zero_rate: 0.1, null_rate: 0.01}
+      zero_fraction: {web: 0.02, store: 0.2}
+      null_fraction: {phone: 0.15}
+      other: {zero_fraction: 0.1, null_fraction: 0.01}
 ```
 
 - **Each row of `quantiles` warps the column's own levels for rows holding that value.** Each
@@ -176,7 +177,7 @@ listed values and tails, so the column's own marginal missed its KS bound.
 ```
 
 A row whose `lhs` value the table lacks draws `rhs` from its own statistics. So does a share
-`violation_rate` gives of the rest. Quote a key or value YAML would read as another type: a bare
+`violation_fraction` gives of the rest. Quote a key or value YAML would read as another type: a bare
 `N` is `false` in YAML 1.1.
 
 ## A derived column is a base date plus a lag, or an expression of other columns
@@ -194,7 +195,7 @@ A row whose `lhs` value the table lacks draws `rhs` from its own statistics. So 
     derived:
       kind: expression
       expr: "round(quantity * unit_price, 2)"
-      violation_rate: 0.01
+      violation_fraction: 0.01
 ```
 
 - **A lag is drawn from its own inverse CDF, then added to the base.** Its quantiles and ends are
@@ -206,8 +207,8 @@ A row whose `lhs` value the table lacks draws `rhs` from its own statistics. So 
   `round(x, places)`.** A name holding a character other than a letter, a digit or `_` is quoted
   in backticks. The result is rounded to `round` places where the entry sets it, else to the
   column's `numeric.scale`. A null operand and a division by zero give a null.
-- **`violation_rate` is the share of rows that take the column's own statistics instead.** With
-  `violation_rate: 0`, every row holds its expression. A lag whose `min` is `0d` keeps `ship_date`
+- **`violation_fraction` is the share of rows that take the column's own statistics instead.** With
+  `violation_fraction: 0`, every row holds its expression. A lag whose `min` is `0d` keeps `ship_date`
   on or after `order_date`.
 
 ## Each column takes one draw, in an order its parents allow
@@ -243,7 +244,7 @@ would draw a column from itself:
 /columns/13/derived/expr: "total" would be drawn from "quantity", which is drawn from it [invalid-dependence]
 ```
 
-`invalid-dependence` also names an expression that does not parse or reads a column that is not
+`E-PROFILE-114` also names an expression that does not parse or reads a column that is not
 numeric, a lag on or from a column that is not a date or timestamp, and a lookup or table value
 its column's type cannot hold.
 
@@ -273,9 +274,9 @@ shows both on generated and on shuffled rows.
 A parent's values are written as keys, so a table given a ZIP code or a birth date would list
 them. Under `strict` and `healthcare`, `profile check` refuses a conditional table, quantiles,
 rates or lookup given a quasi-identifier, and a lag counting from one, as
-`dependence-quasi-identifier`. The policy pass withholds each such entry. Under `healthcare` a
-lag from or to a birth date is an age, so it is refused as `birth-date-lag` and withheld. An
+`E-POLICY-024`. The policy pass withholds each such entry. Under `healthcare` a
+lag from or to a birth date is an age, so it is refused as `E-POLICY-023` and withheld. An
 age's quantiles given a category are capped at 90, as its own are. `profile check` refuses one
-above 90 as `age-over-89`.
+above 90 as `E-POLICY-020`.
 [profile-format-and-privacy-floor.md](profile-format-and-privacy-floor.md) says how each entry is
 audited.

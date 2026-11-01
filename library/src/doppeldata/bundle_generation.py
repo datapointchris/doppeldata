@@ -17,6 +17,7 @@ from typing import Any
 import rfc8785
 
 from doppeldata import _core
+from doppeldata import issue_codes
 from doppeldata.dataset_generation import LARGEST_SEED
 from doppeldata.dataset_generation import ArrowStreamExportable
 from doppeldata.dataset_generation import WriteChoices
@@ -25,13 +26,15 @@ from doppeldata.dataset_generation import destination_of
 from doppeldata.dataset_generation import one_file_of
 from doppeldata.dataset_generation import s3_store_of
 from doppeldata.dataset_generation import write_plan_of
+from doppeldata.errors import InvalidArgument
 from doppeldata.errors import StoppedWrite
+from doppeldata.errors import UnsupportedArgument
 from doppeldata.errors import WriteFailed
+from doppeldata.issue_codes import Issue
 from doppeldata.manifest import BundleManifest
 from doppeldata.manifest import Manifest
 from doppeldata.name_hinted_types import with_type_hints
 from doppeldata.profile_format import Bundle
-from doppeldata.profile_format import Issue
 from doppeldata.profile_format import digest_of
 from doppeldata.profile_sources import ProfileSource
 from doppeldata.scenario_format import InvalidScenario
@@ -62,10 +65,12 @@ def run_of(profile: ProfileSource | Bundle, rows: int | None, seed: int | None, 
     and refuses `rows`, which sizes one table. Anything else is one table, which refuses `scale`, which sizes a bundle."""
     if not isinstance(profile, Bundle):
         if scale is not None:
-            raise ValueError("scale sizes a bundle, a multiple of each table's row count; give rows for one table")
+            message = "scale sizes a bundle, a multiple of each table's row count; give rows for one table"
+            raise InvalidArgument(issue_codes.ROWS_AND_SCALE, message, field='scale', value=scale)
         return TableRun(profile, rows, seed)
     if rows is not None:
-        raise ValueError("rows sizes one table, and a bundle is sized by scale, a multiple of each table's row count")
+        message = "rows sizes one table, and a bundle is sized by scale, a multiple of each table's row count"
+        raise InvalidArgument(issue_codes.ROWS_AND_SCALE, message, field='rows', value=rows)
     return BundleRun(profile, 0 if seed is None else seed, 1.0 if scale is None else scale)
 
 
@@ -76,7 +81,8 @@ def table_scenarios(scenario: Scenario | Sequence[Scenario] | None, bundle: Bund
         return {}
     listed = [scenario] if isinstance(scenario, Scenario) else list(scenario) if isinstance(scenario, list | tuple) else None
     if listed is None or not all(isinstance(each, Scenario) for each in listed):
-        raise TypeError(f'scenario takes a Scenario, such as Scenario.load(path), or a list of them, not {type(scenario).__name__}')
+        message = f'scenario takes a Scenario, such as Scenario.load(path), or a list of them, not {type(scenario).__name__}'
+        raise UnsupportedArgument(issue_codes.NOT_A_SCENARIO, message, field='scenario', value=type(scenario).__name__)
     grouped: dict[str, list[Scenario]] = {}
     for given in listed:
         for member in given.members or (given,):
@@ -84,7 +90,8 @@ def table_scenarios(scenario: Scenario | Sequence[Scenario] | None, bundle: Bund
             if table not in bundle.tables:
                 named = f'names {table}, which is not' if table is not None else 'names no table, and a bundle scenario names one'
                 message = f'the scenario {named} of the bundle: {", ".join(bundle.tables)}'
-                raise InvalidScenario(member.source, [Issue('unknown-table', '/table', message)])
+                issue = Issue(issue_codes.UNKNOWN_TABLE, '/table', message, table, tuple(bundle.tables))
+                raise InvalidScenario(member.source, [issue])
             grouped.setdefault(table, []).append(member)
     return {table: Scenario.compose(*members) for table, members in grouped.items()}
 
@@ -133,7 +140,7 @@ class BundleArguments:
 def bundle_arguments(bundle: Bundle, seed: int, scale: float, scenarios: dict[str, Scenario]) -> BundleArguments:
     """The engine's arguments for `bundle` at `scale` times each table's row count, from `seed`, under `scenarios`."""
     if not 0 <= seed <= LARGEST_SEED:
-        raise ValueError(f'seed must be between 0 and 2^64 - 1, not {seed}')
+        raise InvalidArgument(issue_codes.INVALID_SEED, f'seed must be between 0 and 2^64 - 1, not {seed}', field='seed', value=seed)
     plain = bundle.to_plain()
     plain['tables'] = {name: with_type_hints(table) for name, table in plain['tables'].items()}
     source = str(bundle.path) if bundle.path is not None else f'bundle {bundle.name!r}'
@@ -202,15 +209,15 @@ def prepared_bundle_write(
     bundle = run.bundle
     if one_file_of(out) is not None:
         message = f'{os.fspath(out)} names one file, and a bundle writes a directory of tables; write it to a directory'
-        raise WriteFailed('bundle-writes-a-directory', message, kind='refused')
+        raise WriteFailed(issue_codes.BUNDLE_WRITES_A_DIRECTORY, message)
     choice = (('partition_by', choices.partition_by), ('partition_style', choices.partition_style))
     held = [name for name, value in choice if value is not None]
     if held:
         message = f'each table of a bundle is partitioned as its profile records, so a bundle write takes no {" or ".join(held)}'
-        raise WriteFailed('bundle-partitions-by-table', message, kind='refused')
+        raise WriteFailed(issue_codes.BUNDLE_PARTITIONS_BY_TABLE, message)
     if choices.embed_profile:
         message = 'a bundle table regenerates from the whole bundle, which no file embeds; write it without embed_profile'
-        raise WriteFailed('bundle-embeds-no-profile', message, kind='refused')
+        raise WriteFailed(issue_codes.BUNDLE_EMBEDS_NO_PROFILE, message)
     destination, scheme, bucket = destination_of(out)
     scenarios = table_scenarios(scenario, bundle)
     arguments = bundle_arguments(bundle, run.seed, run.scale, scenarios)

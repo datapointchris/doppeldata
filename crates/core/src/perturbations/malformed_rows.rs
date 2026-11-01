@@ -107,7 +107,7 @@ pub struct MalformedPlan {
     /// Each row source with the running total of rates up to and including it.
     row_sources: Vec<(f64, RowSource)>,
     file_kinds: Vec<FaultKind>,
-    files_share: f64,
+    files_fraction: f64,
     /// Each line break with the running total of shares, empty where no file mixes them.
     line_ends: Vec<(f64, LineEnd)>,
     rows_key: u64,
@@ -137,7 +137,7 @@ pub(super) fn plan(op: &MalformedRows, planning: &Planning<'_>) -> Result<Planne
         kinds: Vec::new(),
         row_sources: Vec::new(),
         file_kinds: Vec::new(),
-        files_share: 0.0,
+        files_fraction: 0.0,
         line_ends: Vec::new(),
         rows_key: planning.key("rows"),
         picks_key: planning.key("picks"),
@@ -146,12 +146,12 @@ pub(super) fn plan(op: &MalformedRows, planning: &Planning<'_>) -> Result<Planne
         files_key: planning.key("files"),
     };
     match &op.kinds {
-        None if op.rate.is_none() && op.files_share.is_none() => reproduce(&mut plan, planning)?,
+        None if op.fraction.is_none() && op.files_fraction.is_none() => reproduce(&mut plan, planning)?,
         None => {
             return Err(planning.refuse(
                 ScenarioFault::InvalidParameter,
                 "/kinds",
-                "rate and files_share place the kinds named, and kinds names none; leave all three out to reproduce the profile's malformed rows",
+                "fraction and files_fraction place the kinds named, and kinds names none; leave all three out to reproduce the profile's malformed rows",
             ));
         }
         Some(kinds) => name(&mut plan, planning, op, kinds)?,
@@ -167,7 +167,7 @@ pub(super) fn plan(op: &MalformedRows, planning: &Planning<'_>) -> Result<Planne
     Ok(Planned::Malformed(plan))
 }
 
-/// The kinds `kinds` names, placed at `rate` of rows and `files_share` of files.
+/// The kinds `kinds` names, placed at `fraction` of rows and `files_fraction` of files.
 fn name(plan: &mut MalformedPlan, planning: &Planning<'_>, op: &MalformedRows, kinds: &[FaultKind]) -> Result<(), PlanError> {
     if kinds.is_empty() {
         return Err(planning.refuse(ScenarioFault::InvalidParameter, "/kinds", "kinds names no fault"));
@@ -179,14 +179,14 @@ fn name(plan: &mut MalformedPlan, planning: &Planning<'_>, op: &MalformedRows, k
         .collect();
     let (file_kinds, row_kinds): (Vec<FaultKind>, Vec<FaultKind>) = kinds.iter().partition(|kind| kind.is_file_kind());
     let names = |kinds: &[FaultKind]| kinds.iter().map(|kind| kind.name()).collect::<Vec<_>>().join(", ");
-    match (op.rate, row_kinds.is_empty()) {
+    match (op.fraction, row_kinds.is_empty()) {
         (None, false) => {
-            let message = format!("kinds names row faults ({}), and rate places them", names(&row_kinds));
-            return Err(planning.refuse(ScenarioFault::InvalidParameter, "/rate", message));
+            let message = format!("kinds names row faults ({}), and fraction places them", names(&row_kinds));
+            return Err(planning.refuse(ScenarioFault::InvalidParameter, "/fraction", message));
         }
         (Some(_), true) => {
-            let message = "rate places row faults, and kinds names only faults of whole files";
-            return Err(planning.refuse(ScenarioFault::InvalidParameter, "/rate", message));
+            let message = "fraction places row faults, and kinds names only faults of whole files";
+            return Err(planning.refuse(ScenarioFault::InvalidParameter, "/fraction", message));
         }
         (Some(rate), false) => {
             let each = rate.0 / row_kinds.len() as f64;
@@ -198,20 +198,20 @@ fn name(plan: &mut MalformedPlan, planning: &Planning<'_>, op: &MalformedRows, k
         }
         (None, true) => {}
     }
-    match (op.files_share, file_kinds.is_empty()) {
+    match (op.files_fraction, file_kinds.is_empty()) {
         (None, false) => {
             let message = format!(
-                "kinds names faults of whole files ({}), and files_share places them",
+                "kinds names faults of whole files ({}), and files_fraction places them",
                 names(&file_kinds)
             );
-            return Err(planning.refuse(ScenarioFault::InvalidParameter, "/files_share", message));
+            return Err(planning.refuse(ScenarioFault::InvalidParameter, "/files_fraction", message));
         }
         (Some(_), true) => {
-            let message = "files_share places faults of whole files, and kinds names only row faults";
-            return Err(planning.refuse(ScenarioFault::InvalidParameter, "/files_share", message));
+            let message = "files_fraction places faults of whole files, and kinds names only row faults";
+            return Err(planning.refuse(ScenarioFault::InvalidParameter, "/files_fraction", message));
         }
         (Some(share), false) => {
-            plan.files_share = share.0;
+            plan.files_fraction = share.0;
             plan.file_kinds = file_kinds.clone();
         }
         (None, true) => {}
@@ -230,7 +230,7 @@ fn reproduce(plan: &mut MalformedPlan, planning: &Planning<'_>) -> Result<(), Pl
     let csv = planning.table.source.as_ref().and_then(|source| source.csv.as_ref());
     let by_type = csv
         .and_then(|csv| csv.malformed.as_ref())
-        .and_then(|malformed| malformed.by_type.as_ref());
+        .and_then(|malformed| malformed.type_fractions.as_ref());
     let mut total = 0.0;
     let mut add = |sources: &mut Vec<(f64, RowSource)>, share: f64, source: RowSource| {
         total += share;
@@ -246,7 +246,7 @@ fn reproduce(plan: &mut MalformedPlan, planning: &Planning<'_>) -> Result<(), Pl
     let mut foreign_values = false;
     let mut held_as_text = Vec::new();
     for column in planning.table.columns.iter().flatten() {
-        let Some(mix) = column.type_mix.as_ref() else {
+        let Some(mix) = column.type_mix_fractions.as_ref() else {
             continue;
         };
         let Ok(index) = planning.schema.index_of(&column.name) else {
@@ -309,7 +309,7 @@ fn reproduce(plan: &mut MalformedPlan, planning: &Planning<'_>) -> Result<(), Pl
         return Err(planning.refuse(
             ScenarioFault::InvalidParameter,
             "",
-            format!("{message}; name kinds, with a rate or a files_share"),
+            format!("{message}; name kinds, with a fraction or a files_fraction"),
         ));
     }
     plan.kinds = kinds.into_iter().map(|kind| (kind, field.clone())).collect();
@@ -337,7 +337,7 @@ impl MalformedPlan {
     pub fn file_fault(&self, range: u32, directory: &str) -> Option<FileFault> {
         let key = self.files_key ^ stream_key("", directory, "");
         let mut rng = rng_for(self.seed, key, u64::from(range));
-        if self.file_kinds.is_empty() || unit(&mut rng) >= self.files_share {
+        if self.file_kinds.is_empty() || unit(&mut rng) >= self.files_fraction {
             return None;
         }
         let kind = self.file_kinds[below(&mut rng, self.file_kinds.len() as u32) as usize];

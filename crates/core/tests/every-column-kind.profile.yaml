@@ -11,7 +11,7 @@ columns:
     numeric: {sequence: {start: 1000, step: 3}}
   - name: quantiles_only
     physical_type: double
-    null_rate: 0.05
+    null_fraction: 0.05
     numeric:
       quantiles: {p01: -3.0, p25: 1.0, p50: 2.5, p75: 4.0, p99: 9.0}
       extremes: {low: -5.0, high: 12.0}
@@ -20,24 +20,24 @@ columns:
     numeric:
       quantiles: {p05: 1.0, p50: 10.0, p95: 40.0}
       extremes: {low: 0.0, high: 60.0}
-      histogram: {kind: equal_width, edges: [0, 10, 20, 30, 40, 50, 60], counts: [500, 250, 120, 80, 40, 10]}
+      histogram: {kind: equal_width, edges: [0, 10, 20, 30, 40, 50, 60], bin_rows: [500, 250, 120, 80, 40, 10]}
   - name: histogram_with_overflow
     physical_type: double
     numeric:
       quantiles: {p05: 1.0, p50: 12.0, p95: 55.0}
       extremes: {low: -5.0, high: 70.0}
-      histogram: {kind: equal_depth, edges: [0, 10, 20, 40], counts: [250, 300, 200], overflow: {below: 20, above: 230}}
+      histogram: {kind: equal_depth, edges: [0, 10, 20, 40], bin_rows: [250, 300, 200], overflow: {rows_below: 20, rows_above: 230}}
   - name: integral_histogram
     physical_type: int64
     numeric:
       integral: true
       quantiles: {p01: -2, p25: 1, p50: 2, p75: 4, p99: 9}
       extremes: {low: -3, high: 9}
-      histogram: {kind: equal_depth, edges: [-0.5, 0.5, 1.5, 3.5, 9.5], counts: [200, 250, 300, 250], overflow: {below: 30, above: 0}}
+      histogram: {kind: equal_depth, edges: [-0.5, 0.5, 1.5, 3.5, 9.5], bin_rows: [200, 250, 300, 250], overflow: {rows_below: 30, rows_above: 0}}
   - name: zero_inflated
     physical_type: double
     numeric:
-      zero_rate: 0.3
+      zero_fraction: 0.3
       quantiles: {p25: 0.0, p50: 2.0, p75: 5.0}
       extremes: {low: 0.0, high: 10.0}
   # The rounded rates end the zero run at 0.4611, past edge 1.0's share of 0.461, and start it
@@ -45,11 +45,11 @@ columns:
   - name: zero_run_past_its_edge
     physical_type: double
     numeric:
-      negative_rate: 0.006
-      zero_rate: 0.4551
+      negative_fraction: 0.006
+      zero_fraction: 0.4551
       quantiles: {p01: -3.0, p25: 0.0, p50: 1.0, p75: 2.5, p99: 10.0}
       extremes: {low: -7.5, high: 12.5}
-      histogram: {kind: equal_depth, edges: [-7.5, 0.0, 1.0, 2.5, 12.5], counts: [6, 455, 400, 139]}
+      histogram: {kind: equal_depth, edges: [-7.5, 0.0, 1.0, 2.5, 12.5], bin_rows: [6, 455, 400, 139]}
   - name: decimal_amount
     physical_type: "decimal128(12, 2)"
     numeric:
@@ -129,14 +129,14 @@ columns:
   # extremes hold, so one is drawn beyond them.
   - name: top_values_with_one_beyond_the_extremes
     physical_type: int64
-    distinct: {approx: 6, ratio: 0.0001}
+    distinct: {approx_values: 6, ratio: 0.0001}
     numeric:
       integral: true
       extremes: {low: 0, high: 4, method: trimmed_k}
       quantiles: {p01: 0, p25: 1, p50: 1, p75: 1, p99: 4}
-      histogram: {kind: equal_depth, edges: [-0.5, 0.5, 1.5, 4.5], counts: [6060, 44500, 9440]}
-      top_values: [{value: 1, rate: 0.7417}, {value: 2, rate: 0.1347}, {value: 0, rate: 0.101}, {value: 4, rate: 0.01614}]
-      other_rate: 0.006431
+      histogram: {kind: equal_depth, edges: [-0.5, 0.5, 1.5, 4.5], bin_rows: [6060, 44500, 9440]}
+      top_values: [{value: 1, fraction: 0.7417}, {value: 2, fraction: 0.1347}, {value: 0, fraction: 0.101}, {value: 4, fraction: 0.01614}]
+      other_fraction: 0.006431
   # Cents on a lognormal whose support starts above the low extreme, so the tail below the body
   # runs straight down to it, with the stated negative rate below zero. Fresh draws would hold
   # more distinct values than the ratio states.
@@ -145,7 +145,7 @@ columns:
     distinct: {ratio: 0.02}
     numeric:
       scale: 2
-      negative_rate: 0.002
+      negative_fraction: 0.002
       quantiles: {p01: 0.4, p25: 2.0, p50: 4.0, p75: 7.5, p99: 30.0}
       extremes: {low: -5.0, high: 90.0}
       fit: {family: lognorm, params: {s: 0.8, loc: 0.2, scale: 4.0}}
@@ -156,67 +156,67 @@ columns:
     physical_type: "timestamp[s]"
     temporal:
       extremes: {low: "2025-03-03T09:00:00", high: "2025-03-07T17:00:00", granularity: second}
-      by_dow: [0.2, 0.2, 0.2, 0.2, 0.2, 0.0, 0.0]
+      weekday_fractions: [0.2, 0.2, 0.2, 0.2, 0.2, 0.0, 0.0]
   - name: timestamp_by_month_and_hour
     physical_type: "timestamp[ms, tz=UTC]"
     temporal:
       extremes: {low: "2024-01-01T06:30:00", high: "2024-12-31T20:15:00", granularity: minute}
-      by_month: [0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
-      by_hour: [0, 0, 0, 0, 0, 0, 0.05, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0, 0, 0, 0, 0, 0]
+      month_fractions: [0.05, 0.05, 0.05, 0.05, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+      hour_fractions: [0, 0, 0, 0, 0, 0, 0.05, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0, 0, 0, 0, 0, 0]
   - name: date_with_gaps
     physical_type: date32
-    temporal: {extremes: {low: "2024-01-01", high: "2024-03-31"}, gap_rate: 0.3}
+    temporal: {extremes: {low: "2024-01-01", high: "2024-03-31"}, gap_fraction: 0.3}
   - name: date64_uniform
     physical_type: date64
     temporal: {extremes: {low: "2020-01-01", high: "2020-12-31"}}
   - name: time_by_hour
     physical_type: "time64[us]"
     temporal:
-      by_hour: [0, 0, 0, 0, 0, 0, 0, 0, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      hour_fractions: [0, 0, 0, 0, 0, 0, 0, 0, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
   - name: time32_inside_extremes
     physical_type: "time32[ms]"
     temporal: {extremes: {low: "08:15:00", high: "17:45:00"}}
   - name: flag
-    boolean: {true_rate: 0.3}
+    boolean: {true_fraction: 0.3}
   - name: status
     string:
-      top_values: [{value: shipped, rate: 0.6}, {value: pending, rate: 0.3}]
-      other_rate: 0.1
-      shapes: [{shape: aaaaaaa, rate: 1.0}]
+      top_values: [{value: shipped, fraction: 0.6}, {value: pending, fraction: 0.3}]
+      other_fraction: 0.1
+      shapes: [{shape: aaaaaaa, fraction: 1.0}]
   - name: stored_pattern
     string: {pattern: '^[A-Z]{3}-\d{4}$'}
   - name: card_with_check_digit
-    null_rate: 0.1
-    quality: {invalid_rate: 0.2}
+    null_fraction: 0.1
+    quality: {invalid_fraction: 0.2}
     semantic: {generator_hint: {pattern: '^4\d{15}$', check_digit: luhn}}
   - name: npi_check_digit
-    quality: {invalid_rate: 0.1}
+    quality: {invalid_fraction: 0.1}
     semantic: {generator_hint: {pattern: '^1\d{9}$', check_digit: npi}}
   - name: dea_check_digit
-    quality: {invalid_rate: 0.1}
+    quality: {invalid_fraction: 0.1}
     semantic: {generator_hint: {pattern: '^[ABFM][A-Z]\d{7}$', check_digit: dea}}
   - name: top_prefixes_with_suffix
     distinct: {ratio: 0.02}
     string:
       prefixes:
-        values: [{value: "021", rate: 0.5}, {value: "000", rate: 0.3}]
-        other_rate: 0.2
+        values: [{value: "021", fraction: 0.5}, {value: "000", fraction: 0.3}]
+        other_fraction: 0.2
         suffix: '\d{2}'
-      shapes: [{shape: "99999", rate: 1.0}]
+      shapes: [{shape: "99999", fraction: 1.0}]
   - name: shapes
-    string: {shapes: [{shape: AAA-9999, rate: 0.7}, {shape: aa99, rate: 0.3}]}
+    string: {shapes: [{shape: AAA-9999, fraction: 0.7}, {shape: aa99, fraction: 0.3}]}
   - name: characters
     string: {length: {min: 2, max: 9, quantiles: {p50: 4}}, charset: {classes: [lower, digit, punct]}}
   - name: large_characters
     physical_type: large_string
     string: {length: {min: 1, max: 3}}
   - name: pattern_at_distinct_ratio
-    null_rate: 0.1
+    null_fraction: 0.1
     distinct: {ratio: 0.05}
     string: {pattern: '^\d{4}$'}
   - name: check_digit_at_distinct_ratio
     distinct: {ratio: 0.03}
-    quality: {invalid_rate: 0.2}
+    quality: {invalid_fraction: 0.2}
     semantic: {generator_hint: {pattern: '^4\d{15}$', check_digit: luhn}}
   - name: provider_at_distinct_ratio
     distinct: {ratio: 0.02}
@@ -224,52 +224,52 @@ columns:
   - name: top_values_with_indexed_other
     distinct: {ratio: 0.01}
     string:
-      top_values: [{value: shipped, rate: 0.6}, {value: pending, rate: 0.3}]
-      other_rate: 0.1
-      shapes: [{shape: AA99, rate: 0.8}, {shape: aaa, rate: 0.2}]
+      top_values: [{value: shipped, fraction: 0.6}, {value: pending, fraction: 0.3}]
+      other_fraction: 0.1
+      shapes: [{shape: AA99, fraction: 0.8}, {shape: aaa, fraction: 0.2}]
   - name: integer_with_foreign_text
     physical_type: int64
-    type_mix: {integer: 0.9, string: 0.06, decimal: 0.04}
+    type_mix_fractions: {integer: 0.9, string: 0.06, decimal: 0.04}
     numeric: {integral: true, quantiles: {p50: 5.0}, extremes: {low: 0.0, high: 10.0}}
   - name: tokens_cover_part_of_the_nulls
     physical_type: double
-    null_rate: 0.1
-    missing_tokens: {NA: 0.02, "-": 0.01}
+    null_fraction: 0.1
+    missing_token_fractions: {NA: 0.02, "-": 0.01}
     numeric: {quantiles: {p50: 1.0}, extremes: {low: 0.0, high: 2.0}}
   - name: string_with_numeric_raw_values
-    type_mix: {string: 0.7, integer: 0.3}
-    string: {shapes: [{shape: AA9, rate: 0.7}, {shape: "99999", rate: 0.3}]}
+    type_mix_fractions: {string: 0.7, integer: 0.3}
+    string: {shapes: [{shape: AA9, fraction: 0.7}, {shape: "99999", fraction: 0.3}]}
   - name: float_with_foreign_text
     physical_type: double
-    null_rate: 0.05
-    type_mix: {decimal: 0.95, string: 0.03, boolean: 0.02}
+    null_fraction: 0.05
+    type_mix_fractions: {decimal: 0.95, string: 0.03, boolean: 0.02}
     numeric: {scale: 2, quantiles: {p50: 12.5}, extremes: {low: 0.0, high: 99.0}}
   - name: decimal128_with_foreign_text
     physical_type: "decimal128(10, 3)"
-    type_mix: {decimal: 0.98, timestamp: 0.02}
+    type_mix_fractions: {decimal: 0.98, timestamp: 0.02}
     numeric: {quantiles: {p50: 1.25}, extremes: {low: -4.0, high: 8.0}}
   - name: boolean_with_foreign_text
     physical_type: bool
-    type_mix: {boolean: 0.97, integer: 0.03}
-    boolean: {true_rate: 0.4}
+    type_mix_fractions: {boolean: 0.97, integer: 0.03}
+    boolean: {true_fraction: 0.4}
   - name: date_with_foreign_text
     physical_type: date32
-    type_mix: {date: 0.92, string: 0.05, integer: 0.03}
+    type_mix_fractions: {date: 0.92, string: 0.05, integer: 0.03}
     temporal: {format: "%m/%d/%Y", extremes: {low: "2023-01-01", high: "2023-12-31"}}
   - name: timestamp_with_foreign_text
     physical_type: "timestamp[us, tz=UTC]"
-    type_mix: {timestamp: 0.9, date: 0.06, string: 0.04}
+    type_mix_fractions: {timestamp: 0.9, date: 0.06, string: 0.04}
     temporal: {format: "%Y-%m-%d %H:%M:%S%.f%#z", extremes: {low: "2023-01-01T00:00:00", high: "2023-12-31T23:59:59", granularity: millisecond}}
   - name: key_with_foreign_text
     physical_type: int64
-    type_mix: {integer: 0.9, string: 0.04, decimal: 0.03, boolean: 0.02, timestamp: 0.01}
+    type_mix_fractions: {integer: 0.9, string: 0.04, decimal: 0.03, boolean: 0.02, timestamp: 0.01}
     numeric: {sequence: {start: 1, step: 1}}
   - name: tags
     logical_type: array
     list:
       length: {p50: 2, p90: 4}
-      empty_rate: 0.25
-      element: {name: element, string: {top_values: [{value: a, rate: 0.5}, {value: b, rate: 0.5}]}}
+      empty_fraction: 0.25
+      element: {name: element, string: {top_values: [{value: a, fraction: 0.5}, {value: b, fraction: 0.5}]}}
   - name: large_list_of_numbers
     physical_type: large_list
     list:
@@ -278,16 +278,16 @@ columns:
     logical_type: array
     list:
       length: {p50: 3}
-      element: {name: element, distinct: {ratio: 0.01}, string: {shapes: [{shape: AA99, rate: 1.0}]}}
+      element: {name: element, distinct: {ratio: 0.01}, string: {shapes: [{shape: AA99, fraction: 1.0}]}}
   - name: address
     logical_type: object
     struct:
-      presence: {zip: 0.5}
+      presence_fractions: {zip: 0.5}
       fields:
         - {name: zip, string: {pattern: '\d{5}'}}
         - {name: city, semantic: {generator_hint: {provider: city}}}
         - {name: lines, logical_type: array, list: {element: {name: element, string: {length: {min: 3, max: 6}}}}}
-        - {name: floor, physical_type: int32, type_mix: {integer: 0.8, string: 0.2}, numeric: {extremes: {low: 0, high: 40}}}
+        - {name: floor, physical_type: int32, type_mix_fractions: {integer: 0.8, string: 0.2}, numeric: {extremes: {low: 0, high: 40}}}
   - {name: provider_email, semantic: {generator_hint: {provider: email}}}
   - {name: provider_free_email, semantic: {generator_hint: {provider: free_email}}}
   - {name: provider_username, semantic: {generator_hint: {provider: username}}}
@@ -299,7 +299,7 @@ columns:
   - {name: provider_icd10cm, semantic: {generator_hint: {provider: icd10cm}}}
   - name: provider_icd10cm_dotted
     distinct: {ratio: 0.01}
-    string: {shapes: [{shape: A99.9, rate: 0.7}, {shape: A99, rate: 0.3}]}
+    string: {shapes: [{shape: A99.9, fraction: 0.7}, {shape: A99, fraction: 0.3}]}
     semantic: {generator_hint: {provider: icd10cm}}
   - {name: provider_hcpcs_level2, semantic: {generator_hint: {provider: hcpcs_level2}}}
   - {name: provider_first_name, semantic: {generator_hint: {provider: first_name}}}
@@ -332,35 +332,35 @@ columns:
       integral: true
       quantiles: {p01: 1, p50: 2, p99: 12}
       extremes: {low: 1, high: 20}
-      top_values: [{value: 1, rate: 0.4}, {value: 2, rate: 0.25}, {value: 3, rate: 0.15}]
-      other_rate: 0.2
+      top_values: [{value: 1, fraction: 0.4}, {value: 2, fraction: 0.25}, {value: 3, fraction: 0.15}]
+      other_fraction: 0.2
   - name: copula_weight
     physical_type: double
-    null_rate: 0.05
+    null_fraction: 0.05
     numeric:
       quantiles: {p05: 0.2, p50: 1.5, p95: 8.0}
       extremes: {low: 0.0, high: 20.0}
       fit: {family: gamma, params: {a: 2.0, loc: 0.0, scale: 1.0}}
   - name: region
     string:
-      top_values: [{value: north, rate: 0.4}, {value: south, rate: 0.35}, {value: west, rate: 0.25}]
+      top_values: [{value: north, fraction: 0.4}, {value: south, fraction: 0.35}, {value: west, fraction: 0.25}]
   # Drawn from its conditional table given region.
   - name: channel
-    null_rate: 0.02
+    null_fraction: 0.02
     string:
-      top_values: [{value: web, rate: 0.5}, {value: store, rate: 0.3}, {value: phone, rate: 0.2}]
+      top_values: [{value: web, fraction: 0.5}, {value: store, fraction: 0.3}, {value: phone, fraction: 0.2}]
   # Drawn through its quantiles given channel, with its zero and null rates given channel.
   - name: paid_amount
     physical_type: double
-    null_rate: 0.03
+    null_fraction: 0.03
     numeric:
-      zero_rate: 0.1
+      zero_fraction: 0.1
       quantiles: {p25: 5.0, p50: 20.0, p75: 50.0}
       extremes: {low: 0.0, high: 300.0}
   # Looked up from region by the dependency's table.
   - name: region_code
     string:
-      top_values: [{value: "N", rate: 0.4}, {value: "S", rate: 0.35}, {value: "W", rate: 0.25}]
+      top_values: [{value: "N", fraction: 0.4}, {value: "S", fraction: 0.35}, {value: "W", fraction: 0.25}]
   - name: order_date
     physical_type: date32
     temporal: {extremes: {low: "2024-01-01", high: "2024-12-31"}}
@@ -376,12 +376,12 @@ columns:
   - name: unit_price
     physical_type: "decimal128(10, 2)"
     # An operand of an expression: `total` reads its own draws, and its text is written last.
-    type_mix: {decimal: 0.97, string: 0.03}
+    type_mix_fractions: {decimal: 0.97, string: 0.03}
     numeric: {quantiles: {p05: 1.0, p50: 9.99, p95: 80.0}, extremes: {low: 0.5, high: 150.0}}
   - name: total
     physical_type: "decimal128(12, 2)"
     numeric: {quantiles: {p05: 2.0, p50: 20.0, p95: 400.0}, extremes: {low: 0.5, high: 1800.0}}
-    derived: {kind: expression, expr: "round(quantity * unit_price, 2)", violation_rate: 0.01}
+    derived: {kind: expression, expr: "round(quantity * unit_price, 2)", violation_fraction: 0.01}
 dataset:
   keys:
     candidates:
@@ -393,10 +393,10 @@ dataset:
   conditionals:
     - given: region
       column: channel
-      table:
+      fractions:
         north: {web: 0.7, store: 0.2, phone: 0.1}
         south: {web: 0.3, store: 0.5, phone: 0.2}
-      other: {web: 0.4, store: 0.3, phone: 0.3}
+      other_fractions: {web: 0.4, store: 0.3, phone: 0.3}
   conditional_quantiles:
     - given: channel
       column: paid_amount
@@ -404,11 +404,11 @@ dataset:
         web: {p25: 10.0, p50: 30.0, p75: 70.0}
         store: {p25: 2.0, p50: 8.0, p75: 20.0}
       other: {p25: 5.0, p50: 15.0, p75: 40.0}
-  conditional_rates:
+  conditional_fractions:
     - given: channel
       column: paid_amount
-      zero_rate: {web: 0.02, store: 0.2}
-      null_rate: {phone: 0.15}
-      other: {zero_rate: 0.1, null_rate: 0.01}
+      zero_fraction: {web: 0.02, store: 0.2}
+      null_fraction: {phone: 0.15}
+      other: {zero_fraction: 0.1, null_fraction: 0.01}
   dependencies:
     - {kind: functional, lhs: [region], rhs: region_code, table: {north: "N", south: "S", west: "W"}}

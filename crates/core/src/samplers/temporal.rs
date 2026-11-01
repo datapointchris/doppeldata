@@ -1,7 +1,7 @@
 //! Date, timestamp and time-of-day columns. With no month, weekday or hour weights and no gaps, a
 //! value is uniform over the extremes at the column's granularity. Otherwise a day is drawn from
-//! the range, weighted by `by_month` and `by_dow` with `gap_rate`'s share of days left empty, then a
-//! time within it weighted by `by_hour`.
+//! the range, weighted by `month_fractions` and `weekday_fractions` with `gap_fraction` of days left
+//! empty, then a time within it weighted by `hour_fractions`.
 
 use std::sync::Arc;
 
@@ -30,6 +30,7 @@ use rand_chacha::ChaCha8Rng;
 use rand_distr::Distribution;
 use rand_distr::weighted::WeightedAliasIndex;
 
+use super::FieldReads;
 use super::Refusal;
 use super::numeric::primitive;
 use crate::plan::ColumnFault;
@@ -217,13 +218,14 @@ pub(crate) struct TemporalSampler {
 }
 
 impl TemporalSampler {
-    /// `gap_days` shuffles the range's days when `gap_rate` leaves some empty.
+    /// `gap_days` shuffles the range's days when `gap_fraction` leaves some empty.
     pub(crate) fn new(
         stats: Option<&TemporalStats>,
         output: TemporalOutput,
         gap_days: impl FnOnce() -> ChaCha8Rng,
+        reads: &mut FieldReads,
     ) -> Result<Self, Refusal> {
-        let extremes = stats.and_then(|s| s.extremes.as_ref());
+        let extremes = reads.read("extremes", "/temporal/extremes", stats.and_then(|s| s.extremes.as_ref()));
         let ticks_per_day = output.ticks_per_day();
         let parse = |text: Option<&String>, default: &str| {
             let text = text.map_or(default, String::as_str);
@@ -240,11 +242,28 @@ impl TemporalSampler {
         let high = parse(extremes.and_then(|e| e.high.as_ref()), default_high)?.max(low);
         let granule = granule(extremes.and_then(|e| e.granularity), &output);
         let whole_days = output.is_date() || granule >= ticks_per_day;
-        let by_month = stats.and_then(|s| s.by_month.as_ref());
-        let by_dow = stats.and_then(|s| s.by_dow.as_ref());
-        let by_hour = stats.and_then(|s| s.by_hour.as_ref()).filter(|_| !whole_days);
-        let gap_rate = stats.and_then(|s| s.gap_rate).map_or(0.0, |r| r.0);
-        if by_month.is_none() && by_dow.is_none() && by_hour.is_none() && gap_rate == 0.0 {
+        let by_month = reads.read(
+            "month_fractions",
+            "/temporal/month_fractions",
+            stats.and_then(|s| s.month_fractions.as_ref()),
+        );
+        let by_dow = reads.read(
+            "weekday_fractions",
+            "/temporal/weekday_fractions",
+            stats.and_then(|s| s.weekday_fractions.as_ref()),
+        );
+        let by_hour = match whole_days {
+            true => None,
+            false => reads.read(
+                "hour_fractions",
+                "/temporal/hour_fractions",
+                stats.and_then(|s| s.hour_fractions.as_ref()),
+            ),
+        };
+        let gap_fraction = reads
+            .read("gap_fraction", "/temporal/gap_fraction", stats.and_then(|s| s.gap_fraction))
+            .map_or(0.0, |r| r.0);
+        if by_month.is_none() && by_dow.is_none() && by_hour.is_none() && gap_fraction == 0.0 {
             let granule = if whole_days { ticks_per_day } else { granule };
             let count = ((high - low) / granule) as u64 + 1;
             return Ok(Self {
@@ -259,7 +278,7 @@ impl TemporalSampler {
         };
         let unusable = |what: &'static str| move |error| Refusal::new(ColumnFault::UnusableRates, format!("{what} are unusable: {error}"));
         let hours = match by_hour {
-            Some(by_hour) => Some(WeightedAliasIndex::new(by_hour.iter().map(|r| r.0).collect()).map_err(unusable("by_hour's rates"))?),
+            Some(by_hour) => Some(WeightedAliasIndex::new(by_hour.iter().map(|r| r.0).collect()).map_err(unusable("hour_fractions"))?),
             None => None,
         };
         let ticks_per_hour = ticks_per_day / 24;
@@ -300,7 +319,7 @@ impl TemporalSampler {
                 }
                 let choice = match runs.len() {
                     1 => None,
-                    _ => Some(WeightedAliasIndex::new(run_weights).map_err(unusable("by_hour's rates"))?),
+                    _ => Some(WeightedAliasIndex::new(run_weights).map_err(unusable("hour_fractions"))?),
                 };
                 edges.push((index, EdgeDay { runs, choice }));
             }
@@ -328,7 +347,7 @@ impl TemporalSampler {
             .zip(&inside)
             .map(|(&(month, weekday), &inside)| inside * share(by_month, month, &months) * share(by_dow, weekday, &weekdays))
             .collect();
-        let gaps = ((gap_rate * weights.len() as f64).round() as usize).min(weights.len().saturating_sub(1));
+        let gaps = ((gap_fraction * weights.len() as f64).round() as usize).min(weights.len().saturating_sub(1));
         if gaps > 0 {
             let mut rng = gap_days();
             let mut order: Vec<usize> = (0..weights.len()).collect();

@@ -111,8 +111,8 @@ Without `--out` the seed prints as YAML. A file names its table up to its first 
   `customers.id`. A key of several fields relates them in order. A key referring to its own
   resource, to a resource the package lacks, or naming more fields on one side is left out with a
   warning. A resource's schema may be a file beside the package. A schema at a URL is refused.
-- **`data generate` takes the bundle once each table states `dataset.row_count`.** A seed states
-  none, so it is refused as `no-row-count` until one is written in. A seed states no fan-out, so
+- **`data generate` takes the bundle once each table states `dataset.rows`.** A seed states
+  none, so it is refused as `E-PROFILE-116` until one is written in. A seed states no fan-out, so
   every parent then holds the same number of children, to within one.
 - **`Profile.from_table_schema` reads one table and records no relationship.** A foreign key names a
   resource, and only a package declares one.

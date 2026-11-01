@@ -14,7 +14,7 @@ from doppeldata_cli.main import app
 from typer.testing import CliRunner
 
 # Fields only a text source has, because its values were parsed from text.
-TEXT_ONLY_FIELDS = {'type_mix', 'format'}
+TEXT_ONLY_FIELDS = {'type_mix_fractions', 'format'}
 # Moments are sums whose order follows the reader's batches, so they may differ in their last digit.
 MOMENTS = {'mean', 'std', 'skew', 'kurtosis'}
 
@@ -102,7 +102,7 @@ def test_the_general_pack_types_each_column_of_the_mixed_fixture(tmp_path):
         'last_name_id': None,
         'phone': 'phone_number',
     }
-    assert columns['card_number']['quality']['invalid_rate'] == pytest.approx(0.003, abs=0.001)
+    assert columns['card_number']['quality']['invalid_fraction'] == pytest.approx(0.003, abs=0.001)
     # An integer identifier repeated across rows, a phone number here, lists none of its values.
     assert 'top_values' not in columns['phone']['numeric']
 
@@ -124,12 +124,12 @@ def test_no_histogram_bin_less_the_listed_values_in_it_leaves_a_cell_under_k_min
     """Rare values beside listed ones in an outer bin, as 5 zeros below 1,000 ones, are not recovered by subtracting the list."""
     values = [0] * 5 + [1] * 1000 + [2] * 1000 + [3] * 11 + [9] * 6
     numeric = profile(pl.DataFrame({'v': values})).to_plain()['columns'][0]['numeric']
-    listed = {entry['value']: round(entry['rate'] * len(values)) for entry in numeric['top_values']}
+    listed = {entry['value']: round(entry['fraction'] * len(values)) for entry in numeric['top_values']}
     histogram = numeric['histogram']
-    for low, high, count in zip(histogram['edges'], histogram['edges'][1:], histogram['counts'], strict=False):
+    for low, high, count in zip(histogram['edges'], histogram['edges'][1:], histogram['bin_rows'], strict=False):
         outside = count - sum(rows for value, rows in listed.items() if low <= value <= high)
         assert not 0 < outside < 11
-    assert not 0 < round(numeric['zero_rate'] * len(values)) < 11
+    assert not 0 < round(numeric['zero_fraction'] * len(values)) < 11
 
 
 def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_and_a_gapped_id_as_a_sequence(tmp_path):
@@ -165,22 +165,22 @@ def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_an
     assert pairs['amount', 'fee']['method'] == 'spearman'
     assert pairs['amount', 'fee']['value'] > 0.9
     looked_up = {f'p{i:02d}': ('bronze', 'silver', 'gold', 'platinum')[i // 10] for i in range(40)}
-    assert {'kind': 'functional', 'lhs': ['plan'], 'rhs': 'tier', 'violation_rate': 0.0, 'table': looked_up} in dataset['dependencies']
+    assert {'kind': 'functional', 'lhs': ['plan'], 'rhs': 'tier', 'violation_fraction': 0.0, 'table': looked_up} in dataset['dependencies']
     conditionals = {(entry['given'], entry['column']): entry for entry in dataset['conditionals']}
     # The lookup draws tier from plan, so a table of plan given tier would close a cycle, and is left out.
     assert ('region', 'channel') in conditionals
     assert ('tier', 'plan') not in conditionals
-    samplers = {column.name: column.sampler for column in plan(written, tmp_path / 'orders.parquet', rows=10).columns}
-    assert samplers['tier'].startswith('looked up from plan')
+    traces = {column.name: column for column in plan(written, tmp_path / 'orders.parquet', rows=10).columns}
+    assert (traces['tier'].origin, traces['tier'].reads) == ('derived', ['plan'])
     assert table_check(profiled, ()).table == profiled['name']
     for (given, child), entry in conditionals.items():
         counted = {(row[given], row[child]): row['len'] for row in frame.group_by(given, child).len().iter_rows(named=True)}
         given_rows = dict(frame.group_by(given).len().iter_rows())
-        assert all(counted[value, written] >= 11 for value, row in entry['table'].items() for written in row)
+        assert all(counted[value, written] >= 11 for value, row in entry['fractions'].items() for written in row)
         assert all(
-            not 0 < given_rows[value] - sum(counted[value, written] for written in row) < 11 for value, row in entry['table'].items()
+            not 0 < given_rows[value] - sum(counted[value, written] for written in row) < 11 for value, row in entry['fractions'].items()
         )
-    assert not any('fax' in row for row in conditionals['region', 'channel']['table'].values())
+    assert not any('fax' in row for row in conditionals['region', 'channel']['fractions'].values())
     # A sample of a quarter of the rows holds a quarter of the ids, and still states the whole table's sequence.
     for sample in (None, rows // 4):
         sampled = profiled if sample is None else profile(frame, sample=sample).to_plain()
@@ -204,11 +204,11 @@ def test_two_folders_named_with_tables_are_two_tables_and_a_column_naming_the_ot
     keys = {name: table['dataset']['keys']['primary']['columns'] for name, table in bundle['tables'].items()}
     assert keys == {'customers': ['customer_id'], 'orders': ['order_id']}
     [relationship] = bundle['relationships']
-    assert {field: relationship[field] for field in ('from', 'to', 'cardinality', 'orphan_rate')} == {
+    assert {field: relationship[field] for field in ('from', 'to', 'cardinality', 'orphan_fraction')} == {
         'from': ['orders.customer_id'],
         'to': ['customers.customer_id'],
         'cardinality': 'many_to_one',
-        'orphan_rate': 0.05,
+        'orphan_fraction': 0.05,
     }
     assert relationship['containment'] == pytest.approx(190 / 197, rel=1e-3)
 
@@ -233,11 +233,11 @@ def test_drifted_hive_folders_are_one_table_and_unlike_folders_are_refused_unles
         assert result.exit_code == 0, result.output
         hive = Profile.load(tmp_path / f'{tree}.yaml').to_plain()
         assert [key['name'] for key in hive['source']['layout']['partitioning']['keys']] == ['year']
-        assert hive['dataset']['row_count'] == 120
+        assert hive['dataset']['rows'] == 120
 
     refused = CliRunner().invoke(app, ['profile', 'create', str(tmp_path / 'mixed')])
     assert refused.exit_code == 2
     bundled = CliRunner().invoke(app, ['profile', 'create', str(tmp_path / 'mixed'), '--tables', '--out', str(tmp_path / 'mixed.yaml')])
     assert bundled.exit_code == 0, bundled.output
     tables = Bundle.load(tmp_path / 'mixed.yaml').tables
-    assert {name: table.to_plain()['dataset']['row_count'] for name, table in tables.items()} == {'customers': 60, 'orders': 120}
+    assert {name: table.to_plain()['dataset']['rows'] for name, table in tables.items()} == {'customers': 60, 'orders': 120}

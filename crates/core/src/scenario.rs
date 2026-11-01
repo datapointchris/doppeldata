@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
+use strum::IntoEnumIterator;
 
 use crate::format_settings::Output;
 use crate::perturbations::ScenarioFault;
@@ -79,8 +80,14 @@ impl JsonSchema for ProfilePatch {
 
 /// One fault, named by `op`. `id` keys its random stream, and defaults to
 /// `<op>:<column or "table">:<n>`, where n counts earlier entries of the same op and column.
-#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema, strum::EnumDiscriminants)]
 #[serde(tag = "op", rename_all = "snake_case")]
+#[strum_discriminants(
+    name(Op),
+    doc = "Each op, as `op` names it.",
+    derive(strum::EnumIter, strum::IntoStaticStr),
+    strum(serialize_all = "snake_case")
+)]
 pub enum Perturbation {
     HotKeys(HotKeys),
     Duplicates(Duplicates),
@@ -115,11 +122,11 @@ pub struct Cdc {
     /// `dataset.keys.primary`, which must name one column.
     pub key: Option<String>,
     /// New rows, as a share of the full load's.
-    pub inserts: Option<Rate>,
+    pub insert_fraction: Option<Rate>,
     /// The share of the full load's rows updated at least once.
-    pub updates: Option<Rate>,
+    pub update_fraction: Option<Rate>,
     /// The share of the full load's rows deleted, each after its updates.
-    pub deletes: Option<Rate>,
+    pub delete_fraction: Option<Rate>,
     /// How many times an updated row is updated. Without it, once.
     pub updates_per_row: Option<CountSpread>,
     pub period: Period,
@@ -138,10 +145,10 @@ pub struct Cdc {
     /// The chance an eligible change is written a second time, in the first change file after the
     /// one holding its key's last change. A change is eligible when its key's last change comes
     /// after it, and deletes the row or leaves it different from this change's.
-    pub duplicate_delivery_rate: Option<Rate>,
+    pub duplicate_delivery_fraction: Option<Rate>,
     /// The chance an eligible change is written late instead, in the first change file after the
-    /// one holding its key's last change. Eligible as for `duplicate_delivery_rate`.
-    pub out_of_order_rate: Option<Rate>,
+    /// one holding its key's last change. Eligible as for `duplicate_delivery_fraction`.
+    pub out_of_order_fraction: Option<Rate>,
 }
 
 impl Cdc {
@@ -324,18 +331,18 @@ impl From<FaultKind> for ListedFault {
 }
 
 /// Bytes a reader rejects or misreads, written into the files and listed in `_faults.jsonl` beside
-/// them. With no `rate`, `kinds` or `files_share`, it reproduces the malformed rows and type mix the
-/// profile records of its CSV source. Otherwise `rate` of rows each take one of the row
-/// kinds named, and `files_share` of files each take one of the file kinds named.
+/// them. With no `fraction`, `kinds` or `files_fraction`, it reproduces the malformed rows and type mix
+/// the profile records of its CSV source. Otherwise `fraction` of rows each take one of the row
+/// kinds named, and `files_fraction` of files each take one of the file kinds named.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MalformedRows {
     pub id: Option<String>,
     /// The share of rows given a row fault, each kind named equally often.
-    pub rate: Option<Rate>,
+    pub fraction: Option<Rate>,
     pub kinds: Option<Vec<FaultKind>>,
     /// The share of files given a file fault, each kind named equally often.
-    pub files_share: Option<Rate>,
+    pub files_fraction: Option<Rate>,
 }
 
 /// One way a file is broken. A row kind breaks one record, and a file kind a whole file.
@@ -390,7 +397,7 @@ enum Breaks {
 }
 
 /// The formats whose bytes can hold a fault kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumIter)]
 pub enum FaultFormats {
     /// CSV and TSV.
     Delimited,
@@ -455,7 +462,7 @@ impl FaultKind {
         self.facts().0
     }
 
-    /// Whether the kind breaks a whole file, so `files_share` places it rather than `rate`.
+    /// Whether the kind breaks a whole file, so `files_fraction` places it rather than `fraction`.
     pub fn is_file_kind(self) -> bool {
         self.facts().1 == Breaks::File
     }
@@ -471,7 +478,7 @@ impl FaultKind {
     }
 }
 
-/// `share` of rows take one of `keys` values: the column's most frequent ones, or values its own
+/// `fraction` of rows take one of `keys` values: the column's most frequent ones, or values its own
 /// sampler draws where it lists none.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -480,16 +487,16 @@ pub struct HotKeys {
     pub column: String,
     #[schemars(range(min = 1))]
     pub keys: u32,
-    pub share: Rate,
+    pub fraction: Rate,
 }
 
-/// Copies of existing rows, so that `rate` of the rows written are copies. Each block's count is
+/// Copies of existing rows, so that `fraction` of the rows written are copies. Each block's count is
 /// planned up front, so block boundaries never move.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Duplicates {
     pub id: Option<String>,
-    pub rate: Rate,
+    pub fraction: Rate,
     #[serde(default)]
     pub scope: DuplicateScope,
     /// False varies one non-key column of each copy, taking that column's value from another row.
@@ -511,18 +518,18 @@ pub enum DuplicateScope {
     AcrossFiles,
 }
 
-/// `rate` of rows have their event time shifted earlier by a drawn lag.
+/// `fraction` of rows have their event time shifted earlier by a drawn lag.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LateArrival {
     pub id: Option<String>,
     /// The event time.
     pub column: String,
-    pub rate: Rate,
+    pub fraction: Rate,
     pub lag: LagSpread,
     /// A column to hold each row's unshifted time, as when it arrived. It is written whether or not
     /// the profile holds it, and added with the event column's type when it does not. A date
-    /// column takes the time truncated to its day. `late_arrival.rate` is measured against it.
+    /// column takes the time truncated to its day. `late_arrival.fraction` is measured against it.
     pub ingest: Option<String>,
 }
 
@@ -544,14 +551,14 @@ pub enum SpreadFamily {
 }
 
 /// Nulls written into `column`: MCAR uniformly, MAR more often for higher values of `depends_on`,
-/// and MNAR more often for the column's own higher values. Each averages `rate` over the rows.
+/// and MNAR more often for the column's own higher values. Each averages `fraction` over the rows.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Missingness {
     pub id: Option<String>,
     pub column: String,
     pub mechanism: Mechanism,
-    pub rate: Rate,
+    pub fraction: Rate,
     /// The column MAR's chance of a null rises with. Only MAR takes it.
     pub depends_on: Option<String>,
 }
@@ -569,14 +576,14 @@ pub enum Mechanism {
     Mnar,
 }
 
-/// `rate` of rows take a sentinel from `values`, or a value past the column's extreme on the side
+/// `fraction` of rows take a sentinel from `values`, or a value past the column's extreme on the side
 /// `beyond` names. Exactly one of the two is given.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OutOfRange {
     pub id: Option<String>,
     pub column: String,
-    pub rate: Rate,
+    pub fraction: Rate,
     /// Sentinels, each cast to the column's type.
     pub values: Option<Vec<serde_json::Value>>,
     pub beyond: Option<Side>,
@@ -589,13 +596,13 @@ pub enum Side {
     High,
 }
 
-/// Two columns' values exchanged in `rate` of rows. Both must have one type.
+/// Two columns' values exchanged in `fraction` of rows. Both must have one type.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SwappedValues {
     pub id: Option<String>,
     pub columns: [String; 2],
-    pub rate: Rate,
+    pub fraction: Rate,
 }
 
 /// The category mix moved: each value named takes its share, and every other value keeps its
@@ -605,41 +612,41 @@ pub struct SwappedValues {
 pub struct CategoricalShift {
     pub id: Option<String>,
     pub column: String,
-    pub to: BTreeMap<String, Rate>,
+    pub to_fractions: BTreeMap<String, Rate>,
 }
 
-/// Gaussian noise of standard deviation `sigma`, in the column's units, added to `rate` of rows.
+/// Gaussian noise of standard deviation `sigma`, in the column's units, added to `fraction` of rows.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Noise {
     pub id: Option<String>,
     pub column: String,
-    pub rate: Rate,
+    pub fraction: Rate,
     #[schemars(range(min = 0))]
     pub sigma: f64,
 }
 
-/// `rate` of rows multiplied by `factor`, a unit error such as cents written as dollars.
+/// `fraction` of rows multiplied by `factor`, a unit error such as cents written as dollars.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Scaling {
     pub id: Option<String>,
     pub column: String,
-    pub rate: Rate,
+    pub fraction: Rate,
     pub factor: f64,
 }
 
-/// `rate` of strings broken: one holding a character past ASCII is mojibake, its UTF-8 read as
+/// `fraction` of strings broken: one holding a character past ASCII is mojibake, its UTF-8 read as
 /// windows-1252, and any other has one character replaced by U+FFFD.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BrokenCharacters {
     pub id: Option<String>,
     pub column: String,
-    pub rate: Rate,
+    pub fraction: Rate,
 }
 
-/// `rate` of rows set far past the trimmed extremes: between `multiplier` and `multiplier + 1`
+/// `fraction` of rows set far past the trimmed extremes: between `multiplier` and `multiplier + 1`
 /// times the span between them, beyond the high extreme, or beyond the low one in a column that
 /// goes below zero.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
@@ -647,7 +654,7 @@ pub struct BrokenCharacters {
 pub struct Outliers {
     pub id: Option<String>,
     pub column: String,
-    pub rate: Rate,
+    pub fraction: Rate,
     #[schemars(range(min = 0))]
     pub multiplier: f64,
 }
@@ -712,7 +719,7 @@ pub struct RowsSpread {
 pub struct PartitionSkew {
     pub id: Option<String>,
     pub column: String,
-    pub shares: BTreeMap<String, Rate>,
+    pub value_fractions: BTreeMap<String, Rate>,
 }
 
 /// A statistic the scenario promises of the generated data, within its bounds.
@@ -720,7 +727,7 @@ pub struct PartitionSkew {
 #[serde(deny_unknown_fields)]
 pub struct Expectation {
     pub metric: ExpectedMetric,
-    /// The column measured. A metric of the whole table, such as `malformed.rate`, takes none.
+    /// The column measured. A metric of the whole table, such as `malformed.fraction`, takes none.
     pub column: Option<String>,
     pub at_least: Option<f64>,
     pub at_most: Option<f64>,
@@ -731,35 +738,35 @@ pub struct Expectation {
 pub enum ExpectedMetric {
     /// The share of rows holding the `keys` most frequent values of `column`, with `keys` from the
     /// column's `hot_keys` perturbation.
-    #[serde(rename = "hot_keys.share")]
-    HotKeysShare,
+    #[serde(rename = "hot_keys.fraction")]
+    HotKeysFraction,
     /// The share of rows whose `column`, a key each copy shares with its source, repeats an earlier
     /// row's. A later perturbation writing that column is refused, because a copy's key would then
     /// differ from its source's.
-    #[serde(rename = "duplicates.rate")]
-    DuplicatesRate,
+    #[serde(rename = "duplicates.fraction")]
+    DuplicatesFraction,
     /// The share of rows whose `column` is earlier than the `ingest` column of its `late_arrival`
     /// perturbation.
-    #[serde(rename = "late_arrival.rate")]
-    LateArrivalRate,
+    #[serde(rename = "late_arrival.fraction")]
+    LateArrivalFraction,
     /// The share of rows whose `column` is null, the profile's own nulls included.
-    #[serde(rename = "missingness.rate")]
-    MissingnessRate,
+    #[serde(rename = "missingness.fraction")]
+    MissingnessFraction,
     /// The share of a CSV or TSV dataset's data rows a reader rejects, as a profile's
-    /// `source.csv.malformed.rate` records it. It takes no column.
-    #[serde(rename = "malformed.rate")]
-    MalformedRate,
+    /// `source.csv.malformed.fraction` records it. It takes no column.
+    #[serde(rename = "malformed.fraction")]
+    MalformedFraction,
 }
 
 impl ExpectedMetric {
     /// The op whose perturbation the metric measures.
     pub fn op(self) -> &'static str {
         match self {
-            Self::HotKeysShare => "hot_keys",
-            Self::DuplicatesRate => "duplicates",
-            Self::LateArrivalRate => "late_arrival",
-            Self::MissingnessRate => "missingness",
-            Self::MalformedRate => "malformed_rows",
+            Self::HotKeysFraction => "hot_keys",
+            Self::DuplicatesFraction => "duplicates",
+            Self::LateArrivalFraction => "late_arrival",
+            Self::MissingnessFraction => "missingness",
+            Self::MalformedFraction => "malformed_rows",
         }
     }
 
@@ -767,33 +774,54 @@ impl ExpectedMetric {
     /// the whole table.
     pub fn takes_column(self) -> bool {
         match self {
-            Self::HotKeysShare | Self::DuplicatesRate | Self::LateArrivalRate | Self::MissingnessRate => true,
-            Self::MalformedRate => false,
+            Self::HotKeysFraction | Self::DuplicatesFraction | Self::LateArrivalFraction | Self::MissingnessFraction => true,
+            Self::MalformedFraction => false,
         }
     }
+}
+
+/// Whether a write making `output`'s files takes `op`. `cdc` writes the CSV or Parquet files DMS
+/// writes. `schema_drift` needs a format that reads as one table under several schemas.
+/// `malformed_rows` needs a format one of its kinds can be held in.
+pub fn op_takes_format(op: Op, output: &Output) -> bool {
+    match op {
+        Op::Cdc => matches!(output, Output::Csv(_) | Output::Parquet(_)),
+        Op::SchemaDrift => !output.reads_under_one_schema(),
+        Op::MalformedRows => FaultFormats::iter().any(|formats| formats.hold(output)),
+        Op::HotKeys
+        | Op::Duplicates
+        | Op::LateArrival
+        | Op::Missingness
+        | Op::OutOfRange
+        | Op::SwappedValues
+        | Op::CategoricalShift
+        | Op::Noise
+        | Op::Scaling
+        | Op::BrokenCharacters
+        | Op::Outliers
+        | Op::SmallFiles
+        | Op::PartitionSkew => true,
+    }
+}
+
+/// Each op's name, with the names of the formats a write takes it in.
+pub fn every_op_formats() -> Vec<(&'static str, Vec<&'static str>)> {
+    Op::iter().map(|op| (op.into(), op_formats(op))).collect()
+}
+
+/// The names of the formats a write takes `op` in, in the order `format` lists them.
+pub fn op_formats(op: Op) -> Vec<&'static str> {
+    Output::every_format()
+        .iter()
+        .filter(|output| op_takes_format(op, output))
+        .map(Output::format_name)
+        .collect()
 }
 
 impl Perturbation {
     /// The op's name, as `op` spells it.
     pub fn op_name(&self) -> &'static str {
-        match self {
-            Self::HotKeys(_) => "hot_keys",
-            Self::Duplicates(_) => "duplicates",
-            Self::LateArrival(_) => "late_arrival",
-            Self::Missingness(_) => "missingness",
-            Self::OutOfRange(_) => "out_of_range",
-            Self::SwappedValues(_) => "swapped_values",
-            Self::CategoricalShift(_) => "categorical_shift",
-            Self::Noise(_) => "noise",
-            Self::Scaling(_) => "scaling",
-            Self::BrokenCharacters(_) => "broken_characters",
-            Self::Outliers(_) => "outliers",
-            Self::SchemaDrift(_) => "schema_drift",
-            Self::SmallFiles(_) => "small_files",
-            Self::PartitionSkew(_) => "partition_skew",
-            Self::MalformedRows(_) => "malformed_rows",
-            Self::Cdc(_) => "cdc",
-        }
+        Op::from(self).into()
     }
 
     /// The id given in the file, if any.

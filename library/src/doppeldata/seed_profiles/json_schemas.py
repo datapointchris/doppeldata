@@ -11,6 +11,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
+from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 from doppeldata.profile_format import Profile
 from doppeldata.seed_profiles.declared_columns import DeclaredColumn
@@ -32,7 +33,8 @@ def json_schema_profile(path: str | os.PathLike[str]) -> Profile:
     named = f'json-schema:{found.name}'
     record = resolved(document, document)
     if not isinstance(record, Mapping) or not isinstance(record.get('properties'), Mapping):
-        raise SourceError(f'{found} describes no object with properties, which a seed takes its columns from', role='schema')
+        message = f'{found} describes no object with properties, which a seed takes its columns from'
+        raise SourceError(issue_codes.NOT_THE_SCHEMA_FORMAT, message, role='schema')
     required = set(record.get('required') or [])
     columns, unread = [], []
     for name, schema in record['properties'].items():
@@ -52,7 +54,12 @@ def resolved(schema: Any, document: Any) -> Any:
     while isinstance(schema, Mapping) and isinstance(schema.get('$ref'), str) and schema['$ref'].startswith('#'):
         reference = schema['$ref']
         if reference in seen:
-            raise SourceError(f'{reference} refers back to itself, so it describes no column', role='schema')
+            raise SourceError(
+                issue_codes.SCHEMA_REFERENCE_UNRESOLVED,
+                f'{reference} refers back to itself, so it describes no column',
+                role='schema',
+                value=reference,
+            )
         seen.add(reference)
         target = document
         try:
@@ -60,9 +67,11 @@ def resolved(schema: Any, document: Any) -> Any:
                 step = part.replace('~1', '/').replace('~0', '~')
                 target = target[int(step)] if isinstance(target, list) else target[step]
         except (KeyError, IndexError, TypeError, ValueError) as error:
-            raise SourceError(f'{reference} points at nothing in the file', role='schema') from error
+            message = f'{reference} points at nothing in the file'
+            raise SourceError(issue_codes.SCHEMA_REFERENCE_UNRESOLVED, message, role='schema', value=reference) from error
         if not isinstance(target, Mapping):
-            raise SourceError(f'{reference} points at {target!r}, which is no schema', role='schema')
+            message = f'{reference} points at {target!r}, which is no schema'
+            raise SourceError(issue_codes.SCHEMA_REFERENCE_UNRESOLVED, message, role='schema', value=reference)
         schema = {**target, **{key: value for key, value in schema.items() if key != '$ref'}}
     return schema
 

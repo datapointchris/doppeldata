@@ -144,7 +144,7 @@ A string column is given a semantic type where enough of its values pass a type'
 need to pass where its name hints the type. An integer column is typed only where its name hints
 the type and a validator agrees. The general pack covers common identifiers, such as emails, card
 numbers and US SSNs, and `doppeldata.profiling.detector_packs.general` lists its types. The type
-names what the generator draws for it, and the failing share becomes `quality.invalid_rate`.
+names what the generator draws for it, and the failing share becomes `quality.invalid_fraction`.
 `--pack NAME` adds an installed detector pack's types to these. The healthcare pack ships with the
 library, and types NPIs, MBIs, NDC, ICD-10-CM, HCPCS and CPT codes, DEA numbers, and member, medical
 record and claim numbers. It ships no code set, so an ICD-10-CM or HCPCS code is typed and generated
@@ -273,6 +273,37 @@ zip -r doppeldata-<version>.gluewheels.zip wheels/
 
 Upload the zip, pass its `s3://` path to `--additional-python-modules`, and pass `--no-index` to
 `--python-modules-installer-option`. Glue then resolves every dependency from the zip.
+
+## Driving doppeldata from an agent
+
+A program or a coding agent drives doppeldata through `--json` and the exit status alone. This
+loop profiles a table, bends it with a scenario, and verifies the result. A table generated from
+the `orders` example stands in for real data:
+
+```bash
+doppeldata capabilities show --json   # everything this install takes, read from the registries that refuse a value outside them
+doppeldata data generate orders --rows 20000 --seed 1 --out real/ --json                  # the manifest
+doppeldata profile create real/ --out orders.profile.yaml --json
+doppeldata profile check orders.profile.yaml --json                       # "passed": true, or each issue at its field
+doppeldata scenario check hot-key orders.profile.yaml --json              # "passed": true
+doppeldata data plan orders.profile.yaml --scenario hot-key --seed 7 --out out/ --json
+doppeldata data generate orders.profile.yaml --scenario hot-key --seed 7 --out out/ --json  # the manifest
+doppeldata data check orders.profile.yaml out/ --scenario hot-key --json  # "passed": true, "verified": true
+```
+
+- **`capabilities show --json` is read from the installed doppeldata**, so it matches that version
+  exactly. Each op lists the formats a write takes it in, and each issue code its exit status and
+  hint.
+- **Every refusal names a registered `E-<AREA>-<NNN>` code.** Under `--json` each issue prints on
+  stderr as one line, with the field refused, the value given, every valid value, the closest of
+  them and a hint. [Issue codes](docs/issue-codes.md) says what each exit status means.
+- **Every write verb takes `--json` too.** `data generate` prints the manifest it wrote. `profile
+  create`, `import` and `expand` print the profile as JSON when no `--out` is given.
+- **`data plan --json` traces each column.** It names the sampler's kind, each profile field the
+  sampler reads with its pointer and value, and the id of each op writing the column. `origin` says whether
+  the column is profiled, derived from others, overlaid by the scenario or pinned.
+- **Without `--json`, `profile check`, `scenario check`, `data check` and `profile diff` print
+  GitHub Markdown**, so a report pastes into a pull request as it is.
 
 ## Layout
 

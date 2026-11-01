@@ -6,6 +6,8 @@ import json
 from typing import Any
 
 from doppeldata import _core
+from doppeldata.errors import InvalidArgument
+from doppeldata.issue_codes import UNKNOWN_SCHEMA
 
 
 @dc.dataclass(frozen=True)
@@ -23,8 +25,11 @@ def schema_names() -> list[str]:
 
 
 def schema_text(name: str) -> str:
-    """A JSON Schema the library ships, as committed in the package."""
-    return importlib.resources.files('doppeldata').joinpath('schemas', _core.schema_file_names()[name]).read_text()
+    """A JSON Schema the library ships, as committed in the package, refused with InvalidArgument where `name` names none."""
+    files = _core.schema_file_names()
+    if name not in files:
+        raise InvalidArgument(UNKNOWN_SCHEMA, f'{name!r} is not a schema doppeldata ships', field='name', value=name, valid=list(files))
+    return importlib.resources.files('doppeldata').joinpath('schemas', files[name]).read_text()
 
 
 def published_enum(definition: str) -> list[str]:

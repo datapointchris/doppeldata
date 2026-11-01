@@ -178,8 +178,8 @@ fn stream_bytes(plan: &Plan, cdc: &CdcPlan, options: &WriteOptions) -> Result<u6
     let changes = stream.changes;
     let load_files = planned_ranges(plan, options)?.len() as u64;
     let records_bytes = records.fixed * (load_files + stream.change_files_at_most) as f64
-        + records.per_row * (rows + changes.insert + changes.update + changes.delete) as f64;
-    let expected_rows = (rows + changes.insert).saturating_sub(changes.delete);
+        + records.per_row * (rows + changes.inserts + changes.updates + changes.deletes) as f64;
+    let expected_rows = (rows + changes.inserts).saturating_sub(changes.deletes);
     let expected_bytes = expected.fixed * stream.expected_parts as f64 + expected.per_row * expected_rows as f64;
     Ok((records_bytes + expected_bytes).round() as u64)
 }

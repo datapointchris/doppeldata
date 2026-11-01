@@ -32,7 +32,7 @@ class KeyColumn:
 
 
 def table_keys(backend: Backend, full: Table, sample: Table, columns: list[KeyColumn], rows: int, k_min: int) -> dict[str, Any]:
-    """The dataset's `duplicate_row_rate` and `keys`, from `full`, which holds every row, and `sample`, the dependence
+    """The dataset's `duplicate_row_fraction` and `keys`, from `full`, which holds every row, and `sample`, the dependence
     sample, which nominates a composite key before every row confirms it. A table of fewer than k_min rows is keyed as
     any other, and the privacy policy withholds its keys."""
     names = tuple(column.spec.name for column in columns)
@@ -44,7 +44,7 @@ def table_keys(backend: Backend, full: Table, sample: Table, columns: list[KeyCo
     found: dict[str, Any] = {}
     if names and rows:
         repeated = rows - counted[Request(None, 'distinct_rows', names)]
-        found['duplicate_row_rate'] = rate(repeated, rows) if repeated >= k_min else 0.0
+        found['duplicate_row_fraction'] = rate(repeated, rows) if repeated >= k_min else 0.0
     unique = {column.spec.name: counted[Request(None, 'unique_rows', (column.spec.name,))] for column in singles}
     keys = [key for name, rows_unique in unique.items() if (key := written_key((name,), rows_unique, rows, k_min))]
     # A column no two rows share keys the table alone, and a nearly unique one, such as a free-text comment, leaves the

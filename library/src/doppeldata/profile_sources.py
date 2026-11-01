@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any
 from typing import Protocol
 
+from doppeldata import issue_codes
+from doppeldata.errors import InvalidArgument
+from doppeldata.errors import UnsupportedArgument
 from doppeldata.example_profiles import bundle_example_names
 from doppeldata.inline_columns import InlineColumn
 from doppeldata.profile_format import BUNDLE_INDEX
@@ -105,18 +108,22 @@ def profile_from(source: ProfileSource) -> Profile:
         return seeded
     if isinstance(source, Mapping):
         if not all(isinstance(name, str) for name in source):
-            raise TypeError(f'the columns given are keyed by their names, as strs, not {list(source)}')
+            message = f'the columns given are keyed by their names, as strs, not {list(source)}'
+            raise UnsupportedArgument(issue_codes.INVALID_COLUMNS, message)
         return validated(expanded(dict(source), None, INLINE_TABLE, DICT_SOURCE), DICT_SOURCE)
     if isinstance(source, Sequence) and all(isinstance(name, str) for name in source):
         repeated = sorted({name for name in source if list(source).count(name) > 1})
         if repeated:
-            raise ValueError(f'the column list names {", ".join(repeated)} more than once')
+            raise InvalidArgument(
+                issue_codes.DUPLICATE_COLUMN, f'the column list names {", ".join(repeated)} more than once', value=repeated[0]
+            )
         return validated(expanded(dict.fromkeys(source), None, INLINE_TABLE, LIST_SOURCE), LIST_SOURCE)
-    raise TypeError(
+    message = (
         'generation takes a Profile, a profile or short YAML file, an example name, a list of column names, a dict of '
         f'columns such as {{"email": sd.fakes.email}}, or a schema of {", ".join(LIBRARIES[:-1])} or {LIBRARIES[-1]}, '
         f'not {type(source).__name__}'
     )
+    raise UnsupportedArgument(issue_codes.UNSUPPORTED_PROFILE_SOURCE, message, value=type(source).__name__)
 
 
 def expanded_profile(source: ProfileSource, rows: int | None = None) -> Profile:
@@ -125,5 +132,5 @@ def expanded_profile(source: ProfileSource, rows: int | None = None) -> Profile:
     if rows is None:
         return profile
     if isinstance(rows, bool) or not isinstance(rows, int) or rows < 0:
-        raise ValueError(f'rows must be zero or more, not {rows!r}')
+        raise InvalidArgument(issue_codes.INVALID_ROWS, f'rows must be zero or more, not {rows!r}', field='rows', value=rows)
     return Profile(with_row_count(copy.deepcopy(profile.document), rows))

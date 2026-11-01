@@ -8,7 +8,6 @@ SHA-256 of its RFC 8785 canonical JSON, which the library alone computes and han
 import copy
 import dataclasses as dc
 import datetime as dt
-import difflib
 import hashlib
 import importlib.resources
 import io
@@ -31,9 +30,15 @@ from ruamel.yaml.nodes import ScalarNode
 from ruamel.yaml.representer import RoundTripRepresenter
 
 from doppeldata import _core
+from doppeldata import issue_codes
 from doppeldata.errors import DoppeldataError
+from doppeldata.errors import InvalidArgument
+from doppeldata.errors import IssueCarrier
 from doppeldata.example_profiles import bundle_example_resource
 from doppeldata.example_profiles import example_resource
+from doppeldata.issue_codes import PROFILE_DOCUMENT
+from doppeldata.issue_codes import DocumentCodes
+from doppeldata.issue_codes import Issue
 from doppeldata.published_schemas import schema_text
 
 BUNDLE_INDEX = 'bundle.yaml'
@@ -80,8 +85,8 @@ INTEGER_FORMAT_RANGES = {
     'uint32': (0, 2**32 - 1),
     'uint64': (0, 2**64 - 1),
 }
-TEMPORAL_RATE_SETS = ('by_month', 'by_dow', 'by_hour')
-# Each column section that can list values, as `top_values` and `other_rate`.
+TEMPORAL_RATE_SETS = ('month_fractions', 'weekday_fractions', 'hour_fractions')
+# Each column section that can list values, as `top_values` and `other_fraction`.
 LISTING_SECTIONS = ('string', 'numeric')
 
 PointerParts = tuple[str | int, ...]
@@ -90,23 +95,24 @@ PointerParts = tuple[str | int, ...]
 @dc.dataclass(frozen=True)
 class GivenList:
     """A dataset list whose entries each draw `column` given the values of the column `given`. `by_value` names the
-    fields of an entry keyed by a listed given value, beside `other`, which holds every other value's. Where `nested`,
-    each key's value is a group of literals, as a table's row is, and otherwise one literal. Where `child_keyed`, the
-    child's values key those groups, so its column must list them."""
+    fields of an entry keyed by a listed given value, beside the field `other` names, which holds every other value's.
+    Where `nested`, each key's value is a group of literals, as a table's row is, and otherwise one literal. Where
+    `child_keyed`, the child's values key those groups, so its column must list them."""
 
     by_value: tuple[str, ...]
     nested: bool
     child_keyed: bool
+    other: str = 'other'
 
     def keys(self, entry: dict[str, Any]) -> set[str]:
         """The values of the given column the entry lists."""
         return {key for field in self.by_value if isinstance(by := entry.get(field), dict) for key in by}
 
     def groups(self, entry: dict[str, Any]) -> list[Any]:
-        """The groups of literals the entry holds, each listed value's and then `other`."""
+        """The groups of literals the entry holds, each listed value's and then every other value's."""
         fields = [entry.get(field) or {} for field in self.by_value]
         listed = [group for by in fields if isinstance(by, dict) for group in by.values()] if self.nested else fields
-        return [*listed, entry.get('other') or {}]
+        return [*listed, entry.get(self.other) or {}]
 
     def literals(self, entry: dict[str, Any]) -> int:
         return sum(len(group) for group in self.groups(entry) if isinstance(group, dict))
@@ -120,40 +126,27 @@ class GivenList:
 
 # The dataset's lists naming a parent column and the values of it each entry is drawn given.
 GIVEN_LISTS = {
-    'conditionals': GivenList(('table',), nested=True, child_keyed=True),
+    'conditionals': GivenList(('fractions',), nested=True, child_keyed=True, other='other_fractions'),
     'conditional_quantiles': GivenList(('quantiles',), nested=True, child_keyed=False),
-    'conditional_rates': GivenList(('zero_rate', 'null_rate'), nested=False, child_keyed=False),
+    'conditional_fractions': GivenList(('zero_fraction', 'null_fraction'), nested=False, child_keyed=False),
 }
 
 
-@dc.dataclass(frozen=True)
-class Issue:
-    """One reason a profile is invalid. `field` is an RFC 6901 JSON Pointer, because map keys hold category values with dots and slashes."""
-
-    code: str
-    field: str
-    message: str
-    # The names an unknown name is closest to, nearest first, where the issue is one.
-    closest: tuple[str, ...] = ()
-
-
 class InvalidProfile(DoppeldataError, ValueError):
-    def __init__(self, source: str, issues: list[Issue]) -> None:
+    """A profile that does not parse or validate. Each issue's field is an RFC 6901 JSON Pointer, because map keys hold
+    category values with dots and slashes."""
+
+    refusal = 'is not a valid profile'
+
+    def __init__(self, source: str, issues: Sequence[Issue]) -> None:
         self.source = source
-        self.issues = issues
-        listed = '\n'.join(f'  {issue.field or "/"}: {issue.message} [{issue.code}]' for issue in issues)
-        super().__init__(f'{source} is not a valid profile:\n{listed}')
+        IssueCarrier.__init__(self, issues, headline=f'{source} {self.refusal}')
 
 
 class UngenerableProfile(InvalidProfile):
     """A valid profile the engine cannot generate, such as one holding a statistic it does not draw from yet."""
 
-    exit_code = 2
-
-    def __init__(self, source: str, issues: list[Issue]) -> None:
-        super().__init__(source, issues)
-        listed = '\n'.join(f'  {issue.field or "/"}: {issue.message} [{issue.code}]' for issue in issues)
-        self.args = (f'{source} cannot be generated:\n{listed}',)
+    refusal = 'cannot be generated'
 
 
 def integer_format_checker() -> jsonschema.FormatChecker:
@@ -220,15 +213,15 @@ def yaml() -> YAML:
     return loader
 
 
-def read_document(path: Path) -> Any:
-    """A profile file as written: comments and key order kept."""
+def read_document(path: Path, codes: DocumentCodes = PROFILE_DOCUMENT) -> Any:
+    """A profile or scenario file as written: comments and key order kept. One that does not parse raises InvalidProfile."""
     try:
         if path.suffix == '.json':
             return json.loads(path.read_text())
         with path.open() as fh:
             return yaml().load(fh)
     except (json.JSONDecodeError, YAMLError, UnicodeDecodeError) as error:
-        raise InvalidProfile(str(path), [Issue('not-parseable', '', str(error))]) from error
+        raise InvalidProfile(str(path), [Issue(codes.not_parseable, '', str(error))]) from error
 
 
 def write_document(document: Any, path: Path) -> None:
@@ -307,18 +300,20 @@ def pointer(path: PointerParts) -> str:
 
 def check(plain: Any) -> list[Issue]:
     """Every reason the document is not a valid profile: numbers RFC 8785 cannot write, the schema's, then the orderings it cannot state."""
+    codes = PROFILE_DOCUMENT
     if not isinstance(plain, dict):
-        return [Issue('not-a-mapping', '', 'a profile is a mapping of sections')]
-    issues = list(unrepresentable_numbers(plain, ()))
+        return [Issue(codes.not_a_mapping, '', 'a profile is a mapping of sections', type(plain).__name__)]
+    issues = list(unrepresentable_numbers(plain, (), codes))
     if issues:
         return issues
     kind = plain.get('kind')
     if 'kind' not in plain:
-        return [Issue('schema-required', '', f"'kind' is a required property; a profile is one of {', '.join(validators())}")]
+        kinds = list(validators())
+        return [Issue(codes.required, '', f"'kind' is a required property; a profile is one of {', '.join(kinds)}", valid=tuple(kinds))]
     if not isinstance(kind, str) or kind not in validators():
-        return [tag_issue(kind, list(validators()), ('kind',))]
+        return [tag_issue(kind, list(validators()), ('kind',), codes)]
     for error in validators()[kind].iter_errors(plain):
-        issues += schema_error_issues(error, ())
+        issues += schema_error_issues(error, (), codes)
     if issues:
         return issues
     if kind == 'bundle':
@@ -326,13 +321,13 @@ def check(plain: Any) -> list[Issue]:
     return list(table_ordering_issues(plain, ()))
 
 
-def schema_error_issues(error: jsonschema.exceptions.ValidationError, at: PointerParts) -> list[Issue]:
-    """Each fault one schema error names, at its path below `at`.
+def schema_error_issues(error: jsonschema.exceptions.ValidationError, at: PointerParts, codes: DocumentCodes) -> list[Issue]:
+    """Each issue one schema error names, at its path below `at`, coded as `codes` code that kind of document's.
 
     Inside an `anyOf` or `oneOf`, only the branch the value was meant for is read. A branch is not meant where the value
     is not its type, such as the `null` every optional field has, or where a field does not hold its tag, such as
-    `derived`'s other `kind`. A value holding no branch's tag is that one fault. A key its section does not declare is an
-    `unknown-field` at the key's own pointer, naming the closest field the section takes.
+    `derived`'s other `kind`. A value holding no branch's tag is that one fault. A key its section does not declare is
+    `codes.unknown_field` at the key's own pointer, listing the fields the section takes and the closest of them.
     """
     if error.context:
         branches: dict[Any, list[jsonschema.exceptions.ValidationError]] = {}
@@ -341,20 +336,21 @@ def schema_error_issues(error: jsonschema.exceptions.ValidationError, at: Pointe
         typed = [errors for errors in branches.values() if not any(map(not_its_type, errors))]
         meant = [errors for errors in typed if not any(map(misses_tag, errors))]
         if len(meant) == 1:
-            return [issue for inner in meant[0] for issue in schema_error_issues(inner, at)]
+            return [issue for inner in meant[0] for issue in schema_error_issues(inner, at, codes)]
         missed = [inner for errors in typed for inner in errors if misses_tag(inner)]
         if not meant and missed:
-            return [
-                tag_issue(missed[0].instance, [tag for inner in missed for tag in tag_of(inner.schema)], (*at, *missed[0].absolute_path))
-            ]
+            tags = [tag for inner in missed for tag in tag_of(inner.schema)]
+            return [tag_issue(missed[0].instance, tags, (*at, *missed[0].absolute_path), codes)]
         best = jsonschema.exceptions.best_match([inner for errors in meant for inner in errors] or error.context)
         if best is not None:
-            return schema_error_issues(best, at)
+            return schema_error_issues(best, at, codes)
     path = (*at, *error.absolute_path)
     if error.validator == 'additionalProperties' and isinstance(error.instance, dict):
         known = list(error.schema.get('properties') or {})
-        return [unknown_field(str(key), known, (*path, key)) for key in error.instance if key not in known]
-    return [Issue(f'schema-{error.validator}', pointer(path), error.message)]
+        return [unknown_field(str(key), known, (*path, key), codes) for key in error.instance if key not in known]
+    valid = tuple(map(str, error.validator_value)) if error.validator == 'enum' and isinstance(error.validator_value, list) else ()
+    value = error.instance if isinstance(error.instance, str | int | float | bool | None) else None
+    return [Issue(codes.of_validator(str(error.validator)), pointer(path), error.message, value, valid)]
 
 
 def not_its_type(error: jsonschema.exceptions.ValidationError) -> bool:
@@ -377,32 +373,29 @@ def tag_of(schema: Any) -> tuple[Any, ...]:
     return tuple(values) if isinstance(values, list) and len(values) == 1 else ()
 
 
-def unknown_field(key: str, known: list[str], at: PointerParts) -> Issue:
-    closest = tuple(difflib.get_close_matches(key, known, n=3))
-    hint = f'the closest is {closest[0]}, and ' if closest else ''
-    return Issue('unknown-field', pointer(at), f'{key!r} is not a field here; {hint}this section takes {", ".join(known)}', closest)
+def unknown_field(key: str, known: list[str], at: PointerParts, codes: DocumentCodes = PROFILE_DOCUMENT) -> Issue:
+    return Issue(codes.unknown_field, pointer(at), f'{key!r} is not a field here', key, tuple(known))
 
 
-def tag_issue(value: Any, tags: list[Any], at: PointerParts) -> Issue:
-    """A tag field holding none of the tags its branches take, naming the closest."""
+def tag_issue(value: Any, tags: list[Any], at: PointerParts, codes: DocumentCodes) -> Issue:
+    """A tag field holding none of the tags its branches take."""
     names = [str(tag) for tag in tags]
-    closest = tuple(difflib.get_close_matches(value, names, n=1)) if isinstance(value, str) else ()
-    hint = f'the closest is {closest[0]}, and ' if closest else ''
-    return Issue('schema-enum', pointer(at), f'{value!r} is not a {at[-1]} here; {hint}this field takes {", ".join(names)}', closest)
+    return Issue(codes.not_one_of, pointer(at), f'{value!r} is not a {at[-1]} here', value, tuple(names))
 
 
-def unrepresentable_numbers(value: Any, at: PointerParts) -> Iterator[Issue]:
+def unrepresentable_numbers(value: Any, at: PointerParts, codes: DocumentCodes) -> Iterator[Issue]:
     """Numbers anywhere in the document, unknown fields included, that canonical JSON cannot write."""
     if isinstance(value, dict):
         for key, item in value.items():
-            yield from unrepresentable_numbers(item, (*at, key))
+            yield from unrepresentable_numbers(item, (*at, key), codes)
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            yield from unrepresentable_numbers(item, (*at, index))
+            yield from unrepresentable_numbers(item, (*at, index), codes)
     elif isinstance(value, float) and not math.isfinite(value):
-        yield Issue('not-finite', pointer(at), f'{value} is not a finite number')
+        yield Issue(codes.not_finite, pointer(at), f'{value} is not a finite number', str(value))
     elif isinstance(value, int) and not isinstance(value, bool) and abs(value) > LARGEST_EXACT_INTEGER:
-        yield Issue('integer-too-large', pointer(at), f'{value} is beyond ±2^53, the largest integer canonical JSON writes exactly')
+        message = f'{value} is beyond ±2^53, the largest integer canonical JSON writes exactly'
+        yield Issue(codes.integer_too_large, pointer(at), message, str(value))
 
 
 def bundle_ordering_issues(bundle: dict[str, Any]) -> Iterator[Issue]:
@@ -410,7 +403,8 @@ def bundle_ordering_issues(bundle: dict[str, Any]) -> Iterator[Issue]:
         if not isinstance(table, dict):
             continue
         if table['name'] != name:
-            yield Issue('table-name-mismatch', pointer(('tables', name, 'name')), f'the table under {name!r} is named {table["name"]!r}')
+            message = f'the table under {name!r} is named {table["name"]!r}'
+            yield Issue(issue_codes.TABLE_NAME_MISMATCH, pointer(('tables', name, 'name')), message, table['name'])
         yield from table_ordering_issues(table, ('tables', name))
     for index, relationship in enumerate(bundle.get('relationships') or []):
         fanout = relationship.get('fanout') or {}
@@ -422,17 +416,18 @@ def table_ordering_issues(table: dict[str, Any], at: PointerParts) -> Iterator[I
     layout = (table.get('source') or {}).get('layout') or {}
     yield from quantile_issues(layout.get('rows_per_file'), (*at, 'source', 'layout', 'rows_per_file'))
     for index, conditional in enumerate((table.get('dataset') or {}).get('conditionals') or []):
-        for given, row in conditional['table'].items():
-            yield from share_ceiling_issues(row.values(), (*at, 'dataset', 'conditionals', index, 'table', given))
-        if conditional.get('other'):
-            yield from share_ceiling_issues(conditional['other'].values(), (*at, 'dataset', 'conditionals', index, 'other'))
+        for given, row in conditional['fractions'].items():
+            yield from share_ceiling_issues(row.values(), (*at, 'dataset', 'conditionals', index, 'fractions', given))
+        if conditional.get('other_fractions'):
+            other = conditional['other_fractions'].values()
+            yield from share_ceiling_issues(other, (*at, 'dataset', 'conditionals', index, 'other_fractions'))
     for index, column in enumerate(table.get('columns') or []):
         yield from column_ordering_issues(column, (*at, 'columns', index))
 
 
 def column_ordering_issues(column: dict[str, Any], at: PointerParts) -> Iterator[Issue]:
-    if column.get('type_mix'):
-        yield from rate_sum_issues(column['type_mix'].values(), (*at, 'type_mix'))
+    if column.get('type_mix_fractions'):
+        yield from rate_sum_issues(column['type_mix_fractions'].values(), (*at, 'type_mix_fractions'))
     numeric = column.get('numeric') or {}
     yield from quantile_issues(numeric.get('quantiles'), (*at, 'numeric', 'quantiles'))
     if numeric.get('histogram'):
@@ -443,7 +438,8 @@ def column_ordering_issues(column: dict[str, Any], at: PointerParts) -> Iterator
         and isinstance(extremes.get('high'), int | float)
         and extremes['low'] > extremes['high']
     ):
-        yield Issue('extremes-reversed', pointer((*at, 'numeric', 'extremes')), f'low {extremes["low"]} is above high {extremes["high"]}')
+        message = f'low {extremes["low"]} is above high {extremes["high"]}'
+        yield Issue(issue_codes.EXTREMES_REVERSED, pointer((*at, 'numeric', 'extremes')), message)
     temporal = column.get('temporal') or {}
     for name in TEMPORAL_RATE_SETS:
         if temporal.get(name):
@@ -461,7 +457,7 @@ def column_ordering_issues(column: dict[str, Any], at: PointerParts) -> Iterator
     for path, pattern in ((('string', 'pattern'), stored), (('semantic', 'generator_hint', 'pattern'), hinted)):
         problem = _core.pattern_problem(pattern) if isinstance(pattern, str) else None
         if problem:
-            yield Issue('invalid-pattern', pointer((*at, *path)), problem)
+            yield Issue(issue_codes.INVALID_PATTERN, pointer((*at, *path)), problem, pattern)
 
 
 def quantile_level(name: str) -> float:
@@ -481,7 +477,7 @@ def listed_section(column: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
 def described_rows(document: dict[str, Any]) -> int | None:
     """The rows a profile's rates are shares of: those its sample read, or else every row."""
     sample = (document.get('generated') or {}).get('sample') or {}
-    rows: int | None = sample.get('rows_read') or (document.get('dataset') or {}).get('row_count')
+    rows: int | None = sample.get('rows_read') or (document.get('dataset') or {}).get('rows')
     return rows
 
 
@@ -489,13 +485,13 @@ def quantile_issues(quantiles: dict[str, float] | None, at: PointerParts) -> Ite
     by_level = sorted((quantiles or {}).items(), key=lambda item: quantile_level(item[0]))
     for (lower, low), (upper, high) in zip(by_level, by_level[1:], strict=False):
         if high < low:
-            yield Issue('quantiles-not-rising', pointer((*at, upper)), f'{upper} ({high}) is below {lower} ({low})')
+            yield Issue(issue_codes.INVALID_QUANTILES, pointer((*at, upper)), f'{upper} ({high}) is below {lower} ({low})', high)
 
 
 def rate_sum_issues(rates: Any, at: PointerParts) -> Iterator[Issue]:
     total = sum(rates)
     if abs(total - 1) > RATE_SUM_TOLERANCE:
-        yield Issue('rates-not-summing-to-one', pointer(at), f'the rates sum to {total:.4g}, not 1')
+        yield Issue(issue_codes.FRACTIONS_NOT_SUMMING_TO_ONE, pointer(at), f'the fractions sum to {total:.4g}, not 1', total)
 
 
 def share_ceiling_issues(shares: Any, at: PointerParts) -> Iterator[Issue]:
@@ -503,16 +499,16 @@ def share_ceiling_issues(shares: Any, at: PointerParts) -> Iterator[Issue]:
     state."""
     total = sum(shares)
     if total - 1 > RATE_SUM_TOLERANCE:
-        yield Issue('rates-over-one', pointer(at), f'the shares sum to {total:.4g}, over 1')
+        yield Issue(issue_codes.FRACTIONS_OVER_ONE, pointer(at), f'the fractions sum to {total:.4g}, over 1', total)
 
 
 def histogram_issues(histogram: dict[str, Any], at: PointerParts) -> Iterator[Issue]:
-    edges, counts = histogram['edges'], histogram['counts']
+    edges, counts = histogram['edges'], histogram['bin_rows']
     if len(counts) != len(edges) - 1:
         message = f'{len(edges)} edges bound {len(edges) - 1} bins, and there are {len(counts)} counts'
-        yield Issue('histogram-bins-mismatch', pointer(at), message)
+        yield Issue(issue_codes.HISTOGRAM_BINS_MISMATCH, pointer(at), message)
     if any(high <= low for low, high in zip(edges, edges[1:], strict=False)):
-        yield Issue('histogram-edges-not-rising', pointer((*at, 'edges')), 'each edge must be above the one before it')
+        yield Issue(issue_codes.INVALID_QUANTILES, pointer((*at, 'edges')), 'each edge must be above the one before it')
 
 
 class Profile:
@@ -534,7 +530,7 @@ class Profile:
             imported_from = (profile.document.get('generated') or {}).get('imported_from')
             if imported_from:
                 message = f'this file is a bundle of the tables {tables} in {imported_from}; import one of them with --table, or table='
-            issues = [Issue('not-a-table', '/kind', message)]
+            issues = [Issue(issue_codes.BUNDLE_GIVEN, '/kind', message, 'bundle')]
         if issues:
             raise InvalidProfile(str(path), issues)
         return profile
@@ -645,7 +641,7 @@ class Profile:
         """Write the profile as YAML, or as JSON to a `.json` path, keeping comments and key order."""
         target = Path(path) if path is not None else self.path
         if target is None:
-            raise ValueError('this profile has no file of its own, so save needs a path')
+            raise InvalidArgument(issue_codes.SAVE_NEEDS_PATH, 'this profile has no file of its own, so save needs a path', field='path')
         write_document(self.document, target)
         self.path = target
 
@@ -689,7 +685,7 @@ class Bundle:
         document = read_document(index)
         issues = check(to_plain(document))
         if not issues and document.get('kind') != 'bundle':
-            issues = [Issue('not-a-bundle', '/kind', 'this file is a table profile, which Profile.load reads')]
+            issues = [Issue(issue_codes.TABLE_NOT_BUNDLE, '/kind', 'this file is a table profile, which Profile.load reads', 'table')]
         if issues:
             raise InvalidProfile(str(index), issues)
         tables = {}
@@ -699,11 +695,12 @@ class Bundle:
                 continue
             member = index.parent / entry
             if not member.is_file():
-                raise InvalidProfile(str(index), [Issue('table-file-missing', pointer(('tables', name)), f'{entry} does not exist')])
+                missing = Issue(issue_codes.TABLE_FILE_MISSING, pointer(('tables', name)), f'{entry} does not exist', entry)
+                raise InvalidProfile(str(index), [missing])
             table = Profile.load(member)
             if table.document['name'] != name:
                 message = f'{entry} is named {table.document["name"]!r}, and the bundle names it {name!r}'
-                raise InvalidProfile(str(index), [Issue('table-name-mismatch', pointer(('tables', name)), message)])
+                raise InvalidProfile(str(index), [Issue(issue_codes.TABLE_NAME_MISMATCH, pointer(('tables', name)), message)])
             tables[name] = table
         return cls(document, index, tables)
 

@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
@@ -50,10 +51,12 @@ def data_package_profile(path: str | os.PathLike[str], *, table: str | None = No
     """The seed of the resource `table` names in a Data Package, or of its only one. `Profile.from_data_package` documents it."""
     found, _, resources = package_resources(path)
     if table is None and len(resources) != 1:
-        raise SourceError(f'{found} holds the resources {", ".join(resources)}; name one with table=, or --table', role='schema')
+        message = f'{found} holds the resources {", ".join(resources)}; name one with table=, or --table'
+        raise SourceError(issue_codes.SCHEMA_TABLE_NOT_NAMED, message, role='schema', valid=list(resources))
     name = table if table is not None else next(iter(resources))
     if name not in resources:
-        raise SourceError(f'{found} holds no resource named {name}; it holds {", ".join(resources)}', role='schema')
+        message = f'{found} holds no resource named {name}; it holds {", ".join(resources)}'
+        raise SourceError(issue_codes.SCHEMA_TABLE_UNKNOWN, message, role='schema', value=name, valid=list(resources))
     return schema_table(resources[name], name, f'data-package:{found.name}#{name}').profile()
 
 
@@ -78,7 +81,7 @@ def package_resources(path: str | os.PathLike[str]) -> tuple[Path, str, dict[str
     """
     found, package = schema_document(path)
     if not isinstance(package, Mapping) or not isinstance(package.get('resources'), list):
-        raise SourceError(f'{found} is not a Data Package, which lists its resources', role='schema')
+        raise SourceError(issue_codes.NOT_THE_SCHEMA_FORMAT, f'{found} is not a Data Package, which lists its resources', role='schema')
     resources: dict[str, Mapping[str, Any]] = {}
     for resource in package['resources']:
         if not isinstance(resource, Mapping) or 'schema' not in resource:
@@ -86,20 +89,19 @@ def package_resources(path: str | os.PathLike[str]) -> tuple[Path, str, dict[str
         schema = resource['schema']
         if isinstance(schema, str):
             if '://' in schema:
-                raise SourceError(
-                    f'{found}: {resource.get("name")} names its schema at {schema}; save it beside the package', role='schema'
-                )
+                message = f'{found}: {resource.get("name")} names its schema at {schema}; save it beside the package'
+                raise SourceError(issue_codes.SCHEMA_REFERENCE_UNRESOLVED, message, role='schema', value=schema)
             _, schema = schema_document(found.parent / schema)
         resources[str(resource.get('name'))] = schema
     if not resources:
-        raise SourceError(f'{found} holds no resource with a schema', role='schema')
+        raise SourceError(issue_codes.NOT_THE_SCHEMA_FORMAT, f'{found} holds no resource with a schema', role='schema')
     return found, str(package.get('name') or table_name(found)), resources
 
 
 def schema_table(schema: Any, name: str, named: str) -> DeclaredTable:
     """The table a Table Schema describes, its first missing value written as a CSV's null."""
     if not isinstance(schema, Mapping) or not isinstance(schema.get('fields'), list):
-        raise SourceError(f'{named} is not a Table Schema, which lists its fields', role='schema')
+        raise SourceError(issue_codes.NOT_THE_SCHEMA_FORMAT, f'{named} is not a Table Schema, which lists its fields', role='schema')
     columns, unread = [], []
     for field in schema['fields']:
         column = schema_column(field)

@@ -12,6 +12,7 @@ from typing import Any
 import pyarrow as pa
 
 from doppeldata import _core
+from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 
 # Held by the writer too, which starts no invalid_utf8 fault inside it.
@@ -33,7 +34,7 @@ def first_block(path: str) -> bytes:
         with pa.input_stream(path, compression='detect') as stream:
             return bytes(stream.read(FIRST_BLOCK_BYTES))
     except (OSError, pa.ArrowException) as error:
-        raise SourceError(f'{path} could not be read: {error}', exit_code=1) from error
+        raise SourceError(issue_codes.DATA_UNREADABLE, f'{path} could not be read: {error}') from error
 
 
 def first_blocks(paths: Sequence[str]) -> list[bytes]:
@@ -71,7 +72,7 @@ def s3_first_block(url: str, client: Any) -> bytes:
         # A block cut mid-stream ends in an error once its whole bytes are read, and what came before it stands.
         if not held:
             message = f'the first {len(raw)} bytes of {url} decompressed as {codec} to nothing: {error}'
-            raise SourceError(message, exit_code=1) from error
+            raise SourceError(issue_codes.DATA_UNREADABLE, message) from error
     return bytes(held)
 
 

@@ -53,7 +53,7 @@ def test_data_generated_at_fewer_rows_than_its_source_passes_its_check_and_a_rai
     patched = generated.set_column(generated.schema.get_field_index('amount'), 'amount', patched_amount)
     report = sd.check(profile, patched)
     schema.validate(report.to_plain())
-    assert failures(report) == [('null_rate_delta', 'amount')]
+    assert failures(report) == [('null_fraction_delta', 'amount')]
 
 
 def test_the_orders_example_generated_at_a_tenth_of_its_rows_keeps_every_quantity_and_passes_its_check():

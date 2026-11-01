@@ -28,7 +28,10 @@ use doppeldata_core::manifest::ManifestFile;
 use doppeldata_core::manifest::StreamFile;
 use doppeldata_core::scenario::CdcTimestampUnit;
 use doppeldata_core::scenario::ListedFault;
+use doppeldata_core::scenario::Op;
 use doppeldata_core::scenario::StreamFault;
+use doppeldata_core::scenario::op_formats;
+use doppeldata_core::scenario::op_takes_format;
 use serde_json::Map;
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -122,6 +125,17 @@ pub(crate) fn manifest_section(cdc: &CdcPlan) -> ManifestCdc {
 pub(crate) fn check_layout(cdc: &CdcPlan, partition_by: &[String], output: &Output) -> Result<(), LayoutError> {
     let refuse = |fault: ScenarioFault, field: String, message: String| Err(LayoutError::Scenario { fault, field, message });
     let unit_field = format!("{}/timestamp_unit", cdc.field());
+    if !op_takes_format(Op::Cdc, output) {
+        return refuse(
+            ScenarioFault::OpNotForFormat,
+            cdc.field(),
+            format!(
+                "cdc writes the {} files DMS writes, and the write makes {} files",
+                op_formats(Op::Cdc).join(" or "),
+                output.format_name()
+            ),
+        );
+    }
     match output {
         Output::Csv(_) if cdc.timestamp_unit().is_some() => {
             return refuse(
@@ -154,17 +168,7 @@ pub(crate) fn check_layout(cdc: &CdcPlan, partition_by: &[String], output: &Outp
             }
             _ => {}
         },
-        Output::Csv(_) => {}
-        other => {
-            return refuse(
-                ScenarioFault::OpNotForFormat,
-                cdc.field(),
-                format!(
-                    "cdc writes the CSV or Parquet files DMS writes, and the write makes {} files",
-                    other.format_name()
-                ),
-            );
-        }
+        _ => {}
     }
     if !partition_by.is_empty() {
         return refuse(

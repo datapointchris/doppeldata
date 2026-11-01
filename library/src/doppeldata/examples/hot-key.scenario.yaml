@@ -2,6 +2,6 @@
 scenario: hot-key
 description: Five customers place 60% of the orders, so a join or group-by on customer_id lands most rows in one task.
 perturbations:
-  - {op: hot_keys, column: customer_id, keys: 5, share: 0.6}
+  - {op: hot_keys, column: customer_id, keys: 5, fraction: 0.6}
 expect:
-  - {metric: hot_keys.share, column: customer_id, at_least: 0.55}
+  - {metric: hot_keys.fraction, column: customer_id, at_least: 0.55}

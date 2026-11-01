@@ -165,7 +165,7 @@ files. It printed:
 
 `benchmarks/type_mix_columns.py`, which `task bench` runs, adds an `int64` `user_id` of 25,000
 distinct values to `eight-columns`. It times `sd.generate` with the column typed, then with
-`type_mix: {integer: 0.75, string: 0.25}`, which draws it as text. It printed:
+`type_mix_fractions: {integer: 0.75, string: 0.25}`, which draws it as text. It printed:
 
 | Arm | Threads | Work | Per second, range of 5 runs | Load average, before and after |
 | --- | --- | --- | --- | --- |

@@ -24,12 +24,12 @@ def test_every_shipped_pack_hint_generates_values_its_own_validator_passes(pack_
             'semantic': {'type': detector.type, 'generator_hint': dict(detector.generator_hint)},
         }
         if 'check_digit' in detector.generator_hint:
-            column['quality'] = {'invalid_rate': INVALID_RATE}
+            column['quality'] = {'invalid_fraction': INVALID_RATE}
         columns.append(column)
     document = {
         'kind': 'table',
         'name': 'hints',
-        'dataset': {'row_count': ROWS},
+        'dataset': {'rows': ROWS},
         'columns': columns,
     }
     table = pa.table(generate(Profile(document)))
@@ -40,7 +40,7 @@ def test_every_shipped_pack_hint_generates_values_its_own_validator_passes(pack_
         values = table.column(column['name']).combine_chunks()
         # A check profiles generated data with no code list, so a detector reading one validates without it.
         rate = passes(bound(detector, {}), detector.generator_hint.get('check_digit'), values, column['name']) / ROWS
-        expected = 1 - column.get('quality', {}).get('invalid_rate', 0)
+        expected = 1 - column.get('quality', {}).get('invalid_fraction', 0)
         if rate < expected - TOLERANCE:
             failures.append(f'{column["name"]} {dict(detector.generator_hint)} passed {rate:.4f}, expected {expected}')
     assert not failures, '\n'.join(failures)

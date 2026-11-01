@@ -10,12 +10,14 @@ from urllib.parse import urlparse
 
 import botocore.exceptions
 
+from doppeldata import issue_codes
 from doppeldata.aws_access import AWS_ERRORS
 from doppeldata.aws_access import CREDENTIAL_ADVICE
 from doppeldata.aws_access import CREDENTIAL_ERRORS
 from doppeldata.aws_access import answered
 from doppeldata.aws_access import no_answer
 from doppeldata.aws_access import unanswered
+from doppeldata.errors import InvalidArgument
 from doppeldata.errors import SourceError
 from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import PARTIAL_MANIFEST_FILE_NAME
@@ -44,14 +46,16 @@ def resolve(data: Any) -> Source:
         return Source(format=None, table=data)
     items = [s3_url(os.fspath(item)) for item in ([data] if isinstance(data, str | os.PathLike) else data)]
     if not items:
-        raise SourceError('no data was named; name a file, a directory or an s3:// prefix')
+        raise SourceError(issue_codes.DATA_NOT_NAMED, 'no data was named; name a file, a directory or an s3:// prefix')
     files = tuple(file for item in items for file in (s3_files(item) if item.startswith('s3://') else local_files(Path(item))))
     formats = sorted({found.value for found in map(format_of, (file.path for file in files)) if found})
     if len(formats) > 1:
-        raise SourceError(f'{", ".join(items)} holds files of {len(formats)} formats, {", ".join(formats)}; profile one format at a time')
+        message = f'{", ".join(items)} holds files of {len(formats)} formats, {", ".join(formats)}; profile one format at a time'
+        raise SourceError(issue_codes.MIXED_FORMATS, message, value=formats)
     source_format = format_of(files[0].path)
     if source_format is None:
-        raise SourceError(f'{files[0].path} is not a format doppeldata reads; name a file ending in one of {", ".join(SUFFIX_FORMATS)}')
+        message = f'{files[0].path} is not a format doppeldata reads; name a file ending in one of {", ".join(SUFFIX_FORMATS)}'
+        raise SourceError(issue_codes.NO_READABLE_FILE, message, value=files[0].path, valid=list(SUFFIX_FORMATS))
     return Source(format=source_format, files=files, name=name_of(items[0]), roots=tuple(items))
 
 
@@ -95,17 +99,18 @@ def local_files(path: Path) -> list[SourceFile]:
     if path.is_file():
         return [local_file(path, PurePosixPath(path.name))]
     if not path.is_dir():
-        raise SourceError(f'{path} does not exist')
+        raise SourceError(issue_codes.DATA_MISSING, f'{path} does not exist', value=str(path))
     found = sorted(
         (candidate, PurePosixPath(candidate.relative_to(path).as_posix()))
         for candidate in path.rglob('*')
         if candidate.is_file() and format_of(candidate.name)
     )
     if any(relative == UNFINISHED_WRITE for _, relative in found):
-        raise SourceError(unfinished(str(path)))
+        raise SourceError(issue_codes.DATA_UNFINISHED, unfinished(str(path)), value=str(path))
     kept = [local_file(candidate, relative) for candidate, relative in found if not is_hidden(relative)]
     if not kept:
-        raise SourceError(f'{path} holds no file doppeldata reads, one ending in {", ".join(SUFFIX_FORMATS)}')
+        message = f'{path} holds no file doppeldata reads, one ending in {", ".join(SUFFIX_FORMATS)}'
+        raise SourceError(issue_codes.NO_READABLE_FILE, message, value=str(path), valid=list(SUFFIX_FORMATS))
     return kept
 
 
@@ -123,13 +128,13 @@ def s3_errors(url: str, endpoint: str, *, doing: str = 'listed') -> Iterator[Non
     try:
         yield
     except CREDENTIAL_ERRORS as error:
-        raise SourceError(f'{url} could not be {doing}: {error}; {CREDENTIAL_ADVICE}', exit_code=1) from error
+        raise SourceError(issue_codes.NO_CREDENTIALS, f'{url} could not be {doing}: {error}; {CREDENTIAL_ADVICE}') from error
     except AWS_ERRORS as error:
         if unanswered(error):
-            raise SourceError(no_answer(endpoint, 'S3', error), exit_code=4) from error
+            raise SourceError(issue_codes.NO_ANSWER, no_answer(endpoint, 'S3', error)) from error
         if isinstance(error, botocore.exceptions.ClientError):
-            raise SourceError(f'{url} could not be {doing}: {endpoint} answered {answered(error)}', exit_code=1) from error
-        raise SourceError(f'{url} could not be {doing} through {endpoint}: {error}', exit_code=1) from error
+            raise SourceError(issue_codes.STORE, f'{url} could not be {doing}: {endpoint} answered {answered(error)}') from error
+        raise SourceError(issue_codes.STORE, f'{url} could not be {doing} through {endpoint}: {error}') from error
 
 
 def s3_files(url: str) -> list[SourceFile]:
@@ -138,8 +143,8 @@ def s3_files(url: str) -> list[SourceFile]:
     bucket, key = parsed.netloc, parsed.path.lstrip('/')
     try:
         _, client = s3_session()
-    except ValueError as error:
-        raise SourceError(f'{url} could not be listed: {error}', exit_code=2) from error
+    except InvalidArgument as error:
+        raise SourceError(error.code, f'{url} could not be listed: {error.message}', role='environment') from error
     with s3_errors(url, endpoint_named(client)):
         # Spark writes a table as a `name.parquet/` directory, so a key with a suffix may still be a prefix.
         if format_of(key) and not key.endswith('/') and (head := object_head(client, bucket, key)):
@@ -147,7 +152,8 @@ def s3_files(url: str) -> list[SourceFile]:
         prefix = key.rstrip('/') + '/' if key else ''
         found = sorted(s3_objects(client, bucket, prefix), key=lambda file: file.path)
     if not found:
-        raise SourceError(f'{url} holds no object doppeldata reads, one ending in {", ".join(SUFFIX_FORMATS)}')
+        message = f'{url} holds no object doppeldata reads, one ending in {", ".join(SUFFIX_FORMATS)}'
+        raise SourceError(issue_codes.NO_READABLE_FILE, message, value=url, valid=list(SUFFIX_FORMATS))
     return found
 
 
@@ -158,8 +164,8 @@ def s3_manifest(url: str) -> Manifest | None:
     key = f'{prefix}/{MANIFEST_FILE_NAME}' if prefix else MANIFEST_FILE_NAME
     try:
         _, client = s3_session()
-    except ValueError as error:
-        raise SourceError(f'{url} could not be read: {error}', exit_code=2) from error
+    except InvalidArgument as error:
+        raise SourceError(error.code, f'{url} could not be read: {error.message}', role='environment') from error
     with s3_errors(url, endpoint_named(client), doing='read'):
         try:
             body: bytes = client.get_object(Bucket=parsed.netloc, Key=key)['Body'].read()
@@ -176,8 +182,8 @@ def s3_holds(url: str, name: str) -> bool:
     prefix = parsed.path.strip('/')
     try:
         _, client = s3_session()
-    except ValueError as error:
-        raise SourceError(f'{url} could not be read: {error}', exit_code=2) from error
+    except InvalidArgument as error:
+        raise SourceError(error.code, f'{url} could not be read: {error.message}', role='environment') from error
     with s3_errors(url, endpoint_named(client), doing='read'):
         return object_head(client, parsed.netloc, f'{prefix}/{name}' if prefix else name) is not None
 
@@ -200,7 +206,7 @@ def check_unchanged(source: Source) -> None:
     changed = sorted({file.path for file in set(resolve(list(source.roots)).files) ^ set(source.files)})
     if changed:
         listed = ', '.join(changed[:5]) + (f' and {len(changed) - 5} more' if len(changed) > 5 else '')
-        raise SourceError(f'{listed} changed while it was profiled; profile it again once it stops changing', exit_code=1)
+        raise SourceError(issue_codes.DATA_CHANGED, f'{listed} changed while it was profiled; profile it again once it stops changing')
 
 
 def s3_objects(client: Any, bucket: str, prefix: str) -> Iterator[SourceFile]:
@@ -208,6 +214,6 @@ def s3_objects(client: Any, bucket: str, prefix: str) -> Iterator[SourceFile]:
         for entry in page.get('Contents', []):
             relative = PurePosixPath(entry['Key'].removeprefix(prefix))
             if relative == UNFINISHED_WRITE:
-                raise SourceError(unfinished(f's3://{bucket}/{prefix}'))
+                raise SourceError(issue_codes.DATA_UNFINISHED, unfinished(f's3://{bucket}/{prefix}'), value=f's3://{bucket}/{prefix}')
             if format_of(entry['Key']) and not is_hidden(relative):
                 yield SourceFile(f's3://{bucket}/{entry["Key"]}', entry['Size'], entry['ETag'], partition_keys(relative))

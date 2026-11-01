@@ -13,8 +13,8 @@ each. A column's nulls are dropped first, so a column with nulls is validated on
   `check_digits_hold` decides that, so the profiler and the generator read one rule.
 - **Of the types that qualify, the most values passed wins.** A tie goes to the hinted type, then to
   the pack and the detector listed first.
-- **`quality.invalid_rate` is the share that failed.** A card-number column with 0.3% bad check
-  digits writes `invalid_rate: 0.003`, and the generator leaves that share of its Luhn digits wrong.
+- **`quality.invalid_fraction` is the share that failed.** A card-number column with 0.3% bad check
+  digits writes `invalid_fraction: 0.003`, and the generator leaves that share of its Luhn digits wrong.
 - **`confidence` is the pass rate.** A name hint halves the doubt left, so 0.9 with a hint is 0.95. A
   type its name hint assigns is given `HINT_ASSIGNED_CONFIDENCE`.
 - **`detectors` lists the methods that agreed.** The first is the detector's `method`: `pattern`
@@ -182,9 +182,9 @@ acme = "acme_detectors:PACK"
   rather than as the written profile failing its schema, or as generation failing wherever it runs.
 - **Two enabled packs may not declare one type.** The privacy policy reads a type's sensitivity
   from one pack.
-- **A pack named but not installed is `refused`, and exits 2.** Any other pack error is `failed`,
-  exits 1 and names the pack. A validator's error also names the type and the column. The kinds
-  are a stopped write's, and `errors.py` maps them to exit statuses for both.
+- **A pack named but not installed is `E-DATA-022`, and exits 2.** Its issue lists the installed
+  packs and the nearest of them. Any other pack error is `E-DATA-023`, exits 1 and names the pack.
+  A validator's error also names the type and the column.
 - **`semantic.pack` names the pack that typed each column**, so a reviewer sees whose rule assigned
   the type. `generated.detector_packs` names each pack a run enabled, with the distribution and
   version that provided it. An earlier profile stands unchanged only where those match, and they

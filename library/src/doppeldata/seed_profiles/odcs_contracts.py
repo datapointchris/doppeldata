@@ -10,6 +10,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
+from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 from doppeldata.profile_format import Profile
 from doppeldata.seed_profiles.declared_columns import DeclaredColumn
@@ -31,21 +32,22 @@ def odcs_profile(path: str | os.PathLike[str], *, table: str | None = None) -> P
     """The seed of the schema object `table` names in an ODCS v3 contract, or of its only one. `Profile.from_odcs` documents it."""
     found, document = schema_document(path)
     if not isinstance(document, Mapping) or not str(document.get('apiVersion', 'v3')).startswith('v3'):
-        raise SourceError(f'{found} is not an ODCS v3 contract, whose apiVersion starts v3', role='schema')
-    objects = [entry for entry in document.get('schema') or [] if isinstance(entry, Mapping)]
-    names = [entry.get('name') for entry in objects]
-    if table is None and len(objects) != 1:
-        held = (
-            f'holds the schema objects {", ".join(map(str, names))}; name one with table=, or --table'
-            if objects
-            else 'holds no schema object'
+        raise SourceError(
+            issue_codes.NOT_THE_SCHEMA_FORMAT, f'{found} is not an ODCS v3 contract, whose apiVersion starts v3', role='schema'
         )
-        raise SourceError(f'{found} {held}', role='schema')
+    objects = [entry for entry in document.get('schema') or [] if isinstance(entry, Mapping)]
+    names = [str(entry.get('name')) for entry in objects]
+    if table is None and len(objects) != 1:
+        if not objects:
+            raise SourceError(issue_codes.NOT_THE_SCHEMA_FORMAT, f'{found} holds no schema object', role='schema')
+        held = f'holds the schema objects {", ".join(names)}; name one with table=, or --table'
+        raise SourceError(issue_codes.SCHEMA_TABLE_NOT_NAMED, f'{found} {held}', role='schema', valid=names)
     chosen = (
         objects[0] if table is None else next((entry for entry in objects if table in (entry.get('name'), entry.get('physicalName'))), None)
     )
     if chosen is None:
-        raise SourceError(f'{found} holds no schema object named {table}; it holds {", ".join(map(str, names))}', role='schema')
+        message = f'{found} holds no schema object named {table}; it holds {", ".join(names)}'
+        raise SourceError(issue_codes.SCHEMA_TABLE_UNKNOWN, message, role='schema', value=table, valid=names)
     named = f'odcs:{found.name}#{chosen.get("name")}'
     return contract_table(chosen, named).profile()
 
@@ -69,7 +71,7 @@ def contract_table(entry: Mapping[str, Any], named: str) -> DeclaredTable:
         unique_keys=tuple(unique),
         partition_keys=tuple(PartitionKey(column.name, column.arrow_type()) for _, column in partitioned),
         row_count=row_count(quality.get('rowCount')),
-        duplicate_row_rate=share(quality.get('duplicateValues')),
+        duplicate_row_fraction=share(quality.get('duplicateValues')),
     )
 
 
@@ -97,7 +99,7 @@ def contract_column(prop: Mapping[str, Any], name: str | None = None) -> Declare
     values = tuple(entry.get('value') if isinstance(entry, Mapping) else entry for entry in prop.get('enum') or [])
     nulls = share(metrics(prop.get('quality')).get('nullValues'))
     if nulls is not None:
-        column = dc.replace(column, null_rate=nulls)
+        column = dc.replace(column, null_fraction=nulls)
     if column.logical_type == 'string':
         return dc.replace(
             column,

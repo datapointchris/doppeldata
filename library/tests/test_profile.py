@@ -32,7 +32,7 @@ def test_the_digest_ignores_format_comments_key_order_and_when_and_by_what_it_wa
     reordered['generated'] |= {'at': '2030-01-01T00:00:00Z', 'tool': 'doppeldata 9.9.9'}
     assert Profile.load(write_json(tmp_path / 'orders.json', reordered)).digest == original.digest
 
-    reordered['dataset']['row_count'] += 1
+    reordered['dataset']['rows'] += 1
     assert Profile.load(write_json(tmp_path / 'orders.json', reordered)).digest != original.digest
 
 
@@ -41,28 +41,28 @@ def test_saving_changes_only_the_edited_value(tmp_path):
     path = tmp_path / 'orders.profile.yaml'
     path.write_text(text)
     profile = Profile.load(path)
-    profile.document['dataset']['row_count'] = 42
+    profile.document['dataset']['rows'] = 42
     profile.save()
-    assert path.read_text() == text.replace('row_count: 10000000', 'row_count: 42')
+    assert path.read_text() == text.replace('rows: 10000000', 'rows: 42')
 
 
 @pytest.mark.parametrize(
     ('edit', 'expected'),
     [
-        (lambda p: p['columns'][1].update(null_rate=1.5), {('schema-maximum', '/columns/1/null_rate')}),
-        (lambda p: p['dataset']['keys'].update(primary={'uniqueness': 1.0}), {('schema-required', '/dataset/keys/primary')}),
-        (lambda p: p['columns'][1]['numeric'].update(skew=math.nan), {('not-finite', '/columns/1/numeric/skew')}),
-        (lambda p: p['columns'][1]['numeric']['quantiles'].update(p5=1.0), {('schema-pattern', '/columns/1/numeric/quantiles')}),
+        (lambda p: p['columns'][1].update(null_fraction=1.5), {('E-PROFILE-009', '/columns/1/null_fraction')}),
+        (lambda p: p['dataset']['keys'].update(primary={'uniqueness': 1.0}), {('E-PROFILE-005', '/dataset/keys/primary')}),
+        (lambda p: p['columns'][1]['numeric'].update(skew=math.nan), {('E-PROFILE-003', '/columns/1/numeric/skew')}),
+        (lambda p: p['columns'][1]['numeric']['quantiles'].update(p5=1.0), {('E-PROFILE-010', '/columns/1/numeric/quantiles')}),
         (
             lambda p: (
                 p['columns'][1]['numeric']['quantiles'].update(p95=50.0),
-                p['columns'][3]['temporal'].update(by_dow=[0.1] * 7),
-                p['columns'][1]['numeric']['histogram'].update(counts=[1, 2, 3]),
+                p['columns'][3]['temporal'].update(weekday_fractions=[0.1] * 7),
+                p['columns'][1]['numeric']['histogram'].update(bin_rows=[1, 2, 3]),
             ),
             {
-                ('quantiles-not-rising', '/columns/1/numeric/quantiles/p95'),
-                ('rates-not-summing-to-one', '/columns/3/temporal/by_dow'),
-                ('histogram-bins-mismatch', '/columns/1/numeric/histogram'),
+                ('E-PROFILE-108', '/columns/1/numeric/quantiles/p95'),
+                ('E-PROFILE-014', '/columns/3/temporal/weekday_fractions'),
+                ('E-PROFILE-016', '/columns/1/numeric/histogram'),
             },
         ),
     ],
@@ -84,7 +84,7 @@ def test_each_fault_is_reported_at_the_field_that_holds_it(tmp_path, edit, expec
 
 def test_a_bundle_directory_and_its_single_file_form_share_one_digest(tmp_path):
     orders = Profile.load(EXAMPLE).to_plain()
-    customers = {'kind': 'table', 'name': 'customers', 'dataset': {'row_count': 5000}}
+    customers = {'kind': 'table', 'name': 'customers', 'dataset': {'rows': 5000}}
     relationships = [{'from': ['orders.customer_id'], 'to': ['customers.customer_id'], 'cardinality': 'many_to_one'}]
 
     directory = tmp_path / 'shop'

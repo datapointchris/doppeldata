@@ -9,6 +9,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 from doppeldata.profiling.backend import ParquetFooter
 from doppeldata.profiling.backend import SourceFile
@@ -60,7 +61,8 @@ def tail_of(client: Any, file: SourceFile) -> bytes:
     bucket, key = file.path.removeprefix('s3://').split('/', 1)
     tail = ranged(client, bucket, key, max(0, file.size - TAIL_BYTES), file.size) if file.size >= 8 else b''
     if len(tail) < 8 or tail[-4:] != PARQUET_MAGIC:
-        raise SourceError(f'the footer of {file.path} could not be read: the file does not end in {PARQUET_MAGIC.decode()}', exit_code=1)
+        message = f'the footer of {file.path} could not be read: the file does not end in {PARQUET_MAGIC.decode()}'
+        raise SourceError(issue_codes.DATA_UNREADABLE, message, value=file.path)
     length = int.from_bytes(tail[-8:-4], 'little')
     if length + 8 > len(tail) and length + 8 <= file.size:
         tail = ranged(client, bucket, key, file.size - length - 8, file.size - len(tail)) + tail
@@ -77,7 +79,7 @@ def parsed(source: str | pa.BufferReader, path: str) -> pq.FileMetaData:
     try:
         return pq.read_metadata(source)
     except (OSError, pa.ArrowException) as error:
-        raise SourceError(f'the footer of {path} could not be read: {error}', exit_code=1) from error
+        raise SourceError(issue_codes.DATA_UNREADABLE, f'the footer of {path} could not be read: {error}') from error
 
 
 def footer_of(metadata: pq.FileMetaData) -> ParquetFooter:

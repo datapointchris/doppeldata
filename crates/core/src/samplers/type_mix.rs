@@ -2,6 +2,7 @@
 //! of the column's `type_mix` shares. Its own type's share renders the column's own draw in its
 //! source layout, and every other share is text parsing as that type.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use arrow_array::Array;
@@ -45,6 +46,7 @@ use super::StreamKeys;
 use super::text::StringOutput;
 use crate::plan::ColumnFault;
 use crate::profile::Column;
+use crate::profile::Rate;
 use crate::profile::RawValueType;
 use crate::rng::BLOCK_ROWS;
 use crate::rng::rng_for;
@@ -138,8 +140,14 @@ impl TypeMix {
     /// parsing as its own type is under 1. Only a source read as text records such a share, so
     /// the table's format is not read, and a scenario changing it changes no column's type. None
     /// for any other column. `keyed` makes each foreign value one no other row holds.
-    pub(crate) fn planned(column: &Column, data_type: &DataType, keyed: bool, pointer: &str) -> Result<Option<Self>, Refusal> {
-        let (Some(own), Some(mix)) = (own_raw_type(data_type), column.type_mix.as_ref()) else {
+    pub(crate) fn planned(
+        column: &Column,
+        mix: Option<&BTreeMap<RawValueType, Rate>>,
+        data_type: &DataType,
+        keyed: bool,
+        pointer: &str,
+    ) -> Result<Option<Self>, Refusal> {
+        let (Some(own), Some(mix)) = (own_raw_type(data_type), mix) else {
             return Ok(None);
         };
         let total: f64 = mix.values().map(|share| share.0.max(0.0)).sum();

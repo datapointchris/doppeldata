@@ -18,6 +18,7 @@ from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
+from doppeldata import issue_codes
 from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
 from doppeldata.profiling.backend import Source
@@ -65,10 +66,11 @@ def only_table(source: Source) -> Source:
     if len(tables) == 1:
         return tables[0].source
     described = '; '.join(f'{table.source.name} ({described_folders(table)}: {described_columns(table)})' for table in tables)
-    raise SourceError(
+    message = (
         f'{source.roots[0]} holds {len(tables)} tables: {described}. Profile every table with profile_tables() or '
         "`profile create --tables`, or name one table's folder"
     )
+    raise SourceError(issue_codes.SEVERAL_TABLES, message, value=source.roots[0], valid=[table.source.name for table in tables])
 
 
 def described_folders(table: GroupedTable) -> str:
@@ -129,7 +131,8 @@ def grouped(source: Source) -> list[GroupedTable]:
         tables.append(GroupedTable(table, tuple(cluster), frozenset().union(*read) if read else None))
     names = [table.source.name for table in tables]
     if len(set(names)) < len(names):
-        raise SourceError(f'{root} groups into tables named {", ".join(names)}, two of them alike; name each folder as its own source')
+        message = f'{root} groups into tables named {", ".join(names)}, two of them alike; name each folder as its own source'
+        raise SourceError(issue_codes.TABLES_ALIKE, message, value=names)
     return tables
 
 
@@ -211,7 +214,7 @@ def arrow_schema(file: SourceFile) -> Schema | None:
         except pa.ArrowInvalid:
             schema = pa.ipc.open_stream(file.path).schema
     except (OSError, pa.ArrowException) as error:
-        raise SourceError(f'{file.path} could not be read as Arrow IPC: {error}', exit_code=1) from error
+        raise SourceError(issue_codes.DATA_UNREADABLE, f'{file.path} could not be read as Arrow IPC: {error}') from error
     return fields_of(schema)
 
 

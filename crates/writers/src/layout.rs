@@ -15,6 +15,9 @@ use doppeldata_core::manifest::LayoutSettings;
 use doppeldata_core::manifest::Manifest;
 use doppeldata_core::profile::PartitionStyle;
 use doppeldata_core::profile::Quantiles;
+use doppeldata_core::scenario::Op;
+use doppeldata_core::scenario::op_formats;
+use doppeldata_core::scenario::op_takes_format;
 
 /// The prefix of every data object's file name.
 pub const PART_PREFIX: &str = "part-";
@@ -187,17 +190,18 @@ fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange], ou
     if let Some(cdc) = plan.cdc() {
         return crate::cdc::check_layout(cdc, partition_by, output);
     }
-    let one_schema = match output {
-        Output::Csv(_) => Some("CSV files, which read as one table only under one header"),
-        Output::Tsv(_) => Some("TSV files, which read as one table only under one header"),
-        Output::Arrow(_) => Some("Arrow files, which read as one table only under one schema"),
-        Output::Parquet(_) | Output::Json(_) | Output::Ndjson(_) => None,
-    };
-    if let (Some(drift), Some(format)) = (plan.drift(), one_schema) {
+    if let Some(drift) = plan.drift()
+        && !op_takes_format(Op::SchemaDrift, output)
+    {
+        let under = if output.is_text() { "one header" } else { "one schema" };
         return Err(LayoutError::Scenario {
             fault: ScenarioFault::OpNotForFormat,
             field: drift.field(),
-            message: format!("schema_drift gives later files other columns, and the write makes {format}; write parquet, json or ndjson"),
+            message: format!(
+                "schema_drift gives later files other columns, and the write makes {} files, which read as one table only under {under}; write {}",
+                output.format_name(),
+                op_formats(Op::SchemaDrift).join(", ")
+            ),
         });
     }
     if let Some(drift) = plan.drift()

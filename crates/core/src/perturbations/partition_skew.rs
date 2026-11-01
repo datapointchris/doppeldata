@@ -29,13 +29,13 @@ struct SkewRows {
 
 pub(super) fn plan(op: &PartitionSkew, planning: &Planning<'_>) -> Result<Planned, PlanError> {
     let (column, field) = planning.column(&op.column, "/column")?;
-    let texts: Vec<Option<String>> = op.shares.keys().cloned().map(Some).collect();
+    let texts: Vec<Option<String>> = op.value_fractions.keys().cloned().map(Some).collect();
     let values = array_edits::cast_texts(&texts, field.data_type()).map_err(|(index, message)| {
         let key = pointer_token(texts[index].as_deref().unwrap_or_default());
         planning.refuse(ScenarioFault::InvalidParameter, &format!("/shares/{key}"), message)
     })?;
     let reach: Vec<f64> = op
-        .shares
+        .value_fractions
         .values()
         .scan(0.0, |total, share| {
             *total += share.0;

@@ -9,7 +9,7 @@ is accepted on input. One JSON Schema validates both.
 - **Every section refuses a key it does not declare.** A reviewer hand-edits the file, so a
   misspelled key must fail rather than be read as absent. serde's `deny_unknown_fields` refuses it
   in the engine, listing the fields its section takes. The schema's `additionalProperties: false`
-  refuses it in the library, as an `unknown-field` at the key's JSON Pointer naming the closest
+  refuses it in the library, as an `E-PROFILE-006` at the key's JSON Pointer naming the closest
   field its section takes. The tool that wrote the profile records its version under
   `generated.tool`.
 - **Every section is optional.** A profile imported from a data catalog or a data contract has types
@@ -63,7 +63,7 @@ to `[product_suppliers.product_code, product_suppliers.supplier_id]`, relates it
 A relationship stores its fan-out as shares and quantiles, never key values. So join skew survives
 into synthetic data while no key leaves the source. Its quantiles stay `k_min` parents clear of each
 end, and a top share is stated only where its last parent holds `k_min` child rows. Where fewer than
-`k_min` child rows are orphans, `containment` is written as 1 and `orphan_rate` as 0. An `inherited`
+`k_min` child rows are orphans, `containment` is written as 1 and `orphan_fraction` as 0. An `inherited`
 entry states an agreement and an `ordinal` a column's name, so neither holds a literal.
 
 ## Generated files name the profile they came from
@@ -113,7 +113,7 @@ The `default` policy:
 5. Every histogram bin, frequency entry, conditional-table cell, rate given another column's
    value, lookup entry and partition share meets `k_min`.
    A smaller cell merges or folds into `other`. A cell a reader can subtract counts too, such as a
-   bin's count less the values listed in it, or `negative_rate` less the listed negative values.
+   bin's count less the values listed in it, or `negative_fraction` less the listed negative values.
 6. Parquet footer minimums and maximums are never copied for an `identifier` or `sensitive` column.
 7. A pattern is stored only when it holds no alternation of data literals.
 
@@ -152,16 +152,16 @@ privacy:
   suppressed:
     - {column: customer_email, reason: identifier, semantic: email}
   audit:
-    - {column: status, field: /string/top_values, values: 5, rule: "count >= k_min", min_count: 7910}
+    - {column: status, field: /string/top_values, values: 5, rule: "count >= k_min", min_rows: 7910}
   dataset_audit:
-    - {field: /dataset/conditionals/0, values: 7, rule: "cell >= k_min", min_count: 16}
+    - {field: /dataset/conditionals/0, values: 7, rule: "cell >= k_min", min_rows: 16}
 ```
 
 An `audit` entry's `field` is the field's RFC 6901 pointer within its column, so reordering the
 columns or adding one leaves every other entry true. A `dataset_audit` entry's `field` points from
 the profile's root, at a conditional table, conditional quantiles or rates, or a functional
 dependency. A lag's entry is in `audit`, at `/derived/lag` in its column. `values` counts the literals
-it holds, and `min_count` is the fewest rows any of them or any cell of it rests on. A
+it holds, and `min_rows` is the fewest rows any of them or any cell of it rests on. A
 suppression's `reason` is one of the `SuppressionReason` values `doppeldata schemas show profile`
 prints.
 
@@ -176,10 +176,10 @@ Each kind of field is admitted by one rule:
 | a pattern | `generalized` | no alternation, optional part, or class narrower than whole digit and letter ranges |
 | a fitted family | `fitted within the trimmed extremes` | trimmed extremes beside it |
 | a sequence start | `follows the trimmed extreme` | the trimmed extreme at its end, less `k_min − 1` steps |
-| a conditional table | `cell >= k_min` | nothing: each value is one its column lists, and the entry's `min_count` reaches `k_min` |
-| conditional quantiles, a lag | `k_min rows from each end` | nothing: the entry's `min_count` reaches `k_min` |
-| conditional rates | `cell >= k_min` | nothing: each given value is one its column lists, and the entry's `min_count` reaches `k_min` |
-| a functional dependency | `lhs >= k_min` | nothing: each lookup key and value is one its column lists, and the entry's `min_count` reaches `k_min` |
+| a conditional table | `cell >= k_min` | nothing: each value is one its column lists, and the entry's `min_rows` reaches `k_min` |
+| conditional quantiles, a lag | `k_min rows from each end` | nothing: the entry's `min_rows` reaches `k_min` |
+| conditional rates | `cell >= k_min` | nothing: each given value is one its column lists, and the entry's `min_rows` reaches `k_min` |
+| a functional dependency | `lhs >= k_min` | nothing: each lookup key and value is one its column lists, and the entry's `min_rows` reaches `k_min` |
 
 An integer identifier's digit bounds hold no data value, so they are not a literal. Nor does an
 expression, which names columns and numbers.
@@ -196,12 +196,12 @@ privacy:
 So a bundle's relationship to such a table is not found, and the entry says why. `--policy none`
 keeps the keys.
 
-A conditional table's `values` counts its cells, and `min_count` is the fewest rows a cell holds.
+A conditional table's `values` counts its cells, and `min_rows` is the fewest rows a cell holds.
 The writer counts every cell over the rows profiled, and floors each one before the table is
-written. Conditional quantiles count each quantile, and their `min_count` is the fewest rows any
-lies from its group's nearer end. Conditional rates count each rate, and their `min_count` is the
+written. Conditional quantiles count each quantile, and their `min_rows` is the fewest rows any
+lies from its group's nearer end. Conditional rates count each rate, and their `min_rows` is the
 fewest rows any count beside a rate holds. A lag counts its quantiles, `min` and `max`. A
-dependency's `values` counts its lookup table's entries, and its `min_count` is the fewest rows a
+dependency's `values` counts its lookup table's entries, and its `min_rows` is the fewest rows a
 listed left-hand value holds. One stating no table counts 1, at `k_min`. Its violation rate is counted only
 over the left-hand values at least `k_min` rows hold.
 
@@ -209,22 +209,22 @@ over the left-hand values at least `k_min` rows hold.
 
 `profile check PROFILE` takes a file or an example name, and reads no data. It validates the schema
 first, then the policy. The rows a rate is taken of are `generated.sample.rows_read`, or else
-`dataset.row_count`, less the column's null rate. A struct field's are its parent's objects times
-its `presence`, less its own null rate. An array element's are not stated, because the file gives
+`dataset.rows`, less the column's `null_fraction`. A struct field's are its parent's objects times
+its share in `presence_fractions`, less its own `null_fraction`. An array element's are not stated, because the file gives
 an array's length only by quantile, and an element is counted by element rather than by row. So the
 writer withholds every literal an element holds. Every literal field must have an audit entry
 whose column, pointer, rule and value count match it, and must meet that rule. A dataset-level
 field's entry is in `dataset_audit`, matched by its pointer. A column the policy withholds from
 must hold nothing withheld, and an audit entry naming no literal field is reported too. Keys on a
-table of fewer than `k_min` rows are reported as `keys-under-k-min`.
+table of fewer than `k_min` rows are reported as `E-POLICY-004`.
 
 A conditional table's cells are the literal the check cannot recompute, so it trusts the entry's
-`min_count` for them. A cell is a share of the rows its row's kept cells hold, and the file states
+`min_rows` for them. A cell is a share of the rows its row's kept cells hold, and the file states
 that total for no row. The writer makes sure no difference names a dropped cell either. Each row's
 given rows, `other` included, and each listed child value's rows, less the kept cells beside them,
 number 0 or at least `k_min`. The check holds what the file does state: every given and
 child value is one its column lists, neither column's list is withheld, no quasi-identifier takes
-part under `strict` or `healthcare`, and an entry at the table's pointer states a `min_count` of at
+part under `strict` or `healthcare`, and an entry at the table's pointer states a `min_rows` of at
 least `k_min`.
 
 A bundle is checked table by table, each table held in its own file read as that file. A
@@ -232,8 +232,9 @@ member file that is a bundle, names itself other than its key, or cannot be read
 `/tables/<name>`, and the other tables are still checked.
 
 It exits 0 when clean and 3 on a violation, because a violation needs a person. A file it cannot
-read is a usage error, exit 2. Each violation prints as the field it is at, what was found and what
-was expected. `--json` prints `passed` and each violation as `{code, field, rule, treatment,
-detail}`. `field` is an RFC 6901 pointer, `rule` is the audit rule the field is held to, and
-`treatment` is the column's suppression reason, each null where none applies. So a CI job can run
-it on every committed profile.
+read is a usage error, exit 2. It prints GitHub Markdown, a table per profile table of each issue
+at its field, what was found, and the hint. `--json` prints `passed` and each table's `issues`, each
+an issue as [issue-codes.md](issue-codes.md) describes one, with `rule` and `treatment` beside it.
+`field` is an RFC 6901 pointer, `rule` is the audit rule the field is held to, and `treatment` is
+the column's suppression reason, each null where none applies. So a CI job can run it on every
+committed profile.

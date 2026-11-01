@@ -114,7 +114,7 @@ pub(crate) struct PlanContext<'a> {
     pub(crate) table: &'a str,
     pub(crate) seed: u64,
     pub(crate) rows: f64,
-    /// The source's rows a distinct ratio is counted over, `dataset.row_count`.
+    /// The source's rows a distinct ratio is counted over, `dataset.rows`.
     pub(crate) source_rows: Option<f64>,
     /// The source's rows a rate is a share of: those a sample read, or else every row.
     pub(crate) described_rows: Option<f64>,
@@ -139,12 +139,12 @@ impl PlanContext<'_> {
     /// above the source's rows its ratio holds, so a longer run holds more values. Below them it is
     /// what a random sample of the source holds where each value fills an equal share of its rows,
     /// `count · (1 − (1 − rows/N)^(N/count))`, so a short run keeps the source's values.
-    fn distinct_target(&self, distinct: Option<&Distinct>, filled_rows: f64) -> Option<DistinctTarget> {
+    fn distinct_target(&self, distinct: Option<&Distinct>, filled_rows: f64, reads: &mut FieldReads) -> Option<DistinctTarget> {
         let distinct = distinct?;
-        let ratio = distinct.ratio?.0;
+        let ratio = reads.read("distinct_ratio", "/distinct/ratio", distinct.ratio)?.0;
         let held = ratio * self.rows;
-        let source_rows = distinct
-            .approx
+        let source_rows = reads
+            .read("approx_values", "/distinct/approx_values", distinct.approx_values)
             .map(|count| count as f64)
             .filter(|&count| count > 0.0 && ratio > 0.0)
             .map(|count| (count, self.source_rows.unwrap_or(count / ratio)));
@@ -274,6 +274,20 @@ pub(crate) enum ValueSampler {
 }
 
 impl ValueSampler {
+    /// The sampler's kind, as a plan's trace names it.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Sequence(_) => "sequence",
+            Self::Numeric(_) => "numeric",
+            Self::Categorical(_) => "categorical",
+            Self::Temporal(_) => "temporal",
+            Self::Boolean(_) => "boolean",
+            Self::Text(_) => "text",
+            Self::List(_) => "list",
+            Self::Struct(_) => "struct",
+        }
+    }
+
     fn data_type(&self) -> DataType {
         match self {
             Self::Sequence(sampler) => sampler.output.data_type(),
@@ -294,9 +308,9 @@ impl ValueSampler {
             Self::Numeric(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::Categorical(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::Temporal(sampler) => sampler.generate(&mut values(), rows, nulls),
-            Self::Boolean(true_rate) => {
+            Self::Boolean(true_fraction) => {
                 let mut rng = values();
-                let values = BooleanBuffer::collect_bool(rows, |_| true_rate.draw(&mut rng));
+                let values = BooleanBuffer::collect_bool(rows, |_| true_fraction.draw(&mut rng));
                 Arc::new(BooleanArray::new(values, nulls))
             }
             Self::Text(sampler) => sampler.generate(at, keys, rows, nulls),
@@ -306,12 +320,31 @@ impl ValueSampler {
     }
 }
 
+/// Each profile field a sampler's builder read, as a parameter's name and the field's pointer
+/// below the column, recorded where the builder reads it. So it names the branch the builder took.
+#[derive(Debug, Default)]
+pub(crate) struct FieldReads(Vec<(&'static str, &'static str)>);
+
+impl FieldReads {
+    /// `value`, the field at `pointer`, recorded as read under `name`.
+    pub(crate) fn read<T>(&mut self, name: &'static str, pointer: &'static str, value: T) -> T {
+        if self.0.iter().all(|&(_, read)| read != pointer) {
+            self.0.push((name, pointer));
+        }
+        value
+    }
+}
+
 /// Everything one column, or one nested field, needs to produce a block.
 #[derive(Debug, Clone)]
 pub(crate) struct ColumnPlan {
     pub(crate) field: FieldRef,
     /// What draws the values, as a plan reports it: `sequence from 1 by 1`.
     pub(crate) sampler: String,
+    /// The sampler's kind, such as `numeric`.
+    pub(crate) kind: &'static str,
+    /// Each profile field the sampler reads, as a parameter's name and the field's pointer.
+    pub(crate) read_fields: Vec<(&'static str, String)>,
     /// The share of rows the null mask draws as null.
     pub(crate) null_share: f64,
     keys: StreamKeys,
@@ -633,34 +666,56 @@ pub(crate) fn column_plan(context: &PlanContext, column: &Column, site: &ColumnS
 /// As [`column_plan`], for a field present in `presence` of its parent's rows.
 fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite, presence: f64) -> Result<ColumnPlan, PlanError> {
     let keys = StreamKeys::new(context.table, &site.path);
+    let mut reads = FieldReads::default();
     let may_be_null = column.nullable != Some(false);
-    let null_rate = column.null_rate.map_or(0.0, |r| r.0);
+    let null_fraction = reads
+        .read("null_fraction", "/null_fraction", column.null_fraction)
+        .map_or(0.0, |r| r.0);
     let null_share = if may_be_null {
-        null_rate + (1.0 - presence) * (1.0 - null_rate)
+        null_fraction + (1.0 - presence) * (1.0 - null_fraction)
     } else {
         0.0
     };
     let type_mix = match physical(column) {
         Ok(PhysicalType::Scalar(data_type)) => {
             let keyed = !site.nested && context.is_key_column(&column.name);
-            TypeMix::planned(column, &data_type, keyed, &site.pointer).map_err(site.refuse("/temporal/format"))?
+            let mix = reads.read("type_mix_fractions", "/type_mix_fractions", column.type_mix_fractions.as_ref());
+            TypeMix::planned(column, mix, &data_type, keyed, &site.pointer).map_err(site.refuse("/temporal/format"))?
         }
         _ => None,
     };
     // A text source's distinct values are counted over the values parsing as the column's type, so
     // the own draw holds every one of them in its share of the rows.
     let own_share = type_mix.as_ref().map_or(1.0, TypeMix::own_share);
-    let values = value_sampler(context, column, site, &keys, context.rows * (1.0 - null_share) * own_share)?;
-    let text_only = TextOnlyValues::new(column.missing_tokens.as_ref(), null_share).map_err(site.refuse("/missing_tokens"))?;
+    let values = value_sampler(
+        context,
+        column,
+        site,
+        &keys,
+        context.rows * (1.0 - null_share) * own_share,
+        &mut reads,
+    )?;
+    let tokens = reads.read(
+        "missing_token_fractions",
+        "/missing_token_fractions",
+        column.missing_token_fractions.as_ref(),
+    );
+    let text_only = TextOnlyValues::new(tokens, null_share).map_err(site.refuse("/missing_token_fractions"))?;
     if site.nested && text_only.is_some() {
         let message = "a text cell names no nested field, so a nested field's missing-value tokens are not generated yet".to_string();
-        return Err(site.refuse_as(ColumnFault::NotGeneratedYet, "/missing_tokens")(message));
+        return Err(site.refuse_as(ColumnFault::NotGeneratedYet, "/missing_token_fractions")(message));
     }
     let nulls = Some(Bernoulli::new(null_share)).filter(|null| !null.never());
     let mut sampler = describe(column, &values);
-    if column.missing_tokens.as_ref().is_some_and(|tokens| !tokens.is_empty()) {
+    if column.missing_token_fractions.as_ref().is_some_and(|tokens| !tokens.is_empty()) {
         sampler.push_str(", with missing-value tokens as text");
     }
+    let read_fields = reads
+        .0
+        .into_iter()
+        .map(|(name, below)| (name, format!("{}{below}", site.pointer)))
+        .collect();
+    let kind = values.kind();
     let field = match &type_mix {
         Some(mix) => text_field(&column.name, may_be_null, mix),
         None => Arc::new(Field::new(&column.name, values.data_type(), may_be_null)),
@@ -668,6 +723,8 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
     Ok(ColumnPlan {
         field,
         sampler,
+        kind,
+        read_fields,
         null_share: nulls.map_or(0.0, |_| null_share),
         keys,
         values,
@@ -708,17 +765,17 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
         }
         ValueSampler::Categorical(categorical) => {
             let string = column.string.as_ref();
-            let (top, other_rate) = match (listed_values(string), listed_prefixes(string)) {
+            let (top, other_fraction) = match (listed_values(string), listed_prefixes(string)) {
                 (None, Some(prefixes)) => (
                     format!("{} top prefixes, each followed by {}", categorical.listed.len(), prefixes.suffix),
-                    prefixes.other_rate,
+                    prefixes.other_fraction,
                 ),
                 _ => (
                     format!("{} top values", categorical.listed.len()),
-                    string.and_then(|s| s.other_rate),
+                    string.and_then(|s| s.other_fraction),
                 ),
             };
-            match other_rate.is_some_and(|r| r.0 > 0.0) {
+            match other_fraction.is_some_and(|r| r.0 > 0.0) {
                 true => format!("{top}, the rest from {}", describe_source(&categorical.other)),
                 false => top,
             }
@@ -726,9 +783,9 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
         ValueSampler::Temporal(_) => {
             let temporal = column.temporal.as_ref();
             let weights: Vec<&str> = [
-                ("month", temporal.and_then(|t| t.by_month.as_ref()).is_some()),
-                ("weekday", temporal.and_then(|t| t.by_dow.as_ref()).is_some()),
-                ("hour", temporal.and_then(|t| t.by_hour.as_ref()).is_some()),
+                ("month", temporal.and_then(|t| t.month_fractions.as_ref()).is_some()),
+                ("weekday", temporal.and_then(|t| t.weekday_fractions.as_ref()).is_some()),
+                ("hour", temporal.and_then(|t| t.hour_fractions.as_ref()).is_some()),
             ]
             .into_iter()
             .filter_map(|(name, weighted)| weighted.then_some(name))
@@ -739,8 +796,8 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
             }
         }
         ValueSampler::Boolean(_) => {
-            let true_rate = column.boolean.as_ref().and_then(|b| b.true_rate).map_or(0.5, |r| r.0);
-            format!("true in {true_rate} of rows")
+            let true_fraction = column.boolean.as_ref().and_then(|b| b.true_fraction).map_or(0.5, |r| r.0);
+            format!("true in {true_fraction} of rows")
         }
         ValueSampler::Text(text) => {
             let mut description = describe_source(&text.source);
@@ -815,50 +872,56 @@ fn value_sampler(
     site: &ColumnSite,
     keys: &StreamKeys,
     filled_rows: f64,
+    reads: &mut FieldReads,
 ) -> Result<ValueSampler, PlanError> {
     let scalar = match physical(column).map_err(site.refuse_as(ColumnFault::UnsupportedType, "/physical_type"))? {
-        PhysicalType::Container(Container::Struct) => return struct_sampler(context, column, site),
-        PhysicalType::Container(container) => return list_sampler(context, column, site, container == Container::LargeList),
+        PhysicalType::Container(Container::Struct) => return struct_sampler(context, column, site, reads),
+        PhysicalType::Container(container) => return list_sampler(context, column, site, container == Container::LargeList, reads),
         PhysicalType::Scalar(data_type) => data_type,
     };
     let numeric = column.numeric.as_ref();
     if let Some(output) = NumericOutput::from_type(&scalar) {
-        if let Some(sequence) = numeric.and_then(|n| n.sequence.as_ref()) {
+        if let Some(sequence) = reads.read("sequence", "/numeric/sequence", numeric.and_then(|n| n.sequence.as_ref())) {
             return Ok(ValueSampler::Sequence(SequenceSampler {
                 start: sequence.start,
                 step: sequence.step,
                 output,
             }));
         }
-        let fit = match numeric.and_then(|n| n.fit.as_ref()) {
+        let fit = match reads.read("fit", "/numeric/fit", numeric.and_then(|n| n.fit.as_ref())) {
             Some(fit) => FittedFamily::from_fit(fit).map_err(site.refuse_as(ColumnFault::InvalidFit, "/numeric/fit"))?,
             None => None,
         };
         let stats = numeric.cloned().unwrap_or_else(empty_numeric_stats);
-        let target = context.distinct_target(column.distinct.as_ref(), filled_rows);
+        let target = context.distinct_target(column.distinct.as_ref(), filled_rows, reads);
         let source = column.distinct.as_ref().and_then(|d| {
-            let (distinct, ratio) = (d.approx?, d.ratio?.0);
+            let distinct = reads.read("approx_values", "/distinct/approx_values", d.approx_values)?;
+            let ratio = reads.read("distinct_ratio", "/distinct/ratio", d.ratio)?.0;
             let described = context.described_rows.or((ratio > 0.0).then(|| distinct as f64 / ratio))?;
-            let null_rate = column.null_rate.map_or(0.0, |r| r.0);
+            let null_fraction = column.null_fraction.map_or(0.0, |r| r.0);
             Some(SourceCounts {
                 distinct,
-                values: described * (1.0 - null_rate),
+                values: described * (1.0 - null_fraction),
                 k_min: context.k_min,
             })
         });
-        let curve = numeric::numeric_cdf(&stats, fit.as_ref()).map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/numeric"))?;
-        let sampler = NumericSampler::new(curve, &stats, output, target, source)
+        let curve = numeric::numeric_cdf(&stats, fit.as_ref(), reads).map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/numeric"))?;
+        let sampler = NumericSampler::new(curve, &stats, output, target, source, reads)
             .map_err(site.refuse_as(ColumnFault::UnusableRates, "/numeric/top_values"))?;
         return Ok(ValueSampler::Numeric(sampler));
     }
     if let Some(output) = TemporalOutput::from_type(&scalar) {
         let gap_days = || rng_for(context.seed, keys.gap_days, 0);
-        let sampler = TemporalSampler::new(column.temporal.as_ref(), output, gap_days).map_err(site.refuse("/temporal"))?;
+        let sampler = TemporalSampler::new(column.temporal.as_ref(), output, gap_days, reads).map_err(site.refuse("/temporal"))?;
         return Ok(ValueSampler::Temporal(sampler));
     }
     if scalar == DataType::Boolean {
-        let true_rate = column.boolean.as_ref().and_then(|b| b.true_rate).map_or(0.5, |r| r.0);
-        return Ok(ValueSampler::Boolean(Bernoulli::new(true_rate)));
+        let true_fraction = reads.read(
+            "true_fraction",
+            "/boolean/true_fraction",
+            column.boolean.as_ref().and_then(|b| b.true_fraction),
+        );
+        return Ok(ValueSampler::Boolean(Bernoulli::new(true_fraction.map_or(0.5, |r| r.0))));
     }
     let Some(output) = StringOutput::from_type(&scalar) else {
         let message = format!("{scalar} is not a type this engine generates");
@@ -870,41 +933,43 @@ fn value_sampler(
     }
     let string = column.string.as_ref();
     let hint = column.semantic.as_ref().and_then(|s| s.generator_hint.as_ref());
-    let source = text_source(string, hint, site)?;
-    let target = context.distinct_target(column.distinct.as_ref(), filled_rows);
-    let categories = match (listed_values(string), listed_prefixes(string)) {
-        (Some(top_values), _) => Some((
+    let source = text_source(string, hint, site, reads)?;
+    let target = context.distinct_target(column.distinct.as_ref(), filled_rows, reads);
+    let categories = match reads.read("listed_values", "/string/top_values", listed_values(string)) {
+        Some(top_values) => Some((
             top_values,
-            string.and_then(|s| s.other_rate),
+            reads.read("rest_fraction", "/string/other_fraction", string.and_then(|s| s.other_fraction)),
             None,
             "/string/top_values",
             source.variety(),
         )),
-        (None, Some(prefixes)) => {
-            let suffix = text::compile_pattern(&prefixes.suffix, PATTERN_MAX_REPEAT)
-                .map_err(site.refuse_as(ColumnFault::InvalidPattern, "/string/prefixes/suffix"))?;
-            // A column written as prefixes counts its distinct prefixes, so the rest are drawn to hold as many.
-            let prefix_chars = prefixes
-                .values
-                .iter()
-                .map(|top| top.value.chars().count())
-                .max()
-                .unwrap_or_default();
-            let variety = source.leading_variety(prefix_chars);
-            Some((
-                &prefixes.values,
-                prefixes.other_rate,
-                Some(suffix),
-                "/string/prefixes/values",
-                variety,
-            ))
-        }
-        (None, None) => None,
+        None => match reads.read("listed_prefixes", "/string/prefixes", listed_prefixes(string)) {
+            Some(prefixes) => {
+                let suffix = text::compile_pattern(&prefixes.suffix, PATTERN_MAX_REPEAT)
+                    .map_err(site.refuse_as(ColumnFault::InvalidPattern, "/string/prefixes/suffix"))?;
+                // A column written as prefixes counts its distinct prefixes, so the rest are drawn to hold as many.
+                let prefix_chars = prefixes
+                    .values
+                    .iter()
+                    .map(|top| top.value.chars().count())
+                    .max()
+                    .unwrap_or_default();
+                let variety = source.leading_variety(prefix_chars);
+                Some((
+                    &prefixes.values,
+                    prefixes.other_fraction,
+                    Some(suffix),
+                    "/string/prefixes/values",
+                    variety,
+                ))
+            }
+            None => None,
+        },
     };
-    if let Some((listed, other_rate, suffix, field, other_variety)) = categories {
-        let values: Vec<_> = listed.iter().map(|top| (top.value.clone(), top.rate.0)).collect();
-        let other_rate = other_rate.map_or(0.0, |r| r.0);
-        let listed = ListedValues::new(values, other_rate).map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
+    if let Some((listed, other_fraction, suffix, field, other_variety)) = categories {
+        let values: Vec<_> = listed.iter().map(|top| (top.value.clone(), top.fraction.0)).collect();
+        let other_fraction = other_fraction.map_or(0.0, |r| r.0);
+        let listed = ListedValues::new(values, other_fraction).map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
         let other_index = target.and_then(|target| ValueIndex::for_distinct(listed.outside(target), &other_variety));
         return Ok(ValueSampler::Categorical(CategoricalSampler {
             listed,
@@ -914,11 +979,21 @@ fn value_sampler(
             output,
         }));
     }
-    let check_digit = hint.and_then(|hint| hint.check_digit).map(|kind| {
-        let invalid_rate = column.quality.as_ref().and_then(|q| q.invalid_rate).map_or(0.0, |r| r.0);
+    let check_digit = reads.read(
+        "check_digit",
+        "/semantic/generator_hint/check_digit",
+        hint.and_then(|hint| hint.check_digit),
+    );
+    let check_digit = check_digit.map(|kind| {
+        let invalid_fraction = reads.read(
+            "invalid_fraction",
+            "/quality/invalid_fraction",
+            column.quality.as_ref().and_then(|q| q.invalid_fraction),
+        );
+        let invalid_fraction = invalid_fraction.map_or(0.0, |r| r.0);
         CheckDigitDraw {
             kind,
-            invalid: Bernoulli::new(invalid_rate),
+            invalid: Bernoulli::new(invalid_fraction),
         }
     });
     Ok(ValueSampler::Text(TextSampler {
@@ -947,35 +1022,49 @@ fn empty_numeric_stats() -> crate::profile::NumericStats {
 
 /// Where a string column's generated values come from, most specific first: a provider, a
 /// pattern, the shapes, then characters of the profiled classes.
-fn text_source(string: Option<&StringStats>, hint: Option<&GeneratorHint>, site: &ColumnSite) -> Result<TextSource, PlanError> {
-    if let Some(provider) = hint.and_then(|hint| hint.provider) {
+fn text_source(
+    string: Option<&StringStats>,
+    hint: Option<&GeneratorHint>,
+    site: &ColumnSite,
+    reads: &mut FieldReads,
+) -> Result<TextSource, PlanError> {
+    if let Some(provider) = reads.read("provider", "/semantic/generator_hint/provider", hint.and_then(|hint| hint.provider)) {
         if provider == Provider::Icd10cm {
             return Ok(TextSource::Icd10cm {
-                dotted: dominant_shape_is_dotted(string),
+                dotted: dominant_shape_is_dotted(reads.read("shapes", "/string/shapes", string.and_then(|s| s.shapes.as_deref()))),
             });
         }
         return Ok(TextSource::Provider(provider));
     }
-    let hinted_pattern = hint
-        .and_then(|hint| hint.pattern.as_deref())
-        .map(|p| (p, "/semantic/generator_hint/pattern"));
-    let stored_pattern = string.and_then(|s| s.pattern.as_deref()).map(|p| (p, "/string/pattern"));
-    if let Some((pattern, field)) = hinted_pattern.or(stored_pattern) {
+    const HINTED: &str = "/semantic/generator_hint/pattern";
+    const STORED: &str = "/string/pattern";
+    let pattern = match reads.read("pattern", HINTED, hint.and_then(|hint| hint.pattern.as_deref())) {
+        Some(hinted) => Some((hinted, HINTED)),
+        None => reads
+            .read("pattern", STORED, string.and_then(|s| s.pattern.as_deref()))
+            .map(|stored| (stored, STORED)),
+    };
+    if let Some((pattern, field)) = pattern {
         let compiled = text::compile_pattern(pattern, PATTERN_MAX_REPEAT).map_err(site.refuse_as(ColumnFault::InvalidPattern, field))?;
         return Ok(TextSource::Pattern(Box::new(compiled)));
     }
-    let shapes = string.and_then(|s| s.shapes.as_ref()).filter(|shapes| !shapes.is_empty());
+    let shapes = reads
+        .read("shapes", "/string/shapes", string.and_then(|s| s.shapes.as_ref()))
+        .filter(|shapes| !shapes.is_empty());
     if let Some(shapes) = shapes {
-        let choice = WeightedAliasIndex::new(shapes.iter().map(|shape| shape.rate.0).collect())
+        let choice = WeightedAliasIndex::new(shapes.iter().map(|shape| shape.fraction.0).collect())
             .map_err(|error| format!("shape rates are unusable: {error}"))
             .map_err(site.refuse_as(ColumnFault::UnusableRates, "/string/shapes"))?;
-        let total: f64 = shapes.iter().map(|shape| shape.rate.0).sum();
+        let total: f64 = shapes.iter().map(|shape| shape.fraction.0).sum();
         return Ok(TextSource::Shapes {
             choice,
-            shapes: shapes.iter().map(|shape| Shape::new(&shape.shape, shape.rate.0 / total)).collect(),
+            shapes: shapes
+                .iter()
+                .map(|shape| Shape::new(&shape.shape, shape.fraction.0 / total))
+                .collect(),
         });
     }
-    let length = string.and_then(|s| s.length.as_ref());
+    let length = reads.read("length", "/string/length", string.and_then(|s| s.length.as_ref()));
     let length = numeric::bounded_cdf(
         length.and_then(|l| l.quantiles.as_ref()),
         length.and_then(|l| l.min).map(|min| min as f64),
@@ -983,32 +1072,42 @@ fn text_source(string: Option<&StringStats>, hint: Option<&GeneratorHint>, site:
         DEFAULT_STRING_LENGTH,
     )
     .map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/string/length"))?;
+    let charset = reads.read("charset", "/string/charset", string.and_then(|s| s.charset.as_ref()));
     Ok(TextSource::Characters {
         length,
-        alphabet: text::alphabet(string.and_then(|s| s.charset.as_ref()).and_then(|c| c.classes.as_deref())),
+        alphabet: text::alphabet(charset.and_then(|c| c.classes.as_deref())),
     })
 }
 
 /// Whether the column's most common shape holds a dot, as an ICD-10-CM code written `E11.9` does.
-fn dominant_shape_is_dotted(string: Option<&StringStats>) -> bool {
-    let shapes = string.and_then(|s| s.shapes.as_deref()).unwrap_or_default();
+fn dominant_shape_is_dotted(shapes: Option<&[crate::profile::Shape]>) -> bool {
     shapes
+        .unwrap_or_default()
         .iter()
-        .max_by(|a, b| a.rate.0.total_cmp(&b.rate.0))
+        .max_by(|a, b| a.fraction.0.total_cmp(&b.fraction.0))
         .is_some_and(|shape| shape.shape.contains('.'))
 }
 
-fn list_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, large: bool) -> Result<ValueSampler, PlanError> {
+fn list_sampler(
+    context: &PlanContext,
+    column: &Column,
+    site: &ColumnSite,
+    large: bool,
+    reads: &mut FieldReads,
+) -> Result<ValueSampler, PlanError> {
     let list = column.list.as_ref();
-    let element = match list.and_then(|l| l.element.as_deref()) {
+    let element = match reads.read("element", "/list/element", list.and_then(|l| l.element.as_deref())) {
         Some(element) => element.clone(),
         None => serde_json::from_value(serde_json::json!({"name": "element", "logical_type": "string"}))
             .expect("a name and a logical type make a column"),
     };
-    let length = numeric::bounded_cdf(list.and_then(|l| l.length.as_ref()), None, None, DEFAULT_LIST_LENGTH)
+    let length = reads.read("length", "/list/length", list.and_then(|l| l.length.as_ref()));
+    let length = numeric::bounded_cdf(length, None, None, DEFAULT_LIST_LENGTH)
         .map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/list/length"))?;
-    let empty_rate = list.and_then(|l| l.empty_rate).map(|r| r.0);
-    let per_row = (1.0 - empty_rate.unwrap_or(0.0)) * nested::mean_length(&length);
+    let empty_fraction = reads
+        .read("empty_fraction", "/list/empty_fraction", list.and_then(|l| l.empty_fraction))
+        .map(|r| r.0);
+    let per_row = (1.0 - empty_fraction.unwrap_or(0.0)) * nested::mean_length(&length);
     let elements = PlanContext {
         rows: context.rows * per_row,
         source_rows: context.source_rows.map(|rows| rows * per_row),
@@ -1018,16 +1117,25 @@ fn list_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, large
     Ok(ValueSampler::List(Box::new(ListSampler {
         element: column_plan(&elements, &element, &site.child(&element, "/list/element"))?,
         length,
-        empty: empty_rate.map(Bernoulli::new),
+        empty: empty_fraction.map(Bernoulli::new),
         large,
     })))
 }
 
-fn struct_sampler(context: &PlanContext, column: &Column, site: &ColumnSite) -> Result<ValueSampler, PlanError> {
+fn struct_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, reads: &mut FieldReads) -> Result<ValueSampler, PlanError> {
     let stats = column.struct_fields.as_ref();
-    let presence = stats.and_then(|s| s.presence.as_ref());
+    let presence = reads.read(
+        "presence_fractions",
+        "/struct/presence_fractions",
+        stats.and_then(|s| s.presence_fractions.as_ref()),
+    );
     let mut fields = Vec::new();
-    for (index, field) in stats.and_then(|s| s.fields.as_ref()).into_iter().flatten().enumerate() {
+    for (index, field) in reads
+        .read("fields", "/struct/fields", stats.and_then(|s| s.fields.as_ref()))
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
         let present = presence.and_then(|p| p.get(&field.name)).map_or(1.0, |r| r.0);
         let field_site = site.child(field, &format!("/struct/fields/{index}"));
         fields.push(column_plan_present(context, field, &field_site, present)?);

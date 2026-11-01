@@ -134,7 +134,7 @@
           ]
         },
         "decides": {
-          "description": "False on a row the report's verdict leaves out: a score against the real data whose\nthreshold no thresholds file sets, and `malformed_rate_delta` on data written with no\n`malformed_rows`. Such a row passes. A score's `threshold` is its reference, which `value`\nand `bound` say whether it meets.",
+          "description": "False on a row the report's verdict leaves out: a score against the real data whose\nthreshold no thresholds file sets, and `malformed_fraction_delta` on data written with no\n`malformed_rows`. Such a row passes. A score's `threshold` is its reference, which `value`\nand `bound` say whether it meets.",
           "type": "boolean"
         },
         "drawn_by": {

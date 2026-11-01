@@ -8,7 +8,6 @@ applies the patch, so the stream version governs how it merges.
 
 import copy
 import dataclasses as dc
-import difflib
 import functools
 import importlib
 import importlib.resources
@@ -24,11 +23,16 @@ import jsonschema
 import rfc8785
 
 from doppeldata import _core
+from doppeldata import issue_codes
 from doppeldata.errors import DoppeldataError
+from doppeldata.errors import InvalidArgument
+from doppeldata.errors import IssueCarrier
 from doppeldata.errors import ProfilingEnginesMissing
+from doppeldata.errors import UnsupportedArgument
 from doppeldata.example_scenarios import example_resource
+from doppeldata.issue_codes import SCENARIO_DOCUMENT
+from doppeldata.issue_codes import Issue
 from doppeldata.profile_format import InvalidProfile
-from doppeldata.profile_format import Issue
 from doppeldata.profile_format import PointerParts
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import digest_of
@@ -54,13 +58,9 @@ class InvalidScenario(DoppeldataError, ValueError):
     the scenario the data checked was written under, or whose faults a check cannot read back. `refusal` follows `source`
     on the message's first line, which is the whole message where no issue is listed."""
 
-    exit_code = 2
-
-    def __init__(self, source: str, issues: list[Issue], *, refusal: str = 'is not a valid scenario') -> None:
+    def __init__(self, source: str, issues: Sequence[Issue], *, refusal: str = 'is not a valid scenario') -> None:
         self.source = source
-        self.issues = issues
-        listed = '\n'.join(f'  {issue.field or "/"}: {issue.message} [{issue.code}]' for issue in issues)
-        super().__init__(f'{source} {refusal}:\n{listed}' if issues else f'{source} {refusal}')
+        IssueCarrier.__init__(self, issues, headline=f'{source} {refusal}')
 
 
 @functools.cache
@@ -102,15 +102,15 @@ def validators() -> dict[str, jsonschema.Draft202012Validator]:
 
 
 def schema_issues(validator: jsonschema.Draft202012Validator, value: Any, at: PointerParts) -> list[Issue]:
-    return [issue for error in validator.iter_errors(value) for issue in schema_error_issues(error, at)]
+    return [issue for error in validator.iter_errors(value) for issue in schema_error_issues(error, at, SCENARIO_DOCUMENT)]
 
 
 def check(plain: Any) -> list[Issue]:
     """Every reason the document is not a valid scenario: numbers canonical JSON cannot write, ops and metrics doppeldata
     does not know, the schema's, then the ids and expectations the schema cannot state."""
     if not isinstance(plain, dict):
-        return [Issue('not-a-mapping', '', 'a scenario is a mapping of sections')]
-    issues = list(unrepresentable_numbers(plain, ()))
+        return [Issue(SCENARIO_DOCUMENT.not_a_mapping, '', 'a scenario is a mapping of sections', type(plain).__name__)]
+    issues = list(unrepresentable_numbers(plain, (), SCENARIO_DOCUMENT))
     if issues:
         return issues
     entries, expectations = plain.get('perturbations'), plain.get('expect')
@@ -119,14 +119,14 @@ def check(plain: Any) -> list[Issue]:
     for index, entry in enumerate(entries if isinstance(entries, list) else []):
         op = entry.get('op') if isinstance(entry, dict) else None
         if isinstance(op, str) and op not in op_schemas():
-            issues.append(unknown_name('unknown-op', op, list(op_schemas()), ('perturbations', index), 'an op', 'the ops'))
+            issues.append(unknown_name(issue_codes.UNKNOWN_OP, op, list(op_schemas()), ('perturbations', index), 'an op'))
         else:
             issues += schema_issues(validators()[op if isinstance(op, str) else 'perturbation'], entry, ('perturbations', index))
     for index, expectation in enumerate(expectations if isinstance(expectations, list) else []):
         metric = expectation.get('metric') if isinstance(expectation, dict) else None
         if isinstance(metric, str) and metric not in expected_metrics():
             at = ('expect', index, 'metric')
-            issues.append(unknown_name('unknown-metric', metric, expected_metrics(), at, 'a metric', 'the metrics'))
+            issues.append(unknown_name(issue_codes.UNKNOWN_METRIC, metric, expected_metrics(), at, 'a metric'))
         else:
             issues += schema_issues(validators()['expectation'], expectation, ('expect', index))
     if issues:
@@ -135,16 +135,13 @@ def check(plain: Any) -> list[Issue]:
     if repeated is not None:
         index, given = repeated
         message = f"{given!r} is an earlier perturbation's id, and each id keys its own random stream; give this one another"
-        issues.append(Issue('duplicate-perturbation-id', pointer(('perturbations', index, 'id')), message))
+        issues.append(Issue(issue_codes.DUPLICATE_PERTURBATION_ID, pointer(('perturbations', index, 'id')), message, given))
     return issues + list(expectation_issues(plain))
 
 
-def unknown_name(code: str, name: str, known: list[str], at: PointerParts, noun: str, listing: str) -> Issue:
-    """A name doppeldata does not know, naming the closest it does and every one, as `doppeldata scenario list` lists them."""
-    closest = tuple(difflib.get_close_matches(name, known, n=3))
-    hint = f'the closest is {closest[0]}, and ' if closest else ''
-    message = f'{name!r} is not {noun} doppeldata knows; {hint}`doppeldata scenario list` lists {listing}: {", ".join(known)}'
-    return Issue(code, pointer(at), message, closest)
+def unknown_name(code: str, name: str, known: list[str], at: PointerParts, noun: str) -> Issue:
+    """A name doppeldata does not know, with every one it knows."""
+    return Issue(code, pointer(at), f'{name!r} is not {noun} doppeldata knows', name, tuple(known))
 
 
 @dc.dataclass(frozen=True)
@@ -186,30 +183,26 @@ def expectation_issues(plain: dict[str, Any]) -> Iterator[Issue]:
         at = pointer(('expect', index))
         metric, column = expectation['metric'], expectation.get('column')
         if expectation.get('at_least') is None and expectation.get('at_most') is None:
-            yield Issue('invalid-parameter', at, f'{metric} gives no bound; an expectation takes at_least, at_most or both')
+            yield Issue(issue_codes.INVALID_PARAMETER, at, f'{metric} gives no bound; an expectation takes at_least, at_most or both')
         takes_column = _core.expected_metric_takes_column(metric)
         if not takes_column and column is not None:
-            yield Issue(
-                'invalid-parameter', pointer(('expect', index, 'column')), f'{metric} measures the whole table, so it takes no column'
-            )
+            message = f'{metric} measures the whole table, so it takes no column'
+            yield Issue(issue_codes.INVALID_PARAMETER, pointer(('expect', index, 'column')), message, column)
         if takes_column and column is None:
-            yield Issue('invalid-parameter', at, f'{metric} measures one column, so it takes column')
+            yield Issue(issue_codes.INVALID_PARAMETER, at, f'{metric} measures one column, so it takes column')
             continue
         measured = expected_perturbation(metric, column, perturbations)
-        if metric == 'missingness.rate' and measured is None and (patched.get(column) or {}).get('null_rate') is not None:
+        if metric == 'missingness.fraction' and measured is None and (patched.get(column) or {}).get('null_fraction') is not None:
             continue
         op = _core.expected_metric_op(metric)
         if measured is None:
             on = f' to {column}' if 'column' in op_schemas()[op]['properties'] else ''
-            yield Issue(
-                'expectation-without-perturbation',
-                at,
-                f'no {op} perturbation applies{on}, so the scenario changes nothing {metric} measures',
-            )
-        elif metric == 'late_arrival.rate' and perturbations[measured].get('ingest') is None:
-            message = f'late_arrival.rate is measured against the ingest column of the late_arrival on {column}, which names none'
-            yield Issue('invalid-parameter', at, message)
-        elif metric == 'duplicates.rate':
+            message = f'no {op} perturbation applies{on}, so the scenario changes nothing {metric} measures'
+            yield Issue(issue_codes.EXPECTATION_WITHOUT_PERTURBATION, at, message, metric)
+        elif metric == 'late_arrival.fraction' and perturbations[measured].get('ingest') is None:
+            message = f'late_arrival.fraction is measured against the ingest column of the late_arrival on {column}, which names none'
+            yield Issue(issue_codes.INVALID_PARAMETER, at, message)
+        elif metric == 'duplicates.fraction':
             rewriting = next(
                 (later for position, later in enumerate(facts) if column in later.writes and (position > measured or later.shapes_files)),
                 None,
@@ -217,9 +210,9 @@ def expectation_issues(plain: dict[str, Any]) -> Iterator[Issue]:
             if rewriting is not None:
                 message = (
                     f'{rewriting.id} writes {column} after {facts[measured].id} copies rows, so a copy would no longer share its '
-                    f"source's {column}; measure duplicates.rate on a key no later perturbation writes"
+                    f"source's {column}; measure duplicates.fraction on a key no later perturbation writes"
                 )
-                yield Issue('invalid-parameter', pointer(('expect', index, 'column')), message)
+                yield Issue(issue_codes.INVALID_PARAMETER, pointer(('expect', index, 'column')), message, column)
 
 
 def composed_patch(first: dict[str, Any], then: dict[str, Any]) -> dict[str, Any]:
@@ -235,9 +228,15 @@ def patched_profile(profile: dict[str, Any], scenario: dict[str, Any]) -> tuple[
     """`profile` with the scenario's patch applied as the engine applies it, and an issue for each patched column the profile
     lacks."""
     text, unknown = _core.patched_profile(json.dumps(profile, allow_nan=False), json.dumps(scenario, allow_nan=False))
-    held = ', '.join(column['name'] for column in profile.get('columns') or [])
+    names = [column['name'] for column in profile.get('columns') or []]
     issues = [
-        Issue('unknown-column', pointer(('patch', 'columns', name)), f'{name} is not a column of {profile["name"]}: {held}')
+        Issue(
+            issue_codes.UNKNOWN_SCENARIO_COLUMN,
+            pointer(('patch', 'columns', name)),
+            f'{name} is not a column of {profile["name"]}',
+            name,
+            tuple(names),
+        )
         for name in unknown
     ]
     patched: dict[str, Any] = json.loads(text)
@@ -245,12 +244,13 @@ def patched_profile(profile: dict[str, Any], scenario: dict[str, Any]) -> tuple[
 
 
 def repointed(issue: Issue, patched: dict[str, Any]) -> Issue:
-    """An issue the patched profile fails, pointed into the patch: `/columns/3/null_rate` as `/patch/columns/discount/null_rate`."""
-    parts = issue.field.split('/')
+    """An issue the patched profile fails, pointed into the patch: `/columns/3/null_fraction` as `/patch/columns/discount/null_fraction`."""
+    field = issue.field or ''
+    parts = field.split('/')
     if len(parts) > 2 and parts[1] == 'columns' and parts[2].isdigit():
         name = patched['columns'][int(parts[2])]['name']
         return dc.replace(issue, field=pointer(('patch', 'columns', name)) + ''.join('/' + part for part in parts[3:]))
-    return dc.replace(issue, field='/patch' + issue.field)
+    return dc.replace(issue, field='/patch' + field)
 
 
 class Scenario:
@@ -266,7 +266,7 @@ class Scenario:
         """Read a YAML or JSON scenario, raising InvalidScenario when it does not validate."""
         path = Path(path)
         try:
-            document = read_document(path)
+            document = read_document(path, SCENARIO_DOCUMENT)
         except InvalidProfile as error:
             raise InvalidScenario(str(path), error.issues) from error
         scenario = cls(document, path)
@@ -294,7 +294,8 @@ class Scenario:
         taken = [key for key in op_schemas()[entry['op']]['properties'] if key != 'op']
         unknown = sorted(set(parameters) - set(taken))
         if unknown:
-            raise TypeError(f'the {name} example applies {entry["op"]}, which takes {", ".join(taken)}, not {", ".join(unknown)}')
+            message = f'the {name} example applies {entry["op"]}, which takes no {", ".join(unknown)}'
+            raise UnsupportedArgument(SCENARIO_DOCUMENT.unknown_field, message, field=unknown[0], value=unknown[0], valid=taken)
         if any(entry.get(key) != value for key, value in parameters.items()):
             document.pop('description', None)
         if any(entry.get(key) != value for key, value in parameters.items() if key != 'column'):
@@ -315,14 +316,15 @@ class Scenario:
         expectations concatenate. Its name joins theirs with `+`, and its digest is the composed document's."""
         members = tuple(member for scenario in scenarios for member in (scenario.members or (scenario,)))
         if not members:
-            raise ValueError('compose takes one scenario or more')
+            raise InvalidArgument(issue_codes.COMPOSE_NOTHING, 'compose takes one scenario or more', field='scenarios')
         if len(members) == 1:
             return members[0]
         plain = [member.to_plain() for member in members]
         document: dict[str, Any] = {'scenario': '+'.join(each['scenario'] for each in plain)}
         tables = sorted({each['table'] for each in plain if each.get('table') is not None})
         if len(tables) > 1:
-            issue = Issue('unknown-table', '/table', f'the scenarios bend {", ".join(tables)}, and one composition bends one table')
+            message = f'the scenarios bend {", ".join(tables)}, and one composition bends one table'
+            issue = Issue(issue_codes.UNKNOWN_TABLE, '/table', message, tables[1], tuple(tables))
             raise InvalidScenario('+'.join(each['scenario'] for each in plain), [issue])
         if tables:
             document['table'] = tables[0]
@@ -406,7 +408,8 @@ def composed(scenario: 'Scenario | Sequence[Scenario] | None') -> Scenario | Non
         return scenario
     if isinstance(scenario, list | tuple) and all(isinstance(each, Scenario) for each in scenario):
         return Scenario.compose(*scenario) if scenario else None
-    raise TypeError(f'scenario takes a Scenario, such as Scenario.load(path), or a list of them, not {type(scenario).__name__}')
+    message = f'scenario takes a Scenario, such as Scenario.load(path), or a list of them, not {type(scenario).__name__}'
+    raise UnsupportedArgument(issue_codes.NOT_A_SCENARIO, message, field='scenario', value=type(scenario).__name__)
 
 
 def refuse_file_shaping(
@@ -421,9 +424,10 @@ def refuse_file_shaping(
     instead = f'; write with {write_with}' if write_with else ''
     issues = [
         Issue(
-            'op-needs-files',
+            issue_codes.OP_NEEDS_FILES,
             pointer(('perturbations', index)),
             f'{entry["op"]} shapes the files a write makes, and {run} {cannot}{instead}',
+            entry['op'],
         )
         for index, (entry, facts) in enumerate(zip(plain.get('perturbations') or [], perturbation_facts(plain), strict=True))
         if (facts.spans_files if across_files else facts.shapes_files)
@@ -450,10 +454,10 @@ def refuse_other_scenario(scenario: Scenario | None, written: 'Manifest', data: 
             return
     wrote = f'scenario {recorded.get("name")} ({digest})' if digest is not None else 'no scenario'
     if scenario is None:
-        issue = Issue('data-has-scenario', '', f'{data} was written under {wrote}; check it under that scenario')
+        issue = Issue(issue_codes.DATA_HAS_SCENARIO, '', f'{data} was written under {wrote}; check it under that scenario', digest)
         raise InvalidScenario(data, [issue], refusal='cannot be checked with no scenario')
     message = f'{data} was written under {wrote}, and {scenario.name} is {scenario.digest}; check it under the scenario that wrote it'
-    issue = Issue('scenario-differs-from-data', '', message)
+    issue = Issue(issue_codes.SCENARIO_DIFFERS_FROM_DATA, '', message, scenario.digest)
     raise InvalidScenario(scenario.source, [issue], refusal=f'is not the scenario {data} was written under')
 
 

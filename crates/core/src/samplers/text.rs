@@ -1,6 +1,6 @@
 //! String columns other than categoricals: a named provider, a stored pattern, the shape
 //! histogram, or characters of the profiled classes at a profiled length. A check digit is applied
-//! after generation, with a share of `quality.invalid_rate` left wrong.
+//! after generation, with a share of `quality.invalid_fraction` left wrong.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

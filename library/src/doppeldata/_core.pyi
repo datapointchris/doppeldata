@@ -164,10 +164,10 @@ class Plan:
         before its first object. Any process then writes ranges with ``write_ranges``, and one
         calls ``commit``.
         """
-    def column_samplers(self, /) -> list[tuple[str, str, str, float]]:
+    def column_traces_json(self, /) -> str:
         """
-        Each top-level column's name, type as a profile's ``physical_type`` spells it, what draws
-        its values, and the share of rows drawn null, in schema order.
+        A JSON list of how each top-level column is drawn, in schema order, as
+        ``doppeldata_core::ColumnTrace`` serializes one.
         """
     def commit(self, /, options: WriteOptions, destination: str, written: SupportsGetItem[int, str], *, tasks: SupportsIndex, elapsed_ms: SupportsIndex, s3_store: dict |None = None) -> str:
         """
@@ -324,7 +324,7 @@ def determinism_values_digest(profile_json: str, profile_digest: str, seed: Supp
 def expected_metric_op(metric: str) -> str:
     """
     The op whose perturbation an expectation's metric measures, such as ``hot_keys`` for
-    ``hot_keys.share``.
+    ``hot_keys.fraction``.
     """
 
 def expected_metric_takes_column(metric: str) -> bool:
@@ -351,10 +351,21 @@ def generalize_pattern(values: SupportsGetItem[int, str]) -> str |None:
     class, or None when it would hold a literal or a character class only some values have.
     """
 
+def issue_codes() -> list[tuple[str, str, str, str |None, int]]:
+    """
+    Every code the engine and its writers refuse with, in declaration order: the name the
+    library binds it by, the code, what raises it, its hint and its exit status.
+    """
+
 def one_file_faults_name(file_name: str) -> str:
     """
     The fault list a write to the one file ``file_name`` keeps beside it, such as
     ``_orders.csv.faults.jsonl``.
+    """
+
+def op_formats() -> list[tuple[str, list[str]]]:
+    """
+    Each op, as ``op`` names it, with the formats a write takes it in, as ``format`` names them.
     """
 
 def patched_profile(profile_json: str, scenario_json: str) -> tuple[str, list[str]]:
@@ -416,6 +427,6 @@ def shape_of(value: str) -> str:
 
 def top_share_ranks() -> list[tuple[str, int]]:
     """
-    Each ``fanout.top_share`` field's name and the rank, at scale 1, its share is held at,
+    Each ``fanout.top_fractions`` field's name and the rank, at scale 1, its share is held at,
     busiest first.
     """

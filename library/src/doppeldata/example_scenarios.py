@@ -3,6 +3,9 @@
 import importlib.resources
 from importlib.resources.abc import Traversable
 
+from doppeldata.errors import InvalidArgument
+from doppeldata.issue_codes import SCENARIO_NOT_FOUND
+
 EXAMPLE_SUFFIX = '.scenario.yaml'
 
 
@@ -14,7 +17,8 @@ def example_names() -> list[str]:
 
 def example_resource(name: str) -> Traversable:
     if name not in example_names():
-        raise ValueError(f'{name!r} is not an example scenario doppeldata ships; choose from {", ".join(example_names())}')
+        message = f'{name!r} is not an example scenario doppeldata ships'
+        raise InvalidArgument(SCENARIO_NOT_FOUND, message, value=name, valid=example_names())
     return importlib.resources.files('doppeldata').joinpath('examples', name + EXAMPLE_SUFFIX)
 
 

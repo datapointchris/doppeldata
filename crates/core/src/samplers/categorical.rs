@@ -1,5 +1,5 @@
 //! A string column with stored `top_values`: an alias table over their rates, where a draw of the
-//! `other_rate` share generates a value instead. With a suffix, each top value is a prefix, and a
+//! `other_fraction` share generates a value instead. With a suffix, each top value is a prefix, and a
 //! draw of the suffix pattern follows it.
 
 use arrow_array::ArrayRef;

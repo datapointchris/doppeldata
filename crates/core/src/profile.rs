@@ -26,7 +26,7 @@ pub use bundle::ColumnRef;
 pub use bundle::Fanout;
 pub use bundle::Inherited;
 pub use bundle::Relationship;
-pub use bundle::TopShare;
+pub use bundle::TopFractions;
 pub use table::*;
 pub use values::Duration;
 pub use values::Quantiles;

@@ -8,6 +8,7 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
+from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 from doppeldata.profile_format import to_plain
 
@@ -18,15 +19,19 @@ def schema_document(path: str | os.PathLike[str]) -> tuple[Path, Any]:
     try:
         text = path.read_text(encoding='utf-8')
     except OSError as error:
-        raise SourceError(f'{os.fspath(path)} cannot be read: {error.strerror or error}', role='schema') from error
+        message = f'{os.fspath(path)} cannot be read: {error.strerror or error}'
+        raise SourceError(issue_codes.FILE_UNREADABLE, message, role='schema', value=os.fspath(path)) from error
     except UnicodeDecodeError as error:
-        raise SourceError(f'{os.fspath(path)} is not UTF-8 text: {error}; save it as UTF-8', role='schema') from error
+        message = f'{os.fspath(path)} is not UTF-8 text: {error}; save it as UTF-8'
+        raise SourceError(issue_codes.SCHEMA_UNPARSEABLE, message, role='schema', value=os.fspath(path)) from error
     try:
         if path.suffix == '.json':
             return path, json.loads(text)
         return path, to_plain(YAML(typ='safe').load(text))
     except (json.JSONDecodeError, YAMLError) as error:
-        raise SourceError(f'{path} is neither JSON nor YAML: {error}', role='schema') from error
+        raise SourceError(
+            issue_codes.SCHEMA_UNPARSEABLE, f'{path} is neither JSON nor YAML: {error}', role='schema', value=str(path)
+        ) from error
 
 
 def table_name(path: Path) -> str:

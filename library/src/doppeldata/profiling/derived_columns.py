@@ -182,7 +182,7 @@ def expressions(
                 'kind': 'expression',
                 'expr': candidate.expr,
                 'round': candidate.scale,
-                'violation_rate': rate(informative - matched, rows),
+                'violation_fraction': rate(informative - matched, rows),
             }
     return found
 

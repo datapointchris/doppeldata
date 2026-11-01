@@ -48,7 +48,7 @@ impl TextOnlyValues {
             weights.push(null_share - covered);
         }
         let choice = WeightedAliasIndex::new(weights)
-            .map_err(|error| Refusal::new(ColumnFault::UnusableRates, format!("missing_tokens rates are unusable: {error}")))?;
+            .map_err(|error| Refusal::new(ColumnFault::UnusableRates, format!("missing_token_fractions are unusable: {error}")))?;
         Ok(Some(Self {
             tokens: (tokens.keys().cloned().collect(), choice),
         }))

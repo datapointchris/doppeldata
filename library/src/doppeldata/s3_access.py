@@ -15,6 +15,7 @@ import boto3
 import botocore.credentials
 import botocore.exceptions
 
+from doppeldata import issue_codes
 from doppeldata.aws_access import ATTEMPTS
 from doppeldata.aws_access import AWS_ERRORS
 from doppeldata.aws_access import CLIENT_CONFIG
@@ -25,6 +26,7 @@ from doppeldata.aws_access import answered
 from doppeldata.aws_access import http_status
 from doppeldata.aws_access import no_answer
 from doppeldata.aws_access import unanswered
+from doppeldata.errors import InvalidArgument
 from doppeldata.errors import WriteFailed
 
 # The store asks for refreshable credentials again this often. botocore refreshes them at least ten minutes before they expire, so
@@ -40,16 +42,18 @@ def endpoint_variable() -> str | None:
 def s3_session() -> tuple[Any, Any]:
     """boto3's session and S3 client for the AWS environment.
 
-    Raises ValueError naming the setting boto3 cannot use: an AWS_PROFILE the AWS config does not hold, or an endpoint that is not
-    a URL.
+    Raises InvalidArgument naming the setting boto3 cannot use: an AWS_PROFILE the AWS config does not hold, or an endpoint that
+    is not a URL.
     """
     try:
         session = boto3.Session()
         return session, session.client('s3', config=CLIENT_CONFIG)
     except botocore.exceptions.ProfileNotFound as error:
-        raise ValueError(f'{error}; set AWS_PROFILE to a profile the AWS config holds') from error
+        message = f'{error}; set AWS_PROFILE to a profile the AWS config holds'
+        raise InvalidArgument(issue_codes.AWS_SETTINGS, message, field='environment', value=os.environ.get('AWS_PROFILE')) from error
     except ValueError as error:
-        raise ValueError(f'{error}, from {endpoint_variable() or "the AWS profile"}') from error
+        message = f'{error}, from {endpoint_variable() or "the AWS profile"}'
+        raise InvalidArgument(issue_codes.AWS_SETTINGS, message, field='environment') from error
 
 
 def endpoint_named(client: Any) -> str:
@@ -87,19 +91,21 @@ class Boto3Credentials:
 
 @contextmanager
 def write_errors(url: str, endpoint: str) -> Iterator[None]:
-    """Each boto3 failure reaching `url` as a WriteFailed naming the endpoint, `unanswered` when no answer came."""
+    """Each boto3 failure reaching `url` as a WriteFailed naming the endpoint, coded NO_ANSWER when no answer came."""
     try:
         yield
     except CREDENTIAL_ERRORS as error:
-        raise WriteFailed('no-credentials', f'{url} cannot be written: {error}; {CREDENTIAL_ADVICE}') from error
+        raise WriteFailed(issue_codes.NO_CREDENTIALS, f'{url} cannot be written: {error}; {CREDENTIAL_ADVICE}') from error
     except AWS_ERRORS as error:
         if unanswered(error):
-            raise WriteFailed('no-answer', no_answer(endpoint, 'S3', error), kind='unanswered') from error
+            raise WriteFailed(issue_codes.NO_ANSWER, no_answer(endpoint, 'S3', error)) from error
         if not isinstance(error, botocore.exceptions.ClientError):
-            raise WriteFailed('store', f'{url} cannot be written through {endpoint}: {error}') from error
-        if http_status(error) == 404:
-            raise WriteFailed('bucket-missing', f'{url} names a bucket {endpoint} does not hold', kind='refused') from error
-        raise WriteFailed('bucket-refused', f'{url} cannot be written: {endpoint} answered {answered(error)}') from error
+            raise WriteFailed(issue_codes.STORE, f'{url} cannot be written through {endpoint}: {error}') from error
+        status = http_status(error)
+        if status == 404:
+            raise WriteFailed(issue_codes.BUCKET_MISSING, f'{url} names a bucket {endpoint} does not hold') from error
+        code = issue_codes.STORE_REFUSED if status == 403 else issue_codes.STORE
+        raise WriteFailed(code, f'{url} cannot be written: {endpoint} answered {answered(error)}') from error
 
 
 def s3_store_settings(url: str, bucket: str) -> dict[str, Any]:
@@ -111,8 +117,8 @@ def s3_store_settings(url: str, bucket: str) -> dict[str, Any]:
     """
     try:
         session, client = s3_session()
-    except ValueError as error:
-        raise WriteFailed('aws-settings', f'{url} cannot be written: {error}', kind='refused') from error
+    except InvalidArgument as error:
+        raise WriteFailed(error.code, f'{url} cannot be written: {error.message}') from error
     with write_errors(url, endpoint_named(client)):
         credentials = session.get_credentials()
         if credentials is None:

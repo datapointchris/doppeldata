@@ -38,7 +38,7 @@ def test_a_messy_csv_records_clevercsvs_dialect_where_duckdb_disagrees_and_its_m
     assert csv['writer']['delimiter'] == '|'
     assert csv['detector']['agreed'] is False
     assert csv['detector']['chosen'] == 'clevercsv'
-    assert set(csv['malformed']['by_type']) == {'cast', 'missing_columns', 'too_many_columns', 'unquoted_value'}
+    assert set(csv['malformed']['type_fractions']) == {'cast', 'missing_columns', 'too_many_columns', 'unquoted_value'}
 
 
 def test_nested_ndjson_records_type_mix_presence_and_field_values_the_engine_generates_back(tmp_path):
@@ -46,9 +46,9 @@ def test_nested_ndjson_records_type_mix_presence_and_field_values_the_engine_gen
     columns = {column['name']: column for column in profile.to_plain()['columns']}
     fields = {field['name']: field for field in columns['addr']['struct']['fields']}
 
-    assert columns['id']['type_mix'] == {'integer': 0.75, 'string': 0.25}
-    assert columns['addr']['struct']['presence']['apt'] == pytest.approx(1 / 3, abs=1e-4)
-    assert fields['st']['string']['top_values'] == [{'value': 'NC', 'rate': 1.0}]
+    assert columns['id']['type_mix_fractions'] == {'integer': 0.75, 'string': 0.25}
+    assert columns['addr']['struct']['presence_fractions']['apt'] == pytest.approx(1 / 3, abs=1e-4)
+    assert fields['st']['string']['top_values'] == [{'value': 'NC', 'fraction': 1.0}]
     addr = pa.table(generate(profile, rows=4000)).column('addr').combine_chunks()
     objects = addr.filter(addr.is_valid())
     assert addr.null_count / len(addr) == pytest.approx(1 / 4, abs=0.03)

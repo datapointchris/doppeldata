@@ -18,7 +18,7 @@ struct AddNoise {
 }
 
 pub(super) fn plan(op: &Noise, planning: &Planning<'_>) -> Result<Planned, PlanError> {
-    let edit = NumericEdit::plan(planning, &op.column, op.rate.0, "noise")?;
+    let edit = NumericEdit::plan(planning, &op.column, op.fraction.0, "noise")?;
     Ok(planning.rows(AddNoise { edit, sigma: op.sigma }))
 }
 

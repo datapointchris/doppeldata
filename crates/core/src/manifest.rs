@@ -338,9 +338,9 @@ pub struct ManifestCdc {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChangeCounts {
-    pub insert: u64,
-    pub update: u64,
-    pub delete: u64,
+    pub inserts: u64,
+    pub updates: u64,
+    pub deletes: u64,
 }
 
 /// One object a `cdc` write stores beside its full load.

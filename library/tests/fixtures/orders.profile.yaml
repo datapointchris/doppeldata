@@ -19,14 +19,15 @@ source:
   format: csv
   compression: gzip
   layout:
-    files: {count: 120, size_bytes: {min: 1200000, p50: 130000000, max: 260000000, total: 16000000000}}
+    files: 120
+    file_size_bytes: {min: 1200000, p50: 130000000, max: 260000000, total: 16000000000}
     rows_per_file: {p50: 830000}
-    partitioning: {style: hive, keys: [{name: order_year, type: int32, values: {count: 5}}]}
+    partitioning: {style: hive, keys: [{name: order_year, type: int32, values: 5}]}
     sort_order: [order_id]
   csv: {writer: {delimiter: ",", header: true}}
 dataset:
-  row_count: 10000000
-  duplicate_row_rate: 0.0002
+  rows: 10000000
+  duplicate_row_fraction: 0.0002
   keys:
     primary: {columns: [order_id], uniqueness: 1.0}
     candidates: []
@@ -34,32 +35,32 @@ dataset:
     - {a: list_price, b: paid_amount, method: spearman, value: 0.93}
     - {a: region, b: channel, method: cramers_v, value: 0.41}
   conditionals:
-    - {given: region, column: channel, table: {west: {web: 0.6, store: 0.4}, east: {web: 0.3, store: 0.7}}}
+    - {given: region, column: channel, fractions: {west: {web: 0.6, store: 0.4}, east: {web: 0.3, store: 0.7}}}
   dependencies:
-    - {kind: functional, lhs: [zip3], rhs: state, violation_rate: 0.001}
+    - {kind: functional, lhs: [zip3], rhs: state, violation_fraction: 0.001}
 columns:
   - name: order_id
     physical_type: string
     logical_type: string
     nullable: false
-    null_rate: 0.0
-    distinct: {approx: 10000000, ratio: 1.0}
+    null_fraction: 0.0
+    distinct: {approx_values: 10000000, ratio: 1.0}
     string:
       length: {min: 11, max: 11, mean: 11, quantiles: {p50: 11}}
       charset: {ascii: true, classes: [upper, digit]}
-      case: {upper: 1.0}
-      whitespace_edge_rate: 0.0
-      shapes: [{shape: "AAA99999999", rate: 1.0}]
+      case_fractions: {upper: 1.0}
+      whitespace_edge_fraction: 0.0
+      shapes: [{shape: "AAA99999999", fraction: 1.0}]
       pattern: '^ORD\d{8}$'   # generalized, so it holds no literal order id
     semantic: {type: order_number, confidence: 0.9, detectors: [pattern, name_hint], sensitivity: identifier}
   - name: paid_amount
     physical_type: "decimal128(12, 2)"
     logical_type: number
     nullable: true
-    null_rate: 0.031
-    missing_tokens: {"": 0.004}
-    type_mix: {decimal: 0.999, string: 0.001}
-    distinct: {approx: 412000, ratio: 0.041}
+    null_fraction: 0.031
+    missing_token_fractions: {"": 0.004}
+    type_mix_fractions: {decimal: 0.999, string: 0.001}
+    distinct: {approx_values: 412000, ratio: 0.041}
     numeric:
       integral: false
       precision: 12
@@ -69,21 +70,21 @@ columns:
       std: 611.2
       skew: 9.8
       kurtosis: 140.3
-      zero_rate: 0.12
-      negative_rate: 0.002
+      zero_fraction: 0.12
+      negative_fraction: 0.002
       quantiles: {p001: 0.0, p01: 0.0, p05: 3.1, p25: 21.0, p50: 64.5, p75: 160.0, p95: 690.0, p99: 2300.0, p999: 9800.0}
-      histogram: {kind: equal_depth, edges: [0.0, 21.0, 64.5, 160.0, 48211.17], counts: [2500000, 2500000, 2500000, 2500000]}
-      fit: {family: lognorm, params: {s: 1.6, loc: 0.0, scale: 61.2}, ks: 0.021, aic: 1200000.0, sample: 20000}
+      histogram: {kind: equal_depth, edges: [0.0, 21.0, 64.5, 160.0, 48211.17], bin_rows: [2500000, 2500000, 2500000, 2500000]}
+      fit: {family: lognorm, params: {s: 1.6, loc: 0.0, scale: 61.2}, ks: 0.021, aic: 1200000.0, sample_rows: 20000}
       monotonic: none
       sequence: null
   - name: region
     physical_type: string
     logical_type: string
     nullable: false
-    distinct: {approx: 2, ratio: 0.0000002}
+    distinct: {approx_values: 2, ratio: 0.0000002}
     string:
-      top_values: [{value: west, rate: 0.52}, {value: east, rate: 0.48}]
-      other_rate: 0.0
+      top_values: [{value: west, fraction: 0.52}, {value: east, fraction: 0.48}]
+      other_fraction: 0.0
   - name: ordered_at
     physical_type: date32
     logical_type: date
@@ -91,33 +92,33 @@ columns:
       format: "%m/%d/%Y"
       timezone: null
       extremes: {low: "2020-01-03", high: "2024-12-30", granularity: day}
-      by_month: [0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.09, 0.09, 0.1]
-      by_dow: [0.15, 0.15, 0.14, 0.14, 0.14, 0.14, 0.14]
-      by_hour: null
-      gap_rate: 0.0
+      month_fractions: [0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.09, 0.09, 0.1]
+      weekday_fractions: [0.15, 0.15, 0.14, 0.14, 0.14, 0.14, 0.14]
+      hour_fractions: null
+      gap_fraction: 0.0
   - name: is_gift
     physical_type: bool
     logical_type: boolean
-    boolean: {true_rate: 0.42}
+    boolean: {true_fraction: 0.42}
   - name: tags
     physical_type: list<string>
     logical_type: array
     list:
       length: {p50: 2, p99: 9}
-      empty_rate: 0.1
+      empty_fraction: 0.1
       element: {name: element, physical_type: string, logical_type: string, string: {length: {min: 3, max: 12}}}
   - name: shipping
     physical_type: "struct<city: string, apt: string>"
     logical_type: object
     struct:
       fields:
-        - {name: city, path: shipping.city, physical_type: string, null_rate: 0.0}
+        - {name: city, path: shipping.city, physical_type: string, null_fraction: 0.0}
         - {name: apt, path: shipping.apt, physical_type: string, nullable: true}
-      presence: {city: 1.0, apt: 0.25}
+      presence_fractions: {city: 1.0, apt: 0.25}
   - name: customer_email
     physical_type: string
     logical_type: string
-    null_rate: 0.01
+    null_fraction: 0.01
     string:
       length: {min: 9, max: 64, mean: 22.5, quantiles: {p05: 14, p50: 21, p95: 34}}
     semantic:
@@ -127,4 +128,4 @@ columns:
       sensitivity: identifier
       generator_hint: {provider: email}
     quality:
-      invalid_rate: 0.0005
+      invalid_fraction: 0.0005

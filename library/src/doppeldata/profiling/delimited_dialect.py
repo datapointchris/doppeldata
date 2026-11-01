@@ -19,6 +19,7 @@ import charset_normalizer
 import clevercsv
 import duckdb
 
+from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 from doppeldata.profiling.backend import CsvDialect
 from doppeldata.profiling.backend import DialectFound
@@ -137,7 +138,7 @@ def first_record_block(files: tuple[SourceFile, ...]) -> tuple[str, bytes]:
         if raw.removeprefix(UTF8_BOM).strip():
             return file.path, raw
     named = files[0].path if len(files) == 1 else f'every one of the {len(files)} files from {files[0].path}'
-    raise SourceError(f'{named} holds no record, so no dialect can be read from it', exit_code=1)
+    raise SourceError(issue_codes.DATA_UNREADABLE, f'{named} holds no record, so no dialect can be read from it')
 
 
 def encodings_of(raw: bytes) -> tuple[str | None, str]:
@@ -179,13 +180,15 @@ def check_first_records(files: tuple[SourceFile, ...], path: str, dialect: CsvDi
             continue
         record = split_records(block_text(raw, dialect.encoding), dialect.delimiter, dialect.quote, dialect.escape, limit=1)[0]
         if dialect.header and [field.text for field in record] != names:
-            raise SourceError(f'{file.path} starts with another header than {path}, so the two are not one table', exit_code=1)
+            raise SourceError(
+                issue_codes.FILES_DISAGREE, f'{file.path} starts with another header than {path}, so the two are not one table'
+            )
         if not dialect.header and len(record) != len(dialect.names):
             message = (
                 f'{file.path} splits its first record into {len(record)} fields in the dialect read from {path}, '
                 f'whose records hold {len(dialect.names)}'
             )
-            raise SourceError(message, exit_code=1)
+            raise SourceError(issue_codes.FILES_DISAGREE, message)
 
 
 def read_as(found: tuple[str, str, str]) -> tuple[str, str, str]:

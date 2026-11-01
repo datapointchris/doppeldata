@@ -25,7 +25,7 @@ from doppeldata.profile_format import quantile_level
 Document = dict[str, Any]
 Column = dict[str, Any]
 Shares = tuple[float, float]
-TEMPORAL_SHARES = ('by_month', 'by_dow', 'by_hour')
+TEMPORAL_SHARES = ('month_fractions', 'weekday_fractions', 'hour_fractions')
 
 
 class Bound(enum.Enum):
@@ -111,7 +111,7 @@ def per_column(
 def described_values(document: Document, column: Column) -> float:
     """The values not null a profile's rates for `column` are shares of, or 0 where it states no row count."""
     rows = described_rows(document) or 0
-    return rows * (1 - (column.get('null_rate') or 0.0))
+    return rows * (1 - (column.get('null_fraction') or 0.0))
 
 
 @dc.dataclass(frozen=True)
@@ -132,8 +132,8 @@ def stated_points(numeric: dict[str, Any]) -> list[Stated]:
     quantiles = {quantile_level(name): value for name, value in (numeric.get('quantiles') or {}).items()}
     points = [Stated(value, (0.0, level), (level, 1.0)) for level, value in quantiles.items()]
     histogram = numeric.get('histogram') or {}
-    edges, counts, overflow = histogram.get('edges') or [], histogram.get('counts') or [], histogram.get('overflow')
-    below, above = (overflow['below'], overflow['above']) if overflow else (0, 0)
+    edges, counts, overflow = histogram.get('edges') or [], histogram.get('bin_rows') or [], histogram.get('overflow')
+    below, above = (overflow['rows_below'], overflow['rows_above']) if overflow else (0, 0)
     total = below + sum(counts) + above
     if total and len(edges) == len(counts) + 1:
         cumulative = [share / total for share in itertools.accumulate(counts, initial=below)]
@@ -143,7 +143,7 @@ def stated_points(numeric: dict[str, Any]) -> list[Stated]:
         if overflow:
             # The last bin holds its upper edge, so its count reaches through that edge rather than below it.
             points.append(Stated(edges[-1], (0.0, cumulative[-1]), (cumulative[-1], cumulative[-1])))
-    negative, zero = numeric.get('negative_rate'), numeric.get('zero_rate')
+    negative, zero = numeric.get('negative_fraction'), numeric.get('zero_fraction')
     if negative is not None and zero is not None:
         points.append(Stated(0.0, (negative, negative), (negative + zero, negative + zero)))
     return points
@@ -196,12 +196,12 @@ def category_shares(column: Column) -> dict[Any, float] | None:
     """
     listing = listed_section(column)
     if listing:
-        return {entry['value']: entry['rate'] for entry in listing[1]['top_values']}
+        return {entry['value']: entry['fraction'] for entry in listing[1]['top_values']}
     if any('overflow' in (column.get(section) or {}) for section in LISTING_SECTIONS):
         return {}
     boolean = column.get('boolean') or {}
-    if boolean.get('true_rate') is not None:
-        return {'true': boolean['true_rate'], 'false': 1 - boolean['true_rate']}
+    if boolean.get('true_fraction') is not None:
+        return {'true': boolean['true_fraction'], 'false': 1 - boolean['true_fraction']}
     return None
 
 
@@ -273,7 +273,7 @@ def null_rate_changes(source: Document, observed: Document) -> Iterator[Measurem
 
 
 def null_rate_change(source: Column, observed: Column, inverse_rows: float) -> Compared | Unmeasured | None:
-    a, b = source.get('null_rate'), observed.get('null_rate')
+    a, b = source.get('null_fraction'), observed.get('null_fraction')
     return rate_beyond_sampling(a, b, 'the other profile holds no null rate for the column', inverse_rows)
 
 
@@ -287,7 +287,7 @@ def zero_rate_changes(source: Document, observed: Document) -> Iterator[Measurem
 
 
 def zero_rate_change(source: Column, observed: Column, inverse_values: float) -> Compared | Unmeasured | None:
-    a, b = ((column.get('numeric') or {}).get('zero_rate') for column in (source, observed))
+    a, b = ((column.get('numeric') or {}).get('zero_fraction') for column in (source, observed))
     missing = 'the other profile holds no zero rate for the column, which it writes from k_min values'
     return rate_beyond_sampling(a, b, missing, inverse_values)
 
@@ -324,9 +324,9 @@ def distinct_ratio_change(source: Column, observed: Column) -> Compared | Unmeas
         return None
     if b is None:
         return Unmeasured('the other profile counts no distinct values for the column, because it holds none', a)
-    if not ours.get('approx') or not theirs.get('approx'):
+    if not ours.get('approx_values') or not theirs.get('approx_values'):
         return Compared(abs(b - a) / a, a, b)
-    low, high = distinct_ratio_range(ours['approx'], a, theirs['approx'] / b)
+    low, high = distinct_ratio_range(ours['approx_values'], a, theirs['approx_values'] / b)
     outside = (low - b) / low if b < low else (b - high) / high if b > high else 0.0
     return Compared(outside, a, b)
 
@@ -357,8 +357,8 @@ def boundary_adherence(source: Column, observed: Column) -> Compared | Unmeasure
         return None
     if not counted or 'overflow' not in counted or (counted['edges'][0], counted['edges'][-1]) != (edges['edges'][0], edges['edges'][-1]):
         return Unmeasured("the other profile was not counted against the source's histogram edges")
-    outside = counted['overflow']['below'] + counted['overflow']['above']
-    total = outside + sum(counted['counts'])
+    outside = counted['overflow']['rows_below'] + counted['overflow']['rows_above']
+    total = outside + sum(counted['bin_rows'])
     return Compared(1 - outside / total) if total else Unmeasured('the other profile counts no values for the column')
 
 
@@ -382,10 +382,10 @@ def expected_files(source: Document, observed: Document) -> float:
     combination of the partition keys' values those rows can fill.
     """
     ours, _ = layouts(source, observed)
-    source_rows, rows = ((document.get('dataset') or {}).get('row_count') for document in (source, observed))
+    source_rows, rows = ((document.get('dataset') or {}).get('rows') for document in (source, observed))
     scale = rows / source_rows if source_rows and rows is not None else 1.0
-    combinations = math.prod((key.get('values') or {}).get('count') or 1 for key in partition_keys(ours))
-    count = (ours.get('files') or {}).get('count') or 1
+    combinations = math.prod(key.get('values') or 1 for key in partition_keys(ours))
+    count = ours.get('files') or 1
     return max(1.0, count * scale, min(combinations, rows) if rows is not None else combinations)
 
 
@@ -397,13 +397,13 @@ def partition_keys(layout: dict[str, Any]) -> list[dict[str, Any]]:
 def file_count_change(source: Document, observed: Document) -> Iterator[Measurement]:
     """The file count's change, relative to the count `expected_files` gives."""
     ours, theirs = layouts(source, observed)
-    if not (ours.get('files') or {}).get('count'):
+    if not ours.get('files'):
         return
     if not theirs:
         yield Measurement(None, Unmeasured(NO_LAYOUT))
         return
     expected = expected_files(source, observed)
-    yield Measurement(None, relative_change(expected, (theirs.get('files') or {}).get('count'), 'the other profile counts no files'))
+    yield Measurement(None, relative_change(expected, theirs.get('files'), 'the other profile counts no files'))
 
 
 def rows_per_file_change(source: Document, observed: Document) -> Iterator[Measurement]:
@@ -417,7 +417,7 @@ def rows_per_file_change(source: Document, observed: Document) -> Iterator[Measu
     if not theirs:
         yield Measurement(None, Unmeasured(NO_LAYOUT))
         return
-    rows = (observed.get('dataset') or {}).get('row_count')
+    rows = (observed.get('dataset') or {}).get('rows')
     expected = min(median, rows / expected_files(source, observed)) if rows else median
     held = (theirs.get('rows_per_file') or {}).get('p50')
     yield Measurement(None, relative_change(expected, held, 'the other profile counts no rows per file'))
@@ -426,14 +426,14 @@ def rows_per_file_change(source: Document, observed: Document) -> Iterator[Measu
 def partition_share_change(source: Document, observed: Document) -> Iterator[Measurement]:
     """For each Hive key the source lists value shares of, the largest change in one value's share of rows, relative to it."""
     ours, theirs = layouts(source, observed)
-    keyed = [key for key in partition_keys(ours) if (key.get('values') or {}).get('shares')]
+    keyed = [key for key in partition_keys(ours) if key.get('value_fractions')]
     if keyed and not theirs:
         yield Measurement(None, Unmeasured(NO_LAYOUT))
         return
     keys = {key['name']: key for key in partition_keys(theirs)}
     for key in keyed:
-        shares = key['values']['shares']
-        held = ((keys.get(key['name']) or {}).get('values') or {}).get('shares')
+        shares = key['value_fractions']
+        held = (keys.get(key['name']) or {}).get('value_fractions')
         if held is None:
             yield Measurement(key['name'], Unmeasured(f"the other profile's files hold no shares of {key['name']}'s values"))
             continue
@@ -447,7 +447,7 @@ def partition_share_change(source: Document, observed: Document) -> Iterator[Mea
 def malformed_shares(document: Document) -> dict[str, float] | None:
     """Each reason a CSV reader rejected rows for, by its share of the rows read, or None for a profile of no CSV or TSV."""
     csv = (document.get('source') or {}).get('csv')
-    return None if csv is None else dict((csv.get('malformed') or {}).get('by_type') or {})
+    return None if csv is None else dict((csv.get('malformed') or {}).get('type_fractions') or {})
 
 
 def malformed_rate_change(source: Document, observed: Document) -> Iterator[Measurement]:
@@ -542,10 +542,10 @@ def conditional_divergences(source: Document, observed: Document) -> Iterator[Me
             yield Measurement(child, Unmeasured(missing), paired_with=given)
             continue
         weights = given_weights(conditional, category_shares(columns.get(given) or {}) or {})
-        rows = other.get('table') or {}
+        rows = other.get('fractions') or {}
         added = {}
-        for value, shares in conditional['table'].items():
-            held = rows.get(value, other.get('other'))
+        for value, shares in conditional['fractions'].items():
+            held = rows.get(value, other.get('other_fractions'))
             if held is None:
                 missing = f"the other profile's conditional table of {child} given {given} holds no row for {value} and no other row"
                 yield Measurement(child, Unmeasured(missing), paired_with=given, given_value=value)
@@ -559,7 +559,7 @@ def conditional_divergences(source: Document, observed: Document) -> Iterator[Me
 def given_weights(conditional: dict[str, Any], shares: Mapping[Any, float]) -> dict[str, float]:
     """Each listed given value's share of the given column's values, scaled to sum to 1, or equal shares where the column
     lists none."""
-    held = {value: shares.get(value, 0.0) for value in conditional['table']}
+    held = {value: shares.get(value, 0.0) for value in conditional['fractions']}
     total = sum(held.values())
     if not total:
         return {value: 1 / len(held) for value in held}
@@ -592,14 +592,14 @@ METRICS = (
         total_variation,
     ),
     Metric(
-        'null_rate_delta',
+        'null_fraction_delta',
         'the difference in the share of values that are null, beyond what sampling puts between two profiles of one rate',
         Bound.AT_MOST,
         0.01,
         null_rate_changes,
     ),
     Metric(
-        'zero_rate_delta',
+        'zero_fraction_delta',
         'the difference in the share of non-null values that are zero, beyond what sampling puts between two profiles of one rate',
         Bound.AT_MOST,
         0.01,
@@ -620,7 +620,7 @@ METRICS = (
         per_column(boundary_adherence),
     ),
     Metric(
-        'file_count_delta',
+        'files_delta',
         "the change in the file count, relative to the source's scaled to the rows checked",
         Bound.AT_MOST,
         0.10,
@@ -634,14 +634,14 @@ METRICS = (
         rows_per_file_change,
     ),
     Metric(
-        'partition_share_delta',
+        'partition_fraction_delta',
         "the largest change in one of a Hive key's values' share of rows, relative to the source's",
         Bound.AT_MOST,
         0.10,
         partition_share_change,
     ),
     Metric(
-        'malformed_rate_delta',
+        'malformed_fraction_delta',
         "the largest change in the share of rows a CSV reader rejects, or in one reason's share, relative to the source's malformed rate",
         Bound.AT_MOST,
         0.20,

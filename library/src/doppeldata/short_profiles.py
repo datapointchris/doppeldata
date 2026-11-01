@@ -5,6 +5,7 @@ A column given no spec takes the fake its name hints: a type the general pack hi
 by its own name or one of `PROVIDER_HINTS`.
 """
 
+import dataclasses as dc
 import difflib
 import os
 import re
@@ -14,10 +15,14 @@ from typing import Any
 from ruamel.yaml.comments import CommentedMap
 
 from doppeldata import fakes
+from doppeldata import issue_codes
 from doppeldata.column_name_words import hint_runs_in
 from doppeldata.column_name_words import name_words
 from doppeldata.embedded_profiles import data_file_metadata
 from doppeldata.embedded_profiles import data_file_profile
+from doppeldata.errors import InvalidArgument
+from doppeldata.errors import ProfileNotFound
+from doppeldata.errors import UnsupportedArgument
 from doppeldata.example_profiles import bundle_example_names
 from doppeldata.example_profiles import example_names
 from doppeldata.inline_columns import Fake
@@ -26,11 +31,11 @@ from doppeldata.inline_columns import choice
 from doppeldata.inline_columns import dates
 from doppeldata.inline_columns import decimals
 from doppeldata.inline_columns import integers
+from doppeldata.issue_codes import Issue
 from doppeldata.name_hinted_types import GENERAL
 from doppeldata.name_hinted_types import type_named_by
 from doppeldata.profile_format import BUNDLE_INDEX
 from doppeldata.profile_format import InvalidProfile
-from doppeldata.profile_format import Issue
 from doppeldata.profile_format import Profile
 from doppeldata.profile_format import pointer
 from doppeldata.profile_format import read_document
@@ -75,14 +80,14 @@ def providers() -> list[str]:
 def with_row_count(document: Any, rows: int) -> Any:
     """`document` recording `rows` as its row count, in a `dataset` section placed before the columns where it has none."""
     if 'dataset' in document:
-        document['dataset']['row_count'] = rows
+        document['dataset']['rows'] = rows
         return document
     at = list(document).index('columns') if 'columns' in document else len(document)
     if isinstance(document, CommentedMap):
-        document.insert(at, 'dataset', {'row_count': rows})
+        document.insert(at, 'dataset', {'rows': rows})
         return document
     items = list(document.items())
-    return dict([*items[:at], ('dataset', {'row_count': rows}), *items[at:]])
+    return dict([*items[:at], ('dataset', {'rows': rows}), *items[at:]])
 
 
 def file_profile(source: str | os.PathLike[str]) -> Profile:
@@ -92,20 +97,24 @@ def file_profile(source: str | os.PathLike[str]) -> Profile:
         if isinstance(source, str) and source in example_names():
             return Profile.example(source)
         if isinstance(source, str) and source in bundle_example_names():
-            raise ValueError(f'{source} is an example bundle; give Bundle.example({source!r}), which every call generating a bundle takes')
+            message = f'{source} is an example bundle; give Bundle.example({source!r}), which every call generating a bundle takes'
+            raise InvalidArgument(issue_codes.BUNDLE_GIVEN, message, value=source)
         if (path / BUNDLE_INDEX).is_file():
-            raise ValueError(
+            message = (
                 f'{os.fspath(source)} holds a bundle; give Bundle.load({os.fspath(source)!r}), which every call generating a bundle takes'
             )
-        raise FileNotFoundError(
-            f'{os.fspath(source)} is neither a profile file nor an example; name a file, or one of {", ".join(example_names())}'
-        )
+            raise InvalidArgument(issue_codes.BUNDLE_GIVEN, message, value=os.fspath(source))
+        named = os.fspath(source)
+        examples = example_names()
+        message = f'{named} is neither a profile file nor an example; name a file, or an example'
+        raise ProfileNotFound(issue_codes.PROFILE_NOT_FOUND, message, value=named, valid=examples)
     metadata = data_file_metadata(path)
     if metadata is not None:
         return data_file_profile(path, metadata)
     document = to_plain(read_document(path))
     if isinstance(document, dict) and document.get('kind') == 'bundle':
-        raise ValueError(f'{path} is a bundle; give Bundle.load({os.fspath(path)!r}), which every call generating a bundle takes')
+        message = f'{path} is a bundle; give Bundle.load({os.fspath(path)!r}), which every call generating a bundle takes'
+        raise InvalidArgument(issue_codes.BUNDLE_GIVEN, message, value=os.fspath(path))
     if not is_short(document):
         return Profile.load(path)
     return validated(short_expanded(document, path), str(path))
@@ -129,27 +138,22 @@ def short_expanded(document: dict[str, Any], path: Path) -> dict[str, Any]:
     issues = [unknown_field(str(key), list(SHORT_KEYS), (key,)) for key in document if key not in SHORT_KEYS]
     rows = document.get('rows')
     if rows is not None and (isinstance(rows, bool) or not isinstance(rows, int) or rows < 0):
-        issues.append(Issue('invalid-rows', '/rows', f'rows is a count of rows, 0 or more, not {rows!r}'))
+        issues.append(Issue(issue_codes.INVALID_SHORT_ROWS, '/rows', f'rows is a count of rows, 0 or more, not {rows!r}', rows))
         rows = None
     columns = document['columns']
     if not isinstance(columns, dict) or not columns:
         message = "columns maps each column's name to a fake, a low..high range, a list of values, or nothing to take its name's fake"
-        raise InvalidProfile(str(path), [*issues, Issue('invalid-columns', '/columns', message)])
+        raise InvalidProfile(str(path), [*issues, Issue(issue_codes.INVALID_COLUMNS, '/columns', message)])
     specs: dict[str, InlineColumn | None] = {}
     for name, value in columns.items():
         try:
             specs[name] = written_column(value)
-        except (TypeError, ValueError) as error:
-            issues.append(Issue('invalid-column', pointer(('columns', name)), str(error), getattr(error, 'closest', ())))
+        except (InvalidArgument, UnsupportedArgument) as error:
+            (refused,) = error.issues
+            issues.append(dc.replace(refused, code=issue_codes.INVALID_COLUMN, field=pointer(('columns', name)), hint=None))
     if issues:
         raise InvalidProfile(str(path), issues)
     return expanded(specs, rows, path.name.split('.')[0], str(path))
-
-
-class UnknownFake(ValueError):
-    def __init__(self, message: str, closest: tuple[str, ...]) -> None:
-        super().__init__(message)
-        self.closest = closest
 
 
 def written_column(value: Any) -> InlineColumn | None:
@@ -159,14 +163,15 @@ def written_column(value: Any) -> InlineColumn | None:
     if isinstance(value, list):
         return choice(value)
     if not isinstance(value, str):
-        raise TypeError(f'a column is a fake, a low..high range or a list of values, not {value!r}')
+        raise UnsupportedArgument(issue_codes.INVALID_COLUMN, f'a column is a fake, a low..high range or a list of values, not {value!r}')
     if value in providers():
         return Fake(value)
     bounds = RANGE.match(value)
     if bounds is None:
-        closest = tuple(difflib.get_close_matches(value, providers(), n=CLOSEST_FAKES, cutoff=CLOSEST_CUTOFF))
+        closest = difflib.get_close_matches(value, providers(), n=CLOSEST_FAKES, cutoff=CLOSEST_CUTOFF)
         named = f'; the closest are {", ".join(closest)}' if closest else '; doppeldata schemas show profile lists them as Provider'
-        raise UnknownFake(f'{value!r} is neither a fake nor a low..high range{named}', closest)
+        message = f'{value!r} is neither a fake nor a low..high range{named}'
+        raise InvalidArgument(issue_codes.INVALID_COLUMN, message, value=value, valid=providers(), closest=closest)
     low, high = bounds['low'], bounds['high']
     if INTEGER.match(low) and INTEGER.match(high):
         return integers(int(low), int(high))
@@ -174,13 +179,14 @@ def written_column(value: Any) -> InlineColumn | None:
         return decimals(float(low), float(high))
     if DATE.match(low) and DATE.match(high):
         return dates(low, high)
-    raise ValueError(f'{value!r} is a range of neither two numbers nor two ISO dates, such as 18..90 or 2023-01-01..2025-12-31')
+    message = f'{value!r} is a range of neither two numbers nor two ISO dates, such as 18..90 or 2023-01-01..2025-12-31'
+    raise InvalidArgument(issue_codes.INVALID_COLUMN, message, value=value)
 
 
 def expanded(specs: dict[str, InlineColumn | None], rows: int | None, table: str, source: str) -> dict[str, Any]:
     """The plain profile of the columns `specs` declares, each None taking the fake its name hints."""
     if not specs:
-        raise InvalidProfile(source, [Issue('no-columns', '/columns', 'a profile needs at least one column')])
+        raise InvalidProfile(source, [Issue(issue_codes.NO_COLUMNS, '/columns', 'a profile needs at least one column')])
     issues, columns = [], []
     remedy = PYTHON_REMEDY if source in (LIST_SOURCE, DICT_SOURCE) else SHORT_YAML_REMEDY
     for name, spec in specs.items():
@@ -188,21 +194,22 @@ def expanded(specs: dict[str, InlineColumn | None], rows: int | None, table: str
             column = named_column(name)
             if column is None:
                 message, closest = no_fake_message(name, remedy)
-                issues.append(Issue('no-fake-for-name', pointer(('columns', name)), message, closest))
+                issues.append(Issue(issue_codes.NO_FAKE_FOR_NAME, pointer(('columns', name)), message, name, closest=closest))
                 continue
         elif isinstance(spec, InlineColumn):
             column = spec.column(name)
         else:
-            raise TypeError(
+            message = (
                 f'column {name!r} is given {type(spec).__name__}; give it a fake such as sd.fakes.email, '
                 'sd.integers, sd.decimals, sd.dates or sd.choice, or None to take the fake its name hints'
             )
+            raise UnsupportedArgument(issue_codes.INVALID_COLUMN, message, field=name, value=type(spec).__name__)
         columns.append(column)
     if issues:
         raise InvalidProfile(source, issues)
     document: dict[str, Any] = {'kind': 'table', 'name': table}
     if rows is not None:
-        document['dataset'] = {'row_count': rows}
+        document['dataset'] = {'rows': rows}
     document['columns'] = columns
     return document
 

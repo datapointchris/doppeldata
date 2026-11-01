@@ -16,6 +16,7 @@ from doppeldata import _core
 from doppeldata.column_name_words import hint_runs_in
 from doppeldata.column_name_words import name_words
 from doppeldata.errors import DetectorPackError
+from doppeldata.issue_codes import DETECTOR_PACK_BROKEN
 from doppeldata.profiling.backend import ColumnSpec
 from doppeldata.profiling.detector_packs import Detector
 from doppeldata.profiling.detector_packs import EnabledPack
@@ -211,9 +212,10 @@ def passes(validate: Validator, check_digit: str | None, values: pa.Array, where
     try:
         passed = validate(values)
     except Exception as error:
-        raise DetectorPackError(f'{where} raised {type(error).__name__}: {error}') from error
+        raise DetectorPackError(DETECTOR_PACK_BROKEN, f'{where} raised {type(error).__name__}: {error}') from error
     if not isinstance(passed, pa.Array | pa.ChunkedArray) or passed.type != pa.bool_() or len(passed) != len(values):
-        raise DetectorPackError(f'{where} returned {describe(passed)}, not one boolean for each of the {len(values)} values it was given')
+        message = f'{where} returned {describe(passed)}, not one boolean for each of the {len(values)} values it was given'
+        raise DetectorPackError(DETECTOR_PACK_BROKEN, message)
     accepted = values.filter(passed.fill_null(False))
     if check_digit:
         return sum(_core.check_digits_hold(check_digit, accepted.to_pylist()))

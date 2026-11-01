@@ -76,10 +76,8 @@ def compression(source: Source, footers: tuple[ParquetFooter, ...]) -> str | Non
 def layout_section(backend: Backend, source: Source, read: SourceRead, profiled: ProfiledColumns, k_min: int) -> dict[str, Any]:
     sizes = sorted(file.size for file in source.files)
     layout: dict[str, Any] = {
-        'files': {
-            'count': len(sizes),
-            'size_bytes': {'min': sizes[0], 'p50': quantiles_of(sizes)['p50'], 'max': sizes[-1], 'total': sum(sizes)},
-        }
+        'files': len(sizes),
+        'file_size_bytes': {'min': sizes[0], 'p50': quantiles_of(sizes)['p50'], 'max': sizes[-1], 'total': sum(sizes)},
     }
     rows = [footer.rows for footer in read.footers] if read.footers else list(read.file_rows)
     if rows:
@@ -96,13 +94,13 @@ def partition_key(backend: Backend, profiled: ProfiledColumns, key: str, k_min: 
     """A Hive key's type and values. Its shares are of every row, each held by at least k_min rows, as top values are."""
     spec = next(spec for spec in profiled.specs if spec.name == key)
     distinct = profiled.stats[(key, 'distinct_count')]
-    values: dict[str, Any] = {'count': distinct}
+    written: dict[str, Any] = {'name': key, 'type': spec.physical_type, 'values': distinct}
     if distinct <= TOP_VALUES_THRESHOLD:
         held = profiled.described - profiled.stats[(key, 'null_count')]
         kept, other = kept_values(backend.top_k(profiled.table, key, TOP_VALUES_THRESHOLD), held, k_min)
-        values['shares'] = {str(value): rate(count, profiled.described) for value, count in kept}
-        values['other_rate'] = rate(other, profiled.described)
-    return {'name': key, 'type': spec.physical_type, 'values': values}
+        written['value_fractions'] = {str(value): rate(count, profiled.described) for value, count in kept}
+        written['other_fraction'] = rate(other, profiled.described)
+    return written
 
 
 def sort_order(footers: tuple[ParquetFooter, ...], profiled: ProfiledColumns) -> list[str]:
@@ -136,7 +134,7 @@ def csv_section(found: DialectFound, rejected: dict[str, int], profiled: Profile
     return {
         'writer': writer,
         'detected_encoding': found.detected_encoding,
-        'line_terminator_mix': {name: rate(count, breaks) for name, count in found.line_terminators.items() if count},
+        'line_terminator_fractions': {name: rate(count, breaks) for name, count in found.line_terminators.items() if count},
         'trailing_delimiter': found.trailing_delimiter,
         'detector': detector_section(found),
         'malformed': malformed_rows(rejected, profiled.unparsed_rows, rows, profiled.described, k_min),
@@ -174,7 +172,7 @@ def malformed_rows(rejected: dict[str, int], unparsed: int, rows: int, described
     if unparsed >= k_min:
         shares['cast'] = unparsed / described * rows / data_rows
     by_type = {reason: significant(share, RATE_DIGITS) for reason, share in sorted(shares.items())}
-    return {'rate': significant(sum(shares.values()), RATE_DIGITS), 'by_type': by_type}
+    return {'fraction': significant(sum(shares.values()), RATE_DIGITS), 'type_fractions': by_type}
 
 
 def parquet_section(footers: tuple[ParquetFooter, ...]) -> dict[str, Any]:

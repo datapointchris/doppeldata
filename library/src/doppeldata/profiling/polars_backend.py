@@ -16,6 +16,7 @@ import polars as pl
 import polars.selectors as cs
 import pyarrow as pa
 
+from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 from doppeldata.profiling import json_paths
 from doppeldata.profiling import parquet_footers
@@ -165,8 +166,8 @@ POLARS_STATISTICS: dict[str, Translation] = {
     'std': lambda c, _: c.std(),
     'skew': lambda c, _: c.skew(),
     'kurtosis': lambda c, _: c.kurtosis(),
-    'zero_rate': lambda c, _: (c == 0).mean(),
-    'negative_rate': lambda c, _: (c < 0).mean(),
+    'zero_fraction': lambda c, _: (c == 0).mean(),
+    'negative_fraction': lambda c, _: (c < 0).mean(),
     # Every level from one sort, where a quantile per level would sort the column once each.
     'quantiles': lambda c, levels: c.quantile(list(levels), 'nearest'),
     'decimal_places': decimal_places,
@@ -178,8 +179,8 @@ POLARS_STATISTICS: dict[str, Translation] = {
     'length_trimmed_high': lambda c, k: c.str.len_chars().top_k(k).min(),
     'length_quantiles': lambda c, levels: c.str.len_chars().quantile(list(levels), 'nearest'),
     'listed_value_counts': lambda c, values: counts_by(c, values),
-    'whitespace_edge_rate': lambda c, _: (c.str.len_chars() != c.str.strip_chars().str.len_chars()).mean(),
-    'true_rate': lambda c, _: c.mean(),
+    'whitespace_edge_fraction': lambda c, _: (c.str.len_chars() != c.str.strip_chars().str.len_chars()).mean(),
+    'true_fraction': lambda c, _: c.mean(),
     'month_counts': lambda months, _: counts_by(months, range(1, 13)),
     'weekday_counts': lambda weekdays, _: counts_by(weekdays, range(1, 8)),
     'hour_counts': lambda hours, _: counts_by(hours, range(24)),
@@ -645,7 +646,8 @@ def read_files(source: Source) -> SourceRead:
         # Counting rows reads every file's footer, so a corrupt file fails here rather than mid-profile.
         table.select(pl.len()).collect(engine='streaming')
     except (pl.exceptions.PolarsError, duckdb.Error, OSError, pa.ArrowException) as error:
-        raise SourceError(f'{", ".join(source.roots)} could not be read as {format_name}: {first_line(error)}', exit_code=1) from error
+        message = f'{", ".join(source.roots)} could not be read as {format_name}: {first_line(error)}'
+        raise SourceError(issue_codes.DATA_UNREADABLE, message) from error
     return dc.replace(read, table=table)
 
 

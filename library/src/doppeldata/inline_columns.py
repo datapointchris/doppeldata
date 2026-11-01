@@ -10,6 +10,10 @@ import math
 from collections.abc import Sequence
 from typing import Any
 
+from doppeldata.errors import InvalidArgument
+from doppeldata.errors import UnsupportedArgument
+from doppeldata.issue_codes import INVALID_COLUMN
+
 # The decimal places a choice's rates are written to, which keeps their sum within the profile's RATE_SUM_TOLERANCE of 1.
 RATE_PLACES = 6
 
@@ -22,13 +26,15 @@ class InlineColumn:
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.nulls <= 1.0:
-            raise ValueError(f'nulls is a share of rows, from 0 to 1, not {self.nulls}')
+            raise InvalidArgument(
+                INVALID_COLUMN, f'nulls is a share of rows, from 0 to 1, not {self.nulls}', field='nulls', value=self.nulls
+            )
 
     def column(self, name: str) -> dict[str, Any]:
         """The profile column this stands for, named `name`."""
         column = {'name': name, **self.described()}
         if self.nulls:
-            column['null_rate'] = self.nulls
+            column['null_fraction'] = self.nulls
         return column
 
     def described(self) -> dict[str, Any]:
@@ -61,13 +67,16 @@ class Integers(InlineColumn):
     def __post_init__(self) -> None:
         super().__post_init__()
         if not all(isinstance(bound, int) and not isinstance(bound, bool) for bound in (self.low, self.high)):
-            raise TypeError(f'integers takes two ints, not {self.low!r} and {self.high!r}; decimals takes other numbers')
+            message = f'integers takes two ints, not {self.low!r} and {self.high!r}; decimals takes other numbers'
+            raise UnsupportedArgument(INVALID_COLUMN, message, field='low')
         if self.low > self.high:
-            raise ValueError(f'integers runs from low to high, and {self.low} is above {self.high}')
+            raise InvalidArgument(
+                INVALID_COLUMN, f'integers runs from low to high, and {self.low} is above {self.high}', field='low', value=self.low
+            )
 
     def described(self) -> dict[str, Any]:
         # One bin half an integer beyond each end, as the profiler bins an integer column, so the ends draw as often as the rest.
-        histogram = {'kind': 'equal_width', 'edges': [self.low - 0.5, self.high + 0.5], 'counts': [1]}
+        histogram = {'kind': 'equal_width', 'edges': [self.low - 0.5, self.high + 0.5], 'bin_rows': [1]}
         numeric = {'extremes': {'low': self.low, 'high': self.high}, 'histogram': histogram}
         return {'physical_type': 'int64', 'logical_type': 'integer', 'numeric': numeric}
 
@@ -85,11 +94,14 @@ class Decimals(InlineColumn):
         if not all(
             isinstance(bound, int | float) and not isinstance(bound, bool) and math.isfinite(bound) for bound in (self.low, self.high)
         ):
-            raise TypeError(f'decimals takes two finite numbers, not {self.low!r} and {self.high!r}')
+            raise UnsupportedArgument(INVALID_COLUMN, f'decimals takes two finite numbers, not {self.low!r} and {self.high!r}', field='low')
         if self.low > self.high:
-            raise ValueError(f'decimals runs from low to high, and {self.low} is above {self.high}')
+            raise InvalidArgument(
+                INVALID_COLUMN, f'decimals runs from low to high, and {self.low} is above {self.high}', field='low', value=self.low
+            )
         if self.places is not None and (isinstance(self.places, bool) or not isinstance(self.places, int) or self.places < 0):
-            raise ValueError(f'places is a count of decimal places, 0 or more, not {self.places!r}')
+            message = f'places is a count of decimal places, 0 or more, not {self.places!r}'
+            raise InvalidArgument(INVALID_COLUMN, message, field='places', value=self.places)
 
     def described(self) -> dict[str, Any]:
         numeric: dict[str, Any] = {'extremes': {'low': self.low, 'high': self.high}}
@@ -108,7 +120,8 @@ class Dates(InlineColumn):
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.start > self.end:
-            raise ValueError(f'dates runs from start to end, and {self.start} is after {self.end}')
+            message = f'dates runs from start to end, and {self.start} is after {self.end}'
+            raise InvalidArgument(INVALID_COLUMN, message, field='start', value=self.start.isoformat())
 
     def described(self) -> dict[str, Any]:
         extremes = {'low': self.start.isoformat(), 'high': self.end.isoformat(), 'granularity': 'day'}
@@ -125,17 +138,20 @@ class Choice(InlineColumn):
     def __post_init__(self) -> None:
         super().__post_init__()
         if not self.values:
-            raise ValueError('choice takes at least one value')
+            raise InvalidArgument(INVALID_COLUMN, 'choice takes at least one value', field='values')
         if len(set(self.values)) != len(self.values):
-            raise ValueError(f'choice takes each value once, and {list(self.values)} repeats one')
+            raise InvalidArgument(INVALID_COLUMN, f'choice takes each value once, and {list(self.values)} repeats one', field='values')
         kinds = {kind_of(value) for value in self.values}
         if len(kinds) != 1 or None in kinds:
-            raise TypeError(f'choice takes values of one kind, all str, all int, all float or all bool, not {list(self.values)}')
+            message = f'choice takes values of one kind, all str, all int, all float or all bool, not {list(self.values)}'
+            raise UnsupportedArgument(INVALID_COLUMN, message, field='values')
         if self.weights is not None:
             if len(self.weights) != len(self.values):
-                raise ValueError(f'choice takes a weight for each of its {len(self.values)} values, not {len(self.weights)}')
+                message = f'choice takes a weight for each of its {len(self.values)} values, not {len(self.weights)}'
+                raise InvalidArgument(INVALID_COLUMN, message, field='weights')
             if any(not math.isfinite(weight) or weight < 0 for weight in self.weights) or not sum(self.weights):
-                raise ValueError(f'choice takes weights of 0 or more, with one above 0, not {list(self.weights)}')
+                message = f'choice takes weights of 0 or more, with one above 0, not {list(self.weights)}'
+                raise InvalidArgument(INVALID_COLUMN, message, field='weights')
 
     def rates(self) -> list[float]:
         weights = self.weights or (1.0,) * len(self.values)
@@ -144,14 +160,14 @@ class Choice(InlineColumn):
 
     def described(self) -> dict[str, Any]:
         kind = kind_of(self.values[0])
-        listed = [{'value': value, 'rate': rate} for value, rate in zip(self.values, self.rates(), strict=True)]
+        listed = [{'value': value, 'fraction': rate} for value, rate in zip(self.values, self.rates(), strict=True)]
         if kind is bool:
-            true_rate = sum(rate for value, rate in zip(self.values, self.rates(), strict=True) if value)
-            return {'physical_type': 'bool', 'logical_type': 'boolean', 'boolean': {'true_rate': true_rate}}
+            true_fraction = sum(rate for value, rate in zip(self.values, self.rates(), strict=True) if value)
+            return {'physical_type': 'bool', 'logical_type': 'boolean', 'boolean': {'true_fraction': true_fraction}}
         if kind is str:
-            return {'physical_type': 'string', 'logical_type': 'string', 'string': {'top_values': listed, 'other_rate': 0.0}}
+            return {'physical_type': 'string', 'logical_type': 'string', 'string': {'top_values': listed, 'other_fraction': 0.0}}
         extremes = {'low': min(self.values), 'high': max(self.values)}
-        numeric = {'top_values': listed, 'other_rate': 0.0, 'extremes': extremes}
+        numeric = {'top_values': listed, 'other_fraction': 0.0, 'extremes': extremes}
         if kind is int:
             return {'physical_type': 'int64', 'logical_type': 'integer', 'numeric': numeric}
         return {'physical_type': 'double', 'logical_type': 'number', 'numeric': numeric}
@@ -173,7 +189,8 @@ def as_date(value: dt.date | str, argument: str) -> dt.date:
     try:
         return dt.date.fromisoformat(value)
     except (TypeError, ValueError) as error:
-        raise ValueError(f'{argument} is a date or an ISO date such as "2025-01-31", not {value!r}') from error
+        message = f'{argument} is a date or an ISO date such as "2025-01-31", not {value!r}'
+        raise InvalidArgument(INVALID_COLUMN, message, field=argument, value=str(value)) from error
 
 
 def integers(low: int, high: int, *, nulls: float = 0.0) -> Integers:

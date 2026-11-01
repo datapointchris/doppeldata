@@ -31,6 +31,8 @@ use self::fanout_counts::RankedCounts;
 use self::keyed_permutation::KeyedPermutation;
 use crate::identity::DatasetIdentity;
 use crate::identity::is_sha256_digest;
+use crate::issue_codes;
+use crate::issue_codes::IssueCode;
 use crate::plan::Plan;
 use crate::plan::PlanError;
 use crate::plan::TableInputs;
@@ -78,25 +80,25 @@ pub enum RelationshipFault {
 }
 
 impl RelationshipFault {
-    pub fn code(self) -> &'static str {
+    pub fn code(self) -> &'static IssueCode {
         match self {
-            Self::TableNotInline => "table-not-inline",
-            Self::NoRowCount => "no-row-count",
-            Self::UnknownColumn => "unknown-column",
-            Self::MismatchedColumns => "mismatched-columns",
-            Self::SelfReference => "self-reference",
-            Self::Cycle => "relationship-cycle",
-            Self::ParentKeyUnaddressable => "parent-key-unaddressable",
-            Self::IncompatibleTypes => "incompatible-types",
-            Self::InvalidFanout => "invalid-fanout",
-            Self::InvalidScale => "invalid-scale",
+            Self::TableNotInline => &issue_codes::TABLE_NOT_INLINE,
+            Self::NoRowCount => &issue_codes::NO_ROWS,
+            Self::UnknownColumn => &issue_codes::UNKNOWN_COLUMN,
+            Self::MismatchedColumns => &issue_codes::MISMATCHED_COLUMNS,
+            Self::SelfReference => &issue_codes::SELF_REFERENCE,
+            Self::Cycle => &issue_codes::RELATIONSHIP_CYCLE,
+            Self::ParentKeyUnaddressable => &issue_codes::PARENT_KEY_UNADDRESSABLE,
+            Self::IncompatibleTypes => &issue_codes::INCOMPATIBLE_TYPES,
+            Self::InvalidFanout => &issue_codes::INVALID_FANOUT,
+            Self::InvalidScale => &issue_codes::INVALID_SCALE,
         }
     }
 }
 
 impl std::fmt::Display for RelationshipFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.code())
+        f.write_str(self.code().code)
     }
 }
 
@@ -265,7 +267,7 @@ pub(crate) struct DrawSpec<'a> {
     parent_columns: Vec<usize>,
     /// The child's files are sorted by this key first, so its rows are left in key order.
     sorted: bool,
-    /// The bundle's scale, which places each `top_share` pin at the same fraction of the parents.
+    /// The bundle's scale, which places each `top_fractions` pin at the same fraction of the parents.
     scale: f64,
     /// The child column numbering each key's rows.
     ordinal: Option<usize>,
@@ -287,10 +289,14 @@ pub(crate) struct InheritSpec<'a> {
 /// How often a child row drawn from its column's own profile equals its parent's, which `parent`'s
 /// profile draws: across the string values both list, and a null meeting a null.
 fn chance_agreement(child: &Column, parent: &Column) -> f64 {
-    let nulls = child.null_rate.map_or(0.0, |rate| rate.0) * parent.null_rate.map_or(0.0, |rate| rate.0);
+    let nulls = child.null_fraction.map_or(0.0, |rate| rate.0) * parent.null_fraction.map_or(0.0, |rate| rate.0);
     let listed = |column: &Column| -> BTreeMap<String, f64> {
         let values = column.string.as_ref().and_then(|string| string.top_values.as_ref());
-        values.into_iter().flatten().map(|top| (top.value.clone(), top.rate.0)).collect()
+        values
+            .into_iter()
+            .flatten()
+            .map(|top| (top.value.clone(), top.fraction.0))
+            .collect()
     };
     let parent_values = listed(parent);
     let values: f64 = listed(child)
@@ -339,10 +345,10 @@ pub fn plan_bundle(
                 "the engine reads every table inline",
             ));
         };
-        let Some(row_count) = table.dataset.as_ref().and_then(|dataset| dataset.row_count) else {
+        let Some(row_count) = table.dataset.as_ref().and_then(|dataset| dataset.rows) else {
             return Err(refuse(
                 RelationshipFault::NoRowCount,
-                format!("/tables/{}/dataset/row_count", crate::perturbations::pointer_token(name)),
+                format!("/tables/{}/dataset/rows", crate::perturbations::pointer_token(name)),
                 format!("{name} records no row count for the scale to multiply"),
             ));
         };
@@ -439,7 +445,7 @@ pub fn plan_bundle(
             }
             let (child, parent) = (child.expect("found"), parent.expect("found"));
             inherited_by.insert((ends.child, child), index);
-            inherits[index].push((child, parent, entry.agreement.0, place));
+            inherits[index].push((child, parent, entry.agreement_fraction.0, place));
         }
     }
     let mut numbered_by: HashMap<(&str, usize), usize> = HashMap::new();
@@ -744,7 +750,7 @@ impl KeyDraw {
         let filled = child_rows - nulls;
         let orphans = match parent_rows {
             0 => filled,
-            _ => ((filled as f64 * relationship.orphan_rate.map_or(0.0, |rate| rate.0)).round() as u64).min(filled),
+            _ => ((filled as f64 * relationship.orphan_fraction.map_or(0.0, |rate| rate.0)).round() as u64).min(filled),
         };
         let matched = filled - orphans;
         let counts = RankedCounts::new(relationship.fanout.as_ref(), parent_rows, matched, spec.scale)
@@ -835,10 +841,10 @@ impl KeyDraw {
         if room.iter().filter(|&&rows| rows > 0).count() < 2 {
             return;
         }
-        let stated: HashMap<&str, f64> = listed.iter().map(|top| (top.value.as_str(), top.rate.0)).collect();
-        let null_rate = child.null_rate.map_or(0.0, |rate| rate.0);
+        let stated: HashMap<&str, f64> = listed.iter().map(|top| (top.value.as_str(), top.fraction.0)).collect();
+        let null_fraction = child.null_fraction.map_or(0.0, |rate| rate.0);
         // Summed in the profile's order, since a map's order varies by process and moves the sum by an ulp.
-        let rest = (1.0 - listed.iter().map(|top| top.rate.0).sum::<f64>() - null_rate).max(0.0);
+        let rest = (1.0 - listed.iter().map(|top| top.fraction.0).sum::<f64>() - null_fraction).max(0.0);
         let is_unlisted = |name: &Option<String>| name.as_deref().is_some_and(|value| !stated.contains_key(value));
         let unlisted: u64 = names
             .iter()
@@ -850,7 +856,7 @@ impl KeyDraw {
             .iter()
             .zip(&room)
             .map(|(name, &rows)| match name.as_deref() {
-                None => null_rate,
+                None => null_fraction,
                 Some(value) => stated
                     .get(value)
                     .copied()

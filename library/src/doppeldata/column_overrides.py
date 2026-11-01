@@ -12,6 +12,9 @@ from collections.abc import Iterable
 from collections.abc import Mapping
 from typing import Any
 
+from doppeldata.errors import UnsupportedArgument
+from doppeldata.issue_codes import INVALID_OVERRIDE
+
 Overrides = Mapping[str, Any]
 
 
@@ -36,10 +39,11 @@ def given_value(column: str, value: object) -> dict[str, str] | None:
         return {'kind': 'date', 'text': value.isoformat()}
     if isinstance(value, dt.time):
         return {'kind': 'time', 'text': value.isoformat()}
-    raise TypeError(
+    message = (
         f'the override of column {column!r} holds a {type(value).__name__}, which no column holds; give a str, int, float, '
         'Decimal, bool, date, datetime, time or None'
     )
+    raise UnsupportedArgument(INVALID_OVERRIDE, message, field=column, value=type(value).__name__)
 
 
 def per_row(values: object) -> bool:
@@ -59,11 +63,12 @@ def overrides_json(overrides: Overrides | None) -> str | None:
     if overrides is None:
         return None
     if not isinstance(overrides, Mapping):
-        raise TypeError(f"overrides maps each column's name to its value or values, not {type(overrides).__name__}")
+        message = f"overrides maps each column's name to its value or values, not {type(overrides).__name__}"
+        raise UnsupportedArgument(INVALID_OVERRIDE, message, field='overrides', value=type(overrides).__name__)
     pinned: list[dict[str, Any]] = []
     for column, values in sorted(overrides.items()):
         if not isinstance(column, str):
-            raise TypeError(f'overrides are keyed by column names, as strs, not {column!r}')
+            raise UnsupportedArgument(INVALID_OVERRIDE, f'overrides are keyed by column names, as strs, not {column!r}', field='overrides')
         if per_row(values):
             pinned.append({'column': column, 'values': {'each_row': [given_value(column, value) for value in values]}})
         else:

@@ -41,7 +41,7 @@ struct CopyRows {
 }
 
 pub(super) fn plan(op: &Duplicates, planning: &Planning<'_>) -> Result<Planned, PlanError> {
-    let rate = op.rate.0;
+    let rate = op.fraction.0;
     if rate >= 1.0 {
         return Err(planning.refuse(
             ScenarioFault::InvalidParameter,

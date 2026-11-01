@@ -18,7 +18,7 @@ relationships:
   - from: [lineitem.l_orderkey]
     to: [orders.o_orderkey]
     containment: 1.0
-    orphan_rate: 0.0
+    orphan_fraction: 0.0
     cardinality: many_to_one
     fanout:
       quantiles: {p001: 1, p01: 1, p05: 1, p25: 2, p50: 4, p75: 6, p95: 7, p99: 7, p999: 7}
@@ -37,10 +37,10 @@ relationships:
 
 | Field | What it states | What the generator does with it |
 | --- | --- | --- |
-| `orphan_rate` | the share of child rows naming a key the parent lacks | gives that share a key past every parent's |
+| `orphan_fraction` | the share of child rows naming a key the parent lacks | gives that share a key past every parent's |
 | `containment` | the share of the child's distinct keys the parent holds | spreads the orphan rows over that many orphan keys |
 | `fanout.quantiles` | child rows per parent, a parent no child names counted at 0 | draws a curve through them, so each quantile holds |
-| `fanout.top_share` | the share of matched child rows the busiest 1, 10 and 100 parents hold | pins the curve to hold each share exactly |
+| `fanout.top_fractions` | the share of matched child rows the busiest 1, 10 and 100 parents hold | pins the curve to hold each share exactly |
 | `fanout.zipf_s` | a Zipf law's exponent fitted to the counts | gives the curve its slope where no quantile or pin does |
 | `inherited` | child columns equal to their parent row's on nearly every joined row | copies the parent's value on the stated share |
 | `ordinal` | a child column numbering each parent's rows from 1 | writes each row's number among its parent's rows |
@@ -56,18 +56,18 @@ ranks. So every block of child rows draws from every parent, as a table loaded i
 doppeldata data generate orders-customers --scale 0.1 --out shop/
 ```
 
-- **Each table generates `round(row_count × scale)` rows.** The 40,000 customers become 4,000, and
+- **Each table generates `round(rows × scale)` rows.** The 40,000 customers become 4,000, and
   the 550,000 orders 55,000.
 - **Each quantile is a share of the parents, so it holds at any scale.** At scale 0.1 the example
   holds `p50` 4, `p95` 45 and `p99` 160 orders per customer exactly.
-- **Each `top_share` holds over the same fraction of the parents.** `top10` of 40,000 customers is
+- **Each `top_fractions` holds over the same fraction of the parents.** `top10` of 40,000 customers is
   the busiest one of 4,000 at scale 0.1, and that customer holds 0.003 of the orders. A pin falling
   on less than one parent is left out.
 
 ## A relationship is edited in the bundle, or bent by a scenario without editing it
 
-- **Every field above is read as written.** Each `top_share` counts the busiest parents' rows
-  together, so `top10` below `top1` is refused as `invalid-fanout`.
+- **Every field above is read as written.** Each `top_fractions` counts the busiest parents' rows
+  together, so `top10` below `top1` is refused as `E-PROFILE-122`.
 - **Deleting an `inherited` entry or an `ordinal` draws the column from its own profile.** Deleting
   a relationship draws its foreign key from its column's profile too, so its values join only by
   chance.
@@ -78,7 +78,7 @@ doppeldata data generate orders-customers --scale 0.1 --out shop/
 
 ```yaml
     inherited:
-      - {child: region, parent: region, agreement: 0.995}
+      - {child: region, parent: region, agreement_fraction: 0.995}
 ```
 
 The profiler writes an entry where at least `AGREEMENT_FLOOR` of the joined rows hold their parent
@@ -110,14 +110,14 @@ child refers to, or copied by an `inherited` entry. The column is then drawn fro
 
 A text source's column holding values of other types generates as text, as
 [column-samplers.md](column-samplers.md) says. A relationship's column holds its parent's values,
-so its own `type_mix` gives way to the parent's form, and every join still holds.
+so its own `type_mix_fractions` gives way to the parent's form, and every join still holds.
 
 - **A foreign key is text where its parent's key is, and typed where it is not.** It holds the
   parent's keys as written, values of other types included.
 - **An orphan key lies past every parent's.** Under an integer key it is an integer past the largest
   the parent's own draws hold, written as text where the key is. Under a string key it is a uuid.
 - **A copied column is text where the parent column it copies is, and typed where it is not.**
-- **An ordinal is typed.** It is a row's number, whatever its `type_mix` states.
+- **An ordinal is typed.** It is a row's number, whatever its `type_mix_fractions` states.
 - **A parent's key holding a type mix repeats no value.** Each value of another type is derived from
   its row, so every child row joins one parent.
 - **The exports type each column as the bundle generates it.** A table exported alone with `table`
@@ -160,7 +160,7 @@ records why:
 
 With no key, nothing refers to it, so `nation.n_regionkey → region.r_regionkey` is not found.
 `--policy none` keeps the key and finds it, at 5 nations to a region. `profile check` reports a key
-on a table under `k_min` rows as `keys-under-k-min`.
+on a table under `k_min` rows as `E-POLICY-004`.
 
 ## `data check` measures each relationship by its fan-out, its orphans and its busiest parents
 
@@ -171,8 +171,8 @@ doppeldata data check orders-customers shop/
 | Metric | What it compares | Passes at |
 | --- | --- | --- |
 | `fanout_ks` | the child rows per parent against the stated quantiles | ≤ 0.05 |
-| `orphan_rate_delta` | the orphan rate against `orphan_rate` | ≤ 0.005 |
-| `top_share_delta` | the furthest of the busiest parents' shares from `top_share`, at the bundle's scale | ≤ 0.001 |
+| `orphan_fraction_delta` | the orphan rate against `orphan_fraction` | ≤ 0.005 |
+| `top_fraction_delta` | the furthest of the busiest parents' shares from `top_fractions`, at the bundle's scale | ≤ 0.001 |
 
 Each table is checked against its own profile first.
 [checking-generated-data-and-profile-drift.md](checking-generated-data-and-profile-drift.md) holds

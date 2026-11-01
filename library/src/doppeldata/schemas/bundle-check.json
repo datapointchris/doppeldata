@@ -17,7 +17,7 @@
       "$ref": "#/$defs/ReportedProfile"
     },
     "relationships": {
-      "description": "`fanout_ks`, `orphan_rate_delta` and `top_share_delta` of each relationship, in the\nbundle's order, each naming its relationship in `relationship`.",
+      "description": "`fanout_ks`, `orphan_fraction_delta` and `top_fraction_delta` of each relationship, in the\nbundle's order, each naming its relationship in `relationship`.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/MetricResult"
@@ -250,14 +250,14 @@
           "format": "double"
         },
         "column": {
-          "description": "The column measured, or null for a metric of the whole table, such as `malformed.rate`.",
+          "description": "The column measured, or null for a metric of the whole table, such as `malformed.fraction`.",
           "type": [
             "string",
             "null"
           ]
         },
         "metric": {
-          "description": "The statistic expected, such as `hot_keys.share`.",
+          "description": "The statistic expected, such as `hot_keys.fraction`.",
           "type": "string"
         },
         "passed": {
@@ -339,7 +339,7 @@
           ]
         },
         "decides": {
-          "description": "False on a row the report's verdict leaves out: a score against the real data whose\nthreshold no thresholds file sets, and `malformed_rate_delta` on data written with no\n`malformed_rows`. Such a row passes. A score's `threshold` is its reference, which `value`\nand `bound` say whether it meets.",
+          "description": "False on a row the report's verdict leaves out: a score against the real data whose\nthreshold no thresholds file sets, and `malformed_fraction_delta` on data written with no\n`malformed_rows`. Such a row passes. A score's `threshold` is its reference, which `value`\nand `bound` say whether it meets.",
           "type": "boolean"
         },
         "drawn_by": {

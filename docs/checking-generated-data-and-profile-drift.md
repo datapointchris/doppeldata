@@ -8,7 +8,7 @@ profile writes is one PROFILE could hold, such as a ZIP column's prefixes under 
 `--against` is the one way a check reads real rows, and a section below covers it.
 Generated data has its own `source_fingerprint`, so the stats cache never hands PROFILE back
 unchanged. DATA is typed with the detector packs PROFILE records, so a type one of them declares can
-be confirmed. A column the engine generates as text from its `type_mix` is typed by its text in
+be confirmed. A column the engine generates as text from its `type_mix_fractions` is typed by its text in
 any format, as PROFILE's text source was. So a Parquet column of `48213` and `abc` profiles as an
 integer column holding a type mix, and its statistics are its integers', as PROFILE's are. A nested
 field generated as text is profiled as text.
@@ -41,8 +41,8 @@ A profile states its CDF at a few points and nothing between them. So `ks` reads
 there, and interpolates nothing.
 
 - **The points are the source's quantiles, interior histogram edges and zero.** An edge pins the
-  share below it, from the counts. Zero pins the share below it at `negative_rate`, and through it
-  at `negative_rate + zero_rate`. A p-quantile q pins less: the share below q is at most p, and the
+  share below it, from the counts. Zero pins the share below it at `negative_fraction`, and through it
+  at `negative_fraction + zero_fraction`. A p-quantile q pins less: the share below q is at most p, and the
   share through q at least p. So a value several quantiles share is one jump they all sit on.
 - **Each side's share at a point is a range.** It is every share a CDF holding all of that side's
   stated points can have there. The gap at the point is how far apart the two ranges are, and zero
@@ -83,19 +83,19 @@ lists and the source does not adds to that category's share.
   So a correct draw of a list of hundreds of values passes at ordinary row counts, and a draw moving
   a tenth of its rows onto one value still fails.
 
-A date or timestamp column's shares are `by_month`, `by_dow` and `by_hour`. Its `tvd` is the
+A date or timestamp column's shares are `month_fractions`, `weekday_fractions` and `hour_fractions`. Its `tvd` is the
 largest of their three distances, over those both profiles hold. It cannot see a shift inside one
-hour or one month. `gap_rate` is not measured, because which days are empty is a seeded draw no
+hour or one month. `gap_fraction` is not measured, because which days are empty is a seeded draw no
 profile records.
 
-## `null_rate_delta` and `zero_rate_delta` subtract the gap sampling puts between two rates
+## `null_fraction_delta` and `zero_fraction_delta` subtract the gap sampling puts between two rates
 
 A null rate is a share of every row, so it is `tvd` over two categories, null and not null. Two
 profiles of one rate `p`, over `n_a` and `n_b` rows, lie about
 `sqrt(2/π · p(1 − p) · (1/n_a + 1/n_b))` apart by chance. That is subtracted, and the value is
 never below 0. A zero rate is a share of the values not null, so its `n` counts those.
 
-A profile stating no `dataset.row_count`, such as one expanded from a dict of fakes, adds no term.
+A profile stating no `dataset.rows`, such as one expanded from a dict of fakes, adds no term.
 Its rate is the parameter itself. So a correct 5% null column drawn at 1,000 rows passes the
 default threshold on most seeds, where the raw difference failed about one seed in seven. A column
 whose rate rose from 0 to 5% still fails.
@@ -104,7 +104,7 @@ whose rate rose from 0 to 5% still fails.
 
 The profiler sets a histogram's outer edges at the trimmed extremes, or half a unit beyond them in
 an integer column. The `k_min` floor merges only interior bins, so a frozen profile's outer edges
-are still the source's. The adherence is `1 − (below + above) / (below + Σ counts + above)` of the
+are still the source's. The adherence is `1 − (rows_below + rows_above) / (rows_below + Σ bin_rows + rows_above)` of the
 other profile's histogram.
 
 - An overflow of 1 to `k_min − 1` rows is written as 0, so adherence overstates by at most
@@ -185,7 +185,7 @@ matrix, so one pair drifting moves the group, and the row names which pair moved
 A source profile with a `source.layout` gets three metrics, one statistic each. Each value is a
 relative change, as `distinct_ratio_delta`'s is, and each defaults to at most 0.10.
 
-- **`file_count_delta` is the file count's change.** The count expected is the source's scaled to
+- **`files_delta` is the file count's change.** The count expected is the source's scaled to
   the rows checked. So a check at the profile's row count holds the source's file count, and one at
   a tenth of it holds a tenth.
 - **The file count expected is never under one file for each partition the rows can fill.** A
@@ -193,16 +193,16 @@ relative change, as `distinct_ratio_delta`'s is, and each defaults to at most 0.
   least the product of each key's value count, or the rows checked where those are fewer.
 - **`rows_per_file_delta` is the median rows per file's change**, against the source's, or the
   rows checked over the files expected where that is fewer.
-- **`partition_share_delta` has a row per Hive key the source lists value shares of.** Its value is
+- **`partition_fraction_delta` has a row per Hive key the source lists value shares of.** Its value is
   the largest change in one value's share of rows. A value the data lacks has a share of 0, so its
   change is 1.
 - **Data whose profile records no layout leaves each of the three unmeasured**, as a table in
   memory does. A source profile with no layout, as a hand-written one may be, gets none of them.
 
-## `malformed_rate_delta` compares the rejected rows by type, only where the data was written broken
+## `malformed_fraction_delta` compares the rejected rows by type, only where the data was written broken
 
 A CSV or TSV source profile recording malformed rows gets one table row. It takes the change in
-the share of rows rejected, and the change in each `source.csv.malformed.by_type` share the source
+the share of rows rejected, and the change in each `source.csv.malformed.type_fractions` share the source
 records. Its value is the largest of them, divided by the source's malformed rate. It defaults to
 at most 0.20.
 
@@ -212,7 +212,7 @@ at most 0.20.
   perturbation asked for malformed rows, and it decides nothing. So a plain generation from a
   profile of broken files passes its check, and the report prints the row on its own line with that
   reason.
-- **Data written under `malformed_rows` with no `rate` is compared.** The op reproduced the source's
+- **Data written under `malformed_rows` with no `fraction` is compared.** The op reproduced the source's
   shares, so the row checks it did.
 - **Data written under named `kinds` skips the row**, and `distinct_ratio_delta` and `tvd` on every
   column. Those kinds replace the source's, and a broken row adds values to the column it breaks.
@@ -241,8 +241,8 @@ doppeldata data check orders-customers shop/
 | Metric | Relationship | Value | Threshold | Expected | Observed | Passed |
 | --- | --- | --- | --- | --- | --- | --- |
 | fanout_ks | orders.customer_id → customers.customer_id | 0 | ≤ 0.05 |  |  | yes |
-| orphan_rate_delta | orders.customer_id → customers.customer_id | 2.002e-06 | ≤ 0.005 | 0.002 | 0.002002 | yes |
-| top_share_delta | orders.customer_id → customers.customer_id | 9.02708e-06 | ≤ 0.001 | 0.003 | 0.00300903 | yes |
+| orphan_fraction_delta | orders.customer_id → customers.customer_id | 2.002e-06 | ≤ 0.005 | 0.002 | 0.002002 | yes |
+| top_fraction_delta | orders.customer_id → customers.customer_id | 9.02708e-06 | ≤ 0.001 | 0.003 | 0.00300903 | yes |
 ```
 
 Each table under `<data>/<table>/` is checked against its own profile, as one table is, parents
@@ -252,9 +252,9 @@ tables, by the join the profiler runs. `check()` takes a `Bundle` and returns a
 
 - **`fanout_ks` is `ks` read over child rows per parent key.** The stated points are the fan-out's
   quantiles. The generated side is exact, counting a parent no child names at 0.
-- **`orphan_rate_delta` is the generated orphan rate's distance from `orphan_rate`.** The share is
+- **`orphan_fraction_delta` is the generated orphan rate's distance from `orphan_fraction`.** The share is
   of child rows, and a relationship stating none states 0.
-- **`top_share_delta` is the furthest of each stated `top_share` from its share.** The share is of
+- **`top_fraction_delta` is the furthest of each stated `top_fractions` from its share.** The share is of
   child rows that name a parent. A bundle at scale 0.5 compares the top 5 parents with the stated
   `top10`, so the same fraction of parents is held. The scale is the one the root manifest records.
   A rank falling on a fraction of a parent takes that fraction of the next parent's rows. One
@@ -262,7 +262,7 @@ tables, by the join the profiler runs. `check()` takes a `Bundle` and returns a
 - **The three are set under `defaults` in a thresholds file, never under `columns`.** Each
   measures a relationship between tables, so no column names it.
 - **A column a relationship draws skips every metric comparing which values it holds.** That is
-  `ks`, `tvd`, `zero_rate_delta`, `boundary_adherence`, `correlation_max_abs_diff` and
+  `ks`, `tvd`, `zero_fraction_delta`, `boundary_adherence`, `correlation_max_abs_diff` and
   `conditional_kl`. Its row passes with `drawn_by` naming the relationship. The relationship
   deals out its parent's keys, so the values follow the parent's table rather than the child's
   profile. Its null rate and distinct values are still checked.
@@ -425,7 +425,8 @@ Drift between two months of one dataset is expected, so `profile diff` exits 1, 
 
 - **A check whose scenario's expectation misses its bounds exits 3**, as a failed metric does.
 - **A check or a diff that could not finish exits 3**, from a refused S3 listing to a crash. It
-  needs a person too, and 1 then means drift and nothing else.
+  needs a person too, and 1 then means drift and nothing else. `data check` leads with
+  `E-DATA-024` and `profile diff` with `E-PROFILE-031`, then the issue that stopped it.
 - **No answer from S3 exits 4**, because the next run can succeed with nobody acting.
 - **A missing file, an unreadable profile, an invalid scenario or a bad thresholds file exits
   2.** So does DATA holding

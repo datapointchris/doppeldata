@@ -6,13 +6,13 @@ perturbations:
   - op: cdc
     style: dms
     schema: sales
-    inserts: 0.05
-    updates: 0.10
-    deletes: 0.01
+    insert_fraction: 0.05
+    update_fraction: 0.10
+    delete_fraction: 0.01
     updates_per_row: {family: geometric, mean: 1.4}
     period: {start: "2026-10-01T00:00:00Z", duration: 7d}
     file_interval: 1m
     timestamp_column: dms_commit_ts
     date_partition: {enabled: true, sequence: YYYYMMDD, delimiter: SLASH}
-    duplicate_delivery_rate: 0.001
-    out_of_order_rate: 0.002
+    duplicate_delivery_fraction: 0.001
+    out_of_order_fraction: 0.002

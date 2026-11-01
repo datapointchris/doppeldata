@@ -115,7 +115,7 @@ class FrozenPairs:
 
 @dc.dataclass(frozen=True)
 class Dependence:
-    """The dataset's `correlations`, `correlation_ratios`, `conditionals`, `conditional_quantiles`, `conditional_rates`
+    """The dataset's `correlations`, `correlation_ratios`, `conditionals`, `conditional_quantiles`, `conditional_fractions`
     and `dependencies`, and the fewest rows a literal of each entry naming a parent or a lookup table rests on, which
     the policy's audit records. A floor is keyed by its list's name and its given and child columns, or by
     `dependencies` and a lookup's left- and right-hand columns."""
@@ -153,22 +153,22 @@ def column_dependence(
     copula = copula_pairs(correlations, draft_plan(columns, derived, before_warps).copula_groups())
     quantiles, quantile_floors = conditional_quantiles(backend, described, columns, measured, k_min, frozen, copula)
     curve_parents = {entry['column']: entry['given'] for entry in quantiles}
-    rates, rate_floors = conditional_rates(backend, sample, described, columns, k_min, frozen, curve_parents, copula)
+    rates, rate_floors = conditional_fractions(backend, sample, described, columns, k_min, frozen, curve_parents, copula)
     sections = {
         'correlations': correlations,
         'correlation_ratios': ratios,
         'conditionals': tables,
         'conditional_quantiles': quantiles,
-        'conditional_rates': rates,
+        'conditional_fractions': rates,
         'dependencies': dependencies,
     }
     sections = without_set_aside(sections, draft_plan(columns, derived, sections).set_aside())
     floors: dict[tuple[str, str, str], int] = {}
     for name, floored in (('conditionals', table_floors), ('conditional_quantiles', quantile_floors)):
         floors |= {(name, entry['given'], entry['column']): floored[(entry['given'], entry['column'])] for entry in sections.get(name, [])}
-    for entry in sections.get('conditional_rates', []):
+    for entry in sections.get('conditional_fractions', []):
         by_rate = rate_floors[(entry['given'], entry['column'])]
-        floors[('conditional_rates', entry['given'], entry['column'])] = min(by_rate[name] for name in by_rate if name in entry)
+        floors[('conditional_fractions', entry['given'], entry['column'])] = min(by_rate[name] for name in by_rate if name in entry)
     for dependency in sections.get('dependencies', []):
         if 'table' in dependency:
             lhs, rhs = dependency['lhs'][0], dependency['rhs']
@@ -204,8 +204,8 @@ def without_set_aside(sections: dict[str, Any], set_aside: list[str]) -> dict[st
                 continue
             entry = {key: value for key, value in entry.items() if key not in fields}
             other = {key: value for key, value in (entry.get('other') or {}).items() if key not in fields}
-            if name == 'conditional_rates':
-                if not {'zero_rate', 'null_rate'} & entry.keys():
+            if name == 'conditional_fractions':
+                if not {'zero_fraction', 'null_fraction'} & entry.keys():
                     continue
                 entry.pop('other', None)
                 if other:
@@ -312,7 +312,7 @@ def table_cells(cells: list[tuple[str, str, int]]) -> int:
 def off_mode_share(column: DependenceColumn) -> float:
     """The share of a numeric column's values its most common value leaves, as its zero rate and top values state it."""
     numeric = column.entry.get('numeric') or {}
-    stated = [numeric.get('zero_rate') or 0.0, *(entry['rate'] for entry in numeric.get('top_values') or [])]
+    stated = [numeric.get('zero_fraction') or 0.0, *(entry['fraction'] for entry in numeric.get('top_values') or [])]
     return 1 - max(stated)
 
 
@@ -486,10 +486,10 @@ def conditional_table(
         held = sum(held_rows[value] for value in members[row])
         return {value: rate(counts[value], held) for value in sorted(counts, key=order.__getitem__)}
 
-    table = {row: shares(row, counts) for row, counts in listed_rows.items()}
-    written: dict[str, Any] = {'given': given, 'column': child, 'table': table}
+    fractions = {row: shares(row, counts) for row, counts in listed_rows.items()}
+    written: dict[str, Any] = {'given': given, 'column': child, 'fractions': fractions}
     if kept[None]:
-        written['other'] = shares(None, kept[None])
+        written['other_fractions'] = shares(None, kept[None])
     return written, min(count for counts in kept.values() for count in counts.values())
 
 
@@ -597,7 +597,7 @@ def written(quantiles: dict[str, float], integral: bool) -> dict[str, int | floa
     return {name: written_number(value, integral) for name, value in quantiles.items()}
 
 
-def conditional_rates(
+def conditional_fractions(
     backend: Backend,
     sample: Table,
     described: Table,
@@ -625,24 +625,24 @@ def conditional_rates(
     numeric = {column.name for column in columns if column.spec.kind in NUMERIC}
 
     def zeros_stated(given: str, child: str) -> bool:
-        return child in numeric and (frozen.gives('conditional_rates', given, child) or not copula.share_group(given, child))
+        return child in numeric and (frozen.gives('conditional_fractions', given, child) or not copula.share_group(given, child))
 
     pairs = [(parent.name, child.name) for parent in givens for child in columns if child is not parent and rated(child)]
     tried = [
         (given, child)
         for (given, child), groups in zip(pairs, backend.grouped_rates(sample, pairs), strict=True)
-        if frozen.gives('conditional_rates', given, child)
+        if frozen.gives('conditional_fractions', given, child)
         or any(rate_dependence(list(by_value.values())) >= RATE_TRIED for _, by_value in kind_counts(groups, zeros_stated(given, child)))
     ]
     best: dict[tuple[str, str], tuple[tuple[bool, bool, float], str, tuple[dict[str, float], float | None, int]]] = {}
     for (given, child), groups in zip(tried, backend.grouped_rates(described, tried), strict=True):
-        held = frozen.gives('conditional_rates', given, child)
+        held = frozen.gives('conditional_fractions', given, child)
         for name, by_value in kind_counts(groups, zeros_stated(given, child)):
             rates = parent_rates(by_value, given_values[given], k_min)
             strength = rate_dependence(list(by_value.values()))
             if rates is None or not (held or strength >= RATE_DEPENDENCE):
                 continue
-            rank = (held, name == 'zero_rate' and curve_parents.get(child) == given, strength)
+            rank = (held, name == 'zero_fraction' and curve_parents.get(child) == given, strength)
             if (child, name) not in best or rank > best[(child, name)][0]:
                 best[(child, name)] = (rank, given, rates)
     found: list[dict[str, Any]] = []
@@ -653,11 +653,11 @@ def conditional_rates(
             continue
         entry: dict[str, Any] = {'given': given, 'column': rated_column}
         other: dict[str, float] = {}
-        for name in ('null_rate', 'zero_rate'):
+        for name in ('null_fraction', 'zero_fraction'):
             if name in kept:
-                entry[name], other_rate, _ = kept[name]
-                if other_rate is not None:
-                    other[name] = other_rate
+                entry[name], other_fraction, _ = kept[name]
+                if other_fraction is not None:
+                    other[name] = other_fraction
         if other:
             entry['other'] = other
         found.append(entry)
@@ -670,8 +670,11 @@ def kind_counts(groups: list[tuple[str | None, int, int, int]], zeros: bool) -> 
     null rate, and its zero rate where `zeros`. A zero rate counts among the rows holding a value."""
     nulls = {value: (rows, null) for value, rows, null, _ in groups if value is not None}
     if not zeros:
-        return [('null_rate', nulls)]
-    return [('null_rate', nulls), ('zero_rate', {value: (rows - null, zero) for value, rows, null, zero in groups if value is not None})]
+        return [('null_fraction', nulls)]
+    return [
+        ('null_fraction', nulls),
+        ('zero_fraction', {value: (rows - null, zero) for value, rows, null, zero in groups if value is not None}),
+    ]
 
 
 def rate_dependence(groups: list[tuple[int, int]]) -> float:
@@ -688,7 +691,7 @@ def rate_dependence(groups: list[tuple[int, int]]) -> float:
 def rated(column: DependenceColumn) -> bool:
     """Whether a column states nulls or zeros a parent could spread, and is no counting sequence."""
     numeric = column.entry.get('numeric') or {}
-    return bool(column.entry.get('null_rate') or numeric.get('zero_rate')) and not numeric.get('sequence')
+    return bool(column.entry.get('null_fraction') or numeric.get('zero_fraction')) and not numeric.get('sequence')
 
 
 def parent_rates(
@@ -807,7 +810,7 @@ def determined_columns(
         counted = backend.dependency_counts(described, lhs, dependents, k_min)
         for rhs, (complete, supported, violating) in zip(dependents, counted, strict=True):
             if complete and supported >= DEPENDENCY_SUPPORT * complete and violating <= DEPENDENCY_VIOLATION * supported:
-                found.append({'kind': 'functional', 'lhs': [lhs], 'rhs': rhs, 'violation_rate': rate(violating, supported)})
+                found.append({'kind': 'functional', 'lhs': [lhs], 'rhs': rhs, 'violation_fraction': rate(violating, supported)})
     return sorted(found, key=lambda dependency: (position[dependency['lhs'][0]], position[dependency['rhs']]))
 
 

@@ -49,7 +49,7 @@ pub(super) fn plan(op: &BrokenCharacters, planning: &Planning<'_>) -> Result<Pla
     }
     Ok(planning.rows(BreakCharacters {
         column,
-        rate: op.rate.0,
+        rate: op.fraction.0,
         rows_key: planning.key("rows"),
         values_key: planning.key("values"),
     }))

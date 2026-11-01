@@ -9,6 +9,7 @@ import math
 import re
 from typing import Any
 
+from doppeldata import issue_codes
 from doppeldata.privacy_policy.column_treatment import OLDEST_AGE
 from doppeldata.privacy_policy.column_treatment import Policy
 from doppeldata.privacy_policy.column_treatment import Treatment
@@ -16,9 +17,9 @@ from doppeldata.privacy_policy.column_treatment import is_birth_date
 from doppeldata.privacy_policy.column_treatment import restricted_zip_prefixes
 from doppeldata.privacy_policy.literal_fields import DIGIT_BOUNDS
 from doppeldata.privacy_policy.literal_fields import ColumnLiterals
-from doppeldata.privacy_policy.literal_fields import Fault
 from doppeldata.privacy_policy.literal_fields import FieldKind
 from doppeldata.privacy_policy.literal_fields import LiteralField
+from doppeldata.privacy_policy.literal_fields import RuleBreak
 from doppeldata.privacy_policy.literal_fields import listed_values
 from doppeldata.profile_format import GIVEN_LISTS
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
@@ -40,7 +41,7 @@ REFUSED: dict[Treatment, frozenset[FieldKind]] = {
 }
 
 
-def refused(field: LiteralField, column: ColumnLiterals, treatment: Treatment) -> Fault | None:
+def refused(field: LiteralField, column: ColumnLiterals, treatment: Treatment) -> RuleBreak | None:
     """The fault of a literal the column's treatment withholds, or None where it may hold it."""
     if field.kind not in REFUSED.get(treatment, frozenset()):
         return None
@@ -49,12 +50,18 @@ def refused(field: LiteralField, column: ColumnLiterals, treatment: Treatment) -
         semantic_type = (column.column.get('semantic') or {}).get('type')
         sensitivity = 'an identifier' if treatment is Treatment.IDENTIFIER else 'a quasi-identifier under strict'
         typed = f'typed {semantic_type}, {sensitivity},' if semantic_type else f'{sensitivity},'
-        return Fault('identifier-literal', field.path, f'{column.name} is {typed} and stores its {label}; expected no data value')
+        return RuleBreak(
+            issue_codes.IDENTIFIER_LITERAL, field.path, f'{column.name} is {typed} and stores its {label}; expected no data value'
+        )
     if treatment is Treatment.FREE_TEXT:
-        return Fault('free-text-literal', field.path, f'{column.name} is free text, and stores its {label}; expected its lengths only')
+        return RuleBreak(
+            issue_codes.FREE_TEXT_LITERAL, field.path, f'{column.name} is free text, and stores its {label}; expected its lengths only'
+        )
     if treatment is Treatment.ZIP_PREFIX:
-        return Fault('zip-literal', field.path, f'{column.name} is a ZIP code, and stores its {label}; expected its prefixes only')
-    return Fault('age-literal', field.path, f'{column.name} is an age, and stores its {label}; expected none')
+        return RuleBreak(
+            issue_codes.ZIP_LITERAL, field.path, f'{column.name} is a ZIP code, and stores its {label}; expected its prefixes only'
+        )
+    return RuleBreak(issue_codes.AGE_LITERAL, field.path, f'{column.name} is an age, and stores its {label}; expected none')
 
 
 def amend(column: dict[str, Any], treatment: Treatment, oldest_birth_year: int | None) -> None:
@@ -82,7 +89,7 @@ def amend(column: dict[str, Any], treatment: Treatment, oldest_birth_year: int |
         dates['low'], dates['high'] = (to_year(dates[end], end == 'high', floor) for end in ('low', 'high'))
 
 
-def treatment_faults(column: ColumnLiterals, treatment: Treatment, oldest_birth_year: int | None) -> list[Fault]:
+def treatment_faults(column: ColumnLiterals, treatment: Treatment, oldest_birth_year: int | None) -> list[RuleBreak]:
     """Where a column breaks a rule of its treatment beyond the literals it refuses. A date of birth's fault where the
     file states no `generated.at` points there."""
     at = column.path
@@ -93,50 +100,64 @@ def treatment_faults(column: ColumnLiterals, treatment: Treatment, oldest_birth_
     if treatment.keeps_no_value and extremes.get('method') == DIGIT_BOUNDS and not is_digit_bounds(extremes):
         bounds = f'extremes are {extremes.get("low")} and {extremes.get("high")}'
         detail = f'{bounds}; expected 0 or a power of ten, then one less than a power of ten'
-        found.append(Fault('extremes-not-digit-bounds', (*at, 'numeric', 'extremes'), detail))
+        found.append(RuleBreak(issue_codes.EXTREMES_NOT_DIGIT_BOUNDS, (*at, 'numeric', 'extremes'), detail))
     if treatment is Treatment.ZIP_PREFIX:
         restricted = restricted_zip_prefixes()
         for index, entry in enumerate((string.get('prefixes') or {}).get('values') or []):
             value, path = str(entry.get('value')), (*at, 'string', 'prefixes', 'values', index)
             if not ZIP_PREFIX.fullmatch(value):
-                found.append(Fault('zip-not-prefix', path, f'value is {value!r}; expected three digits'))
+                found.append(RuleBreak(issue_codes.ZIP_NOT_PREFIX, path, f'value is {value!r}; expected three digits'))
             elif value in restricted:
-                found.append(Fault('restricted-zip-prefix', path, f'{value} is on the restricted prefix list; expected 000'))
+                found.append(RuleBreak(issue_codes.RESTRICTED_ZIP_PREFIX, path, f'{value} is on the restricted prefix list; expected 000'))
     if treatment is Treatment.AGE:
         for end in ('low', 'high'):
             if isinstance(extremes.get(end), int | float) and extremes[end] > OLDEST_AGE:
                 found.append(
-                    Fault('age-over-89', (*at, 'numeric', 'extremes', end), f'{end} is {extremes[end]}; expected at most {OLDEST_AGE}')
+                    RuleBreak(
+                        issue_codes.AGE_OVER_89,
+                        (*at, 'numeric', 'extremes', end),
+                        f'{end} is {extremes[end]}; expected at most {OLDEST_AGE}',
+                    )
                 )
         for name, value in (numeric.get('quantiles') or {}).items():
             if value > OLDEST_AGE:
-                found.append(Fault('age-over-89', (*at, 'numeric', 'quantiles', name), f'{name} is {value}; expected at most {OLDEST_AGE}'))
+                found.append(
+                    RuleBreak(
+                        issue_codes.AGE_OVER_89, (*at, 'numeric', 'quantiles', name), f'{name} is {value}; expected at most {OLDEST_AGE}'
+                    )
+                )
         edges = (numeric.get('histogram') or {}).get('edges') or []
         if edges and edges[-1] > OLDEST_AGE + 0.5:
             detail = f'the last edge is {edges[-1]}; expected at most {OLDEST_AGE + 0.5}'
-            found.append(Fault('age-over-89', (*at, 'numeric', 'histogram', 'edges', len(edges) - 1), detail))
+            found.append(RuleBreak(issue_codes.AGE_OVER_89, (*at, 'numeric', 'histogram', 'edges', len(edges) - 1), detail))
     if treatment is Treatment.DATE_TO_YEAR:
         dates = (column.column.get('temporal') or {}).get('extremes') or {}
         for end, shape, expected in (('low', YEAR_START, 'the first instant of a year'), ('high', YEAR_END, 'a time on December 31')):
             stated = dates.get(end)
             if stated is not None and not shape.fullmatch(str(stated)):
-                found.append(Fault('date-below-year', (*at, 'temporal', 'extremes', end), f'{end} is {stated}; expected {expected}'))
+                found.append(
+                    RuleBreak(issue_codes.DATE_BELOW_YEAR, (*at, 'temporal', 'extremes', end), f'{end} is {stated}; expected {expected}')
+                )
         if dates and is_birth_date(column.name):
             if oldest_birth_year is None:
                 found.append(
-                    Fault('birth-date-unanchored', ('generated', 'at'), 'generated.at is absent; expected the time the profile was made')
+                    RuleBreak(
+                        issue_codes.BIRTH_DATE_UNANCHORED,
+                        ('generated', 'at'),
+                        'generated.at is absent; expected the time the profile was made',
+                    )
                 )
             for end in ('low', 'high'):
                 stated = str(dates.get(end, ''))
                 if stated[:4].isdigit() and oldest_birth_year is not None and int(stated[:4]) < oldest_birth_year:
                     detail = f'{end} is {stated}; expected {oldest_birth_year} or later, 90 years before generated.at'
-                    found.append(Fault('age-over-89', (*at, 'temporal', 'extremes', end), detail))
+                    found.append(RuleBreak(issue_codes.AGE_OVER_89, (*at, 'temporal', 'extremes', end), detail))
     return found
 
 
 def conditional_faults(
     table: dict[str, Any], index: int, policy: Policy, name: str = 'conditionals', ages: frozenset[str] = frozenset()
-) -> list[Fault]:
+) -> list[RuleBreak]:
     """Where the entry at `index` of the dataset's list `name`, one of `GIVEN_LISTS`, names a column that lists no values
     where its values are keys, a value its column does not list, or under `strict` and `healthcare` a quasi-identifier.
     A column whose list the policy withheld lists none. A conditional table's child holds listed values as its cells'
@@ -153,7 +174,7 @@ def conditional_faults(
             for quantile, value in quantiles.items():
                 if isinstance(value, int | float) and value > OLDEST_AGE:
                     detail = f'{quantile} is {value}; expected at most {OLDEST_AGE}'
-                    found.append(Fault('age-over-89', (*at, *place, quantile), detail))
+                    found.append(RuleBreak(issue_codes.AGE_OVER_89, (*at, *place, quantile), detail))
     return found
 
 
@@ -175,7 +196,7 @@ def age_quantile_groups(entry: dict[str, Any]) -> list[tuple[PointerParts, dict[
     return groups
 
 
-def lag_faults(table: dict[str, Any], column: ColumnLiterals, policy: Policy) -> list[Fault]:
+def lag_faults(table: dict[str, Any], column: ColumnLiterals, policy: Policy) -> list[RuleBreak]:
     """Where a column's lag counts from a quasi-identifier under `strict` or `healthcare`, or under `healthcare` from or
     to a date of birth, which turns the lag into an age."""
     derived = column.column.get('derived') or {}
@@ -186,15 +207,15 @@ def lag_faults(table: dict[str, Any], column: ColumnLiterals, policy: Policy) ->
     found = []
     if not policy.joins_quasi_identifiers and ((columns.get(base) or {}).get('semantic') or {}).get('sensitivity') == 'quasi_identifier':
         detail = f'{base} is a quasi-identifier under {policy.value}; expected no lag counted from it'
-        found.append(Fault('dependence-quasi-identifier', at, detail))
+        found.append(RuleBreak(issue_codes.DEPENDENCE_QUASI_IDENTIFIER, at, detail))
     born = next((name for name in (column.name, base) if is_birth_date(name)), None)
     if policy is Policy.HEALTHCARE and born:
         detail = f'{born} is a date of birth under healthcare, so the lag from {base} to {column.name} states an age; expected no lag'
-        found.append(Fault('birth-date-lag', at, detail))
+        found.append(RuleBreak(issue_codes.BIRTH_DATE_LAG, at, detail))
     return found
 
 
-def lookup_faults(table: dict[str, Any], index: int, policy: Policy) -> list[Fault]:
+def lookup_faults(table: dict[str, Any], index: int, policy: Policy) -> list[RuleBreak]:
     """As `conditional_faults`, for the lookup table of the dependency at `index`: each key a listed value of its
     left-hand column, and each value one of its right-hand column's. A dependency stating no table has none."""
     dependency = table['dataset']['dependencies'][index]
@@ -211,7 +232,7 @@ def lookup_faults(table: dict[str, Any], index: int, policy: Policy) -> list[Fau
 
 def keyed_faults(
     table: dict[str, Any], at: PointerParts, roles: list[tuple[PointerParts, Any, set[str] | None]], policy: Policy, naming: str
-) -> list[Fault]:
+) -> list[RuleBreak]:
     """Where each role's column, by name, lists no values, holds a value it does not list, or is a quasi-identifier
     under a policy that never joins one. Each role sits at its parts below `at`. A role whose values are None needs no
     list, and is checked as a quasi-identifier alone."""
@@ -222,18 +243,18 @@ def keyed_faults(
         column = columns.get(name) or {}
         if not policy.joins_quasi_identifiers and (column.get('semantic') or {}).get('sensitivity') == 'quasi_identifier':
             detail = f'{name} is a quasi-identifier under {policy.value}; expected no {naming} naming it'
-            found.append(Fault('dependence-quasi-identifier', role_at, detail))
+            found.append(RuleBreak(issue_codes.DEPENDENCE_QUASI_IDENTIFIER, role_at, detail))
         if values is None:
             continue
         listed = listed_values(column)
         if listed is None:
             detail = f'{name} lists no values; expected a column whose values the profile lists'
-            found.append(Fault('dependence-column-unlisted', role_at, detail))
+            found.append(RuleBreak(issue_codes.DEPENDENCE_COLUMN_UNLISTED, role_at, detail))
             continue
         unlisted = sorted(values - set(listed))
         if unlisted:
             detail = f'{name} holds {", ".join(map(repr, unlisted[:3]))}, which it does not list; expected only its listed values'
-            found.append(Fault('dependence-value-unlisted', role_at, detail))
+            found.append(RuleBreak(issue_codes.DEPENDENCE_VALUE_UNLISTED, role_at, detail))
     return found
 
 

@@ -67,19 +67,19 @@ def test_a_strict_reader_rejects_exactly_the_lines_the_bad_csv_example_lists_and
 def test_inserting_a_perturbation_leaves_the_rows_every_other_one_writes_unchanged():
     orders = sd.Profile.example('orders')
     others = [
-        {'op': 'hot_keys', 'column': 'customer_id', 'keys': 5, 'share': 0.6},
-        {'op': 'missingness', 'column': 'amount', 'mechanism': 'MAR', 'depends_on': 'quantity', 'rate': 0.2},
-        {'op': 'out_of_range', 'column': 'quantity', 'rate': 0.01, 'values': [-1, 0]},
+        {'op': 'hot_keys', 'column': 'customer_id', 'keys': 5, 'fraction': 0.6},
+        {'op': 'missingness', 'column': 'amount', 'mechanism': 'MAR', 'depends_on': 'quantity', 'fraction': 0.2},
+        {'op': 'out_of_range', 'column': 'quantity', 'fraction': 0.01, 'values': [-1, 0]},
         {
             'op': 'late_arrival',
             'column': 'ordered_at',
-            'rate': 0.05,
+            'fraction': 0.05,
             'lag': {'family': 'lognormal', 'median': '2d'},
             'ingest': 'ingested_at',
         },
-        {'op': 'categorical_shift', 'column': 'status', 'to': {'returned': 0.3}},
+        {'op': 'categorical_shift', 'column': 'status', 'to_fractions': {'returned': 0.3}},
     ]
-    inserted = {'op': 'broken_characters', 'column': 'customer_email', 'rate': 0.5}
+    inserted = {'op': 'broken_characters', 'column': 'customer_email', 'fraction': 0.5}
     before = pa.table(sd.generate(orders, rows=ROWS, scenario=sd.Scenario({'scenario': 'before', 'perturbations': others})))
     after = pa.table(sd.generate(orders, rows=ROWS, scenario=sd.Scenario({'scenario': 'after', 'perturbations': [inserted, *others]})))
     assert before.column_names == after.column_names
@@ -94,8 +94,8 @@ def test_a_commit_order_merge_of_the_cdc_dms_stream_is_its_expected_table_and_a_
         'cdc-dms',
         period={'start': '2026-10-01T00:00:00Z', 'duration': '1d'},
         file_interval='10m',
-        duplicate_delivery_rate=0.05,
-        out_of_order_rate=0.05,
+        duplicate_delivery_fraction=0.05,
+        out_of_order_fraction=0.05,
     )
     sd.write(sd.Profile.example('orders'), f'{tmp_path}/', rows=20_000, format='parquet', scenario=cdc)
     stream = tmp_path / 'sales' / 'orders'
@@ -130,7 +130,7 @@ def test_a_commit_order_merge_of_the_cdc_dms_stream_is_its_expected_table_and_a_
     merged.write_bytes(b'a merge job writes its output beside the stream it read')
     with pytest.raises(sd.WriteFailed) as refused:
         sd.write(sd.Profile.example('orders'), f'{tmp_path}/', rows=20_000, format='parquet', scenario=cdc, replace=True)
-    assert refused.value.code == 'foreign-object'
+    assert refused.value.code == 'E-WRITE-205'
     assert merged.exists()
 
 

@@ -38,7 +38,7 @@ class DeclaredTable:
     partition_keys: tuple[PartitionKey, ...] = ()
     source: Mapping[str, Any] = dc.field(default_factory=dict)
     row_count: int | None = None
-    duplicate_row_rate: float | None = None
+    duplicate_row_fraction: float | None = None
 
     def profile(self) -> Profile:
         """The seed: the short form's expansion of the columns, under the table's `generated`, `source` and `dataset`."""
@@ -57,7 +57,7 @@ class DeclaredTable:
         source = dict(self.source)
         if self.partition_keys:
             keys = [
-                {'name': key.name, 'type': key.physical_type, **({'values': {'count': key.count}} if key.count is not None else {})}
+                {'name': key.name, 'type': key.physical_type, **({'values': key.count} if key.count is not None else {})}
                 for key in self.partition_keys
             ]
             source['layout'] = {**(source.get('layout') or {}), 'partitioning': {'style': 'hive', 'keys': keys}}
@@ -65,9 +65,9 @@ class DeclaredTable:
             document['source'] = source
         dataset: dict[str, Any] = {}
         if self.row_count is not None:
-            dataset['row_count'] = self.row_count
-        if self.duplicate_row_rate is not None:
-            dataset['duplicate_row_rate'] = self.duplicate_row_rate
+            dataset['rows'] = self.row_count
+        if self.duplicate_row_fraction is not None:
+            dataset['duplicate_row_fraction'] = self.duplicate_row_fraction
         keys_section: dict[str, Any] = {}
         if self.primary_key:
             keys_section['primary'] = {'columns': list(self.primary_key)}

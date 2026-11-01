@@ -9,7 +9,6 @@ use std::sync::Arc;
 use arrow_array::BooleanArray;
 use arrow_array::RecordBatch;
 use arrow_array::RecordBatchOptions;
-use arrow_schema::DataType;
 use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
 use arrow_select::filter::filter_record_batch;
@@ -19,6 +18,8 @@ use crate::column_overrides::ColumnOverride;
 use crate::column_overrides::PinnedColumn;
 use crate::identity::DatasetIdentity;
 use crate::identity::is_sha256_digest;
+use crate::issue_codes;
+use crate::issue_codes::IssueCode;
 use crate::perturbations;
 use crate::perturbations::Block;
 use crate::perturbations::BlockPerturbation;
@@ -32,6 +33,8 @@ use crate::perturbations::ScenarioFault;
 use crate::perturbations::SchemaDriftPlan;
 use crate::perturbations::StreamOutline;
 use crate::perturbations::plan_perturbation;
+use crate::physical_type::physical_type_name;
+use crate::profile::Column;
 use crate::profile::DEFAULT_K_MIN;
 use crate::profile::Profile;
 use crate::profile::Quantiles;
@@ -55,6 +58,8 @@ use crate::samplers::column_plan;
 use crate::scenario::OPERATION_COLUMN;
 use crate::scenario::Perturbation;
 use crate::scenario::Scenario;
+use serde::Serialize;
+use serde_json::Value;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlanError {
@@ -90,7 +95,7 @@ pub enum PlanError {
     },
     /// An override naming a column the table lacks, or giving a value its column cannot hold.
     /// `field` is the column's JSON pointer, empty for a column the table lacks.
-    #[error("{message} [invalid-override]")]
+    #[error("{message} [{}]", issue_codes::INVALID_OVERRIDE)]
     Override { field: String, message: String },
 }
 
@@ -112,7 +117,7 @@ pub enum ColumnFault {
     /// A temporal extreme that does not parse as the column's type.
     InvalidExtreme,
     StructWithoutFields,
-    /// `missing_tokens` whose rates, each a share of rows, sum above the column's null rate.
+    /// `missing_token_fractions` that, each a share of rows, sum above the column's `null_fraction`.
     TokensExceedNullRate,
     /// A dependence between columns names a column the table lacks.
     UnknownColumn,
@@ -123,37 +128,37 @@ pub enum ColumnFault {
 }
 
 impl ColumnFault {
-    /// The kebab-case code, in the form of the library's issue codes.
-    pub fn code(self) -> &'static str {
+    /// The code a caller branches on.
+    pub fn code(self) -> &'static IssueCode {
         match self {
-            Self::UnsupportedType => "unsupported-type",
-            Self::NotGeneratedYet => "not-generated-yet",
-            Self::InvalidFit => "invalid-fit",
-            Self::InvalidPattern => "invalid-pattern",
-            Self::InvalidQuantiles => "invalid-quantiles",
-            Self::UnusableRates => "unusable-rates",
-            Self::InvalidExtreme => "invalid-extreme",
-            Self::StructWithoutFields => "struct-without-fields",
-            Self::TokensExceedNullRate => "tokens-exceed-null-rate",
-            Self::UnknownColumn => "unknown-column",
-            Self::InvalidDependence => "invalid-dependence",
+            Self::UnsupportedType => &issue_codes::UNSUPPORTED_TYPE,
+            Self::NotGeneratedYet => &issue_codes::NOT_GENERATED_YET,
+            Self::InvalidFit => &issue_codes::INVALID_FIT,
+            Self::InvalidPattern => &issue_codes::INVALID_PATTERN,
+            Self::InvalidQuantiles => &issue_codes::INVALID_QUANTILES,
+            Self::UnusableRates => &issue_codes::UNUSABLE_FRACTIONS,
+            Self::InvalidExtreme => &issue_codes::INVALID_EXTREME,
+            Self::StructWithoutFields => &issue_codes::STRUCT_WITHOUT_FIELDS,
+            Self::TokensExceedNullRate => &issue_codes::TOKENS_EXCEED_NULL_FRACTION,
+            Self::UnknownColumn => &issue_codes::UNKNOWN_COLUMN,
+            Self::InvalidDependence => &issue_codes::INVALID_DEPENDENCE,
         }
     }
 }
 
 impl PlanError {
-    /// The kebab-case code a caller branches on, in the form of the library's issue codes.
-    pub fn code(&self) -> &'static str {
+    /// The code a caller branches on.
+    pub fn code(&self) -> &'static IssueCode {
         match self {
-            Self::Bundle { .. } => "bundle",
-            Self::NoColumns { .. } => "no-columns",
-            Self::DuplicateColumn { .. } => "duplicate-column",
-            Self::ProfileDigest { .. } => "invalid-profile-digest",
+            Self::Bundle { .. } => &issue_codes::BUNDLE_GIVEN,
+            Self::NoColumns { .. } => &issue_codes::NO_COLUMNS,
+            Self::DuplicateColumn { .. } => &issue_codes::DUPLICATE_COLUMN,
+            Self::ProfileDigest { .. } => &issue_codes::INVALID_PROFILE_DIGEST,
             Self::Column { code, .. } => code.code(),
             Self::Scenario { code, .. } => code.code(),
-            Self::ScenarioDigest { .. } => "invalid-scenario-digest",
+            Self::ScenarioDigest { .. } => &issue_codes::INVALID_SCENARIO_DIGEST,
             Self::Relationship { code, .. } => code.code(),
-            Self::Override { .. } => "invalid-override",
+            Self::Override { .. } => &issue_codes::INVALID_OVERRIDE,
         }
     }
 
@@ -190,25 +195,63 @@ impl PlanError {
 
 impl std::fmt::Display for ScenarioFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.code())
+        f.write_str(self.code().code)
     }
 }
 
 impl std::fmt::Display for ColumnFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.code())
+        f.write_str(self.code().code)
     }
 }
 
-/// How one top-level column is drawn, as a plan reports it before generating anything.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ColumnSampler {
+/// How one top-level column is drawn, and what in the profile and the scenario decides it, as a
+/// plan reports it before generating anything.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ColumnTrace {
     pub name: String,
-    pub data_type: DataType,
+    /// The column's type, as a profile's `physical_type` spells it.
+    pub physical_type: String,
+    /// The sampler's kind: `sequence`, `numeric`, `categorical`, `temporal`, `boolean`, `text`,
+    /// `list` or `struct`.
+    pub sampler_kind: &'static str,
     /// What draws the values, such as `sequence from 1 by 1` or `50 top values`.
-    pub sampler: String,
-    /// The share of rows drawn null.
-    pub null_share: f64,
+    pub summary: String,
+    /// Each profile field the sampler reads that the profile holds. A field left out reads as its
+    /// default.
+    pub parameters: Vec<SamplerParameter>,
+    pub null_fraction: f64,
+    pub origin: ColumnOrigin,
+    /// The columns whose values a derived column's follow.
+    pub reads: Vec<String>,
+    /// The id of each scenario op writing the column, in the scenario's order.
+    pub ops: Vec<String>,
+    /// The pointer of each profile field the scenario's patch sets for the column.
+    pub patched_fields: Vec<String>,
+}
+
+/// One profile field a column's sampler reads: the parameter it sets, the field's JSON pointer,
+/// and its value.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SamplerParameter {
+    pub name: &'static str,
+    pub field: String,
+    pub value: Value,
+}
+
+/// What decides a column's values. A column the scenario changes is `overlaid` though it also
+/// follows others, and `reads` still names what it follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColumnOrigin {
+    /// Drawn from the profile's statistics.
+    Profiled,
+    /// Computed from other columns: a lookup, a lag or an expression.
+    Derived,
+    /// Changed by the scenario: its patch sets the column's fields, or an op writes it.
+    Overlaid,
+    /// Taken from the values a caller pinned.
+    Pinned,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -244,6 +287,8 @@ pub struct Plan {
     related: Option<RelatedColumns>,
     /// Each column a caller pinned, which takes its pinned values in place of its draw.
     pinned: Vec<PinnedColumn>,
+    /// The pointer of each field the scenario's patch sets, by the column it sets it for.
+    patched_fields: BTreeMap<String, Vec<String>>,
 }
 
 /// One perturbation applied to every block, and the schema its rows carry after it.
@@ -487,6 +532,7 @@ pub(crate) fn plan_table(table: &TableProfile, identity: DatasetIdentity, inputs
         writes: Vec::new(),
         related,
         pinned,
+        patched_fields: scenario.map(|scenario| patched_fields(scenario, columns)).unwrap_or_default(),
     };
     if let Some(scenario) = scenario {
         plan.apply_scenario(table, scenario)?;
@@ -494,10 +540,38 @@ pub(crate) fn plan_table(table: &TableProfile, identity: DatasetIdentity, inputs
     Ok(plan)
 }
 
+/// The pointer of each field `scenario`'s patch sets, by the column of `columns` it sets it for.
+fn patched_fields(scenario: &Scenario, columns: &[Column]) -> BTreeMap<String, Vec<String>> {
+    let Some(Value::Object(patched)) = scenario.patch.as_ref().and_then(|patch| patch.0.get("columns")) else {
+        return BTreeMap::new();
+    };
+    columns
+        .iter()
+        .enumerate()
+        .filter_map(|(index, column)| {
+            let mut pointers = Vec::new();
+            leaf_pointers(patched.get(&column.name)?, &format!("/columns/{index}"), &mut pointers);
+            Some((column.name.clone(), pointers))
+        })
+        .collect()
+}
+
+/// The pointer below `at` of each value `patch` sets, as RFC 6901 escapes a key.
+fn leaf_pointers(patch: &Value, at: &str, pointers: &mut Vec<String>) {
+    match patch {
+        Value::Object(fields) if !fields.is_empty() => {
+            for (key, inner) in fields {
+                leaf_pointers(inner, &format!("{at}/{}", key.replace('~', "~0").replace('/', "~1")), pointers);
+            }
+        }
+        _ => pointers.push(at.to_string()),
+    }
+}
+
 /// What `table`'s column samplers are planned against for `rows` rows from `seed`, with streams
 /// named for `name`.
 pub(crate) fn plan_context<'a>(table: &'a TableProfile, name: &'a str, seed: u64, rows: u64) -> PlanContext<'a> {
-    let source_rows = table.dataset.as_ref().and_then(|dataset| dataset.row_count);
+    let source_rows = table.dataset.as_ref().and_then(|dataset| dataset.rows);
     let rows_read = table
         .generated
         .as_ref()
@@ -532,7 +606,7 @@ fn refuse_beside_cdc(scenario: &Scenario, cdc: &CdcPlan) -> Result<(), PlanError
             }
             Perturbation::MalformedRows(_) => {
                 return Err(refuse(
-                    "malformed_rows breaks records, and cdc's faults are its duplicate_delivery_rate and out_of_order_rate".into(),
+                    "malformed_rows breaks records, and cdc's faults are its duplicate_delivery_fraction and out_of_order_fraction".into(),
                 ));
             }
             Perturbation::HotKeys(_)
@@ -768,15 +842,58 @@ impl Plan {
         self.block_count
     }
 
-    /// How each top-level column is drawn, in schema order.
-    pub fn column_samplers(&self) -> Vec<ColumnSampler> {
+    /// How each top-level column is drawn, in schema order. Each parameter's value is read from
+    /// `document`, the profile the plan was made from with any scenario's patch applied.
+    pub fn column_traces(&self, document: &Value) -> Vec<ColumnTrace> {
+        let following = self.dependent.following();
+        let reads: BTreeMap<usize, Vec<usize>> = following.reads().collect();
         self.columns
             .iter()
-            .map(|column| ColumnSampler {
-                name: column.field.name().clone(),
-                data_type: column.field.data_type().clone(),
-                sampler: column.description(),
-                null_share: column.null_share,
+            .enumerate()
+            .map(|(index, column)| {
+                let name = column.field.name().clone();
+                let ops: Vec<String> = self
+                    .writes
+                    .iter()
+                    .filter(|(_, written)| written.contains(&name))
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                let patched_fields = self.patched_fields.get(&name).cloned().unwrap_or_default();
+                let origin = if self.pinned.iter().any(|pin| pin.index == index) {
+                    ColumnOrigin::Pinned
+                } else if !ops.is_empty() || !patched_fields.is_empty() {
+                    ColumnOrigin::Overlaid
+                } else if following.follows(index) {
+                    ColumnOrigin::Derived
+                } else {
+                    ColumnOrigin::Profiled
+                };
+                let parameters = column
+                    .read_fields
+                    .iter()
+                    .chain(self.dependent.sources(index))
+                    .filter_map(|(parameter, field)| {
+                        let value = document.pointer(field)?.clone();
+                        Some(SamplerParameter {
+                            name: parameter,
+                            field: field.clone(),
+                            value,
+                        })
+                    })
+                    .collect();
+                let read_names = reads.get(&index).into_iter().flatten();
+                ColumnTrace {
+                    physical_type: physical_type_name(column.field.data_type()),
+                    sampler_kind: column.kind,
+                    summary: column.description(),
+                    parameters,
+                    null_fraction: column.null_share,
+                    origin,
+                    reads: read_names.map(|&read| self.columns[read].field.name().clone()).collect(),
+                    ops,
+                    patched_fields,
+                    name,
+                }
             })
             .collect()
     }

@@ -161,7 +161,7 @@ fn values_depend_on_no_thread_count_and_no_other_column() {
 
     let mut with_another = document.clone();
     let another = serde_json::json!({
-        "name": "another", "logical_type": "number", "null_rate": 0.1,
+        "name": "another", "logical_type": "number", "null_fraction": 0.1,
         "numeric": {"quantiles": {"p25": 1.0, "p50": 2.0, "p75": 4.0}, "extremes": {"low": 0.0, "high": 9.0}}
     });
     with_another["columns"].as_array_mut().unwrap().insert(0, another);

@@ -9,7 +9,9 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
+from doppeldata import issue_codes
 from doppeldata.errors import InvalidThresholds
+from doppeldata.issue_codes import Issue
 from doppeldata.profile_comparison.metrics import METRICS
 from doppeldata.profile_comparison.metrics import Document
 from doppeldata.profile_comparison.metrics import Thresholded
@@ -23,6 +25,7 @@ from doppeldata.profile_format import to_plain
 THRESHOLDED = {measure.name: measure for measure in (*METRICS, *SCORES, *RELATIONSHIP_METRICS)}
 if len(THRESHOLDED) != len(METRICS) + len(SCORES) + len(RELATIONSHIP_METRICS):
     raise RuntimeError('two metrics or scores share a name, so a thresholds file could not tell them apart')
+SECTIONS = ('defaults', 'columns')
 
 
 @dc.dataclass(frozen=True)
@@ -45,25 +48,31 @@ class Thresholds:
             text = path.read_text()
             document = json.loads(text) if path.suffix == '.json' else YAML(typ='safe').load(text)
         except (OSError, json.JSONDecodeError, YAMLError, UnicodeDecodeError) as error:
-            raise InvalidThresholds(f'{path} is not a readable thresholds file: {error}') from error
+            message = f'{path} is not a readable thresholds file: {error}'
+            raise InvalidThresholds([Issue(issue_codes.THRESHOLDS_UNREADABLE, None, message, str(path))]) from error
         return cls.of(to_plain(document) if document is not None else {}, str(path))
 
     @classmethod
     def of(cls, document: Any, source: str = 'the thresholds') -> 'Thresholds':
         """Thresholds from their plain document, raising InvalidThresholds naming every fault in it."""
         if not isinstance(document, dict):
-            raise InvalidThresholds(f'{source} must be a mapping holding `defaults` and `columns`')
-        faults = [f'`{key}` is not a section; use `defaults` or `columns`' for key in document if key not in ('defaults', 'columns')]
+            message = f'{source} must be a mapping holding `defaults` and `columns`'
+            raise InvalidThresholds([Issue(issue_codes.INVALID_THRESHOLDS, '', message, valid=SECTIONS)])
+        faults = [
+            Issue(issue_codes.INVALID_THRESHOLDS, f'/{key}', f'`{key}` is not a section; use `defaults` or `columns`', key, SECTIONS)
+            for key in document
+            if key not in SECTIONS
+        ]
         defaults = document.get('defaults') or {}
         columns = document.get('columns') or {}
         faults += metric_faults(defaults, '/defaults', for_column=False)
         if not isinstance(columns, dict):
-            faults.append('`columns` must map each column name to its metrics')
+            faults.append(Issue(issue_codes.INVALID_THRESHOLDS, '/columns', '`columns` must map each column name to its metrics'))
             columns = {}
         for column, metrics in columns.items():
             faults += metric_faults(metrics, f'/columns/{column}', for_column=True)
         if faults:
-            raise InvalidThresholds(f'{source} is not a valid thresholds file:\n' + '\n'.join(f'  {fault}' for fault in faults))
+            raise InvalidThresholds(faults, headline=f'{source} is not a valid thresholds file')
         return cls(defaults, columns)
 
     def threshold(self, measure: Thresholded, column: str | None) -> float:
@@ -81,7 +90,8 @@ class Thresholds:
         """
         named = sorted({name for metrics in (self.defaults, *self.columns.values()) for name in metrics if name in SCORES_BY_NAME})
         if named and not scoring:
-            raise InvalidThresholds(f'the thresholds set {", ".join(named)}, which score data against the real data, and {refusing}')
+            message = f'the thresholds set {", ".join(named)}, which score data against the real data, and {refusing}'
+            raise InvalidThresholds([Issue(issue_codes.THRESHOLDS_NEED_AGAINST, None, message, named)])
 
     def check_columns(self, source: Document | list[Document]) -> None:
         """Refuse a column the source profile does not hold, or none of a bundle's tables do, which a misspelled name would
@@ -90,7 +100,18 @@ class Thresholds:
         held = {column['name'] for document in sources for column in document.get('columns') or []}
         unknown = sorted(name for name in self.columns if name not in held)
         if unknown:
-            raise InvalidThresholds(f'the thresholds name columns the source profile does not hold: {", ".join(unknown)}')
+            known = tuple(sorted(held))
+            issues = [
+                Issue(
+                    issue_codes.THRESHOLDS_UNKNOWN_COLUMN,
+                    f'/columns/{name}',
+                    f'{name} is no column the source profile holds',
+                    name,
+                    known,
+                )
+                for name in unknown
+            ]
+            raise InvalidThresholds(issues, headline=f'the thresholds name columns the source profile does not hold: {", ".join(unknown)}')
 
     def of_table(self, source: Document) -> 'Thresholds':
         """These thresholds with `columns` cut to the columns one of a bundle's tables holds."""
@@ -98,19 +119,21 @@ class Thresholds:
         return Thresholds(self.defaults, {name: metrics for name, metrics in self.columns.items() if name in held})
 
 
-def metric_faults(metrics: Any, at: str, *, for_column: bool) -> list[str]:
+def metric_faults(metrics: Any, at: str, *, for_column: bool) -> list[Issue]:
     """Each name in `metrics` no check measures, each value not a number, and, under a column, each metric or score of
     a pair."""
+    code = issue_codes.INVALID_THRESHOLDS
     if not isinstance(metrics, dict):
-        return [f'{at} must map each metric name to its threshold']
+        return [Issue(code, at, f'{at} must map each metric name to its threshold')]
     faults = []
+    names = tuple(THRESHOLDED)
     for name, value in metrics.items():
         if name not in THRESHOLDED:
-            faults.append(f'{at}/{name}: {name!r} is not a metric; choose from {", ".join(THRESHOLDED)}')
+            faults.append(Issue(code, f'{at}/{name}', f'{name!r} is not a metric', name, names))
         elif for_column and THRESHOLDED[name].pairs:
-            faults.append(f'{at}/{name}: {name} measures a pair of columns; set it under `defaults`')
+            faults.append(Issue(code, f'{at}/{name}', f'{name} measures a pair of columns; set it under `defaults`', name))
         elif for_column and name in RELATIONSHIP_METRICS_BY_NAME:
-            faults.append(f'{at}/{name}: {name} measures a relationship between tables; set it under `defaults`')
+            faults.append(Issue(code, f'{at}/{name}', f'{name} measures a relationship between tables; set it under `defaults`', name))
         elif isinstance(value, bool) or not isinstance(value, int | float):
-            faults.append(f'{at}/{name}: {value!r} is not a number')
+            faults.append(Issue(code, f'{at}/{name}', f'{value!r} is not a number', value))
     return faults

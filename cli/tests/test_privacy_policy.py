@@ -31,18 +31,20 @@ def test_profile_check_passes_the_claims_example_and_points_at_a_three_row_top_v
     passed = runner.invoke(app, ['profile', 'check', 'claims'])
     assert passed.exit_code == 0, passed.output
 
-    pending = '- {value: pending, rate: 0.05}\n'
+    pending = '- {value: pending, fraction: 0.05}\n'
     edited = tmp_path / 'claims.profile.yaml'
-    edited.write_text(example_resource('claims').read_text().replace(pending, pending + '        - {value: appealed, rate: 0.000012}\n'))
+    edited.write_text(
+        example_resource('claims').read_text().replace(pending, pending + '        - {value: appealed, fraction: 0.000012}\n')
+    )
     failed = runner.invoke(app, ['profile', 'check', str(edited), '--json'])
 
     assert failed.exit_code == 3, failed.output
     report = json.loads(failed.stdout)
     assert report['passed'] is False
-    violations = report['tables'][0]['violations']
-    assert {(violation['code'], violation['field']) for violation in violations} == {
-        ('below-k-min', '/columns/10/string/top_values/3'),
-        ('audit-values-mismatch', '/privacy/audit/21/values'),
+    issues = report['tables'][0]['issues']
+    assert {(issue['code'], issue['field']) for issue in issues} == {
+        ('E-POLICY-007', '/columns/10/string/top_values/3'),
+        ('E-POLICY-006', '/privacy/audit/21/values'),
     }
 
 
@@ -58,11 +60,11 @@ def test_profile_check_names_each_key_no_section_declares_by_its_pointer_in_a_bu
 
     assert checked.exit_code == 3, checked.output
     (refused,) = json.loads(checked.stdout)['tables']
-    assert {(violation['code'], violation['field']) for violation in refused['violations']} == {
-        ('unknown-field', '/relationship'),
-        ('unknown-field', '/tables/orders/nmae'),
-        ('unknown-field', '/tables/orders/dataset/row_cnt'),
-        ('unknown-field', '/tables/orders/columns/0/nul_rate'),
+    assert {(issue['code'], issue['field']) for issue in refused['issues']} == {
+        ('E-PROFILE-006', '/relationship'),
+        ('E-PROFILE-006', '/tables/orders/nmae'),
+        ('E-PROFILE-006', '/tables/orders/dataset/row_cnt'),
+        ('E-PROFILE-006', '/tables/orders/columns/0/nul_rate'),
     }
 
 
