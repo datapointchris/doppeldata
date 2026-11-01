@@ -1,4 +1,6 @@
+import itertools
 import json
+import shlex
 from typing import Any
 
 import typer
@@ -14,10 +16,19 @@ def nodes(command: Any, path: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...
     return [(path, command), *(node for name, child in children.items() for node in nodes(child, (*path, name)))]
 
 
-def test_every_command_answers_help_with_examples_and_every_leaf_takes_json_and_v_beside_q():
+def example_words(command: Any) -> list[list[str]]:
+    """Each example row's words after `doppeldata`, up to a shell redirection or pipe."""
+    rows = [row.removeprefix('- ').partition(' — ')[0] for row in (command.epilog or '').split('\n\n') if row.startswith('- doppeldata ')]
+    return [list(itertools.takewhile(lambda word: word not in ('>', '|'), shlex.split(row)[1:])) for row in rows]
+
+
+def test_every_command_answers_help_with_examples_that_parse_and_every_leaf_takes_json_and_v_beside_q():
     for path, command in nodes(typer.main.get_command(app)):
         assert CliRunner().invoke(app, [*path, '--help']).exit_code == 0, path
         assert (command.epilog or '').startswith('Examples:'), path
+        for words in example_words(command):
+            # The parser reads every word before --help exits, so a command or flag the tree lacks fails here.
+            assert CliRunner().invoke(app, [*words, '--help']).exit_code == 0, words
         if hasattr(command, 'commands'):
             continue
         flags = {name for parameter in command.params for name in parameter.opts}
