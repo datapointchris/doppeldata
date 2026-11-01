@@ -11,7 +11,7 @@ doppeldata --version     # prints the installed release
 Every release is published to that package index, and nothing else is. The command needs Python
 3.13 or later. It pins the `doppeldata` library to its own release, so the two always match.
 
-It also installs every engine the library leaves optional. So `profile create` reads Parquet and
+It also installs every package the Polars engine needs, and boto3 to reach S3. So `profile create` reads Parquet and
 Arrow locally or on S3, and CSV, TSV and JSON locally, with nothing more installed. Two features
 need one package more, added with `--with`:
 
