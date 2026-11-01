@@ -27,6 +27,7 @@ from doppeldata.errors import InvalidArgument
 from doppeldata.errors import StoppedWrite
 from doppeldata.errors import WriteFailed
 from doppeldata.issue_codes import Issue
+from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import BundleManifest
 from doppeldata.manifest import Manifest
 from doppeldata.manifest import in_s3
@@ -99,6 +100,14 @@ def recorded_bundle_scenarios(record: dict[str, Any] | None) -> dict[str, Scenar
     if record is None:
         return {}
     return {table: recorded_scenario(document) for table, document in record['document'].items()}
+
+
+def recorded_location(recorded: Manifest | BundleManifest) -> str | None:
+    """Where the write `recorded` records stored its manifest file, or None for a write to memory, which keeps none."""
+    destination: str = recorded.document['destination']
+    if _core.destination_scheme(destination)[0] == 'memory':
+        return None
+    return f'{destination.rstrip("/")}/{MANIFEST_FILE_NAME}'
 
 
 def holds(out: str, location: str) -> bool:

@@ -34,6 +34,7 @@ from doppeldata.issue_codes import MANIFEST_ON_BUNDLE
 from doppeldata.manifest import BundleManifest
 from doppeldata.manifest import Manifest
 from doppeldata.manifest_regeneration import manifest_at
+from doppeldata.manifest_regeneration import recorded_location
 from doppeldata.manifest_regeneration import regenerate_bundle
 from doppeldata.manifest_regeneration import regenerate_table
 from doppeldata.profile_format import Bundle
@@ -444,8 +445,9 @@ def regenerate(
     So is a plan whose dataset identity differs for another reason, such as a release that moved the stream version, naming
     the identity keys that differ.
 
-    `out` takes any destination `write` writes to except one file. It is refused where it holds the manifest file named,
-    because a run there with replace would store the fresh manifest over the record it compares with. `replace`, `threads`
+    `out` takes any destination `write` writes to except one file. It is refused where it holds the manifest file named, or
+    for a Manifest or BundleManifest the one at the destination it records. A run there with replace would store the fresh
+    manifest over the record it compares with. `replace`, `threads`
     and `aws_profile` are taken as `write` takes them. A partial manifest is refused, and so are one whose files embed the
     profile and one recording a write to one file.
 
@@ -456,8 +458,8 @@ def regenerate(
     the Bundle.
     """
     with aws_profile_chosen(aws_profile):
-        location = None if isinstance(manifest, Manifest | BundleManifest) else os.fspath(manifest)
         recorded = manifest if isinstance(manifest, Manifest | BundleManifest) else manifest_at(manifest)
+        location = recorded_location(recorded) if isinstance(manifest, Manifest | BundleManifest) else os.fspath(manifest)
         started = time.monotonic()
         if isinstance(recorded, BundleManifest):
             if not isinstance(profile, Bundle):
