@@ -174,18 +174,18 @@ def column_dependence(
         quantiles, quantile_floors = conditional_quantiles(backend, described, columns, measured, k_min, frozen, copula)
         curve_parents = {entry['column']: entry['given'] for entry in quantiles}
         rates, rate_floors = conditional_fractions(backend, sample, described, columns, k_min, frozen, curve_parents, copula)
-        looped = looped_float_tables(tables, rates, columns)
+        sections = {
+            'correlations': correlations,
+            'correlation_ratios': ratios,
+            'conditionals': tables,
+            'conditional_quantiles': quantiles,
+            'conditional_fractions': rates,
+            'dependencies': dependencies,
+        }
+        looped = looped_float_tables(columns, derived, sections)
         if not looped:
             break
         refused |= looped
-    sections = {
-        'correlations': correlations,
-        'correlation_ratios': ratios,
-        'conditionals': tables,
-        'conditional_quantiles': quantiles,
-        'conditional_fractions': rates,
-        'dependencies': dependencies,
-    }
     sections = without_set_aside(sections, draft_plan(columns, derived, sections).set_aside())
     floors: dict[tuple[str, str, str], int] = {}
     for name, floored in (('conditionals', table_floors), ('conditional_quantiles', quantile_floors)):
@@ -201,15 +201,23 @@ def column_dependence(
 
 
 def looped_float_tables(
-    tables: list[dict[str, Any]], rates: list[dict[str, Any]], columns: list[DependenceColumn]
+    columns: list[DependenceColumn], derived: dict[str, dict[str, Any]], sections: dict[str, Any]
 ) -> frozenset[tuple[str, str]]:
-    """Each table given a float column, by its given and child, whose given's null or zero rate is stated given its
-    child. The engine would set the rate aside to break the loop, losing where the given's nulls and zeros fall. So the
-    table is refused instead, and its child takes its next strongest given."""
+    """Each table given a float column, by its given and child, whose adding makes the engine's plan of the draft set
+    aside an entry the draft without such tables keeps. That is a loop through the table, such as its given's null rate
+    stated given its child, which the engine breaks by setting the later entry aside and losing what it places. So
+    the table is refused instead, and its child takes its next strongest given."""
     floats = {column.name for column in columns if listed_float(column)}
-    rated = {(entry['given'], entry['column']) for entry in rates}
+    tables = sections['conditionals']
+    plain = [table for table in tables if table['given'] not in floats]
+    if len(plain) == len(tables):
+        return frozenset()
+    without = sections | {'conditionals': plain}
+    kept = set(draft_plan(columns, derived, without).set_aside())
     return frozenset(
-        (table['given'], table['column']) for table in tables if table['given'] in floats and (table['column'], table['given']) in rated
+        (table['given'], table['column'])
+        for table in tables
+        if table['given'] in floats and set(draft_plan(columns, derived, without | {'conditionals': [*plain, table]}).set_aside()) - kept
     )
 
 
@@ -337,16 +345,25 @@ def sampled_v(cells: list[tuple[str, str, int]], least: int) -> float | None:
 
 
 def listed_float(column: DependenceColumn) -> bool:
-    """Whether a float column lists every value it holds, `GIVEN_VALUES` at most. Its values then key a conditional
-    table's rows as a category's do, written as text as Polars, Spark and the engine all write a float."""
+    """Whether a float column lists every value it holds, `GIVEN_VALUES` at most, each finite. Its values then key a
+    conditional table's rows as a category's do, each written by `float_keyed`, which the engine reads back as the same
+    number. The engine places no row by an infinity or a NaN."""
     numeric = column.entry.get('numeric') or {}
+    listed = numeric.get('top_values') or []
     return (
         column.spec.kind is ColumnKind.FLOAT
         and role(column) == RANKED
         and column.distinct <= GIVEN_VALUES
-        and bool(numeric.get('top_values'))
+        and bool(listed)
         and not numeric.get('other_fraction')
+        and all(math.isfinite(item['value']) for item in listed)
     )
+
+
+def float_keyed(cells: list[tuple[str | None, str | None, int]]) -> list[tuple[str | None, str | None, int]]:
+    """`cells` with each given value written as Python writes the float, the shortest text reading back as the same
+    number, as `listed_values` writes the given's list. Polars and Spark each spell an exponent their own way."""
+    return [(None if given is None else repr(float(given)), child, count) for given, child, count in cells]
 
 
 def listed_float_trials(
@@ -479,7 +496,9 @@ def conditional_tables(
             pairs.append((fewer.name, more.name, fewer_values, more_values))
     strongest: dict[str, tuple[tuple[bool, float], dict[str, Any], int]] = {}
     counted = backend.cross_counts(described, [(given, child) for given, child, _, _ in pairs])
-    for (given, child, given_values, child_values), cells in zip(pairs, counted, strict=True):
+    floats = {column.name for column in columns if listed_float(column)}
+    for (given, child, given_values, child_values), counts in zip(pairs, counted, strict=True):
+        cells = float_keyed(counts) if given in floats else counts
         held, strength = frozen.gives('conditionals', given, child), cramers_v(both_held(cells)) or 0.0
         if not held and strength < CORRELATION_FLOOR:
             continue
@@ -564,18 +583,19 @@ def conditional_table(
 
 
 def conditionals_without_floor(
-    backend: Backend, described: Table, frozen: tuple[FrozenConditional, ...], columns: set[str]
+    backend: Backend, described: Table, frozen: tuple[FrozenConditional, ...], columns: set[str], floats: frozenset[str] = frozenset()
 ) -> list[dict[str, Any]]:
     """Each table `frozen` holds whose two columns `columns` names, counted over `described` cell for cell: each child
     value an earlier row states, as its share of the given value's rows holding a child value, whatever its rows. A given
-    value no such row holds has no row. No floor holds a cell, so no profile may hold these tables."""
+    value no such row holds has no row. A given `floats` names is keyed by `float_keyed`. No floor holds a cell, so no
+    profile may hold these tables."""
     held = [entry for entry in frozen if {entry.given, entry.child} <= columns]
     if not held:
         return []
     tables = []
-    for entry, cells in zip(held, backend.cross_counts(described, [(entry.given, entry.child) for entry in held]), strict=True):
+    for entry, counts in zip(held, backend.cross_counts(described, [(entry.given, entry.child) for entry in held]), strict=True):
         by_given: dict[str, collections.Counter[str]] = collections.defaultdict(collections.Counter)
-        for given_value, child_value, count in cells:
+        for given_value, child_value, count in float_keyed(counts) if entry.given in floats else counts:
             if given_value is not None and child_value is not None:
                 by_given[given_value][child_value] += count
         fractions = {

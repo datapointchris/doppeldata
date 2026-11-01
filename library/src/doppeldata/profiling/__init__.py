@@ -260,18 +260,15 @@ def profile_in_dialect(
             return edges_from, []
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=3)
     frozen = (
-        table_profile.FrozenLayout.of(edges_from.to_plain(), count_conditionals_without_floor=count_frozen_conditionals_without_floor)
+        table_profile.FrozenLayout.of(
+            edges_from.to_plain(),
+            count_conditionals_without_floor=count_frozen_conditionals_without_floor,
+            dependence_sample_rows=dependence_sample_rows,
+        )
         if edges_from is not None
         else None
     )
-    profiles, _, unfloored = profiled_tables(
-        backend,
-        [(source, readers)],
-        settings,
-        frozen,
-        type_mix_columns=frozenset(type_mix_columns),
-        dependence_sample_rows=dependence_sample_rows,
-    )
+    profiles, _, unfloored = profiled_tables(backend, [(source, readers)], settings, frozen, type_mix_columns=frozenset(type_mix_columns))
     only = profiles[source.name]
     sources.check_unchanged(listed)
     issues = only.validate()
@@ -428,12 +425,11 @@ def profiled_tables(
     *,
     related: bool = False,
     type_mix_columns: frozenset[str] = frozenset(),
-    dependence_sample_rows: int = table_profile.FIT_SAMPLE_ROWS,
 ) -> tuple[dict[str, Profile], foreign_keys.FoundRelationships, dict[str, list[dict[str, Any]]]]:
     """Each table's profile by its name, each source beside the readers that read it, and where `related`, the foreign
     keys between them, counted in the same session, which holds every table's rows until it ends. Each string column
-    `type_mix_columns` names is typed by its text, and each table's correlations read a sample of
-    `dependence_sample_rows` rows. Last, each table's conditional tables `frozen` asks to count without a floor."""
+    `type_mix_columns` names is typed by its text. Last, each table's conditional tables `frozen` asks to count without
+    a floor."""
     profiled: dict[str, table_profile.ProfiledTable] = {}
     # `none` holds no floor, so every statistic is computed over every row.
     k_min = settings.k_min or 1
@@ -450,7 +446,6 @@ def profiled_tables(
                 readers=readers,
                 frozen=frozen,
                 type_mix_columns=type_mix_columns,
-                dependence_sample_rows=dependence_sample_rows,
             )
         members = [foreign_keys.BundleMember(name, table.table, table.specs, table.document) for name, table in profiled.items()]
         relationships = foreign_keys.relationships(backend, members, k_min) if related else foreign_keys.FoundRelationships()
