@@ -28,8 +28,10 @@ jobs:
   #   x86_64-unknown-linux-gnu  AWS Glue, and Linux workstations. manylinux2014
   #                             is glibc 2.17, which every Glue version in
   #                             docs/aws-glue-support.md accepts.
-  #   x86_64-apple-darwin       Intel Macs.
+  #   x86_64-apple-darwin       Intel Macs. Cross-compiled on Apple Silicon,
+  #                             where Rosetta runs the x86_64 test and wheel.
   # Anywhere else installs the sdist, which compiles the crates.
+  # python is the interpreter that runs the built wheel, on the wheel's platform.
   wheels:
     strategy:
       fail-fast: false
@@ -37,25 +39,38 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-26.04
+            python: cpython-3.11-linux-x86_64-gnu
           - target: x86_64-apple-darwin
-            runner: macos-26-intel
+            runner: macos-26
+            python: cpython-3.11-macos-x86_64-none
     runs-on: ${{ matrix.runner }}
-    # Bounds a hung run, above the slowest healthy Intel macOS build. A queued
-    # job waiting for a runner is not covered.
+    # Bounds a hung run, above the slowest healthy build, the macOS wheel's with
+    # a cold cache. A queued job waiting for a runner is not covered.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 
+      # macOS only: on Linux, the host test and the container rebuild each other's artifacts.
+      - if: runner.os == 'macOS'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: crates
+
       # Every platform shipping a wheel generates the pinned values, so a new
-      # target cannot ship untested. determinism-contract.yml covers the rest.
+      # target cannot ship untested. --target compiles it for the wheel's
+      # platform. determinism-contract.yml covers the rest.
       # Skipped once a release stamps the version, because the commit it builds
       # passed here before it was tagged.
       - name: Generate the determinism contract's pinned values
         if: inputs.version == ''
         working-directory: crates
-        run: cargo test --release -p doppeldata-core --test determinism_contract
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup target add "$TARGET"
+          cargo test --release --target "$TARGET" -p doppeldata-core --test determinism_contract
 
       - name: Write the release version into the crates
         if: inputs.version != ''
@@ -80,8 +95,10 @@ jobs:
       # shipped, through the extension's own generation path, on Python 3.11.
       # It runs on a stamped build too, because those are the bytes released.
       - name: Generate the pinned values through the built wheel
+        env:
+          PYTHON: ${{ matrix.python }}
         run: |
-          uv venv --python 3.11 "$RUNNER_TEMP/wheel"
+          uv venv --python "$PYTHON" "$RUNNER_TEMP/wheel"
           uv pip install --python "$RUNNER_TEMP/wheel" library/dist/*.whl
           "$RUNNER_TEMP/wheel/bin/python" crates/check-pinned-values-through-wheel.py
 
