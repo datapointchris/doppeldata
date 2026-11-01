@@ -4,47 +4,10 @@ A project with a schema and no data yet can still generate. A seed is a profile 
 schema: each column takes its type and constraints, and a fixed default where the schema is silent.
 Every verb that reads a profile reads a seed. `profile create` replaces it once real data exists.
 
+[Import a seed profile from a schema](how-to/import-a-seed-from-a-schema.md) runs each import, a
+schema class of each library, and a generate and check from the seed.
+
 ## A schema class generates rows wherever a profile is taken
-
-```python
-import dataframely as dy
-import doppeldata as sd
-import polars as pl
-
-class Orders(dy.Schema):
-    order_id = dy.Int64(primary_key=True, min=1)
-    status = dy.Enum(['placed', 'shipped', 'returned'])
-    amount = dy.Decimal(precision=10, scale=2, min=0, max=500)
-    customer_email = dy.String(nullable=True)
-
-orders = sd.generate(Orders, rows=1000)
-Orders.validate(pl.DataFrame(orders), cast=True)
-```
-
-```python
-import pandera.pandas as pa
-from pandera.typing import Series
-
-class Orders(pa.DataFrameModel):
-    order_id: Series[int] = pa.Field(ge=1, unique=True)
-    status: Series[str] = pa.Field(isin=['placed', 'shipped', 'returned'])
-    sku: Series[str] = pa.Field(str_matches=r'^[A-Z]{3}-\d{4}$')
-    customer_email: Series[str] = pa.Field(nullable=True)
-
-sd.write(Orders, 'orders.parquet', rows=1000)
-sd.Profile.expand(Orders, rows=1000).save('orders.profile.yaml')
-```
-
-```python
-from pyspark.sql import types as T
-
-schema = T.StructType([
-    T.StructField('order_id', T.LongType(), nullable=False),
-    T.StructField('ordered_at', T.TimestampType(), nullable=False),
-    T.StructField('tags', T.ArrayType(T.StringType())),
-])
-orders = sd.generate(schema, rows=1000)
-```
 
 `generate`, `stream`, `write` and `Profile.expand` take a pandera `DataFrameModel` or
 `DataFrameSchema`, of the pandas or the Polars flavor, a dataframely `Schema`, and a Spark
@@ -80,26 +43,9 @@ orders = sd.generate(schema, rows=1000)
 
 ## `profile import` writes a seed from a schema file or a Glue table
 
-```bash
-doppeldata profile import --from odcs orders.odcs.yaml --out orders.profile.yaml
-doppeldata profile import --from json-schema orders.schema.json --out orders.profile.yaml
-doppeldata profile import --from table-schema orders.tableschema.json --out orders.profile.yaml
-doppeldata profile import --from data-package datapackage.json --out shop.bundle.yaml
-doppeldata profile import --from data-package datapackage.json --table orders --out orders.profile.yaml
-doppeldata profile import --from glue shop.orders --region eu-west-1 --out orders.profile.yaml
-doppeldata data generate orders.profile.yaml --rows 1000 --out orders/
-```
-
-```python
-sd.Profile.from_odcs('orders.odcs.yaml')
-sd.Profile.from_json_schema('orders.schema.json')
-sd.Profile.from_table_schema('orders.tableschema.json')
-sd.Profile.from_data_package('datapackage.json', table='orders')
-sd.Bundle.from_data_package('datapackage.json')
-sd.Profile.from_glue('shop', 'orders', region='eu-west-1')
-```
-
-Without `--out` the seed prints as YAML. A file names its table up to its first dot, so
+`--from` names the kind: `odcs`, `json-schema`, `table-schema`, `data-package` or `glue`. Each has
+a `Profile.from_*` call, and `Bundle.from_data_package` reads a package whole. Without `--out` the
+seed prints as YAML. A file names its table up to its first dot, so
 `orders.schema.json` imports as `orders`.
 
 - **`--table` picks one table from a source holding several**: an ODCS contract's schema objects,
@@ -240,11 +186,6 @@ pyarrow too.
   `--detected-entities FILE` reads the same map as JSON.
 
 ## An ODCS contract's properties each become a column
-
-```bash
-datacontract import sql --source orders.sql --dialect postgres --output orders.odcs.yaml
-doppeldata profile import --from odcs orders.odcs.yaml --out orders.profile.yaml
-```
 
 A project with DDL, Avro, dbt or another schema datacontract-cli reads can reach a seed through its
 `import`, which writes an ODCS v3 contract. It is no dependency of doppeldata.

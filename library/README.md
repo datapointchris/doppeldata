@@ -3,8 +3,9 @@
 Profile a dataset into a reviewable file holding no rows, then generate synthetic data from it at any
 scale.
 
-This is the library. The `doppeldata` command is the separate `doppeldata-cli` distribution, so a
-project importing the library installs none of the CLI's dependencies.
+This is the library. It installs the compiled generator and the packages that read and validate a
+profile's YAML, and no profiling engine. The `doppeldata` command is the separate `doppeldata-cli`
+distribution, so a project importing the library installs none of the CLI's dependencies.
 
 ```bash
 uv add --index https://pypi.ichrisbirch.com/simple/ doppeldata
@@ -26,7 +27,8 @@ manifest, or one file such as `people.csv`, and
 `sd.plan()` says what it would write. A write that stops raises a `StoppedWrite`.
 `sd.spark.generate()` and `sd.spark.write()` do the same inside Spark's executors, with the values
 and files a local run gives. They need PySpark 3.5 or later, with pyarrow 15 or later and the pandas
-PySpark asks for, and doppeldata installed on every executor.
+PySpark asks for, and doppeldata installed on every executor. A write to S3 needs boto3 on every
+executor too.
 `sd.spark.to_spark(spark, table)` builds a DataFrame from a table on the driver, of up to
 `sd.spark.DRIVER_ROWS_AT_MOST` rows.
 
@@ -71,4 +73,5 @@ doppeldata, so a package of that name there is someone else's. The library needs
 later, so it installs into an AWS Glue job:
 <https://github.com/datapointchris/doppeldata#run-the-library-inside-an-aws-glue-job>.
 
-Source, documentation and issues: <https://github.com/datapointchris/doppeldata>.
+The README walks up from column names to a profile of real data, and links a page for every task:
+<https://github.com/datapointchris/doppeldata#readme>. Source and issues live there too.

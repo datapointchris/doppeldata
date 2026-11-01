@@ -293,17 +293,8 @@ select count(*) from read_json_auto('out/part-*.json')
 
 ## A bundle writes each table as its own dataset, and a root manifest names each one's
 
-```bash
-doppeldata data generate orders-customers --scale 0.1 --out shop/
-```
-
-```text
-customers  wrote 4,000 rows as parquet in 1 file, 48.1 KB
-orders     wrote 55,000 rows as parquet in 1 file, 896.4 KB
-```
-
-Each table goes under `<out>/<table>/` with its own `_manifest.json`, parents first. So
-`shop/orders/` reads and regenerates as a dataset of its own. The root `shop/_manifest.json` is a
+[Generate related tables](how-to/generate-related-tables.md) writes one. Each table goes under
+`<out>/<table>/` with its own `_manifest.json`, parents first. So `shop/orders/` reads and regenerates as a dataset of its own. The root `shop/_manifest.json` is a
 bundle manifest, `doppeldata schemas show bundle-manifest`.
 
 - **The root manifest is the bundle's claim.** It is stored as `_manifest.partial.json` before the

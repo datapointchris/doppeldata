@@ -15,9 +15,9 @@ the core crate's `scenario` model, which `doppeldata schemas show scenario` prin
 - **`expect` declares what the scenario promises**, such as the share the hot keys hold. A check
   certifies those and nothing undeclared.
 
-A scenario is applied with `scenario=` in Python, or `--scenario` on `data plan`, `data generate`
-and `data check`. Several compose in order: their patches merge left to right, their perturbations
-and expectations concatenate, and the composition's name joins theirs with `+`.
+[Bend data with a scenario](how-to/bend-data-with-a-scenario.md) shows how a scenario is written,
+checked, applied and composed. Several compose in order: their patches merge left to right, and
+their perturbations and expectations concatenate.
 
 The manifest records the document the scenario's digest covers, and each composed member's digest.
 So a dataset regenerates with no scenario file, and an edited member shows which one moved.
@@ -28,33 +28,15 @@ misspelled column would then generate a new column from a fragment. It is refuse
 
 ## A bundle's scenario names the table it bends, and may patch the relationships drawing it
 
-```yaml
-scenario: one-busy-customer
-table: orders
-patch:
-  relationships:
-    customer_id:
-      fanout:
-        top_fractions: {top1: 0.05, top10: 0.1, top100: 0.3}
-```
+[Bend data with a scenario](how-to/bend-data-with-a-scenario.md) shows a bundle's scenario and its
+check. A patch of `top1: 0.05` puts 0.05 of the `orders-customers` example's 550,000 orders on the
+busiest of its 40,000 customers, to within a millionth.
 
-```bash
-doppeldata data generate orders-customers --scenario one-busy-customer.scenario.yaml --out busy/
-```
-
-The busiest of 40,000 customers then holds 0.05 of the 550,000 orders, the top 10 hold 0.1 and the
-top 100 hold 0.3. `data check` measures `top_fraction_delta` against the patched shares.
-
-- **`table` names the bundle table the patch and every perturbation apply to.** A bundle refuses a
-  scenario naming no table, or one it lacks, as `E-SCENARIO-108`. A lone profile takes a scenario
-  naming its own table, or none.
-- **Several scenarios bend several tables, one each.** Scenarios naming one table compose as they
-  do on a lone profile. One composition naming two tables is refused.
-- **`patch.relationships` is keyed by a relationship's `from` columns, without their table**,
-  joined by `,`, so a composite key is `product_code,supplier_id`. The name every output prints,
-  such as `orders.customer_id → customers.customer_id`, is the same key. It patches a relationship
-  drawing a column of the scenario's table. Any other key is refused as `E-SCENARIO-109`,
-  which lists the keys the table takes, and so is the key on a lone profile.
+- **A lone profile takes a scenario naming its own table, or none.** Scenarios naming one table of a
+  bundle compose as they do on a lone profile. One composition naming two tables is refused.
+- **`patch.relationships` is keyed as every output names a relationship**, by its `from` columns
+  without their table, so `orders.customer_id → customers.customer_id` is `customer_id`. It patches
+  a relationship drawing a column of the scenario's table, so a lone profile refuses the key.
 - **`hot_keys` on a foreign-key column takes its `keys` busiest parents.** `fraction` of the rows
   take one of them, every column of the key with it. Each inherited column copies the hot
   parent's, at the relationship's agreement. On `orders-customers`, `keys: 5` and `fraction: 0.6` put
@@ -66,91 +48,12 @@ top 100 hold 0.3. `data check` measures `top_fraction_delta` against the patched
 
 ## `malformed_rows` writes broken files, and `_faults.jsonl` names every fault in them
 
-A pipeline's bad-row handling is tested against files broken on purpose. The `bad-csv` example
-writes a profile like `orders` as CSV. It breaks the share of rows its `fraction` sets with ragged,
-quoting, encoding and type faults. It gives the share of files its `files_fraction` sets a byte order
-mark or a cut last line. A profile with no string column, or none of another type, is refused as
-`E-SCENARIO-102`:
-
-```bash
-doppeldata data generate orders --scenario bad-csv --out orders-bad/
-doppeldata scenario show bad-csv     # its kinds and shares, to start a scenario of your own from
-```
-
-A scenario of your own names the kinds. `fraction` is the chance each row is broken, shared evenly by
-the row kinds named. `files_fraction` is the chance each file is broken, shared evenly by the file
-kinds. `doppeldata scenario show malformed_rows` lists every kind.
-
-```yaml
-scenario: ragged-rows
-perturbations:
-  - {op: malformed_rows, fraction: 0.01, kinds: [ragged_short, ragged_long, bom], files_fraction: 0.25}
-```
-
-```bash
-doppeldata data generate orders --scenario ragged-rows.scenario.yaml --format csv --out orders-ragged/
-```
-
-`_faults.jsonl` beside the data lists each fault, one JSON object a line, and the manifest's
-`faults` counts them by kind. `doppeldata schemas show faults` is a line's schema, and
-[file-writers-and-manifest.md](file-writers-and-manifest.md) gives each kind's `detail`.
-
-```bash
-jq -r .kind orders-bad/_faults.jsonl | sort | uniq -c
-```
-
-```json
-{"file":"part-00000-1cf678fb.csv","line":25,"row":23,"kind":"unescaped_quote","column":"customer_email","detail":{}}
-```
-
-A pipeline test then asserts that its quarantine holds exactly the lines `_faults.jsonl` names.
-DuckDB's `reject_errors.line` counts records, where `line` counts physical lines, so an
-`embedded_newline` earlier in the file shifts every record after it. A reject is placed by its
-`line_byte_position` instead:
-
-```python
-import bisect, json, re
-from pathlib import Path
-
-import duckdb
-
-data = Path('orders-bad')
-columns = {'order_id': 'BIGINT', 'customer_id': 'BIGINT', 'amount': 'DECIMAL(12,2)', 'quantity': 'INTEGER',
-           'status': 'VARCHAR', 'ordered_at': 'TIMESTAMPTZ', 'customer_email': 'VARCHAR', 'ship_zip': 'VARCHAR'}
-faults = [json.loads(line) for line in (data / '_faults.jsonl').read_text().splitlines()]
-# CSV allows a newline inside quotes, so a strict reader takes an embedded_newline row whole.
-expected = {(f['file'], f['line']) for f in faults if f['line'] is not None and f['kind'] != 'embedded_newline'}
-
-quarantined = set()
-for path in sorted(data.glob('part-*.csv')):
-    connection = duckdb.connect()
-    connection.execute(
-        'create table orders as select * from read_csv($path, columns = $columns, header = true, '
-        'auto_detect = false, strict_mode = true, store_rejects = true)',
-        {'path': str(path), 'columns': columns},
-    )
-    breaks = [match.start() for match in re.finditer(b'\n', path.read_bytes())]
-    for (at,) in connection.execute('select min(line_byte_position) from reject_errors group by line').fetchall():
-        quarantined.add((path.name, bisect.bisect_left(breaks, at) + 1))
-assert quarantined == expected
-```
-
-`doppeldata data check orders orders-bad/ --scenario bad-csv` verifies the example's
-`malformed.fraction` bound.
-
-With no `fraction`, `kinds` or `files_fraction`, the op reproduces what a profile records of its CSV
-source. So a profile of a landing zone's files writes files broken as those were:
-
-```bash
-doppeldata profile create source/ --out source.profile.yaml
-doppeldata data generate source.profile.yaml --scenario reproduce.scenario.yaml --out reproduced/
-```
-
-```yaml
-scenario: reproduce
-perturbations:
-  - {op: malformed_rows}
-```
+A pipeline's bad-row handling is tested against files broken on purpose. So the op writes faults
+into a write's bytes and lists each one in `_faults.jsonl` beside them. A test then asserts that its
+quarantine holds exactly the lines listed. With no `fraction`, `kinds` or `files_fraction`, the op
+writes the rejected rows a profile records of its CSV source, so a landing zone's faults are
+reproduced. [Write broken files](how-to/write-broken-files.md) runs the `bad-csv` example, a
+scenario of your own, a DuckDB quarantine test and a source's faults reproduced.
 
 ## Strict DuckDB rejects each CSV row fault but `embedded_newline`, and Spark reads three as values
 
@@ -215,8 +118,8 @@ sets. It then prints, per kind, what each reader caught of what `_faults.jsonl` 
 - **A `latin1_file` holding only ASCII is not listed.** windows-1252 writes ASCII as UTF-8 does,
   so the file is unchanged.
 - **The op applies only where files are written.** A one-file write keeps its list beside the file,
-  named for it: `--out landing/orders.csv` writes `landing/_orders.csv.faults.jsonl`. So several
-  one-file writes share a directory, and `replace` replaces a file's list with the file.
+  named for it. So several one-file writes share a directory, and `replace` replaces a file's list
+  with the file.
 
 ## With no `fraction`, `malformed_rows` reproduces the profile's rejected rows by type
 
@@ -243,80 +146,10 @@ Each reason in `source.csv.malformed.type_fractions` becomes the kind DuckDB rej
 ## `cdc` writes an AWS DMS change stream, and `_expected` holds the table its merge must reach
 
 A pipeline that merges change data capture output is tested against a stream whose answer is
-known. The `cdc-dms` example writes changes to `orders` across its `period`, as AWS DMS writes them
-to Amazon S3:
-
-```bash
-doppeldata data generate orders --scenario cdc-dms --format parquet --out orders-cdc/
-```
-
-The full load is `sales/orders/LOAD00000001.parquet`. The changes follow, one file for each
-`file_interval` that holds a change, under date folders below `sales/orders/`. Each change record
-starts with `Op`, which is `I`, `U` or `D`, then `dms_commit_ts`. `_expected/sales/orders/` holds
-the table the merge must produce. [file-writers-and-manifest.md](file-writers-and-manifest.md)
-gives the layout.
-
-A merge keeps each key's last change by commit time, and drops a key whose last change is a
-delete. In DuckDB, against `_expected`:
-
-```sql
-create view stream as
-  select 'I' as Op, * from read_parquet('orders-cdc/sales/orders/LOAD*.parquet')
-  union all by name
-  select * from read_parquet('orders-cdc/sales/orders/**/[0-9]*.parquet', union_by_name = true);
-create view merged as
-  select * exclude (Op, dms_commit_ts) from stream
-  qualify row_number() over (partition by order_id order by dms_commit_ts desc) = 1 and Op <> 'D';
-create view expected as from read_parquet('orders-cdc/_expected/sales/orders/*.parquet');
-select (select count(*) from (from merged except all from expected)) as merged_only,
-       (select count(*) from (from expected except all from merged)) as expected_only;
-```
-
-Both counts are 0. A merge ordered by file name instead differs on exactly the keys of the
-records `_faults.jsonl` lists. Each is a change delivered late or twice.
-
-A scenario of your own sets the stream's shape. `doppeldata scenario show cdc` lists every
-parameter:
-
-```yaml
-scenario: orders-day
-perturbations:
-  - op: cdc
-    style: dms
-    schema: sales
-    update_fraction: 0.2
-    delete_fraction: 0.01
-    updates_per_row: {family: geometric, mean: 2}
-    period: {start: "2026-10-01T00:00:00Z", duration: 1d}
-    file_interval: 10m
-    out_of_order_fraction: 0.01
-```
-
-```bash
-doppeldata data generate orders --scenario orders-day.scenario.yaml --format csv --writer '{"header": false}' --out orders-day/
-```
-
-Each parameter stands for a DMS endpoint setting, as the
-[S3 target guide](https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Target.S3.html) names it:
-
-| Parameter | DMS setting |
-| --- | --- |
-| the write's format, `csv` or `parquet` | `DataFormat` |
-| the CSV writer's `header` | `AddColumnName` |
-| `timestamp_column` | `TimestampColumnName` |
-| `file_interval` | `CdcMaxBatchInterval` |
-| `date_partition` `sequence` and `delimiter` | `DatePartitionSequence` and `DatePartitionDelimiter` |
-| `include_op_for_full_load` | `IncludeOpForFullLoad` |
-| `timestamp_unit: ms`, or the Parquet writer's where the op sets none | `ParquetTimestampInMillisecond` |
-| every full-load row stamped with the period's `start` | `UseTaskStartTimeForFullLoadTimestamp: true` |
-
-- **A CSV write prints a header unless the writer's `header` is false.** `--writer '{"header":
-  false}'` writes what an endpoint with `AddColumnName` off does.
-- **A CSV stream carries no types, so its reader declares them.** Spark's `inferSchema` reads
-  `ship_zip` as an integer and drops its leading zeros. A reader with the profile's types
-  declared merges to `_expected` exactly.
-- **`_expected` is Parquet whatever the stream's format.** It is the merge's answer, so it keeps
-  every column's type.
+known. So the op writes a full load and its changes as AWS DMS writes them to Amazon S3, each
+parameter standing for a DMS endpoint setting. `_expected` beside them is the table a merge in
+commit order reaches. [Write a change stream](how-to/write-a-cdc-stream.md) runs the `cdc-dms`
+example, a merge in commit order and one in file order, and a headerless CSV stream.
 
 ## `cdc` draws every change from the period, and places a fault only where a file-order merge breaks
 
@@ -494,11 +327,8 @@ RFC 6901 pointer into the scenario, such as `/perturbations/2/keys`. `doppeldata
 - **An unknown op, metric or column lists every one doppeldata knows** in its issue's `valid`, and
   `closest` holds the nearest names. The engine refuses an unknown column, and the library fills in
   the name given and the profile's columns.
-- **`doppeldata scenario check FILE PROFILE` exits 3 on a refusal.** It validates the scenario,
-  applies its patch, and plans each perturbation and the file layout as `data generate` would with
-  the same layout flags. It prints GitHub Markdown, and `--json` prints `passed`, the scenario, the
-  profile and each issue.
-- **A data verb exits 2 on one**, as it does on an invalid profile.
+- **`scenario check` plans each perturbation and the file layout as `data generate` would**, so a
+  scenario a write would refuse fails the check first.
 
 ## `data check --scenario` skips what a perturbation moves, and `verified` covers the expectations
 
@@ -541,14 +371,10 @@ something a reader of the scenario could not see.
 
 ## The examples are written for the `orders` profile
 
-The example scenarios ship as package data beside the example profiles, and `doppeldata scenario
-list` names them. `--scenario hot-key` takes one by name.
-
-- **`Scenario.example(name, **parameters)` replaces parameters of the example's one perturbation.**
-  `column=` moves its expectations with it.
-- **A keyword changing any other value drops the expectations.** Each was written for the
-  example's own values.
-- **Any keyword drops the description**, which names those values.
+The example scenarios ship as package data beside the example profiles. `Scenario.example(name,
+**parameters)` replaces parameters of the example's one perturbation. `column=` moves its
+expectations with it. Any other keyword drops them, because each was written for the example's own
+values, and any keyword drops the description, which names those values.
 
 ## A drifted Parquet dataset reads as the union of its files' schemas
 

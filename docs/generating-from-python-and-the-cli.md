@@ -1,19 +1,11 @@
 # Generating from Python and the command line
 
 Rows come first, from a line of column names. Each section after the first adds one thing the one
-before it lacks, and none is needed to generate.
+before it lacks, and none is needed to generate. [Generate rows from column
+names](how-to/generate-rows-from-column-names.md) and [Generate a
+dataset](how-to/generate-a-dataset.md) run each form.
 
 ## A list of column names generates rows, each column taking the fake its name hints
-
-```python
-import doppeldata as sd
-
-table = sd.generate(['name', 'email', 'city', 'zip'], rows=1000)
-```
-
-```bash
-doppeldata data generate --columns name,email,city,zip --rows 1000 --out people.csv
-```
 
 - **A name takes the general pack's type whose hint ends it, else a provider.** `customer_zip` is a
   `us_zip` and `email_address` an `email`. A provider matches its whole name, such as `city`, or an
@@ -26,31 +18,11 @@ doppeldata data generate --columns name,email,city,zip --rows 1000 --out people.
   and exit 2 on the command line. A column of random text would pass for data until someone read it.
   Each says what to give instead where the name was written: a dict in Python, a short YAML on the
   command line.
-
-  ```text
-  /columns/zipp: 'zipp' names no fake; give it one from sd.fakes, sd.integers, sd.decimals, sd.dates or sd.choice in a dict; the closest are zip_code [E-PROFILE-021]
-  doppeldata: E-PROFILE-021: 'age' names no fake; give it a fake, a low..high range such as 18..90, or a list of values, in a short YAML
-  ```
-
 - **Expanding the names imports no profiling engine.** The table of name hints sits in
   `name_hinted_types.py`, apart from the general pack, which imports pyarrow. So a job that only
   generates installs no pyarrow, Polars or DuckDB.
 
 ## A dict gives each column a fake, a range or a list of values
-
-```python
-table = sd.generate({
-    'name': sd.fakes.name,
-    'street': sd.fakes.street_address,
-    'zip': sd.fakes.zip_code,
-    'age': sd.integers(18, 90),
-    'price': sd.decimals(0, 500, places=2),
-    'signed_up': sd.dates('2023-01-01', '2025-12-31'),
-    'plan': sd.choice(['free', 'pro', 'team'], weights=[0.7, 0.25, 0.05]),
-    'score': sd.decimals(0, 1, nulls=0.05),
-    'email': None,
-}, rows=1000, seed=0)
-```
 
 - **`sd.fakes` holds one fake for each provider the engine draws**, so tab completion lists them.
   A test fails when the profile schema names a provider `sd.fakes` lacks.
@@ -62,29 +34,14 @@ table = sd.generate({
 
 ## A short YAML gives each column a fake, a range or a list, and every command reading a profile reads it
 
-```yaml
-rows: 1000
-columns:
-  name:
-  street:
-  zip: zip_code
-  age: 18..90
-  plan: [free, pro, team]
-```
-
-```bash
-doppeldata data generate people.yaml --out people.csv
-doppeldata data check people.yaml people.csv
-```
-
 - **A column's value is a provider, a `low..high` range, a list, or empty.** A range of integers,
   numbers or ISO dates is `sd.integers`, `sd.decimals` or `sd.dates`. A list is `sd.choice`. Empty
   takes the name's fake.
 - **`0..1` is a range of integers.** Write `0.0..1` for decimals.
 - **Null shares, weights and decimal places need the dict or the expanded profile.** A short YAML
   holds none of them.
-- **`rows` is the count `--rows` defaults to.** The table is named for the file, so this one is
-  `people`.
+- **`rows` is the count `--rows` defaults to.** The table is named for the file, so `people.yaml`
+  makes `people`.
 - **A file holding `kind` is read as a full profile.**
 
 ## A write to one local file writes that file alone
@@ -120,17 +77,8 @@ destination always holds one.
 
 ## `profile expand` writes the full profile, to edit once a column needs more
 
-```bash
-doppeldata profile expand people.yaml --out people.profile.yaml
-doppeldata profile expand --columns name,email,city,zip --rows 1000
-```
-
-```python
-sd.Profile.expand({'name': None, 'age': sd.integers(18, 90)}, rows=1000).save('people.profile.yaml')
-```
-
 The list, the dict and the short YAML each expand to an ordinary profile, which is what generates.
-So `data generate people.profile.yaml` writes the same bytes as `data generate people.yaml`. The
+So a short YAML and the profile it expands to write the same bytes. The
 manifest, determinism, `data check`, scenarios and Spark read it as any profile. From there, a
 column takes any source [column-samplers.md](column-samplers.md) lists, and `profile create`
 profiles real data into the same format.
@@ -146,48 +94,29 @@ profiles real data into the same format.
 
 ## A schema a project already has generates rows, as a seed profile
 
-```python
-sd.generate(OrdersSchema, rows=1000)
-```
-
-```bash
-doppeldata profile import --from odcs orders.odcs.yaml --out orders.profile.yaml
-```
-
 A pandera, dataframely or Spark schema goes wherever a profile is taken. `profile import` writes a
-seed from a schema file or a Glue table, and `--help` lists the kinds it reads.
+seed from a schema file or a Glue table, and `--help` lists the kinds it reads. [Import a seed
+profile from a schema](how-to/import-a-seed-from-a-schema.md) runs each.
 [seed-profiles-from-schemas.md](seed-profiles-from-schemas.md) says what each source's declarations
 become and what a column the schema is silent on draws.
 
 ## A profile exports as the contract other tools validate with, and a write can carry it
 
-```bash
-doppeldata profile export orders --format pandera --out orders_schemas.py
-doppeldata data generate orders --format parquet --embed-profile --out orders/
-```
-
 `profile export` writes the contract in each format `--format` takes, and `sd.export` returns the
 same text. `--embed-profile`, or `embed_profile=True` on
 `sd.write`, puts the profile in each Parquet and Arrow file, and every PROFILE argument reads it
-back. Neither happens unless asked.
-[profile-exports-and-embedded-profiles.md](profile-exports-and-embedded-profiles.md) shows each
-format and what each leaves out.
+back. Neither happens unless asked. [Export a profile as a data
+contract](how-to/export-a-profile-as-a-contract.md) and [Reproduce a
+dataset](how-to/reproduce-a-dataset.md) run them.
+[profile-exports-and-embedded-profiles.md](profile-exports-and-embedded-profiles.md) says what each
+format leaves out.
 
 ## Tables cross into Python through the Arrow PyCapsule interface, so no Arrow library is a dependency
 
 `doppeldata.generate()` returns a table and `doppeldata.stream()` a RecordBatchReader. Both are
-pyo3-arrow's own classes, and both carry `__arrow_c_stream__`. A reader takes them with no copy:
-
-```python
-import doppeldata as sd
-
-profile = sd.Profile.example('orders')
-table = sd.generate(profile, rows=1_000_000, seed=7)
-pl.DataFrame(table)                          # Polars
-duckdb.sql('select count(*) from table')     # DuckDB, by variable name
-pa.table(table)                              # pyarrow 14 or later
-pa.RecordBatchReader.from_stream(sd.stream(profile, rows=10**9, seed=7))   # pyarrow 15 or later
-```
+pyo3-arrow's own classes, and both carry `__arrow_c_stream__`. So Polars, DuckDB, pyarrow 14 or
+later for a table and pyarrow 15 or later for a stream take them with no copy. [Generate a
+dataset](how-to/generate-a-dataset.md) reads both.
 
 - **Polars and DuckDB read both in a Python 3.11 environment with no pyarrow and no arro3.** The
   schema's metadata carries the `doppeldata.*` keys a Parquet file carries, the dataset digest and
@@ -333,11 +262,6 @@ the uploads alike.
 
 ## `data plan` prints what `data generate` writes with the same flags
 
-```bash
-doppeldata data plan orders --rows 250000 --seed 7 --file-rows 100000 --out orders/
-doppeldata data generate orders --rows 250000 --seed 7 --file-rows 100000 --out orders/
-```
-
 `PROFILE` is a profile file, a short YAML or a bundled example's name, and `--columns` stands in for
 it. `--out` is a local directory, a local file named for its format, an `s3://` or `s3a://` URL, or
 `memory://`, which keeps nothing and times a write. `data plan` reads nothing at
@@ -373,27 +297,7 @@ commands and requires the manifest's identity and ranges to equal the plan's.
 
 ## A bundle generates every table parents first, sized by `--scale`
 
-```bash
-doppeldata data plan orders-customers --scale 0.1 --out shop/
-```
-
-```text
-dataset    sha256:…
-identity   59,000 rows at scale 0.1 from seed 0, bundle sha256:…, stream version …
-
-customers  4,000 rows as parquet, up to 1 file to shop/customers, estimate 48.1 KB
-orders     55,000 rows as parquet, up to 1 file to shop/orders, estimate 896.4 KB
-
-orders.customer_id → customers.customer_id
-```
-
-```python
-import doppeldata as sd
-
-tables = sd.generate(sd.Bundle.example('orders-customers'), scale=0.1, seed=7)
-tables['orders']  # an Arrow table of 55,000 rows, each customer_id one of tables['customers']'
-```
-
+[Generate related tables](how-to/generate-related-tables.md) plans, writes and checks a bundle.
 `PROFILE` may be a bundle file, a bundle directory or a bundled example's name, on `data plan`,
 `data generate` and `data check`. `profile list` lists the example bundles beside the profiles,
 and `profile show` prints one.
@@ -418,12 +322,7 @@ line asks `profile_or_columns` for the `Bundle` a name holds, then passes it on.
 
 ## A scenario is one more input to every verb that generates or checks
 
-```bash
-doppeldata scenario check hot-key orders
-doppeldata data generate orders --scenario hot-key --scenario late-data --out orders/
-doppeldata data check orders orders/ --scenario hot-key --scenario late-data
-```
-
+[Bend data with a scenario](how-to/bend-data-with-a-scenario.md) runs each verb under one.
 `--scenario` takes a scenario file or a bundled example's name, and repeats to compose several in
 order. The SDK's `scenario=` takes a `Scenario` or a list of them, on `generate`, `stream`, `plan`
 and `write`. [scenario-overlays.md](scenario-overlays.md) holds the format and what it changes.

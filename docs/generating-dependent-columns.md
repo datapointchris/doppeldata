@@ -7,14 +7,8 @@ wrong. Each dependence is a few parameters, so it costs a few operations a row.
 ## A profile generates every dependence it states, with no flag
 
 `profile create` writes the dependence it finds, and `data generate` draws what the profile
-states:
-
-```bash
-doppeldata profile create checkouts.parquet --out checkouts.profile.yaml
-doppeldata data generate checkouts.profile.yaml --out generated/ --rows 1000000
-```
-
-`data plan` names how each column is drawn. The committed fixture ends in columns of checkouts
+states. [Read and edit how columns depend on each other](how-to/edit-dependent-columns.md) gives
+the commands. `data plan` names how each column is drawn. The committed fixture ends in columns of checkouts
 that state each kind, and these are its last lines:
 
 ```bash
@@ -236,17 +230,10 @@ city      string  looked up from zip_code, else 12 top values, its conditional t
 `Plan.set_aside` lists each one's JSON pointer, and `data check` measures none of them. The
 profiler plans its draft through the same planner, and writes no entry it sets aside.
 
-A dependence on a column the table lacks is refused at plan time. So is a derived column that
-would draw a column from itself:
-
-```text
-/columns/13/derived/expr: the table holds no column "qty" [unknown-column]
-/columns/13/derived/expr: "total" would be drawn from "quantity", which is drawn from it [invalid-dependence]
-```
-
-`E-PROFILE-114` also names an expression that does not parse or reads a column that is not
-numeric, a lag on or from a column that is not a date or timestamp, and a lookup or table value
-its column's type cannot hold.
+A dependence on a column the table lacks is refused at plan time as `E-PROFILE-113`. A derived
+column that would draw a column from itself is refused as `E-PROFILE-114`, as is an expression that
+does not parse or reads a column that is not numeric, a lag on or from a column that is not a date
+or timestamp, and a lookup or table value its column's type cannot hold.
 
 **A column `sample` pins takes the given values in place of every draw above.** It sits at its own
 place in the order, so a derived, lookup or conditional child reads the pinned values. A copula

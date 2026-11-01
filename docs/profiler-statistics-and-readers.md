@@ -483,21 +483,12 @@ column names is this design's reading of "70 percent".
 
 `profile create` and `profile()` write them into the profile's `dataset` section, with no option to
 set. `--tables` and `profile_tables()` also write the foreign keys between the tables, as the
-bundle's `relationships`:
+bundle's `relationships`. [Generate related tables](how-to/generate-related-tables.md) profiles
+one.
 
-```bash
-doppeldata profile create customers/ orders/ --tables --out shop.bundle.yaml
-```
-
-```python
-import doppeldata as sd
-
-shop = sd.profile_tables(['customers/', 'orders/'])
-shop.save('shop.bundle.yaml')
-```
-
-Both write the bundle `shop`, named for the directory the two paths share. Of 10,000 customers
-and 200,000 orders, with about 5% of the orders naming a customer the table lacks:
+`profile create customers/ orders/ --tables` writes the bundle `shop`, named for the directory the
+two paths share. Of 10,000 customers and 200,000 orders, with about 5% of the orders naming a
+customer the table lacks:
 
 ```yaml
 relationships:

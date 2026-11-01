@@ -1,15 +1,11 @@
-# Driving doppeldata from a program
+# Capabilities, the plan trace, reports and logging
 
 A program or a coding agent learns what doppeldata takes from `capabilities show --json`. It reads
 what each refusal was from its issue code, and how each column will be drawn from `data plan
---json`. A person reads the same checks as GitHub Markdown.
+--json`. A person reads the same checks as GitHub Markdown. [Drive doppeldata from a
+script](how-to/drive-doppeldata-from-a-script.md) runs each of them.
 
 ## `capabilities show` lists what the installed doppeldata refuses outside of
-
-```bash
-doppeldata capabilities show          # each command, then each list on a line
-doppeldata capabilities show --json   # the same lists whole, as one document
-```
 
 | Key | Holds | Read from |
 | --- | --- | --- |
@@ -42,29 +38,6 @@ doppeldata capabilities show --json   # the same lists whole, as one document
 - **`schema_version` rises when a key is removed or changes meaning.** A key added leaves it.
 
 ## `data plan --json` traces each column to the profile field it reads
-
-`doppeldata data plan orders --scenario hot-key --out out/ --json` gives `customer_id` as:
-
-```json
-{
-  "name": "customer_id",
-  "physical_type": "int64",
-  "sampler_kind": "numeric",
-  "summary": "uniform between the extremes, at the profiled distinct ratio",
-  "parameters": [
-    {"name": "null_fraction", "field": "/columns/1/null_fraction", "value": 0.0},
-    {"name": "distinct_ratio", "field": "/columns/1/distinct/ratio", "value": 0.2},
-    {"name": "approx_values", "field": "/columns/1/distinct/approx_values", "value": 20000},
-    {"name": "extremes", "field": "/columns/1/numeric/extremes", "value": {"high": 99999, "low": 10, "method": "digit_bounds"}},
-    {"name": "integral", "field": "/columns/1/numeric/integral", "value": true}
-  ],
-  "null_fraction": 0.0,
-  "origin": "overlaid",
-  "reads": [],
-  "ops": ["hot_keys:customer_id:0"],
-  "patched_fields": []
-}
-```
 
 - **The engine records each field a sampler reads when it builds the sampler.** So the trace
   follows the branch the engine took: a text column drawn from a hinted pattern names

@@ -4,193 +4,193 @@ Profile a dataset once, commit the profile, and generate synthetic data from it 
 benchmark needs some.
 
 A profile is a YAML file holding a dataset's types, distributions, skew, null and error rates, the
-dependence between its columns, file layout and table relationships. It holds no rows. doppeldata is built to read CSV, TSV, JSON,
-Parquet, Arrow and Spark DataFrames, and to write any of them back at any size: in memory, to disk,
-to S3, or inside Spark executors.
+dependence between its columns, its file layout and its table relationships. It holds no rows.
+doppeldata reads CSV, TSV, JSON, Parquet, Arrow and Spark DataFrames. It writes any of them back at
+any size: in memory, to disk, to S3, or inside Spark executors.
 
-A scenario file layered on a profile bends the data on purpose: a hot join key, late rows, a flood
-of small files, or broken rows a pipeline must quarantine, each listed in `_faults.jsonl`. The same
-profile, scenario and seed always produce the same data.
+A scenario layered on a profile bends the data on purpose: a hot join key, late rows, a flood of
+small files, or broken rows a pipeline must quarantine. The same profile, scenario and seed always
+produce the same data.
 
-Rows need no profile to start. Each column takes the fake its name hints:
+doppeldata is experimental. Each release's notes list what it does. Its commands and its profile
+format change without notice until 1.0.
 
-```python
-import doppeldata as sd
+## Each step up takes one change
 
-sd.generate(['name', 'email', 'city', 'zip'], rows=1000)   # an Arrow table of 1,000 people
-```
-
-```bash
-doppeldata data generate --columns name,email,city,zip --rows 1000 --out people.csv
-```
-
-A dict sets ranges and categories, such as `{'age': sd.integers(18, 90), 'plan': sd.choice(['free', 'pro'])}`.
-A short YAML gives each column a fake, a `low..high` range or a list of values. Null shares, weights
-and decimal places need the dict. `doppeldata profile expand` writes the full profile any of them
-stands for. [Generating from Python and the command line](docs/generating-from-python-and-the-cli.md)
-climbs from there to a profile of real data.
-
-A project's existing schema generates rows too. `sd.generate(OrdersSchema, rows=1000)` takes a pandera,
-dataframely or Spark schema, and `doppeldata profile import` writes a seed profile from a schema file
-or a Glue table.
-[Seed profiles imported from a schema](docs/seed-profiles-from-schemas.md) says what each becomes.
-
-doppeldata is experimental. So far it profiles a table's columns and its files, generates a table from a profile
-under any scenarios, and ships the profile and scenario formats with hand-written examples of each:
-
-```bash
-doppeldata profile create data/orders/ --out orders.profile.yaml   # profile a directory of one table
-doppeldata profile create s3://bucket/orders/ --sample 1000000     # a seeded sample, printed as YAML
-doppeldata profile create data/orders/ --edges-from orders.profile.yaml --out orders.profile.yaml  # keep its bin edges
-doppeldata profile create data/claims/ --policy healthcare --out claims.profile.yaml  # add HIPAA Safe Harbor
-doppeldata profile create s3://bucket/claims/ --engine spark --out claims.profile.yaml  # compute it in Spark
-doppeldata profile check orders.profile.yaml   # the file against its schema and privacy policy, from the file alone
-doppeldata profile list                # the example profiles
-doppeldata profile show orders         # one of them, as YAML to start a profile from
-doppeldata profile expand people.yaml  # the full profile a short YAML of rows and columns stands for
-doppeldata profile import --from odcs orders.odcs.yaml --out orders.profile.yaml  # a seed from a data contract
-doppeldata profile export orders --format pandera --out orders_schemas.py  # the contract, as pandera models
-doppeldata profile diff march.profile.yaml april.profile.yaml  # how far April drifted from March
-doppeldata data check orders.profile.yaml out/orders/        # generated data against its profile
-doppeldata data check orders.profile.yaml out/orders/ --against data/orders/ --html side-by-side.html  # and the real data
-doppeldata schemas show profile        # the JSON Schema every profile validates against
-
-doppeldata data plan orders --rows 1000000 --seed 7 --out orders/       # the files a write makes, and their size
-doppeldata data generate orders --rows 1000000 --seed 7 --out orders/   # write them, and _manifest.json
-doppeldata data generate orders.profile.yaml --rows 100000000 --format csv --out s3://bucket/orders/
-doppeldata data generate orders --format parquet --embed-profile --out orders/  # each file holds its profile
-
-doppeldata scenario list               # the ops a scenario applies, its metrics, and the example scenarios
-doppeldata scenario check hot-key orders                            # a scenario against a profile, generating nothing
-doppeldata data generate orders --scenario hot-key --out orders/    # five customers place 60% of the orders
-doppeldata data check orders orders/ --scenario hot-key             # and the check verifies that share
-doppeldata data generate orders --scenario bad-csv --out orders-bad/  # CSV with broken rows and files, each fault in _faults.jsonl
-doppeldata data generate orders --scenario cdc-dms --format parquet --out orders-cdc/  # an AWS DMS change stream, beside _expected
-```
-
-`data generate` writes every format `doppeldata schemas show manifest` lists, to a local directory, a
-local file or S3. A directory or S3 write records `_manifest.json` beside its files, and a one-file
-write does so under `--manifest`. It holds the profile's digest, the scenario's, the seed, the row
-count and the engine's stream version. Those regenerate the same values in any format. From Python, a table arrives through the Arrow PyCapsule interface, so
-Polars, DuckDB and pyarrow 14 or later read it with no copy:
+### Column names alone generate rows, each taking the fake its name hints
 
 ```python
 import doppeldata as sd
 
-profile = sd.Profile.load('orders.profile.yaml')
-table = sd.generate(profile, rows=1_000_000, seed=7)
-polars.DataFrame(table)
-sd.write(profile, 's3://bucket/orders/', rows=100_000_000, seed=7)
+table = sd.generate(['name', 'email', 'city', 'zip'], rows=1000)   # an Arrow table
 ```
 
-Inside Spark, the executors generate the rows, with the values a local run gives at any partition
-count. `sd.spark.write` writes the files `sd.write` writes, byte for byte, from the executors:
+```text
+$ doppeldata data generate --columns name,email,city,zip --rows 1000 --out people.csv
+wrote 1,000 rows as csv in 1 file, 61.3 KB, in 0.00 s on 16 threads: 1.00M rows/s
+people.csv holds dataset sha256:9b19bca5d364d65f32fd03648a6fc4ea23991302aef4ee653ea83f297d9c95aa
+$ head -4 people.csv
+name,email,city,zip
+Arlie Larson,heidi.reichert@example.net,Rempelton,65947
+Cooper Bechtelar,brett.bernhard@example.com,Casimirville,46712
+Roselyn Torphy,mitchel.dickens@example.net,Kuvaliston,01433
+```
+
+### A dict or a short YAML says more about each column inline
 
 ```python
-frame = sd.spark.generate(spark, profile, rows=1_000_000_000, seed=7)   # a DataFrame, for any Spark writer
-sd.spark.write(spark, profile, 's3://bucket/orders/', rows=1_000_000_000, seed=7)
+import polars as pl
+
+import doppeldata as sd
+
+table = sd.generate({
+    'name': None,
+    'email': None,
+    'age': sd.integers(18, 90),
+    'plan': sd.choice(['free', 'pro', 'team'], weights=[0.7, 0.25, 0.05]),
+    'monthly_spend': sd.decimals(0, 500, places=2, nulls=0.1),
+    'signed_up': sd.dates('2023-01-01', '2025-12-31'),
+}, rows=1000, seed=7)
+print(pl.DataFrame(table).head(3))
 ```
 
-For a test, `sd.sample` pins a column to given values, and every column drawn from it reads them.
-The `synthetic` pytest fixture generates a table from each test's own seed, and
-`sd.spark.to_spark` turns a driver-side table into a DataFrame:
+```text
+shape: (3, 6)
+┌───────────────┬─────────────────────────────────┬─────┬──────┬───────────────┬────────────┐
+│ name          ┆ email                           ┆ age ┆ plan ┆ monthly_spend ┆ signed_up  │
+│ ---           ┆ ---                             ┆ --- ┆ ---  ┆ ---           ┆ ---        │
+│ str           ┆ str                             ┆ i64 ┆ str  ┆ f64           ┆ date       │
+╞═══════════════╪═════════════════════════════════╪═════╪══════╪═══════════════╪════════════╡
+│ Bria Kihn     ┆ damaris.stoltenberg@example.or… ┆ 35  ┆ pro  ┆ 454.35        ┆ 2024-05-15 │
+│ Wiley Steuber ┆ jaylon.maggio@example.com       ┆ 60  ┆ pro  ┆ 249.79        ┆ 2025-01-12 │
+│ Claude Larkin ┆ samir.auer@example.net          ┆ 18  ┆ free ┆ 423.07        ┆ 2023-10-21 │
+└───────────────┴─────────────────────────────────┴─────┴──────┴───────────────┴────────────┘
+```
+
+A short YAML gives each column a fake, a `low..high` range or a list of values:
+
+```yaml
+# people.yaml
+rows: 1000
+columns:
+  name:
+  email:
+  city:
+  zip:
+  age: 18..90
+  plan: [free, pro, team]
+```
+
+```text
+$ doppeldata data generate people.yaml --out people.csv
+wrote 1,000 rows as csv in 1 file, 69.3 KB, in 0.00 s on 16 threads: 0.25M rows/s
+people.csv holds dataset sha256:caba3bd0b1728702ff875b15e6cca81c43184782d8ed8d5d5a95f6f98b9415cd
+$ head -4 people.csv
+name,email,city,zip,age,plan
+Kelsie Senger,annabel.mueller@example.com,South Golden Hyattshire,77030,55,pro
+Stephan Borer,miles.carroll@example.com,Fisherport,18553,39,team
+Floyd Mayert,jane.feil@example.com,Hicklemouth,50574,32,team
+```
+
+### A profile of real data on S3 replaces the dict
 
 ```python
-refunds = sd.sample(profile, rows=50, overrides={'status': 'refunded'})
-
-def test_refunds(synthetic, spark):
-    orders = synthetic('orders', rows=5_000, overrides={'status': 'refunded'}, as_='spark')
+profile = sd.profile('s3://your-bucket/orders/', aws_profile='analytics')
 ```
 
-[Generating test data in pytest](docs/generating-test-data-in-pytest.md) says how the fixture finds a
-profile and which seed each test takes.
+```text
+$ doppeldata profile create s3://your-bucket/orders/ --aws-profile analytics --out orders.profile.yaml
+$ head -17 orders.profile.yaml
+kind: table
+name: orders
+generated:
+  tool: doppeldata 0.0.0
+  at: '2026-11-01T08:43:10Z'
+  engine: polars
+  fitter: scipy 1.18.1
+  detector_packs: {general: doppeldata 0.0.0}
+  readers: {polars: 2.0.0, pyarrow: 26.0.0}
+  source_fingerprint: sha256:4930bca3c82280f05763b2a2b4b00c319b14e33988b2935b5db92339f62a9756
+  sample: {strategy: full}
+privacy:
+  policy: default
+  k_min: 11
+  suppressed:
+    - {column: customer_email, reason: identifier, semantic: email}
+  audit:
+```
 
-`profile create` reads Parquet and Arrow locally or from S3, with the credentials and endpoint of the
-AWS profile `--aws-profile` names, else the AWS environment's. It reads CSV, TSV and JSON from local
-files.
+The emails were typed as identifiers, so the profile keeps their format and no address. Without
+`--out`, the profile prints as YAML.
 
-`--engine spark` computes the profile in Spark instead: in the Spark Connect session `SPARK_REMOTE`
-names, or in one it starts on `local[*]`. Spark reads Parquet, CSV and TSV, from S3 too. It
-estimates distinct counts with a 1% standard error, and quantiles within a rank error of 1/10,000.
-From Python, `sd.profile(frame,
-engine='spark')` profiles a DataFrame in its own session, and `spark=` names a session for files.
-`docs/profiling-with-spark.md` gives the commands for a Glue job and a Glue Spark Connect session.
+### Rows generated from the profile take the real data's shape
 
-A directory whose folders hold unlike column names is refused, and the refusal names each table it
-holds. `--tables` profiles it as a bundle of one table per kind of folder, as an AWS Glue crawler
-splits a prefix. Folders sharing most of their column names are one table, and `key=value` folders
-are always Hive partitions of one. Each path named beside `--tables` is grouped on its own, so
-`profile create customers/ orders/ --tables` is two tables. The bundle records each foreign key
-between them, with the share of child rows it orphans and its fan-out.
+```python
+table = sd.generate(profile, rows=100_000, seed=7)
+```
 
-A profile is written under a privacy policy, `default` unless `--policy` names another. No data value
-it stores, such as a top value or an extreme, rests on fewer than `--k-min` rows. A
-column typed as an identifier keeps its format and no value, free text keeps its lengths, and
-`privacy.audit` lists every literal a column keeps with the rule that admits it.
-`privacy.dataset_audit` does the same for each conditional table, quantile and rate, and each
-dependency's lookup table. `strict` treats
-quasi-identifiers as identifiers. `healthcare` adds HIPAA Safe Harbor and the healthcare detector
-pack: ZIP codes keep three-digit prefixes, ages over 89 share one bin, places below a state keep no
-value, and every date keeps only its years. `none` keeps every value, for data that is already synthetic or public. `profile check` reads a
-profile file alone, recomputes each rule from the rates and row counts it states, and exits 3 on a
-violation, so CI can run it on every committed profile.
+```text
+$ doppeldata data generate orders.profile.yaml --rows 100000 --seed 7 --out synthetic/orders/
+wrote 100,000 rows as parquet in 20 files, 3.4 MB, in 0.07 s on 16 threads: 1.35M rows/s
+synthetic/orders/_manifest.json names dataset sha256:83ff122c7ef321edb1ac7ccf7b2819ab8f5a19eb7164e0a78ac80be00df7ac6f
+```
 
-A profile's `source` section records how the files were written. For a CSV, that is its dialect,
-encoding and line endings, and its malformed rows by kind. For Parquet, it is the footer's writer,
-Spark version, codec and row groups, and never a footer's min or max. For JSON, it is the nesting
-depth and whether nulls are written, and each path's type mix and presence sit on its column. Every
-format gets the file sizes, the rows per file, and each Hive key's values. `data generate` writes the dialect and the Parquet settings back. A text source's column that held values of other types generates as text, holding them at its type mix's shares.
+The Python table is the same dataset, `sha256:83ff122c…`. A dataset is a pure function of its
+profile, row count and seed.
 
-A string column is given a semantic type where enough of its values pass a type's validator. Fewer
-need to pass where its name hints the type. An integer column is typed only where its name hints
-the type and a validator agrees. The general pack covers common identifiers, such as emails, card
-numbers and US SSNs, and `doppeldata.profiling.detector_packs.general` lists its types. The type
-names what the generator draws for it, and the failing share becomes `quality.invalid_fraction`.
-`--pack NAME` adds an installed detector pack's types to these. The healthcare pack ships with the
-library, and types NPIs, MBIs, NDC, ICD-10-CM, HCPCS and CPT codes, DEA numbers, and member, medical
-record and claim numbers. It ships no code set, so an ICD-10-CM or HCPCS code is typed and generated
-by its format, and is not guaranteed real. `--code-list ndc=FILE`, `icd10cm=FILE` or
-`hcpcs_level2=FILE` types such a code only where FILE lists it, and the profile records the file's
-sha256.
+### The saved YAML is reviewed, committed, and generates the same rows anywhere
 
-Each numeric column gets an equal-depth histogram, and each with enough distinct values gets the
-distribution family that fits it best. `--edges-from` counts a new profile against an earlier one's
-bin edges and value lists, so the two compare bin for bin, and the rows outside them are written as
-overflow. Where the files, the run's settings, the doppeldata, scipy and reader versions, the
-detector packs and the code lists match the ones the earlier profile was made with, it is kept as it is, with any edits a
-reviewer made. Otherwise `profile create` says what differs.
+```python
+profile.save('orders.profile.yaml')
+again = sd.generate(sd.Profile.load('orders.profile.yaml'), rows=100_000, seed=7)   # sha256:83ff122c…
+```
 
-Columns that move together are written as Spearman correlations, as a categorical column's shares,
-quantiles, zero and null rates given another, as lookup tables, and as columns derived from others:
-a date a lag after another, or a number one of `+ - * /` of two more gives. `data generate` draws a
-group of correlated numeric columns through one Gaussian copula, and each other dependent column
-from its parent's row. [Generating dependent columns](docs/generating-dependent-columns.md) shows
-each in a profile.
+```text
+$ doppeldata profile check orders.profile.yaml
+# doppeldata profile check passed
 
-`data check` profiles generated data with its profile's edges frozen, and reads the real data only
-with `--against`. It measures each column against the profile by the metrics `data check --help`
-defines, each with a threshold and a verdict, and exits 3 when any fails or the check cannot finish.
-`profile diff` measures the same metrics between two profiles of one table, and lists every field
-that changed between them. It exits 1 on drift.
-`--thresholds FILE` sets each metric's threshold, and `--json` prints the report that `schemas show
-check` or `schemas show diff` describes.
+`orders.profile.yaml`, 1 table.
 
-`--against REAL_DATA` also scores a seeded sample of each side by the scores `data check --help`
-lists. Each follows SDMetrics' definition, and doppeldata computes it itself. The report holds the
-scores and no real row.
-They decide nothing until `--thresholds` sets them. `--html FILE` writes the two samples side by
-side with sweetviz. It shows the real data's extremes and category names, so it is not for sharing.
+## orders
 
-Each release's notes list what it does. Its commands and its profile format change without notice
-until 1.0.
+25 literal fields under policy `default`, `k_min` 11, and 0 issues.
+```
+
+`profile check` reads the file alone and exits 3 on a privacy or schema violation, so CI can run it
+on every committed profile. [Review and commit a profile](docs/how-to/review-and-commit-a-profile.md)
+reads each section.
+
+### Spark, scenarios, checks and exports each take one more argument or command
+
+| Change | Does | How-to |
+| --- | --- | --- |
+| `sd.spark.write(spark, profile, 's3://your-bucket/spark/orders/', rows=1_000_000, seed=7)` | writes the files `data generate` writes, from Spark's executors | [Generate inside Spark or AWS Glue](docs/how-to/generate-inside-spark-or-glue.md) |
+| `--scenario hot-key` | five customers place 60% of the orders | [Bend data with a scenario](docs/how-to/bend-data-with-a-scenario.md) |
+| `doppeldata data check orders.profile.yaml synthetic/orders/` | measures written data against its profile | [Check generated data](docs/how-to/check-generated-data.md) |
+| `doppeldata profile export orders.profile.yaml --format pandera --out orders_schemas.py` | the profile as pandera models | [Export a profile as a data contract](docs/how-to/export-a-profile-as-a-contract.md) |
+
+```text
+$ doppeldata data generate orders.profile.yaml --rows 100000 --seed 7 --scenario hot-key --out hot/
+wrote 100,000 rows as parquet in 20 files, 3.2 MB, in 0.09 s on 16 threads: 1.08M rows/s
+hot/_manifest.json names dataset sha256:7d0663432c3472104242943990e6fb5e54963f9079e363e6caed350f23d85317
+$ doppeldata data check orders.profile.yaml hot/ --scenario hot-key
+# doppeldata check passed
+...
+0 of 1 expectations failed.
+
+| Expectation | Column | Value | Bounds | Passed |
+| --- | --- | --- | --- | --- |
+| hot_keys.fraction | customer_id | 0.59937 | ≥ 0.55 | yes |
+```
 
 ## Install
 
 The command line:
 
-```bash
-uv tool install --index https://pypi.ichrisbirch.com/simple/ doppeldata-cli
-doppeldata --version     # prints the installed release
+```text
+$ uv tool install --index https://pypi.ichrisbirch.com/simple/ doppeldata-cli
+$ doppeldata --version
+doppeldata 0.33.0
 ```
 
 The command ships in the `doppeldata-cli` distribution, so a one-off run names both:
@@ -200,12 +200,12 @@ uvx --index https://pypi.ichrisbirch.com/simple/ --from doppeldata-cli doppeldat
 ```
 
 Every release is published to that package index, and nothing else is. Name it on every install.
+PyPI does not carry doppeldata, so a package of that name there is someone else's.
 
-`data check --html` also needs sweetviz, which the command line does not declare:
-
-```bash
-uv tool install --index https://pypi.ichrisbirch.com/simple/ --with sweetviz doppeldata-cli
-```
+- **`data check --html` also needs sweetviz**, which the command line does not declare:
+  `uv tool install --index https://pypi.ichrisbirch.com/simple/ --with sweetviz doppeldata-cli`.
+- **`--engine spark` needs pyspark beside the command line.**
+  [Profile with Spark or AWS Glue](docs/how-to/profile-with-spark-or-glue.md) installs it.
 
 The library, for code that profiles or generates data itself:
 
@@ -217,77 +217,46 @@ The library installs no profiling engine, so a job that only generates carries n
 `doppeldata.profile()` installs them beside it:
 
 ```bash
-uv add polars duckdb pyarrow boto3
+uv add polars duckdb pyarrow
+uv add boto3                          # to profile an s3:// prefix, or write to S3
 uv add clevercsv charset-normalizer   # to profile CSV or TSV files
-uv add scipy     # optional: without it, no column is fitted to a distribution family
-uv add sweetviz  # for check(..., html=...), the side-by-side HTML
+uv add scipy                          # to fit each numeric column to a distribution family
+uv add sweetviz                       # for check(..., html=...), the side-by-side HTML
 ```
 
-`profile(engine='spark')` needs pyspark, pyarrow and boto3 instead of polars, with duckdb, clevercsv
-and charset-normalizer for CSV or TSV. A Spark install brings pyspark, and the CLI declares none.
+Each is refused by name when a call needs it and it is missing. `profile(engine='spark')` needs
+pyspark and pyarrow in place of polars, and duckdb only to sniff a CSV or TSV.
 
-Code that writes to S3 installs boto3, which resolves the AWS environment's credentials, SSO
-profiles included. Each call reaching S3 or the Glue catalog through boto3 takes `aws_profile=` to
-name the profile for that call. Spark reads S3 with its session's own credentials, so
-`doppeldata.spark` takes none.
-
-The library runs on Python 3.11 and later, and the command line on 3.13 and later. The command line
-is a separate distribution, so a project importing the library installs no CLI dependencies. The
-library's generator is compiled Rust. A wheel is built for each platform the `wheels` job in
+The library runs on Python 3.11 and later, and the command line on 3.13 and later. The library's
+generator is compiled Rust. A wheel is built for each platform the `wheels` job in
 `.github/workflows/build-library.yml` lists. Anywhere else, the install builds the sdist, which
 needs a Rust toolchain.
 
-## First run
-
-Profile a table you hold, check the profile, then generate from it and check what was written:
-
-```bash
-doppeldata profile create data/orders/ --out orders.profile.yaml   # a profile of the files, holding no row
-doppeldata profile check orders.profile.yaml                       # its schema and privacy policy, from the file alone
-doppeldata data plan orders.profile.yaml --rows 1000000 --out synthetic/orders/      # what the write makes, before it runs
-doppeldata data generate orders.profile.yaml --rows 1000000 --out synthetic/orders/  # the files, beside _manifest.json
-doppeldata data generate orders.profile.yaml --rows 1000000 --out s3://bucket/orders/ --aws-profile analytics
-doppeldata data check orders.profile.yaml synthetic/orders/        # the data against the profile it came from
-```
-
-- **`data plan` prints what `data generate` writes with the same flags.** It names the dataset's
-  digest, the files, each column's sampler and an estimate of the bytes, and reads nothing at
-  `--out`.
-- **Both writes print the same dataset digest**, because a dataset is a pure function of its
-  profile, row count and seed. Each records it in its `_manifest.json`.
-- **`--aws-profile` names the AWS profile S3 and the Glue Data Catalog are reached with.** Left out,
-  `AWS_PROFILE` names it, then boto3's default chain. A name the AWS config lacks is refused before
-  a byte is written. `profile create --engine spark` refuses it, because Spark reads S3 with its
-  session's own credentials.
-- **`profile check` and `data check` exit 0 when clean and 3 on a finding**, so CI can run either.
-  Each prints a Markdown report a pull request takes as it is.
-- **With no data at hand, an example stands in.** `doppeldata profile list` names them, and
-  `orders` in place of `orders.profile.yaml` runs every line after the first.
-- **Every command's `--help` ends in examples, and every command takes `--json`.**
-
-## Run the library inside an AWS Glue job
+### Run the library inside an AWS Glue job
 
 Every Glue version that runs Python 3.11 or later installs the library, and
-`docs/aws-glue-support.md` lists them. Glue compiles nothing, so download the Linux x86_64 wheel from
-the index alone, and upload it to S3:
+[aws-glue-support.md](docs/aws-glue-support.md) lists them. Glue compiles nothing, so download the
+Linux x86_64 wheel from the index alone, and upload it to S3:
 
-```bash
-pip download --no-deps --index-url https://pypi.ichrisbirch.com/simple/ \
-  --platform manylinux2014_x86_64 --python-version 311 --only-binary=:all: \
-  --dest wheels doppeldata
-aws s3 cp --recursive wheels/ s3://your-bucket/glue/
+```text
+$ pip download --no-deps --index-url https://pypi.ichrisbirch.com/simple/ \
+    --platform manylinux2014_x86_64 --python-version 311 --only-binary=:all: \
+    --dest wheels doppeldata
+$ ls wheels/
+doppeldata-0.33.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+$ aws s3 cp --recursive wheels/ s3://your-bucket/glue/
 ```
 
 Then pass its path in the job's parameters, with the file name pip downloaded. Glue installs the
 wheel, and its dependencies from PyPI:
 
 ```text
---additional-python-modules  s3://your-bucket/glue/doppeldata-<version>-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+--additional-python-modules  s3://your-bucket/glue/doppeldata-<version>-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
 ```
 
-A job that profiles names more modules after the wheel. It names `scipy`, which no Glue
-preinstalls and which fits the numeric columns. For CSV or TSV it also names `duckdb`, `clevercsv`
-and `charset-normalizer`. `docs/profiling-with-spark.md` gives the whole job, with the versions.
+[Profile with Spark or AWS Glue](docs/how-to/profile-with-spark-or-glue.md) and [Generate inside
+Spark or AWS Glue](docs/how-to/generate-inside-spark-or-glue.md) run whole jobs, and list the
+modules each names after the wheel.
 
 Never give pip the package index as an extra index beside PyPI. pip installs the highest version it
 finds on either, so anyone uploading a `doppeldata` to PyPI would run their code in the job.
@@ -297,13 +266,115 @@ its path, so pip never asks PyPI for doppeldata:
 
 ```bash
 pip download --dest wheels --platform manylinux2014_x86_64 --python-version 311 \
-  --only-binary=:all: wheels/doppeldata-<version>-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+  --only-binary=:all: wheels/doppeldata-<version>-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
 echo doppeldata > wheels/requirements.txt
-zip -r doppeldata-<version>.gluewheels.zip wheels/
+python -m zipfile -c doppeldata-<version>.gluewheels.zip wheels/
 ```
 
 Upload the zip, pass its `s3://` path to `--additional-python-modules`, and pass `--no-index` to
 `--python-modules-installer-option`. Glue then resolves every dependency from the zip.
+
+## First run
+
+Profile a table you hold, read the profile, then generate from it and check what was written. With
+no data at hand, `doppeldata data generate orders --rows 20000 --seed 1 --file-rows 5000 --out
+data/orders/` writes the table these commands ran on, from the `orders` example.
+
+```bash
+doppeldata profile create data/orders/ --out orders.profile.yaml
+doppeldata profile check orders.profile.yaml
+doppeldata data plan orders.profile.yaml --rows 1000000 --seed 7 --out synthetic/orders/
+doppeldata data generate orders.profile.yaml --rows 1000000 --seed 7 --out synthetic/orders/
+doppeldata data check orders.profile.yaml synthetic/orders/
+```
+
+Each column's section says what the generator draws. A category keeps its top values and their
+shares, each resting on at least `k_min` rows:
+
+```text
+$ yq '.columns[] | select(.name == "status") | .string.top_values' orders.profile.yaml
+- {value: delivered, fraction: 0.462}
+- {value: shipped, fraction: 0.2175}
+- {value: processing, fraction: 0.14}
+- {value: cancelled, fraction: 0.1013}
+- {value: returned, fraction: 0.0793}
+```
+
+`privacy.audit` lists every literal a column keeps and the rule that admits it:
+
+```text
+$ rg 'column: (status|ship_zip)' orders.profile.yaml
+    - {column: status, field: /string/top_values, values: 5, rule: count >= k_min, min_rows: 1586}
+    - {column: status, field: /string/shapes, values: 4, rule: count >= k_min, min_rows: 1586}
+    - {column: ship_zip, field: /string/shapes, values: 1, rule: count >= k_min, min_rows: 20000}
+    - {column: ship_zip, field: /string/pattern, values: 1, rule: generalized}
+```
+
+`data plan` prints what `data generate` writes with the same flags, and reads nothing at `--out`:
+
+```text
+$ doppeldata data plan orders.profile.yaml --rows 1000000 --seed 7 --out synthetic/orders/
+dataset    sha256:54f7e4b5cfa6b79ea9c17e89c5b9f094b23b93ce5aa1ee8be109209288f903a4
+identity   1,000,000 rows from seed 7, profile sha256:7a3c827a291ca3aade44e80b5b318a0401c8deafa82ccb03087d21367e3998b4, stream version 12
+format     parquet {"compression":"zstd","compression_level":null,"dictionary_columns":null,"row_group_rows":5000,"statistics":"page","timestamp_unit":"us"}
+files      200 files to synthetic/orders/
+estimate   34.7 MB, from the first blocks encoded with these settings
+
+order_id        int64                  sequence from 1 by 1
+customer_id     int64                  quantiles with fitted randint tails
+amount          decimal128(12, 2)      quantiles with fitted lognorm tails
+quantity        int32                  10 top values
+status          string                 5 top values
+ordered_at      timestamp[us, tz=UTC]  between the extremes, weighted by month, weekday, hour
+customer_email  string                 the email provider, at the profiled distinct ratio, 0.019 null
+ship_zip        string                 a pattern
+...
+$ doppeldata data generate orders.profile.yaml --rows 1000000 --seed 7 --out synthetic/orders/
+wrote 1,000,000 rows as parquet in 200 files, 34.5 MB, in 0.54 s on 16 threads: 1.87M rows/s
+synthetic/orders/_manifest.json names dataset sha256:54f7e4b5cfa6b79ea9c17e89c5b9f094b23b93ce5aa1ee8be109209288f903a4
+$ doppeldata data check orders.profile.yaml synthetic/orders/
+# doppeldata check passed
+
+`synthetic/orders/`, 1,000,000 rows, against profile `orders` (sha256:7a3c827a291ca3aade44e80b5b318a0401c8deafa82ccb03087d21367e3998b4).
+
+0 of 31 metrics failed.
+```
+
+- **The plan and the write name the same dataset.** `_manifest.json` records it with the profile's
+  SHA-256, the seed, the row count and the stream version, which regenerate it.
+- **The profile's `source` section records how the files were written**, and `data generate` writes
+  it back: a CSV's dialect and encoding, a Parquet footer's codec and row groups, the rows per file.
+- **`profile check` and `data check` exit 0 when clean and 3 on a finding**, so CI can run either.
+  Each prints a Markdown report a pull request takes as it is.
+- **Every command's `--help` ends in examples, and every command takes `--json`.**
+
+## Every task has a page
+
+| Task | Page |
+| --- | --- |
+| Generate rows from column names, a dict or a short YAML | [generate-rows-from-column-names.md](docs/how-to/generate-rows-from-column-names.md) |
+| Profile a dataset, local or on S3 | [profile-a-dataset.md](docs/how-to/profile-a-dataset.md) |
+| Review a profile's privacy audit and commit it | [review-and-commit-a-profile.md](docs/how-to/review-and-commit-a-profile.md) |
+| Profile claims and other healthcare data under HIPAA Safe Harbor | [profile-healthcare-data.md](docs/how-to/profile-healthcare-data.md) |
+| Type columns with your own detector pack | [write-a-detector-pack.md](docs/how-to/write-a-detector-pack.md) |
+| Import a seed profile from a schema or a Glue table | [import-a-seed-from-a-schema.md](docs/how-to/import-a-seed-from-a-schema.md) |
+| Generate a dataset in any format, locally or to S3 | [generate-a-dataset.md](docs/how-to/generate-a-dataset.md) |
+| Reproduce a dataset from its manifest or its files | [reproduce-a-dataset.md](docs/how-to/reproduce-a-dataset.md) |
+| Profile and generate related tables with their foreign keys | [generate-related-tables.md](docs/how-to/generate-related-tables.md) |
+| Read and edit how columns depend on each other | [edit-dependent-columns.md](docs/how-to/edit-dependent-columns.md) |
+| Bend data with a scenario | [bend-data-with-a-scenario.md](docs/how-to/bend-data-with-a-scenario.md) |
+| Write broken files a pipeline must quarantine | [write-broken-files.md](docs/how-to/write-broken-files.md) |
+| Write an AWS DMS change stream and the table it must merge to | [write-a-cdc-stream.md](docs/how-to/write-a-cdc-stream.md) |
+| Check generated data against its profile, or the real data | [check-generated-data.md](docs/how-to/check-generated-data.md) |
+| Measure drift between two profiles | [measure-drift-between-profiles.md](docs/how-to/measure-drift-between-profiles.md) |
+| Export a profile as a data contract | [export-a-profile-as-a-contract.md](docs/how-to/export-a-profile-as-a-contract.md) |
+| Test with synthetic data in pytest | [test-with-synthetic-data.md](docs/how-to/test-with-synthetic-data.md) |
+| Profile with Spark, over Spark Connect, or in a Glue job | [profile-with-spark-or-glue.md](docs/how-to/profile-with-spark-or-glue.md) |
+| Generate inside Spark's executors or a Glue job | [generate-inside-spark-or-glue.md](docs/how-to/generate-inside-spark-or-glue.md) |
+| Drive doppeldata from a script: capabilities, refusals, the plan trace and logging | [drive-doppeldata-from-a-script.md](docs/how-to/drive-doppeldata-from-a-script.md) |
+
+[docs/README.md](docs/README.md) indexes the design pages, which say why each part is built as it
+is.
 
 ## Driving doppeldata from an agent
 
@@ -331,10 +402,13 @@ doppeldata data check orders.profile.yaml out/ --scenario hot-key --json  # "pas
 - **Every write verb takes `--json` too.** `data generate` prints the manifest it wrote. `profile
   create`, `import` and `expand` print the profile as JSON when no `--out` is given.
 - **`data plan --json` traces each column.** It names the sampler's kind, each profile field the
-  sampler reads with its pointer and value, and the id of each op writing the column. `origin` says whether
-  the column is profiled, derived from others, overlaid by the scenario or pinned.
+  sampler reads with its pointer and value, and the id of each op writing the column. `origin` says
+  whether the column is profiled, derived from others, overlaid by the scenario or pinned.
 - **Without `--json`, `profile check`, `scenario check`, `data check` and `profile diff` print
   GitHub Markdown**, so a report pastes into a pull request as it is.
+
+[Drive doppeldata from a script](docs/how-to/drive-doppeldata-from-a-script.md) reads each of these
+from a program.
 
 ## Layout
 
@@ -343,9 +417,10 @@ doppeldata data check orders.profile.yaml out/ --scenario hot-key --json  # "pas
 | `crates/` | the Rust workspace: `core`, the generation engine; `writers`, which writes its blocks as files to any object store; and `python`, the extension module over the engine |
 | `library/` | the `doppeldata` distribution: the compiled extension and the Python code over it |
 | `cli/` | the `doppeldata-cli` distribution: the `doppeldata` command over the library |
-| `docs/` | why the design is what it is |
+| `docs/` | the how-to pages under `docs/how-to/`, and the design pages saying why the design is what it is |
 | `benchmarks/` | the scripts `task bench` runs to time the engine against numpy, Faker and Mimesis |
 | `spark-parity/` | the checks that `doppeldata.spark` gives a local run's values and files, and that `profile(engine='spark')` gives Polars' profile, inside each Spark image named |
+| `malformed-file-readers/` | what DuckDB and each Spark image named make of every fault kind `malformed_rows` writes |
 
 ## Develop
 

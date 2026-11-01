@@ -6,12 +6,9 @@ the child rows its relationship states, so joins, skew and orphans come out as t
 
 ## `profile create --tables` writes one bundle holding each table and every foreign key between them
 
-```bash
-doppeldata profile create --tables *.parquet --out tpch.bundle.yaml
-```
-
-Each file or folder named is one table, named for it. Over TPC-H at scale factor 1, this took 45.7 s
-and 3.5 GB at peak, and wrote this relationship among its nine:
+[Generate related tables](how-to/generate-related-tables.md) gives the commands. Over TPC-H at
+scale factor 1, `profile create --tables` took 45.7 s and 3.5 GB at peak, and wrote this
+relationship among its nine tables:
 
 ```yaml
 relationships:
@@ -31,7 +28,6 @@ relationships:
   holds the three name rules and the alias prefixes, such as `ps_` on every column of `partsupp`.
 - **A key of two columns is found as one of one.** `lineitem (l_partkey, l_suppkey)` refers to
   `partsupp (ps_partkey, ps_suppkey)`, and `from` and `to` list the columns in order.
-- **`sd.profile_tables(paths)` returns the same `Bundle`**, and `Bundle.save` writes it.
 
 ## Each relationship states how many child rows each parent holds, and the generator holds them exactly
 
@@ -52,27 +48,13 @@ ranks. So every block of child rows draws from every parent, as a table loaded i
 
 ## `--scale` multiplies every table's rows, and each relationship keeps its shape
 
-```bash
-doppeldata data generate orders-customers --scale 0.1 --out shop/
-```
-
-- **Each table generates `round(rows × scale)` rows.** The 40,000 customers become 4,000, and
-  the 550,000 orders 55,000.
+- **Each table generates `round(rows × scale)` rows.** At scale 0.1, the `orders-customers`
+  example's 40,000 customers become 4,000, and its 550,000 orders 55,000.
 - **Each quantile is a share of the parents, so it holds at any scale.** At scale 0.1 the example
   holds `p50` 4, `p95` 45 and `p99` 160 orders per customer exactly.
 - **Each `top_fractions` holds over the same fraction of the parents.** `top10` of 40,000 customers is
   the busiest one of 4,000 at scale 0.1, and that customer holds 0.003 of the orders. A pin falling
   on less than one parent is left out.
-
-## A relationship is edited in the bundle, or bent by a scenario without editing it
-
-- **Every field above is read as written.** Each `top_fractions` counts the busiest parents' rows
-  together, so `top10` below `top1` is refused as `E-PROFILE-122`.
-- **Deleting an `inherited` entry or an `ordinal` draws the column from its own profile.** Deleting
-  a relationship draws its foreign key from its column's profile too, so its values join only by
-  chance.
-- **A scenario's `patch.relationships` changes one relationship for one run.**
-  [scenario-overlays.md](scenario-overlays.md) holds the format, and a `hot_keys` on a foreign key.
 
 ## An inherited column copies its parent row's value on the share its agreement states
 
@@ -163,10 +145,6 @@ With no key, nothing refers to it, so `nation.n_regionkey → region.r_regionkey
 on a table under `k_min` rows as `E-POLICY-004`.
 
 ## `data check` measures each relationship by its fan-out, its orphans and its busiest parents
-
-```bash
-doppeldata data check orders-customers shop/
-```
 
 | Metric | What it compares | Passes at |
 | --- | --- | --- |
