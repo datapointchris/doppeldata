@@ -1146,7 +1146,8 @@ def semantic_sections(typing: 'Typing') -> dict[str, Any]:
 def generalized_patterns(
     sample: 'pa.Table | None', shapes: dict[str, list[tuple[str, int]]], stats: Answers, described: int, k_min: int
 ) -> dict[str, str]:
-    """Each string column's pattern, generalized by grex from the sampled values of its dominant shape."""
+    """Each string column's pattern, generalized by grex from the sampled values of its dominant shape, where at least
+    k_min of them hold two or more distinct values."""
     dominant = {
         name: counted[0][0]
         for name, counted in shapes.items()
@@ -1157,14 +1158,16 @@ def generalized_patterns(
     patterns = {}
     for name, shape in dominant.items():
         matching = [value for value in sample.column(name).to_pylist() if value is not None and shape_of(value) == shape]
+        distinct = sorted(set(matching))
         # Every literal grex keeps is shared by all the values it is given, so k_min of them must back it.
-        if len(matching) >= k_min:
-            distinct = sorted(set(matching))
-            # A seeded draw rather than the first values in order, which would share the smallest prefix.
-            drawn = random.Random(SAMPLE_SEED).sample(distinct, min(PATTERN_VALUES, len(distinct)))
-            pattern = _core.generalize_pattern(sorted(drawn))
-            if pattern:
-                patterns[name] = pattern
+        # A rest drawn from one value's pattern would only regenerate that value.
+        if len(matching) < k_min or len(distinct) < 2:
+            continue
+        # A seeded draw rather than the first values in order, which would share the smallest prefix.
+        drawn = random.Random(SAMPLE_SEED).sample(distinct, min(PATTERN_VALUES, len(distinct)))
+        pattern = _core.generalize_pattern(sorted(drawn))
+        if pattern:
+            patterns[name] = pattern
     return patterns
 
 

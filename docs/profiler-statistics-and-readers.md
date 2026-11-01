@@ -879,6 +879,9 @@ and the policy's pass then removes what each column's rule withholds:
   but `\d` appears. Every literal left is then shared by all the values grex saw. grex gets a seeded
   draw of the distinct values, because the first ones in order would share one prefix. The dominant
   shape must also hold at least half the values, because the generator prefers a pattern to the
+  shapes. Those values must hold two or more distinct ones. grex gives one value back as itself,
+  its digits as `\d`. The rows outside a column's listed values draw from the pattern, so they
+  would hold that value again, or it with other digits. Without a pattern they draw from the
   shapes.
 
 A gapless counting column is written as a `sequence`, whose `start` is its first value: the minimum

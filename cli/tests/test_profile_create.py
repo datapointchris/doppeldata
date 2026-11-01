@@ -153,6 +153,15 @@ def test_no_histogram_bin_less_the_listed_values_in_it_leaves_a_cell_under_k_min
     assert not 0 < round(numeric['zero_fraction'] * len(values)) < 11
 
 
+def test_a_dominant_shape_holding_one_value_stores_no_pattern_and_one_holding_many_does():
+    tiers = ['Standard'] * 20 + ['Express Line'] * 12
+    orders = [f'ORD{index:05d}' for index in range(32)]
+    columns = profile(pl.DataFrame({'tier': tiers, 'order_id': orders})).to_plain()['columns']
+    strings = {column['name']: column['string'] for column in columns}
+    assert 'pattern' not in strings['tier']
+    assert strings['order_id']['pattern'] == r'^ORD\d{5}$'
+
+
 def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_and_a_gapped_id_as_a_sequence(tmp_path):
     draw, rows = random.Random(3), 4000
     amounts = [round(draw.lognormvariate(3, 1), 2) for _ in range(rows)]
