@@ -4,6 +4,7 @@
 
 use std::cmp::Ordering;
 
+use super::FieldReads;
 use super::inverse_cdf::InverseCdf;
 use super::inverse_cdf::Knots;
 use super::listed_values::ListedValues;
@@ -37,12 +38,16 @@ impl ListedNumbers {
         stats: &NumericStats,
         rounding: Rounding,
         source: Option<SourceCounts>,
+        reads: &mut FieldReads,
     ) -> Result<Option<Self>, String> {
-        let Some(top_values) = stats.top_values.as_deref().filter(|values| !values.is_empty()) else {
+        let top_values = reads.read("listed_values", "/numeric/top_values", stats.top_values.as_deref());
+        let Some(top_values) = top_values.filter(|values| !values.is_empty()) else {
             return Ok(None);
         };
         let mut listed: Vec<(f64, f64)> = top_values.iter().map(|top| (top.value, top.fraction.0)).collect();
-        let other_fraction = stats.other_fraction.map_or(0.0, |r| r.0);
+        let other_fraction = reads
+            .read("rest_fraction", "/numeric/other_fraction", stats.other_fraction)
+            .map_or(0.0, |r| r.0);
         // Rows hidden beyond the extremes are part of the `other` share, never added to it.
         let hidden: Vec<(f64, f64)> = source
             .map(|source| hidden_beyond(stats, rounding, &listed, source))

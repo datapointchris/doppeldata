@@ -620,7 +620,10 @@ impl DependentColumns {
                     }
                     let rounding = match expression.round {
                         Some(places) => Rounding::Decimals(super::numeric::power_of_ten(places)),
-                        None => Rounding::for_column(column.numeric.as_ref(), &output),
+                        None => {
+                            let numeric = column.numeric.as_ref();
+                            Rounding::for_column(numeric.and_then(|n| n.integral), numeric.and_then(|n| n.scale), &output)
+                        }
                     };
                     let violation = expression
                         .violation_fraction

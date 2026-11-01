@@ -117,7 +117,7 @@ pub enum ColumnFault {
     /// A temporal extreme that does not parse as the column's type.
     InvalidExtreme,
     StructWithoutFields,
-    /// `missing_tokens` whose rates, each a share of rows, sum above the column's null rate.
+    /// `missing_token_fractions` that, each a share of rows, sum above the column's `null_fraction`.
     TokensExceedNullRate,
     /// A dependence between columns names a column the table lacks.
     UnknownColumn,
@@ -214,7 +214,7 @@ pub struct ColumnTrace {
     pub physical_type: String,
     /// The sampler's kind: `sequence`, `numeric`, `categorical`, `temporal`, `boolean`, `text`,
     /// `list` or `struct`.
-    pub sampler: &'static str,
+    pub sampler_kind: &'static str,
     /// What draws the values, such as `sequence from 1 by 1` or `50 top values`.
     pub summary: String,
     /// Each profile field the sampler reads that the profile holds. A field left out reads as its
@@ -884,7 +884,7 @@ impl Plan {
                 let read_names = reads.get(&index).into_iter().flatten();
                 ColumnTrace {
                     physical_type: physical_type_name(column.field.data_type()),
-                    sampler: column.kind,
+                    sampler_kind: column.kind,
                     summary: column.description(),
                     parameters,
                     null_fraction: column.null_share,

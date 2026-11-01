@@ -70,8 +70,8 @@ class SamplerParameter:
 class ColumnTrace:
     """How one top-level column is drawn, and what in the profile and the scenario decides it.
 
-    `physical_type` is spelled as a profile spells it. `sampler` is the kind, such as `numeric`, and `summary` says what
-    draws the values in a few words. `parameters` holds each field the sampler reads that the profile holds. `origin` is
+    `physical_type` is spelled as a profile spells it. `sampler_kind` is the sampler's kind, such as `numeric`, and `summary`
+    says what draws the values in a few words. `parameters` holds each field the sampler reads that the profile holds. `origin` is
     `profiled`, `derived` from other columns, `overlaid` by the scenario, or `pinned` by an override. `reads` names the
     columns a derived column follows, `ops` the id of each scenario op writing it, and `patched_fields` each field the
     scenario's patch sets for it.
@@ -79,7 +79,7 @@ class ColumnTrace:
 
     name: str
     physical_type: str
-    sampler: str
+    sampler_kind: str
     summary: str
     parameters: list[SamplerParameter]
     null_fraction: float

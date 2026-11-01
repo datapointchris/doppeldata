@@ -30,6 +30,7 @@ use arrow_schema::DataType;
 use rand_chacha::ChaCha8Rng;
 
 use super::BlockPosition;
+use super::FieldReads;
 use super::StreamKeys;
 use super::distinct_values::DistinctTarget;
 use super::distinct_values::Stratum;
@@ -139,12 +140,16 @@ fn tail_kind(family: Option<&str>) -> String {
 }
 
 /// The inverse CDF a numeric column draws through, and what it was built from.
-pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> Result<(InverseCdf, CurveShape), String> {
-    let extremes = stats.extremes.as_ref();
+pub(crate) fn numeric_cdf(
+    stats: &NumericStats,
+    fit: Option<&FittedFamily>,
+    reads: &mut FieldReads,
+) -> Result<(InverseCdf, CurveShape), String> {
+    let extremes = reads.read("extremes", "/numeric/extremes", stats.extremes.as_ref());
     let low = extremes.and_then(|e| e.low);
     let high = extremes.and_then(|e| e.high);
-    let quantiles = quantile_knots(stats.quantiles.as_ref())?;
-    let histogram = histogram_knots(stats.histogram.as_ref());
+    let quantiles = quantile_knots(reads.read("quantiles", "/numeric/quantiles", stats.quantiles.as_ref()))?;
+    let histogram = histogram_knots(reads.read("histogram", "/numeric/histogram", stats.histogram.as_ref()));
     let mut shape = CurveShape {
         body: if quantiles.is_empty() {
             CurveBody::Histogram
@@ -186,8 +191,8 @@ pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> R
         let low = low.filter(|&low| low <= value);
         // Where the body starts at or above zero, the stated negative rate is the share a fitted tail
         // below zero may hold, and the levels from it up to the body draw between zero and the body.
-        let below_zero = stats
-            .negative_fraction
+        let below_zero = reads
+            .read("negative_fraction", "/numeric/negative_fraction", stats.negative_fraction)
             .map(|r| r.0)
             .filter(|&share| 0.0 < share && share < level && value >= 0.0 && low.is_some_and(|low| low < 0.0));
         let (top_level, top_value) = below_zero.map_or((level, value), |share| (share, 0.0));
@@ -219,8 +224,10 @@ pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> R
             _ = knots.insert(level, value);
         }
     }
-    if let Some(zero_fraction) = stats.zero_fraction.map(|r| r.0).filter(|&r| r > 0.0) {
-        let below_zero = stats.negative_fraction.map(|r| r.0).or_else(|| {
+    let zero_fraction = reads.read("zero_fraction", "/numeric/zero_fraction", stats.zero_fraction);
+    if let Some(zero_fraction) = zero_fraction.map(|r| r.0).filter(|&r| r > 0.0) {
+        let negative_fraction = reads.read("negative_fraction", "/numeric/negative_fraction", stats.negative_fraction);
+        let below_zero = negative_fraction.map(|r| r.0).or_else(|| {
             let lowest = knots.first().map_or(0.0, |(_, value)| value);
             (lowest >= 0.0).then_some(0.0)
         });
@@ -305,12 +312,12 @@ pub(crate) enum Rounding {
 }
 
 impl Rounding {
-    pub(crate) fn for_column(stats: Option<&NumericStats>, output: &NumericOutput) -> Self {
-        let integral = stats.and_then(|s| s.integral).unwrap_or(false);
-        if integral || output.is_integer() {
+    /// The rounding a column of `output` stating `integral` and `scale` draws through.
+    pub(crate) fn for_column(integral: Option<bool>, scale: Option<i32>, output: &NumericOutput) -> Self {
+        if integral.unwrap_or(false) || output.is_integer() {
             return Self::Integer;
         }
-        match (output, stats.and_then(|s| s.scale)) {
+        match (output, scale) {
             // The decimal type quantizes to its scale anyway, so rounding there first changes no value.
             (&NumericOutput::Decimal128 { scale, .. }, _) => Self::Decimals(power_of_ten(i32::from(scale))),
             (NumericOutput::Float32 | NumericOutput::Float64, Some(scale)) => Self::Decimals(power_of_ten(scale)),
@@ -407,9 +414,11 @@ impl NumericSampler {
         output: NumericOutput,
         target: Option<DistinctTarget>,
         source: Option<SourceCounts>,
+        reads: &mut FieldReads,
     ) -> Result<Self, String> {
-        let rounding = Rounding::for_column(Some(stats), &output);
-        let Some(numbers) = ListedNumbers::of(&cdf, stats, rounding, source)? else {
+        let integral = reads.read("integral", "/numeric/integral", stats.integral);
+        let rounding = Rounding::for_column(integral, reads.read("scale", "/numeric/scale", stats.scale), &output);
+        let Some(numbers) = ListedNumbers::of(&cdf, stats, rounding, source, reads)? else {
             let index = target.and_then(|target| ValueIndex::for_distinct_in_bands(target, &variety(&cdf, rounding)));
             return Ok(Self {
                 cdf,
