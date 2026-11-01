@@ -66,6 +66,27 @@ def luhn_completed(payload: str) -> str:
     return payload + str(-total % 10)
 
 
+def test_profile_expand_of_a_file_embedding_its_profile_writes_the_yaml_profile_create_wrote(tmp_path):
+    source, created, embedded, expanded = tmp_path / 'source', tmp_path / 'orders.yaml', tmp_path / 'embedded', tmp_path / 'expanded.yaml'
+    runner = CliRunner()
+    for command in (
+        ['data', 'generate', 'orders', '--rows', '5000', '--seed', '1', '--no-partitions', '--out', f'{source}/'],
+        ['profile', 'create', f'{source}/', '--out', str(created)],
+        ['data', 'generate', str(created), '--rows', '100', '--no-partitions', '--embed-profile', '--out', f'{embedded}/'],
+    ):
+        result = runner.invoke(app, command)
+        assert result.exit_code == 0, result.output
+    result = runner.invoke(app, ['profile', 'expand', str(next(embedded.glob('*.parquet'))), '--out', str(expanded)])
+    assert result.exit_code == 0, result.output
+
+    pairs = zip(created.read_text().splitlines(), expanded.read_text().splitlines(), strict=True)
+    differing = [(written, back) for written, back in pairs if written != back]
+    assert differing, 'the fits name their parameters in another order than canonical JSON sorts them'
+    for written, back in differing:
+        assert written.lstrip().startswith('params: {')
+        assert sorted(written.split('{')[1].rstrip('}').split(', ')) == back.split('{')[1].rstrip('}').split(', ')
+
+
 def test_the_general_pack_types_each_column_of_the_mixed_fixture(tmp_path):
     rows, draw = 10_000, random.Random(11)
     corrupted = set(draw.sample(range(rows), 30))

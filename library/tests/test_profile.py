@@ -115,17 +115,3 @@ def test_a_file_written_with_its_profile_embedded_gives_the_profile_back_and_a_p
     assert Profile.from_data_file(embedded).digest == orders.digest
     with pytest.raises(SourceError):
         Profile.from_data_file(plain)
-
-
-def test_expanding_a_file_written_with_its_profile_embedded_writes_the_yaml_profile_create_wrote(tmp_path):
-    sd.write('orders', tmp_path / 'source', rows=5000, seed=1)
-    created = sd.profile(tmp_path / 'source')
-    sd.write(created, tmp_path / 'embedded.parquet', rows=100, embed_profile=True)
-    expanded = Profile.from_data_file(tmp_path / 'embedded.parquet')
-
-    pairs = zip(created.to_yaml().splitlines(), expanded.to_yaml().splitlines(), strict=True)
-    differing = [(written, back) for written, back in pairs if written != back]
-    assert differing, 'the fits name their parameters in another order than canonical JSON sorts them'
-    for written, back in differing:
-        assert written.lstrip().startswith('params: {')
-        assert sorted(written.split('{')[1].rstrip('}').split(', ')) == back.split('{')[1].rstrip('}').split(', ')
