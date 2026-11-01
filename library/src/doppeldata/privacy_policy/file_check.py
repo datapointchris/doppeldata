@@ -9,6 +9,7 @@ import dataclasses as dc
 import importlib.resources
 import json
 import os
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,9 @@ from doppeldata.privacy_policy.literal_fields import LiteralField
 from doppeldata.privacy_policy.literal_fields import column_literals
 from doppeldata.privacy_policy.literal_fields import dataset_literals
 from doppeldata.privacy_policy.literal_fields import faults
+from doppeldata.privacy_policy.relationship_floors import floor_breaks
+from doppeldata.privacy_policy.relationship_floors import relationship_k_min
+from doppeldata.privacy_policy.relationship_floors import top_shares
 from doppeldata.privacy_policy.treatment_rules import conditional_faults
 from doppeldata.privacy_policy.treatment_rules import lag_faults
 from doppeldata.privacy_policy.treatment_rules import lookup_faults
@@ -85,25 +89,39 @@ class TableCheck:
 
 
 @dc.dataclass(frozen=True)
+class RelationshipsCheck:
+    """A bundle's relationships held to their tables' `k_min`: how many it states, and each violation, at its pointer from
+    the bundle's root."""
+
+    stated: int
+    violations: list[Violation]
+
+
+@dc.dataclass(frozen=True)
 class ProfileFileCheck:
-    """A profile file checked against its schema and privacy policy: the file as named, whether it passed, and each table's check."""
+    """A profile file checked against its schema and privacy policy: the file as named, whether it passed, each table's
+    check, and a bundle's relationships' check."""
 
     failure_code: ClassVar[str] = issue_codes.PROFILE_CHECK_FAILED
 
     profile: str
     passed: bool
     tables: list[TableCheck]
+    relationships: RelationshipsCheck | None = None
 
     @classmethod
-    def of(cls, profile: str, tables: list[TableCheck]) -> 'ProfileFileCheck':
-        return cls(profile, not any(table.violations for table in tables), tables)
+    def of(cls, profile: str, tables: list[TableCheck], relationships: RelationshipsCheck | None = None) -> 'ProfileFileCheck':
+        held = any(table.violations for table in tables) or (relationships is not None and bool(relationships.violations))
+        return cls(profile, not held, tables, relationships)
 
     @property
     def violations(self) -> list[Violation]:
-        return [violation for check in self.tables for violation in check.violations]
+        found = [violation for check in self.tables for violation in check.violations]
+        return found + (self.relationships.violations if self.relationships is not None else [])
 
     def to_json(self) -> str:
-        """The check as `profile check --json` prints it: each table's name, policy, `k_min` and literal fields, and its issues."""
+        """The check as `profile check --json` prints it: each table's name, policy, `k_min` and literal fields, and its
+        issues, then for a bundle the relationships it states and their issues."""
         tables = [
             {
                 'table': check.table,
@@ -114,13 +132,19 @@ class ProfileFileCheck:
             }
             for check in self.tables
         ]
-        return json.dumps({'profile': self.profile, 'passed': self.passed, 'tables': tables}, indent=2, ensure_ascii=False) + '\n'
+        related = self.relationships
+        relationships = None if related is None else {'stated': related.stated, 'issues': [issue.to_json() for issue in related.violations]}
+        document = {'profile': self.profile, 'passed': self.passed, 'tables': tables, 'relationships': relationships}
+        return json.dumps(document, indent=2, ensure_ascii=False) + '\n'
 
     def to_markdown(self) -> str:
-        """The check for a person: each table's policy and literal fields, then its issues."""
+        """The check for a person: each table's policy and literal fields, then its issues, then a bundle's relationships."""
         verdict = 'passed' if self.passed else 'failed'
-        tables = f'{len(self.tables)} table{"" if len(self.tables) == 1 else "s"}'
-        lines = [f'# doppeldata profile check {verdict}', '', f'`{self.profile}`, {tables}.', '']
+        parts = [f'{len(self.tables)} table{"" if len(self.tables) == 1 else "s"}']
+        related = self.relationships
+        if related is not None and related.stated:
+            parts.append(f'{related.stated} relationship{"" if related.stated == 1 else "s"}')
+        lines = [f'# doppeldata profile check {verdict}', '', f'`{self.profile}`, {", ".join(parts)}.', '']
         for table in self.tables:
             count = len(table.violations)
             found = f'{count} issue{"" if count == 1 else "s"}'
@@ -131,6 +155,12 @@ class ProfileFileCheck:
                 literals = f'{table.literal_fields} literal field{"" if table.literal_fields == 1 else "s"}'
                 held = f'{literals} under policy `{table.policy}`{floor}, and {found}.'
             lines += [f'## {table.table}', '', held, '', *issue_table(table.violations)]
+        if related is not None and (related.stated or related.violations):
+            count = len(related.violations)
+            found = f'{count} issue{"" if count == 1 else "s"}'
+            stated = '1 relationship,' if related.stated == 1 else f'{related.stated} relationships, each'
+            held = f'{stated} held to the larger `k_min` of its two tables, and {found}.'
+            lines += ['## relationships', '', held, '', *issue_table(related.violations)]
         return '\n'.join(lines).rstrip('\n') + '\n'
 
     def failure_message(self) -> str:
@@ -139,8 +169,9 @@ class ProfileFileCheck:
         return f'{self.profile} breaks its schema or its privacy policy in {count} place{"" if count == 1 else "s"}'
 
 
-def file_checks(path: Path) -> list[TableCheck]:
-    """The check of a table profile, or of each table of a bundle, whose violations point into the file named.
+def file_checks(path: Path) -> tuple[list[TableCheck], RelationshipsCheck | None]:
+    """The check of a table profile, or of each table and the relationships of a bundle, whose violations point into the
+    file named.
 
     A bundle's table held in its own file is checked as that file, and its violations point into it. Raises OSError
     where the file named cannot be read. A member that cannot be read is a violation, and the others are still checked.
@@ -150,24 +181,28 @@ def file_checks(path: Path) -> list[TableCheck]:
     try:
         document = to_plain(read_document(path)) if metadata is None else embedded_document(path, metadata)
     except InvalidProfile as error:
-        return [TableCheck(path.name, None, None, 0, schema_violations(error.issues))]
+        return [TableCheck(path.name, None, None, 0, schema_violations(error.issues))], None
     if not isinstance(document, dict) or document.get('kind') != 'bundle':
-        return [table_check(document, ())]
+        return [table_check(document, ())], None
     issues = check(document)
     if issues:
-        return [TableCheck(str(document.get('name')), None, None, 0, schema_violations(issues))]
+        return [TableCheck(str(document.get('name')), None, None, 0, schema_violations(issues))], None
     checks = []
+    tables: dict[str, Any] = {}
     for name, entry in document['tables'].items():
-        checks.append(table_check(entry, ('tables', name)) if not isinstance(entry, str) else member_check(path.parent / entry, name))
-    return checks
+        checked, read = member_check(path.parent / entry, name) if isinstance(entry, str) else (table_check(entry, ('tables', name)), entry)
+        checks.append(checked)
+        tables[name] = read if checked.policy is not None else None
+    return checks, relationships_check(document, tables)
 
 
-def member_check(member: Path, name: str) -> TableCheck:
-    """The check of a bundle's table held in its own file, read as a table alone, as `Bundle.load` reads it."""
+def member_check(member: Path, name: str) -> tuple[TableCheck, Any]:
+    """The check of a bundle's table held in its own file, read as a table alone, as `Bundle.load` reads it, and the
+    table's profile, None where it is not one."""
     at = pointer(('tables', name))
 
-    def refusal(code: str, detail: str) -> TableCheck:
-        return TableCheck(name, None, None, 0, [Violation(code, at, detail)])
+    def refusal(code: str, detail: str) -> tuple[TableCheck, Any]:
+        return TableCheck(name, None, None, 0, [Violation(code, at, detail)]), None
 
     if not member.is_file():
         return refusal(issue_codes.TABLE_FILE_MISSING, f'{member} is not a file; expected the table profile the bundle names')
@@ -176,7 +211,7 @@ def member_check(member: Path, name: str) -> TableCheck:
     except OSError as error:
         return refusal(issue_codes.FILE_UNREADABLE, f'{member} cannot be read: {error.strerror}; expected a readable table profile')
     except InvalidProfile as error:
-        return TableCheck(member.name, None, None, 0, schema_violations(error.issues))
+        return TableCheck(member.name, None, None, 0, schema_violations(error.issues)), None
     if not isinstance(document, dict) or document.get('kind') != 'table':
         kind = document.get('kind') if isinstance(document, dict) else type(document).__name__
         if not isinstance(document, dict):
@@ -188,7 +223,7 @@ def member_check(member: Path, name: str) -> TableCheck:
         return refusal(
             issue_codes.TABLE_NAME_MISMATCH, f'{member} is named {document.get("name")!r}; expected {name!r}, as the bundle names it'
         )
-    return table_check(document, ())
+    return table_check(document, ()), document
 
 
 def profile_file_check(source: str | os.PathLike[str]) -> ProfileFileCheck:
@@ -198,11 +233,11 @@ def profile_file_check(source: str | os.PathLike[str]) -> ProfileFileCheck:
     path = Path(source)
     try:
         if path.is_file():
-            return ProfileFileCheck.of(named, file_checks(path))
+            return ProfileFileCheck.of(named, *file_checks(path))
         if named in example_names() or named in bundle_example_names():
             resource = example_resource(named) if named in example_names() else bundle_example_resource(named)
             with importlib.resources.as_file(resource) as example:
-                return ProfileFileCheck.of(named, file_checks(example))
+                return ProfileFileCheck.of(named, *file_checks(example))
     except OSError as error:
         message = f'{named} cannot be read: {error.strerror}'
         raise InvalidArgument(issue_codes.FILE_UNREADABLE, message, field='profile', value=named) from error
@@ -212,8 +247,8 @@ def profile_file_check(source: str | os.PathLike[str]) -> ProfileFileCheck:
 
 
 def refuse_failed_check(found: Profile | Bundle) -> None:
-    """Raise ProfileFailsCheck where a table made from data fails `profile check`, before its literals leave the profile. A
-    seed was written under no policy."""
+    """Raise ProfileFailsCheck where a table made from data, or a bundle's relationship, fails `profile check`, before
+    its literals leave the profile. A seed was written under no policy, and its relationships state no fan-out or orphans."""
     tables = found.tables if isinstance(found, Bundle) else {found.document['name']: found}
     at = ('tables',) if isinstance(found, Bundle) else ()
     checks = [
@@ -221,8 +256,13 @@ def refuse_failed_check(found: Profile | Bundle) -> None:
         for name, profile in tables.items()
         if (profile.document.get('generated') or {}).get('engine') != 'import'
     ]
-    if any(result.violations for result in checks):
-        raise ProfileFailsCheck(ProfileFileCheck.of(str(found.document['name']), checks))
+    relationships = None
+    if isinstance(found, Bundle):
+        plain = found.to_plain()
+        relationships = relationships_check(plain, plain['tables'])
+    result = ProfileFileCheck.of(str(found.document['name']), checks, relationships)
+    if not result.passed:
+        raise ProfileFailsCheck(result)
 
 
 def table_check(table: Any, at: PointerParts) -> TableCheck:
@@ -309,6 +349,47 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
         detail = f'the table holds {rows} rows, and a key is stated only over {k_min}; expected no keys'
         violations.append(Violation(issue_codes.KEYS_UNDER_K_MIN, pointer((*at, 'dataset', 'keys')), detail, rule=ROWS_AT_LEAST_K_MIN))
     return TableCheck(name, policy.value, k_min, fields, violations)
+
+
+def relationships_check(bundle: dict[str, Any], tables: Mapping[str, Any]) -> RelationshipsCheck:
+    """The bundle's relationships held to the larger `k_min` of each one's tables. `tables` holds each table's profile by
+    name, None where it cannot be read.
+
+    What the file states of a relationship's rows is recomputed. A top share's parents are not stated, so it must have an
+    entry in `privacy.relationship_audit` at its pointer, matching its rule and values, whose `min_rows` reaches `k_min`.
+    """
+    audit = (bundle.get('privacy') or {}).get('relationship_audit') or []
+    audited = {entry.get('field'): index for index, entry in enumerate(audit)}
+    seen: set[int] = set()
+    violations: list[Violation] = []
+    relationships = bundle.get('relationships') or []
+    for index, relationship in enumerate(relationships):
+        at = ('relationships', index)
+        shares = top_shares(relationship, at)
+        audited_at = audited.get(shares.pointer) if shares is not None else None
+        if audited_at is not None:
+            seen.add(audited_at)
+        k_min = relationship_k_min(relationship, tables)
+        if k_min is None:
+            continue
+        for kind, fault in floor_breaks(relationship, at, tables, k_min):
+            violations.append(Violation(fault.code, pointer(fault.path), fault.message, rule=kind.rule))
+        if shares is None:
+            continue
+        if audited_at is None:
+            detail = f'no privacy.relationship_audit entry for the {shares.kind.label} at {shares.pointer}; expected one with that field'
+            violations.append(Violation(issue_codes.UNAUDITED_LITERAL, pointer(shares.path), detail, rule=shares.kind.rule))
+            continue
+        entry_at = ('privacy', 'relationship_audit', audited_at)
+        violations += audit_faults(audit[audited_at], entry_at, shares, k_min)
+        if audit[audited_at].get('min_rows') is None:
+            detail = f'the entry states no min_rows, which is all that holds the {shares.kind.label} to k_min; expected at least {k_min}'
+            violations.append(Violation(issue_codes.ROWS_NOT_STATED, pointer(entry_at), detail, rule=shares.kind.rule))
+    for index, entry in enumerate(audit):
+        if index not in seen:
+            detail = f'the bundle states no top shares at {entry.get("field")}; expected the pointer of a relationship stating some'
+            violations.append(Violation(issue_codes.STALE_AUDIT_ENTRY, pointer(('privacy', 'relationship_audit', index)), detail))
+    return RelationshipsCheck(len(relationships), violations)
 
 
 def schema_violations(issues: Sequence[Issue], at: PointerParts = ()) -> list[Violation]:

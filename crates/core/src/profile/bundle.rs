@@ -8,6 +8,7 @@ use schemars::SchemaGenerator;
 use schemars::json_schema;
 use serde::Deserialize;
 
+use super::table::DatasetAuditEntry;
 use super::table::Generated;
 use super::table::TableProfile;
 use super::values::Quantiles;
@@ -23,6 +24,15 @@ pub struct BundleProfile {
     /// Each table by name: a profile file's path relative to the bundle, or the profile inline.
     pub tables: BTreeMap<String, BundleTable>,
     pub relationships: Option<Vec<Relationship>>,
+    pub privacy: Option<BundlePrivacy>,
+}
+
+/// What holds the bundle's relationships to their tables' `k_min` where the file cannot recompute it.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BundlePrivacy {
+    /// Each relationship's `fanout/top_fractions`, with the fewest child rows any parent it counts holds.
+    pub relationship_audit: Option<Vec<DatasetAuditEntry>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]

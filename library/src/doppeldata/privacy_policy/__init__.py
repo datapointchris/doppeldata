@@ -9,10 +9,13 @@ from doppeldata.privacy_policy.column_treatment import Treatment
 from doppeldata.privacy_policy.column_treatment import column_treatment
 from doppeldata.privacy_policy.column_treatment import restricted_zip_prefixes
 from doppeldata.privacy_policy.file_check import ProfileFileCheck
+from doppeldata.privacy_policy.file_check import RelationshipsCheck
 from doppeldata.privacy_policy.file_check import TableCheck
 from doppeldata.privacy_policy.file_check import Violation
 from doppeldata.privacy_policy.file_check import file_checks
+from doppeldata.privacy_policy.file_check import relationships_check
 from doppeldata.privacy_policy.file_check import table_check
+from doppeldata.privacy_policy.withholding import audited_relationships
 from doppeldata.privacy_policy.withholding import withheld
 
 __all__ = [
@@ -22,11 +25,14 @@ __all__ = [
     'ColumnFacts',
     'Policy',
     'ProfileFileCheck',
+    'RelationshipsCheck',
     'TableCheck',
     'Treatment',
     'Violation',
+    'audited_relationships',
     'column_treatment',
     'file_checks',
+    'relationships_check',
     'restricted_zip_prefixes',
     'table_check',
     'withheld',

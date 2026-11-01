@@ -1,4 +1,5 @@
-"""The privacy policy applied to a computed profile: what each column withholds, then the audit of every literal kept.
+"""The privacy policy applied to a computed profile: what each column withholds, then the audit of every literal kept,
+and of a bundle's top shares.
 
 It reads the profile's own fields and no data, so every profiling backend inherits it unchanged. A rule that needs
 data, such as a ZIP code's prefixes or a date's gap rate over whole years, is computed by the statistics pass the
@@ -6,6 +7,7 @@ policy asks it of. The written profile is checked as `profile check` checks it, 
 the check fails.
 """
 
+from collections.abc import Mapping
 from typing import Any
 
 from doppeldata.privacy_policy.column_treatment import ColumnFacts
@@ -13,6 +15,7 @@ from doppeldata.privacy_policy.column_treatment import Policy
 from doppeldata.privacy_policy.column_treatment import Treatment
 from doppeldata.privacy_policy.column_treatment import column_treatment
 from doppeldata.privacy_policy.column_treatment import oldest_birth_year
+from doppeldata.privacy_policy.file_check import relationships_check
 from doppeldata.privacy_policy.file_check import table_check
 from doppeldata.privacy_policy.literal_fields import EXACT
 from doppeldata.privacy_policy.literal_fields import ROWS_AT_LEAST_K_MIN
@@ -21,6 +24,7 @@ from doppeldata.privacy_policy.literal_fields import column_literals
 from doppeldata.privacy_policy.literal_fields import dataset_literals
 from doppeldata.privacy_policy.literal_fields import faults
 from doppeldata.privacy_policy.literal_fields import min_rows
+from doppeldata.privacy_policy.relationship_floors import top_shares
 from doppeldata.privacy_policy.treatment_rules import amend
 from doppeldata.privacy_policy.treatment_rules import capped_age_quantiles
 from doppeldata.privacy_policy.treatment_rules import conditional_faults
@@ -28,6 +32,7 @@ from doppeldata.privacy_policy.treatment_rules import lag_faults
 from doppeldata.privacy_policy.treatment_rules import lookup_faults
 from doppeldata.privacy_policy.treatment_rules import refused
 from doppeldata.profile_format import GIVEN_LISTS
+from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import PointerParts
 
 
@@ -131,6 +136,30 @@ def withheld(
         listed = '; '.join(f'{violation.field}: {violation.message}' for violation in broken)
         raise RuntimeError(f'the {policy} profile of {document.get("name")} breaks its own policy: {listed}')
     return document
+
+
+def audited_relationships(bundle: Bundle, policy: Policy, top_share_floors: Mapping[int, int]) -> None:
+    """Write the bundle's `privacy.relationship_audit`: an entry for each relationship's top shares, whose `min_rows` is
+    the fewest child rows any parent they count holds, which `top_share_floors` holds by the relationship's index. The
+    file states each share and not its parents' rows, so the entry is what holds them to `k_min`. `none` audits nothing.
+
+    Raises RuntimeError where a relationship written breaks the floor, which is a fault in doppeldata.
+    """
+    if policy is Policy.NONE:
+        return
+    audit = []
+    for index, relationship in enumerate(bundle.document.get('relationships') or []):
+        shares = top_shares(relationship, ('relationships', index))
+        if shares is not None:
+            entry = {'field': shares.pointer, 'values': shares.values, 'rule': shares.kind.rule, 'min_rows': top_share_floors[index]}
+            audit.append(entry)
+    if audit:
+        bundle.document['privacy'] = {'relationship_audit': audit}
+    plain = bundle.to_plain()
+    broken = relationships_check(plain, plain['tables']).violations
+    if broken:
+        listed = '; '.join(f'{violation.field}: {violation.message}' for violation in broken)
+        raise RuntimeError(f'the {policy} bundle {bundle.name} breaks its own policy: {listed}')
 
 
 def drop(document: dict[str, Any], path: PointerParts, kind: FieldKind, failing: set[PointerParts]) -> None:

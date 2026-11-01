@@ -113,8 +113,12 @@ $ doppeldata data check shop.bundle.yaml shop/
 ## Edit a relationship in the bundle, or bend it for one run with a scenario
 
 - **Every relationship field is read as written**, so a reviewer edits a fan-out quantile, an
-  orphan rate or a busiest parent's share in the YAML. `profile check` then holds the edit to the
-  model, and refuses a `top10` below `top1` as `E-PROFILE-122`.
+  orphan rate or a busiest parent's share in the YAML. `data plan` then holds the edit to the model,
+  and refuses a `top10` below `top1` as `E-PROFILE-122`.
+- **`profile check` holds each relationship to its tables' `k_min` too.** A quantile within `k_min`
+  parents of an end, or orphans under `k_min` rows, is `E-POLICY-007`. A share added to
+  `top_fractions` needs its entry in the bundle's `privacy.relationship_audit` to count it, with the
+  fewest child rows any parent it counts holds as `min_rows`.
 - **Deleting an `inherited` entry or an `ordinal` draws that column from its own profile.**
   Deleting a relationship draws the foreign key from its column's profile, so it joins only by
   chance.

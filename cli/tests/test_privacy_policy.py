@@ -3,6 +3,7 @@ import json
 import random
 
 import polars as pl
+from doppeldata import Bundle
 from doppeldata import Profile
 from doppeldata.example_profiles import example_resource
 from doppeldata_cli.main import app
@@ -65,6 +66,31 @@ def test_profile_check_names_each_key_no_section_declares_by_its_pointer_in_a_bu
         ('E-PROFILE-006', '/tables/orders/nmae'),
         ('E-PROFILE-006', '/tables/orders/dataset/row_cnt'),
         ('E-PROFILE-006', '/tables/orders/columns/0/nul_rate'),
+    }
+
+
+def test_profile_check_holds_a_bundle_s_relationship_to_its_tables_k_min(tmp_path):
+    runner = CliRunner()
+    passed = runner.invoke(app, ['profile', 'check', 'orders-customers'])
+    assert passed.exit_code == 0, passed.output
+
+    bundle = Bundle.example('orders-customers').to_plain()
+    bundle['tables']['customers']['dataset']['rows'] = 1000
+    [relationship] = bundle['relationships']
+    relationship['orphan_fraction'] = 0.00001
+    relationship['fanout']['quantiles'] = {'p001': 0.0, **relationship['fanout']['quantiles']}
+    bundle['privacy']['relationship_audit'][0]['min_rows'] = 5
+    path = tmp_path / 'shop.json'
+    path.write_text(json.dumps(bundle))
+    failed = runner.invoke(app, ['profile', 'check', str(path), '--json'])
+
+    assert failed.exit_code == 3, failed.output
+    issues = json.loads(failed.stdout)['relationships']['issues']
+    assert {(issue['code'], issue['field']) for issue in issues} == {
+        ('E-POLICY-007', '/relationships/0/fanout/quantiles/p001'),
+        ('E-POLICY-007', '/relationships/0/orphan_fraction'),
+        ('E-POLICY-007', '/relationships/0/containment'),
+        ('E-POLICY-007', '/privacy/relationship_audit/0/min_rows'),
     }
 
 

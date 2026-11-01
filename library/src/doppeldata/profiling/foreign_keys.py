@@ -51,16 +51,27 @@ class BundleMember:
 
 @dc.dataclass(frozen=True)
 class Reference:
-    """Child columns found to refer to a parent's key, and the relationship written for them."""
+    """Child columns found to refer to a parent's key, the relationship written for them, and the child rows of the
+    last parent its busiest stated top share counts, None where it states none."""
 
     child: BundleMember
     columns: tuple[str, ...]
     parent: BundleMember
     keys: tuple[str, ...]
     written: dict[str, Any]
+    top_share_rows: int | None
 
 
-def relationships(backend: Backend, members: list[BundleMember], k_min: int) -> list[dict[str, Any]]:
+@dc.dataclass(frozen=True)
+class FoundRelationships:
+    """Every foreign key found between a bundle's tables as the bundle writes it, and by its index, the fewest child rows
+    any parent its top shares count holds, where it states one."""
+
+    written: list[dict[str, Any]] = dc.field(default_factory=list)
+    top_share_floors: dict[int, int] = dc.field(default_factory=dict)
+
+
+def relationships(backend: Backend, members: list[BundleMember], k_min: int) -> FoundRelationships:
     """Every foreign key between the members, in the order of the tables and their columns, each with the columns its
     child copies from the parent row."""
     found = []
@@ -70,9 +81,9 @@ def relationships(backend: Backend, members: list[BundleMember], k_min: int) -> 
                 continue
             for keys in parent_keys(parent.document):
                 for columns in referring_columns(child, parent, keys):
-                    written = measured_relationship(backend, child, columns, parent, keys, k_min, contained_only=True)
-                    if written:
-                        found.append(Reference(child, columns, parent, keys, written))
+                    measured = measured_relationship(backend, child, columns, parent, keys, k_min, contained_only=True)
+                    if measured:
+                        found.append(Reference(child, columns, parent, keys, *measured))
     kept = one_way(found, members)
     drawn = {(reference.child.name, column) for reference in kept for column in reference.columns}
     for reference in kept:
@@ -82,7 +93,8 @@ def relationships(backend: Backend, members: list[BundleMember], k_min: int) -> 
         ordinal = ordinal_column(backend, reference.child, reference.columns, drawn)
         if ordinal:
             reference.written['ordinal'] = ordinal
-    return [reference.written for reference in kept]
+    floors = {index: reference.top_share_rows for index, reference in enumerate(kept) if reference.top_share_rows is not None}
+    return FoundRelationships([reference.written for reference in kept], floors)
 
 
 def referring_columns(child: BundleMember, parent: BundleMember, keys: tuple[str, ...]) -> list[tuple[str, ...]]:
@@ -108,9 +120,10 @@ def measured_relationship(
     k_min: int,
     *,
     contained_only: bool,
-) -> dict[str, Any] | None:
-    """The relationship of `columns` to the parent's `keys`, counted over every row of both. Where `contained_only`, None
-    where the parent holds under `CONTAINMENT_FLOOR` of the child's values."""
+) -> tuple[dict[str, Any], int | None] | None:
+    """The relationship of `columns` to the parent's `keys`, counted over every row of both, and the child rows of the
+    last parent its busiest stated top share counts. Where `contained_only`, None where the parent holds under
+    `CONTAINMENT_FLOOR` of the child's values."""
     counts = backend.foreign_key_counts(child.table, list(columns), parent.table, list(keys))
     child_refs = [f'{child.name}.{column}' for column in columns]
     parent_refs = [f'{parent.name}.{key}' for key in keys]
@@ -234,9 +247,9 @@ def refers_to(column: str, child_table: str, parent_table: str, key: str) -> boo
 
 def written_relationship(
     child: list[str], parent: list[str], counts: list[tuple[bool, int, int]], k_min: int, *, contained_only: bool = True
-) -> dict[str, Any] | None:
-    """The relationship the counts make, or where `contained_only`, None where the parent holds too few of the child's
-    values.
+) -> tuple[dict[str, Any], int | None] | None:
+    """The relationship the counts make, and the child rows of the last parent its busiest stated top share counts, or
+    where `contained_only`, None where the parent holds too few of the child's values.
 
     Orphan rows fewer than k_min are written as none, so neither rate names them.
     """
@@ -254,16 +267,17 @@ def written_relationship(
         'orphan_fraction': 0.0 if floored else rate(orphan_rows, child_rows),
         'cardinality': 'one_to_one' if all(rows <= 1 for _, rows, values in counts if values) else 'many_to_one',
     }
-    fanout = fanout_of(sorted((rows, values) for held, rows, values in counts if held), k_min)
+    fanout, top_share_rows = fanout_of(sorted((rows, values) for held, rows, values in counts if held), k_min)
     if fanout:
         written['fanout'] = fanout
-    return written
+    return written, top_share_rows
 
 
-def fanout_of(parents: list[tuple[int, int]], k_min: int) -> dict[str, Any]:
+def fanout_of(parents: list[tuple[int, int]], k_min: int) -> tuple[dict[str, Any], int | None]:
     """The child rows of each parent value, as quantiles held k_min parents from each end, the busiest parents' shares of
-    the child rows where each of them holds k_min, and a Zipf exponent. `parents` pairs child rows with the parents
-    holding that many, rising."""
+    the child rows where each of them holds k_min, and a Zipf exponent. Beside it, the child rows of the last parent the
+    busiest stated share counts, None where none is stated. `parents` pairs child rows with the parents holding that
+    many, rising."""
     held = sum(values for _, values in parents)
     matched = sum(rows * values for rows, values in parents)
     fanout: dict[str, Any] = {}
@@ -276,15 +290,18 @@ def fanout_of(parents: list[tuple[int, int]], k_min: int) -> dict[str, Any]:
         fanout['quantiles'] = quantiles
     busiest = sorted(parents, reverse=True)
     shares = {}
+    fewest = None
     for name, count in TOP_SHARES.items():
-        if count <= held and matched and rank_value(busiest, count - 1) >= k_min:
+        last = rank_value(busiest, count - 1) if count <= held and matched else 0
+        if last >= k_min:
             shares[name] = rate(sum_of_busiest(busiest, count), matched)
+            fewest = last if fewest is None else min(fewest, last)
     if shares:
         fanout['top_fractions'] = shares
     exponent = zipf_exponent([(rows, values) for rows, values in busiest if rows])
     if exponent is not None:
         fanout['zipf_s'] = significant(exponent, RATE_DIGITS) + 0.0
-    return fanout
+    return fanout, fewest
 
 
 def rank_value(runs: list[tuple[int, int]], index: int) -> int:

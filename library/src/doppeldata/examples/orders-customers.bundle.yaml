@@ -158,3 +158,6 @@ relationships:
       top_fractions: {top10: 0.003}
     inherited:
       - {child: region, parent: region, agreement_fraction: 0.995}
+privacy:
+  relationship_audit:
+    - {field: /relationships/0/fanout/top_fractions, values: 1, rule: "cell >= k_min", min_rows: 160}

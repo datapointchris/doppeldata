@@ -1041,7 +1041,8 @@ def profile_check(profile_name: ProfileArgument, as_json: JsonOption = False) ->
     """Check a profile against its schema and privacy policy, from the file alone.
 
     It prints GitHub Markdown, a table of each issue at its field with what was found, and exits 3 on any. Every literal
-    must be listed in privacy.audit and meet its rule, counted as a rate of the rows the profile describes.
+    must be listed in privacy.audit and meet its rule, counted as a rate of the rows the profile describes. A bundle's
+    relationships are held to their tables' k_min, and their top shares must be listed in privacy.relationship_audit.
     """
     report = profile_file_check(profile_name)
     typer.echo(report.to_json() if as_json else report.to_markdown(), nl=False)

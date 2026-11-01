@@ -498,7 +498,7 @@
           "const": "count >= k_min"
         },
         {
-          "description": "Each histogram bin, overflow count or calendar share holds no rows or at least `k_min`.",
+          "description": "Each histogram bin, overflow count or calendar share holds no rows or at least `k_min`, and so does\neach parent a relationship's top share counts.",
           "type": "string",
           "const": "cell >= k_min"
         },
@@ -535,11 +535,11 @@
       ]
     },
     "DatasetAuditEntry": {
-      "description": "One dataset-level field a floor holds, and the rule it met.",
+      "description": "One field outside any column a floor holds, and the rule it met.",
       "type": "object",
       "properties": {
         "field": {
-          "description": "The RFC 6901 pointer to the field from the profile's root, such as `/dataset/conditionals/0`.",
+          "description": "The RFC 6901 pointer to the field from the profile's root, such as `/dataset/conditionals/0`, or\nfrom a bundle's, such as `/relationships/0/fanout/top_fractions`.",
           "type": "string"
         },
         "values": {
@@ -3372,6 +3372,16 @@
           "items": {
             "$ref": "#/$defs/Relationship"
           }
+        },
+        "privacy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BundlePrivacy"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -3590,6 +3600,23 @@
         "parent",
         "agreement_fraction"
       ]
+    },
+    "BundlePrivacy": {
+      "description": "What holds the bundle's relationships to their tables' `k_min` where the file cannot recompute it.",
+      "type": "object",
+      "properties": {
+        "relationship_audit": {
+          "description": "Each relationship's `fanout/top_fractions`, with the fewest child rows any parent it counts holds.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DatasetAuditEntry"
+          }
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

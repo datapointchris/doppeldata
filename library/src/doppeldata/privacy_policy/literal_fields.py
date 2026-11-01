@@ -54,6 +54,8 @@ class FieldKind(enum.Enum):
     CONDITIONAL_RATES = ('conditional_fractions', 'cell >= k_min', 'conditional rates')
     DEPENDENCY = ('dependency', 'lhs >= k_min', 'functional dependency')
     LAG = ('lag', 'k_min rows from each end', 'lag')
+    ORPHAN_ROWS = ('orphan_rows', 'cell >= k_min', 'orphan rows')
+    TOP_SHARES = ('top_shares', 'cell >= k_min', 'top shares')
 
     @property
     def rule(self) -> str:
@@ -64,8 +66,9 @@ class FieldKind(enum.Enum):
         return self.value[2]
 
 
-# Every field of a column and of each statistics section in it, with the kind of literal it holds, or None where it
-# holds no data value and no count finer than the column. `literal_fields` reads each field named here with a kind.
+# Every field of a column, of each statistics section in it, of the dataset and of a bundle's relationship, with the
+# kind of literal it holds, or None where it holds no data value and no count finer than the column. `literal_fields`,
+# `dataset_literals` and `relationship_floors` read each field named here with a kind.
 FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
     'Column': dict.fromkeys(
         (
@@ -132,6 +135,11 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
         'conditional_fractions': FieldKind.CONDITIONAL_RATES,
         'dependencies': FieldKind.DEPENDENCY,
     },
+    # A containment under 1 states orphan keys, so it rests on the orphan rows. An inherited column's agreement is
+    # written to four significant digits, too coarse to count the disagreeing rows from.
+    'Relationship': dict.fromkeys(('from', 'to', 'cardinality', 'fanout', 'inherited', 'ordinal'))
+    | {'containment': FieldKind.ORPHAN_ROWS, 'orphan_fraction': FieldKind.ORPHAN_ROWS},
+    'Fanout': {'quantiles': FieldKind.QUANTILES, 'top_fractions': FieldKind.TOP_SHARES, 'zipf_s': None},
 }
 
 

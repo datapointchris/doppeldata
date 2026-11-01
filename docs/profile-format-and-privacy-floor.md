@@ -64,7 +64,9 @@ A relationship stores its fan-out as shares and quantiles, never key values. So 
 into synthetic data while no key leaves the source. Its quantiles stay `k_min` parents clear of each
 end, and a top share is stated only where its last parent holds `k_min` child rows. Where fewer than
 `k_min` child rows are orphans, `containment` is written as 1 and `orphan_fraction` as 0. An `inherited`
-entry states an agreement and an `ordinal` a column's name, so neither holds a literal.
+entry states an agreement and an `ordinal` a column's name, so neither holds a literal. The bundle's
+`privacy.relationship_audit` gives each relationship's top shares the fewest child rows any parent
+they count holds, because the file states only the share.
 
 ## Generated files name the profile they came from
 
@@ -157,10 +159,18 @@ privacy:
     - {field: /dataset/conditionals/0, values: 7, rule: "cell >= k_min", min_rows: 16}
 ```
 
+A bundle lists each relationship's top shares the same way, beside its tables:
+
+```yaml
+privacy:
+  relationship_audit:
+    - {field: /relationships/0/fanout/top_fractions, values: 1, rule: "cell >= k_min", min_rows: 160}
+```
+
 An `audit` entry's `field` is the field's RFC 6901 pointer within its column, so reordering the
 columns or adding one leaves every other entry true. A `dataset_audit` entry's `field` points from
 the profile's root, at a conditional table, conditional quantiles or rates, or a functional
-dependency. A lag's entry is in `audit`, at `/derived/lag` in its column. `values` counts the literals
+dependency. A `relationship_audit` entry's points from the bundle's root. A lag's entry is in `audit`, at `/derived/lag` in its column. `values` counts the literals
 it holds, and `min_rows` is the fewest rows any of them or any cell of it rests on. A
 suppression's `reason` is one of the `SuppressionReason` values `doppeldata schemas show profile`
 prints.
@@ -180,9 +190,13 @@ Each kind of field is admitted by one rule:
 | conditional quantiles, a lag | `k_min rows from each end` | nothing: the entry's `min_rows` reaches `k_min` |
 | conditional rates | `cell >= k_min` | nothing: each given value is one its column lists, and the entry's `min_rows` reaches `k_min` |
 | a functional dependency | `lhs >= k_min` | nothing: each lookup key and value is one its column lists, and the entry's `min_rows` reaches `k_min` |
+| a relationship's fan-out quantiles | `k_min rows from each end` | the parents between each quantile and the nearer end of the parent table's rows, its own counted |
+| a relationship's `orphan_fraction` and `containment` | `cell >= k_min` | the orphan rows, `orphan_fraction` times the child table's rows, which may be 0, and below `k_min` a `containment` of 1 |
+| a relationship's top shares | `cell >= k_min` | nothing: the entry's `min_rows` reaches `k_min` |
 
 An integer identifier's digit bounds hold no data value, so they are not a literal. Nor does an
-expression, which names columns and numbers.
+expression, which names columns and numbers. A relationship's quantiles and orphans have no audit
+entry, because the check recomputes them whole.
 
 `privacy.withheld` lists each dataset-level field left out for a floor it failed. A table of fewer
 than `k_min` rows states no `keys`, because a key's uniqueness rests on every row:
@@ -227,14 +241,37 @@ child value is one its column lists, neither column's list is withheld, no quasi
 part under `strict` or `healthcare`, and an entry at the table's pointer states a `min_rows` of at
 least `k_min`.
 
-A bundle is checked table by table, each table held in its own file read as that file. A
-member file that is a bundle, names itself other than its key, or cannot be read is a violation at
-`/tables/<name>`, and the other tables are still checked.
+A relationship's top shares are the cell the check cannot recompute, so it trusts the entry's
+`min_rows` for them, as it does a conditional table's. The file states each share and not the
+parents it counts. The check holds what the file does state, at the larger `k_min` of the
+relationship's two tables:
+
+- each fan-out quantile lies at least `k_min` parents from each end of the parent table's
+  `dataset.rows`;
+- `orphan_fraction` times the child table's `dataset.rows` is 0 or at least `k_min`, and a
+  `containment` under 1, which states orphan keys, needs those rows to reach `k_min`;
+- an entry in the bundle's `privacy.relationship_audit` at the top shares' pointer counts each share
+  stated, and states a `min_rows` of at least `k_min`.
+
+`orphan_fraction` is a share of the child rows holding a whole key, and the check takes it of every
+row of the child table. A sampled table's `null_fraction` is the sample's, while a relationship is
+counted over every row, so the null keys cannot be taken out exactly. The check therefore counts at
+least the orphan rows the profiler did. An `inherited` agreement is not held. It is written to four significant
+digits, too coarse to count fewer than `k_min` disagreeing rows from. A relationship of a table
+under `none` or `dp` is not held either, because that table's own check reports its policy.
+
+A bundle is checked table by table, each table held in its own file read as that file, then
+relationship by relationship. A member file that is a bundle, names itself other than its key, or
+cannot be read is a violation at `/tables/<name>`, and the other tables are still checked. A
+relationship's violation sits at its pointer, such as `/relationships/0/fanout/quantiles/p01`, or at
+its audit entry.
 
 It exits 0 when clean and 3 on a violation, because a violation needs a person. A file it cannot
 read is a usage error, exit 2. It prints GitHub Markdown, a table per profile table of each issue
-at its field, what was found, and the hint. `--json` prints `passed` and each table's `issues`, each
-an issue as [issue-codes.md](issue-codes.md) describes one, with `rule` and `treatment` beside it.
+at its field, what was found, and the hint, then a bundle's relationships' issues. `--json` prints
+`passed`, each table's `issues`, and `relationships`, which is null for a table profile and for a
+bundle holds `stated` and its `issues`. Each is an issue as [issue-codes.md](issue-codes.md)
+describes one, with `rule` and `treatment` beside it.
 `field` is an RFC 6901 pointer, `rule` is the audit rule the field is held to, and `treatment` is
 the column's suppression reason, each null where none applies. So a CI job can run it on every
 committed profile.

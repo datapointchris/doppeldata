@@ -220,11 +220,12 @@ pub struct AuditEntry {
     pub min_rows: Option<u64>,
 }
 
-/// One dataset-level field a floor holds, and the rule it met.
+/// One field outside any column a floor holds, and the rule it met.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetAuditEntry {
-    /// The RFC 6901 pointer to the field from the profile's root, such as `/dataset/conditionals/0`.
+    /// The RFC 6901 pointer to the field from the profile's root, such as `/dataset/conditionals/0`, or
+    /// from a bundle's, such as `/relationships/0/fanout/top_fractions`.
     pub field: String,
     /// How many cells or counted values the field holds.
     pub values: Option<u64>,
@@ -239,7 +240,8 @@ pub enum AuditRule {
     /// Each listed value or shape is held by at least `k_min` rows, and the remainder by none or `k_min`.
     #[serde(rename = "count >= k_min")]
     CountAtLeastKMin,
-    /// Each histogram bin, overflow count or calendar share holds no rows or at least `k_min`.
+    /// Each histogram bin, overflow count or calendar share holds no rows or at least `k_min`, and so does
+    /// each parent a relationship's top share counts.
     #[serde(rename = "cell >= k_min")]
     CellAtLeastKMin,
     /// The extremes are the values at rank `k_min` from each end.

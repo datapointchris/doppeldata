@@ -28,6 +28,7 @@ from doppeldata.errors import ProfilingWarning
 from doppeldata.errors import SourceError
 from doppeldata.privacy_policy import APPLIED_POLICIES
 from doppeldata.privacy_policy import Policy
+from doppeldata.privacy_policy import audited_relationships
 from doppeldata.profile_format import DERIVED_FROM
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
@@ -343,7 +344,8 @@ def profiled_bundle(
     profiled, relationships, _ = profiled_tables(backend, tables, settings, None, related=True)
     for listed, _ in listings:
         sources.check_unchanged(listed)
-    bundle = Bundle.of(bundle_name([listed for listed, _ in listings]), profiled, relationships)
+    bundle = Bundle.of(bundle_name([listed for listed, _ in listings]), profiled, relationships.written)
+    audited_relationships(bundle, settings.policy, relationships.top_share_floors)
     issues = bundle.validate()
     if issues:
         raise InvalidProfile(f'the profile of {data!r}', issues)
@@ -417,7 +419,7 @@ def profiled_tables(
     *,
     related: bool = False,
     type_mix_columns: frozenset[str] = frozenset(),
-) -> tuple[dict[str, Profile], list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+) -> tuple[dict[str, Profile], foreign_keys.FoundRelationships, dict[str, list[dict[str, Any]]]]:
     """Each table's profile by its name, each source beside the readers that read it, and where `related`, the foreign
     keys between them, counted in the same session, which holds every table's rows until it ends. Each string column
     `type_mix_columns` names is typed by its text. Last, each table's conditional tables `frozen` asks to count without
@@ -440,7 +442,7 @@ def profiled_tables(
                 type_mix_columns=type_mix_columns,
             )
         members = [foreign_keys.BundleMember(name, table.table, table.specs, table.document) for name, table in profiled.items()]
-        relationships = foreign_keys.relationships(backend, members, k_min) if related else []
+        relationships = foreign_keys.relationships(backend, members, k_min) if related else foreign_keys.FoundRelationships()
     profiles = {name: Profile(table.document) for name, table in profiled.items()}
     return profiles, relationships, {name: table.conditionals_without_floor for name, table in profiled.items()}
 
