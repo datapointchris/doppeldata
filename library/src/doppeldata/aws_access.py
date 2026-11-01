@@ -34,7 +34,7 @@ UNANSWERED_ERRORS = (
     botocore.exceptions.ReadTimeoutError,
     botocore.exceptions.ConnectionClosedError,
 )
-CREDENTIAL_ADVICE = 'run `aws sso login`, or set AWS_PROFILE to a profile with credentials'
+CREDENTIAL_ADVICE = 'run `aws sso login`, or name an AWS profile that holds credentials'
 THROTTLED = ThrottledRetryableChecker()
 
 

@@ -567,20 +567,30 @@ class Profile:
 
     @classmethod
     def from_glue(
-        cls, database: str, table: str, *, region: str | None = None, detected_entities: Mapping[str, Sequence[str]] | None = None
+        cls,
+        database: str,
+        table: str,
+        *,
+        region: str | None = None,
+        detected_entities: Mapping[str, Sequence[str]] | None = None,
+        aws_profile: str | None = None,
     ) -> 'Profile':
         """A seed of a Glue Data Catalog table: its columns, format, CSV dialect and header, and partition keys drawing
         the values the catalog lists, else those its partition projection declares.
 
-        Reads `glue:GetTable` and `glue:GetPartitions` through boto3, in `region` or the AWS environment's. The library
+        Reads `glue:GetTable` and `glue:GetPartitions` through boto3, in `region` or the AWS environment's, with the
+        credentials of the AWS profile `aws_profile` names, else of AWS_PROFILE and boto3's default chain. A profile the
+        AWS config lacks raises InvalidArgument. The library
         does not install boto3. Without it the call raises PackagesMissing, which names how to install it.
         `detected_entities` maps a column to the Glue entity types `classifyColumns` found in it, such as
         `{'email': ['EMAIL']}`, and gives it the type the shipped detector pack declares for the first. A key naming no
         column raises SourceError. The packs import pyarrow, so `detected_entities` needs it installed.
         """
+        from doppeldata.aws_sessions import aws_profile_chosen
         from doppeldata.seed_profiles.glue_catalog import glue_profile
 
-        return glue_profile(database, table, region=region, detected_entities=detected_entities)
+        with aws_profile_chosen(aws_profile):
+            return glue_profile(database, table, region=region, detected_entities=detected_entities)
 
     @classmethod
     def from_odcs(cls, path: str | Path, *, table: str | None = None) -> 'Profile':

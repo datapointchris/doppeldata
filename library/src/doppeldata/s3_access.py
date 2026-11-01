@@ -1,17 +1,18 @@
-"""How doppeldata reaches S3: through boto3, with the credentials, region and endpoint its chain resolves from the AWS environment.
+"""How doppeldata reaches S3: through boto3, with the credentials, region and endpoint its chain resolves for the AWS profile
+a call names, else from the AWS environment.
 
 Profiling lists and reads S3 with boto3 itself. A write uploads through the engine's object store, which takes its credentials
 from a callable over boto3's, so an SSO profile or any other source boto3 reads works for both.
 """
 
 import datetime as dt
+import logging
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urlsplit
 
-import boto3
 import botocore.credentials
 import botocore.exceptions
 
@@ -26,8 +27,12 @@ from doppeldata.aws_access import answered
 from doppeldata.aws_access import http_status
 from doppeldata.aws_access import no_answer
 from doppeldata.aws_access import unanswered
+from doppeldata.aws_sessions import aws_session
+from doppeldata.aws_sessions import profile_in_force
 from doppeldata.errors import InvalidArgument
 from doppeldata.errors import WriteFailed
+
+log = logging.getLogger(__name__)
 
 # The store asks for refreshable credentials again this often. botocore refreshes them at least ten minutes before they expire, so
 # each answer outlives the interval.
@@ -40,13 +45,13 @@ def endpoint_variable() -> str | None:
 
 
 def s3_session() -> tuple[Any, Any]:
-    """boto3's session and S3 client for the AWS environment.
+    """boto3's session and S3 client for the AWS profile the call chose, else the AWS environment's.
 
     Raises InvalidArgument naming the setting boto3 cannot use: an AWS_PROFILE the AWS config does not hold, or an endpoint that
     is not a URL.
     """
     try:
-        session = boto3.Session()
+        session = aws_session()
         return session, session.client('s3', config=CLIENT_CONFIG)
     except botocore.exceptions.ProfileNotFound as error:
         message = f'{error}; set AWS_PROFILE to a profile the AWS config holds'
@@ -64,7 +69,7 @@ def endpoint_named(client: Any) -> str:
         return f'{endpoint} (from {chosen_by})'
     if (urlsplit(endpoint).hostname or '').endswith(('.amazonaws.com', '.amazonaws.com.cn')):
         return f'{endpoint} (the AWS endpoint for region {client.meta.region_name})'
-    return f'{endpoint} (from AWS profile {os.environ.get("AWS_PROFILE", "default")})'
+    return f'{endpoint} (from AWS profile {profile_in_force()})'
 
 
 class Boto3Credentials:
@@ -129,6 +134,7 @@ def s3_store_settings(url: str, bucket: str) -> dict[str, Any]:
     client_options: dict[str, Any] = {'connect_timeout': CONNECT_TIMEOUT}
     if endpoint.startswith('http://'):
         client_options['allow_http'] = True
+    log.info('%s: uploading through %s in region %s, with AWS profile %s', url, endpoint, region, profile_in_force())
     return {
         'config': {'region': region, 'endpoint': endpoint},
         'client_options': client_options,

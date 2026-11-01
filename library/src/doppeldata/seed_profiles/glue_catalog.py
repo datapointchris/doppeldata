@@ -9,6 +9,7 @@ draws each key's projected values where the projection lists them or bounds them
 import contextlib
 import dataclasses as dc
 import importlib
+import logging
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
@@ -29,6 +30,8 @@ from doppeldata.seed_profiles.declared_columns import warn_left_out
 from doppeldata.seed_profiles.declared_tables import DeclaredTable
 from doppeldata.seed_profiles.declared_tables import PartitionKey
 from doppeldata.seed_profiles.hive_types import hive_column
+
+log = logging.getLogger(__name__)
 
 # A table's `classification`, as a crawler writes it, and the source format it names. ORC and Avro are left out,
 # because doppeldata writes neither.
@@ -85,17 +88,22 @@ def glue_profile(
         if described.get('PartitionKeys'):
             pages = client.get_paginator('get_partitions').paginate(**located, TableName=described['Name'], ExcludeColumnSchema=True)
             partitions = [partition['Values'] for page in pages for partition in page['Partitions']]
+    columns = len(described.get('StorageDescriptor', {}).get('Columns') or [])
+    log.info('%s: %d columns and %d listed partitions, read through %s', named, columns, len(partitions), client.meta.endpoint_url)
     return catalog_table(described, partitions, named, detected_entities or {}).profile()
 
 
 def glue_client(region: str | None) -> Any:
-    """A Glue client of the AWS environment's, in `region` where it is given."""
-    boto3 = importlib.import_module('boto3')
+    """A Glue client of the AWS profile the call chose, else the AWS environment's, in `region` where it is given."""
     exceptions = importlib.import_module('botocore.exceptions')
     from doppeldata.aws_access import CLIENT_CONFIG
+    from doppeldata.aws_sessions import aws_session
+    from doppeldata.aws_sessions import profile_in_force
 
     try:
-        return boto3.Session().client('glue', region_name=region, config=CLIENT_CONFIG)
+        client = aws_session().client('glue', region_name=region, config=CLIENT_CONFIG)
+        log.info('reading the Glue Data Catalog in region %s, with AWS profile %s', client.meta.region_name, profile_in_force())
+        return client
     except exceptions.NoRegionError as error:
         message = "the Glue Data Catalog is regional, and the AWS environment names no region; give the catalog's, or set AWS_REGION"
         raise SourceError(issue_codes.GLUE_REGION, message, role='region') from error
