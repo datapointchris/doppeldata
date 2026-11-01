@@ -8,12 +8,14 @@ use std::sync::Arc;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use strum::IntoEnumIterator;
 
 use crate::profile::provenance;
 
 /// The format, under `format`, and that format's settings, under `writer`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, strum::EnumDiscriminants)]
 #[serde(tag = "format", content = "writer", rename_all = "snake_case")]
+#[strum_discriminants(name(OutputFormat), doc = "Each format, as `format` names it.", derive(strum::EnumIter))]
 pub enum Output {
     Parquet(ParquetSettings),
     Arrow(ArrowSettings),
@@ -45,15 +47,17 @@ impl Output {
     }
 
     /// Every format under its default settings, in the order `format` lists them.
-    pub fn every_format() -> [Self; 6] {
-        [
-            Self::Parquet(ParquetSettings::default()),
-            Self::Arrow(ArrowSettings::default()),
-            Self::Csv(DelimitedSettings::default()),
-            Self::Tsv(DelimitedSettings::default()),
-            Self::Json(JsonSettings::default()),
-            Self::Ndjson(JsonSettings::default()),
-        ]
+    pub fn every_format() -> Vec<Self> {
+        OutputFormat::iter()
+            .map(|format| match format {
+                OutputFormat::Parquet => Self::Parquet(ParquetSettings::default()),
+                OutputFormat::Arrow => Self::Arrow(ArrowSettings::default()),
+                OutputFormat::Csv => Self::Csv(DelimitedSettings::default()),
+                OutputFormat::Tsv => Self::Tsv(DelimitedSettings::default()),
+                OutputFormat::Json => Self::Json(JsonSettings::default()),
+                OutputFormat::Ndjson => Self::Ndjson(JsonSettings::default()),
+            })
+            .collect()
     }
 
     /// Whether files of the format read as one table only while every file holds one schema, as a

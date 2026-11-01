@@ -39,6 +39,7 @@ def capabilities(commands: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     Listing the semantic types loads every detector pack installed, and the packs import pyarrow.
     """
     formats = output_formats()
+    op_formats = dict(_core.op_formats())
     return {
         'schema_version': SCHEMA_VERSION,
         'tool': 'doppeldata',
@@ -61,7 +62,7 @@ def capabilities(commands: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
         'fakes': providers(),
         'semantic_types': semantic_types(),
         'ops': [
-            {'op': op, 'formats': _core.op_formats(op), 'fields': [field for field in schema['properties'] if field != 'op']}
+            {'op': op, 'formats': op_formats[op], 'fields': [field for field in schema['properties'] if field != 'op']}
             for op, schema in op_schemas().items()
         ],
         'fault_kinds': [fault_kind(kind, formats) for kind in fault_kinds()],

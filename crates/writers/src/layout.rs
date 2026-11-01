@@ -15,6 +15,7 @@ use doppeldata_core::manifest::LayoutSettings;
 use doppeldata_core::manifest::Manifest;
 use doppeldata_core::profile::PartitionStyle;
 use doppeldata_core::profile::Quantiles;
+use doppeldata_core::scenario::Op;
 use doppeldata_core::scenario::op_formats;
 use doppeldata_core::scenario::op_takes_format;
 
@@ -190,7 +191,7 @@ fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange], ou
         return crate::cdc::check_layout(cdc, partition_by, output);
     }
     if let Some(drift) = plan.drift()
-        && !op_takes_format("schema_drift", output)
+        && !op_takes_format(Op::SchemaDrift, output)
     {
         let under = if output.is_text() { "one header" } else { "one schema" };
         return Err(LayoutError::Scenario {
@@ -199,7 +200,7 @@ fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange], ou
             message: format!(
                 "schema_drift gives later files other columns, and the write makes {} files, which read as one table only under {under}; write {}",
                 output.format_name(),
-                op_formats("schema_drift").join(", ")
+                op_formats(Op::SchemaDrift).join(", ")
             ),
         });
     }

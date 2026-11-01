@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
+use strum::IntoEnumIterator;
 
 use crate::format_settings::Output;
 use crate::perturbations::ScenarioFault;
@@ -79,8 +80,14 @@ impl JsonSchema for ProfilePatch {
 
 /// One fault, named by `op`. `id` keys its random stream, and defaults to
 /// `<op>:<column or "table">:<n>`, where n counts earlier entries of the same op and column.
-#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema, strum::EnumDiscriminants)]
 #[serde(tag = "op", rename_all = "snake_case")]
+#[strum_discriminants(
+    name(Op),
+    doc = "Each op, as `op` names it.",
+    derive(strum::EnumIter, strum::IntoStaticStr),
+    strum(serialize_all = "snake_case")
+)]
 pub enum Perturbation {
     HotKeys(HotKeys),
     Duplicates(Duplicates),
@@ -390,7 +397,7 @@ enum Breaks {
 }
 
 /// The formats whose bytes can hold a fault kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumIter)]
 pub enum FaultFormats {
     /// CSV and TSV.
     Delimited,
@@ -402,8 +409,6 @@ pub enum FaultFormats {
 }
 
 impl FaultFormats {
-    pub const ALL: [Self; 4] = [Self::Delimited, Self::Text, Self::Json, Self::Parquet];
-
     /// Whether a file `output` writes can hold the fault.
     pub fn hold(self, output: &Output) -> bool {
         match output {
@@ -775,20 +780,37 @@ impl ExpectedMetric {
     }
 }
 
-/// Whether a write making `output`'s files takes the op named `op`. `cdc` writes the CSV or Parquet
-/// files DMS writes. `schema_drift` needs a format that reads as one table under several schemas.
-/// `malformed_rows` needs a format one of its kinds can be held in. Every other op takes every format.
-pub fn op_takes_format(op: &str, output: &Output) -> bool {
+/// Whether a write making `output`'s files takes `op`. `cdc` writes the CSV or Parquet files DMS
+/// writes. `schema_drift` needs a format that reads as one table under several schemas.
+/// `malformed_rows` needs a format one of its kinds can be held in.
+pub fn op_takes_format(op: Op, output: &Output) -> bool {
     match op {
-        "cdc" => matches!(output, Output::Csv(_) | Output::Parquet(_)),
-        "schema_drift" => !output.reads_under_one_schema(),
-        "malformed_rows" => FaultFormats::ALL.iter().any(|formats| formats.hold(output)),
-        _ => true,
+        Op::Cdc => matches!(output, Output::Csv(_) | Output::Parquet(_)),
+        Op::SchemaDrift => !output.reads_under_one_schema(),
+        Op::MalformedRows => FaultFormats::iter().any(|formats| formats.hold(output)),
+        Op::HotKeys
+        | Op::Duplicates
+        | Op::LateArrival
+        | Op::Missingness
+        | Op::OutOfRange
+        | Op::SwappedValues
+        | Op::CategoricalShift
+        | Op::Noise
+        | Op::Scaling
+        | Op::BrokenCharacters
+        | Op::Outliers
+        | Op::SmallFiles
+        | Op::PartitionSkew => true,
     }
 }
 
-/// The names of the formats a write takes the op named `op` in, in the order `format` lists them.
-pub fn op_formats(op: &str) -> Vec<&'static str> {
+/// Each op's name, with the names of the formats a write takes it in.
+pub fn every_op_formats() -> Vec<(&'static str, Vec<&'static str>)> {
+    Op::iter().map(|op| (op.into(), op_formats(op))).collect()
+}
+
+/// The names of the formats a write takes `op` in, in the order `format` lists them.
+pub fn op_formats(op: Op) -> Vec<&'static str> {
     Output::every_format()
         .iter()
         .filter(|output| op_takes_format(op, output))
@@ -799,24 +821,7 @@ pub fn op_formats(op: &str) -> Vec<&'static str> {
 impl Perturbation {
     /// The op's name, as `op` spells it.
     pub fn op_name(&self) -> &'static str {
-        match self {
-            Self::HotKeys(_) => "hot_keys",
-            Self::Duplicates(_) => "duplicates",
-            Self::LateArrival(_) => "late_arrival",
-            Self::Missingness(_) => "missingness",
-            Self::OutOfRange(_) => "out_of_range",
-            Self::SwappedValues(_) => "swapped_values",
-            Self::CategoricalShift(_) => "categorical_shift",
-            Self::Noise(_) => "noise",
-            Self::Scaling(_) => "scaling",
-            Self::BrokenCharacters(_) => "broken_characters",
-            Self::Outliers(_) => "outliers",
-            Self::SchemaDrift(_) => "schema_drift",
-            Self::SmallFiles(_) => "small_files",
-            Self::PartitionSkew(_) => "partition_skew",
-            Self::MalformedRows(_) => "malformed_rows",
-            Self::Cdc(_) => "cdc",
-        }
+        Op::from(self).into()
     }
 
     /// The id given in the file, if any.

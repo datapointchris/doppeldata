@@ -363,10 +363,9 @@ def one_file_faults_name(file_name: str) -> str:
     ``_orders.csv.faults.jsonl``.
     """
 
-def op_formats(op: str) -> list[str]:
+def op_formats() -> list[tuple[str, list[str]]]:
     """
-    The formats a write takes the op ``op`` in, as ``format`` names them. An op the engine does
-    not single out takes every format.
+    Each op, as ``op`` names it, with the formats a write takes it in, as ``format`` names them.
     """
 
 def patched_profile(profile_json: str, scenario_json: str) -> tuple[str, list[str]]:

@@ -284,11 +284,10 @@ mod _core {
         Ok((fault.is_file_kind(), fault.formats().hold(&output), fault.check_reads_back(&output)))
     }
 
-    /// The formats a write takes the op ``op`` in, as ``format`` names them. An op the engine does
-    /// not single out takes every format.
+    /// Each op, as ``op`` names it, with the formats a write takes it in, as ``format`` names them.
     #[pyfunction]
-    fn op_formats(op: &str) -> Vec<&'static str> {
-        doppeldata_core::scenario::op_formats(op)
+    fn op_formats() -> Vec<(&'static str, Vec<&'static str>)> {
+        doppeldata_core::scenario::every_op_formats()
     }
 
     /// ``profile_json`` with the scenario's patch applied as the engine applies it, and each column
