@@ -229,6 +229,13 @@ Where a fixture changed since the release at a level stream version, its hash ca
 The workflow then generates the release's own fixtures with this build, which must reach the
 release's hash.
 
+The Intel Mac wheel builds on an Apple Silicon runner with `--target x86_64-apple-darwin`. Rosetta
+runs its test and its wheel as x86_64 code, against the x86_64 system libraries. So a float result
+Rosetta computed differently from an Intel CPU would pass there.
+
+- *Rejected:* GitHub's Intel macOS runners. Their speed varied enough that a slow one ran the wheel
+  job past its bound and cancelled a release.
+
 ## Every JSON object the engine writes or hands Python holds its keys sorted
 
 schemars' `preserve_order` writes each published schema in the model's field order. It also turns
