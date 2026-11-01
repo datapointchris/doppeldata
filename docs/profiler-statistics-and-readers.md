@@ -270,10 +270,11 @@ identity.
 The profiling packages are imported only by the modules that profile, and boto3 also by a write to
 S3. `ENGINES` in `doppeldata.profiling` names each engine's packages, each with the formats whose
 files it reads or sniffs, and whether a source of any format needs it. CleverCSV, for one, is
-needed only for CSV and TSV. `LISTING_PACKAGES` names the ones listing S3 needs whatever the engine.
-`profile()` checks those any source needs before it imports one, and a format's own once the source
-is listed. Either check raises `ProfilingEnginesMissing` naming each missing distribution, and a
-command it stops exits 2.
+needed only for CSV and TSV. `profile()` checks those any source needs before it imports one, and
+a format's own once the source is listed. Either check raises `ProfilingEnginesMissing` naming each
+missing distribution. Listing an `s3://` prefix needs boto3 whatever the engine, and without it
+raises `PackagesMissing` naming boto3. `ProfilingEnginesMissing` is a `PackagesMissing`, so one
+`except PackagesMissing` catches both. A command either stops exits 2.
 `generated.readers` records the version of each package that reads the source's format, from the
 same table. pyspark's is the session's Spark version, because the session reads the files. A Spark
 Connect client's pyspark can differ from it, and so can one a launcher leaves in site-packages, as
