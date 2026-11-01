@@ -76,12 +76,8 @@ log = logging.getLogger('doppeldata')
 
 
 def examples(*rows: tuple[str, str]) -> str:
-    """A help screen's examples block: each command beside what it is for.
-
-    Typer folds an epilog's single line breaks into spaces and keeps a blank line as one break, so each row is a list
-    item of its own paragraph, which prints as a line of its own.
-    """
-    return '\n\n'.join(['Examples:', *(f'- {command} — {purpose}' for command, purpose in rows)])
+    """An epilog of runnable invocations, each with what it is for."""
+    return '**Examples**\n\n' + '\n'.join(f'- `{command}` — {purpose}' for command, purpose in rows)
 
 
 def beside(destination: str, name: str) -> str:
@@ -188,24 +184,8 @@ JSON_REQUESTED = 'doppeldata.json'
 INVOKED_COMMAND = 'doppeldata.command'
 
 
-def folded(help_text: str | None) -> str | None:
-    """`help_text` with each paragraph on one line, so the terminal wraps it. Typer folds an epilog's line breaks, but
-    prints a help body's as they are."""
-    if help_text is None:
-        return None
-    paragraphs = help_text.split('\n\n')
-    return '\n\n'.join(' '.join(line.strip() for line in paragraph.splitlines()) for paragraph in paragraphs)
-
-
 class CommandGroup(TyperGroup):
-    """A group recording the command it resolves in the meta every context of one invocation shares, and folding each of
-    its commands' help into paragraphs the terminal wraps."""
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        for command in self.commands.values():
-            if not isinstance(command, TyperGroup):
-                command.help = folded(command.help)
+    """A group recording the command it resolves in the meta every context of one invocation shares."""
 
     def resolve_command(self, ctx: Any, args: list[str]) -> Any:
         name, command, rest = super().resolve_command(ctx, args)
@@ -327,10 +307,11 @@ CAPABILITIES_EXAMPLES = examples(
     ('doppeldata capabilities show --json', 'each list whole, for a program or an agent'),
 )
 
-app = typer.Typer(name='doppeldata', no_args_is_help=True, cls=DoppeldataGroup)
+app = typer.Typer(name='doppeldata', no_args_is_help=True, cls=DoppeldataGroup, rich_markup_mode='markdown')
 profile_app = typer.Typer(
     cls=CommandGroup,
     no_args_is_help=True,
+    rich_markup_mode='markdown',
     help='Profiles: reviewable files that describe a dataset without holding its rows.',
     epilog=PROFILE_EXAMPLES,
 )
@@ -338,6 +319,7 @@ app.add_typer(profile_app, name='profile', rich_help_panel='Profile and generate
 data_app = typer.Typer(
     cls=CommandGroup,
     no_args_is_help=True,
+    rich_markup_mode='markdown',
     help='Synthetic datasets generated from a profile, written as files with a manifest, and checked against it.',
     epilog=DATA_EXAMPLES,
 )
@@ -345,6 +327,7 @@ app.add_typer(data_app, name='data', rich_help_panel='Profile and generate')
 scenario_app = typer.Typer(
     cls=CommandGroup,
     no_args_is_help=True,
+    rich_markup_mode='markdown',
     help='Scenarios: layers over a profile that bend the generated data on purpose.',
     epilog=SCENARIO_EXAMPLES,
 )
@@ -352,6 +335,7 @@ app.add_typer(scenario_app, name='scenario', rich_help_panel='Profile and genera
 schemas_app = typer.Typer(
     cls=CommandGroup,
     no_args_is_help=True,
+    rich_markup_mode='markdown',
     help='The JSON Schemas of the files doppeldata reads and writes.',
     epilog=SCHEMAS_EXAMPLES,
 )
@@ -359,6 +343,7 @@ app.add_typer(schemas_app, name='schemas', rich_help_panel='Look up what doppeld
 capabilities_app = typer.Typer(
     cls=CommandGroup,
     no_args_is_help=True,
+    rich_markup_mode='markdown',
     help='What a program or an agent can name: everything this install takes, read from the registries that refuse a value outside them.',
     epilog=CAPABILITIES_EXAMPLES,
 )
@@ -861,7 +846,7 @@ def data_check(
     Only --against reads the real data. Exits 0 when every metric, column and expectation passes, and 3 when one does not
     or the check could not finish.
 
-    A bundle PROFILE checks each table under DATA/<table>/ against its own profile, then measures each relationship by the
+    A bundle PROFILE checks each table under `DATA/<table>/` against its own profile, then measures each relationship by the
     relationship metrics below. It takes no --against.
     """
     logged_at(verbose, quiet)
@@ -1253,7 +1238,7 @@ def data_generate(
     A Parquet or Arrow file written with --embed-profile regenerates its dataset as PROFILE. Its seed, rows and scenario
     are the defaults, and with none of the three given, a file whose dataset this release would not make again is refused.
 
-    A bundle PROFILE writes each table under --out/<table>/ with its own manifest, parents first, each foreign key drawn
+    A bundle PROFILE writes each table under `--out/<table>/` with its own manifest, parents first, each foreign key drawn
     from its parent's keys, and a _manifest.json at --out naming each. Each --scenario bends the table it names.
     """
     logged_at(verbose, quiet)
