@@ -204,13 +204,16 @@ def command_line_refusal(error: UsageError) -> IssueCarrier:
     """The parser's refusal as E-USAGE-001, naming the parameter and the values it takes where the parser knows them."""
     context = error.ctx
     field: str | None = None
+    value: str | None = None
+    message = error.format_message()
     valid: Sequence[str] = ()
     closest: Sequence[str] = ()
     if isinstance(error, typer.BadParameter):
         field = parameter_named(error)
         valid = list(getattr(error.param.type, 'choices', None) or ()) if error.param is not None else []
     elif isinstance(error, NoSuchOption):
-        field = error.option_name
+        field = value = error.option_name
+        message = f'no such option: {error.option_name}'
         closest = list(error.possibilities or ())
         if context is not None:
             valid = sorted(name for parameter in context.command.params for name in parameter.opts if name.startswith('--'))
@@ -218,7 +221,7 @@ def command_line_refusal(error: UsageError) -> IssueCarrier:
         field = 'command'
         valid = list_commands(context)
     hint = None if context is None else f'{context.command_path} --help'
-    issue = Issue(issue_codes.COMMAND_LINE, field, error.format_message(), None, tuple(valid), tuple(closest), hint)
+    issue = Issue(issue_codes.COMMAND_LINE, field, message, value, tuple(valid), tuple(closest), hint)
     return IssueCarrier([issue])
 
 
