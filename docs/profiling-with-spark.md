@@ -101,6 +101,10 @@ driver. Both profiles must pass `profile check`, and the Spark one is held to th
 A dataset or relationship field the published schema gains stops the check until it compares the
 field, so no field the engines might write differently goes unread.
 
+A conditional table given a float matches cell for cell in each image. Spark casts `1e-05` to the
+text `1.0E-5` and `2.5e16` to `2.5E16`, where Polars writes `0.00001` and `2.5e+16`. The profiler
+keys each as Python writes the float, so both engines state `1e-05` and `2.5e+16`.
+
 Build the wheel, then run the check over a file. `KEEP` names a directory to keep each profile in.
 
 ```bash

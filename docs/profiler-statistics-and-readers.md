@@ -628,8 +628,10 @@ which `--sample` makes its sample.
 
   A table is given the column holding fewer values, where that holds at most `GIVEN_VALUES`, and
   only where both columns list their values. A float column listing every value it holds is a
-  given too, of a categorical column holding as many values or more. Its values must be finite. A
-  copula member then places the rows of a column the engine would otherwise draw apart from it.
+  given too, of a categorical column holding as many values or more. Its values must be finite.
+  Each key is written as Python writes the float, the shortest text that reads back as it, whichever
+  engine counted the cells. A copula member then places the rows of a column the engine would
+  otherwise draw apart from it.
   Such a table can close a loop, as where its given's null rate is stated given its child. The
   engine breaks a loop by setting an entry aside. So the profiler plans the draft with and without
   each float-given table, and refuses one whose adding sets an entry aside. The child then takes
