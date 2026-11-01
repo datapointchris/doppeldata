@@ -538,7 +538,7 @@ def size(count: int) -> str:
 
 def profile_text(found: Profile | Bundle, *, as_json: bool) -> str:
     """A profile or bundle as the file `save` writes for a `.json` path where `as_json`, else for a YAML one."""
-    return json.dumps(found.to_plain(), indent=2, allow_nan=False) + '\n' if as_json else found.to_yaml()
+    return found.to_json() if as_json else found.to_yaml()
 
 
 def writable_out(out: Path | None) -> None:

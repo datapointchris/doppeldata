@@ -14,7 +14,6 @@ from doppeldata import issue_codes
 from doppeldata.errors import SourceError
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
-from doppeldata.profile_format import in_schema_order
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 
@@ -81,7 +80,7 @@ def written_data_file(path: str | os.PathLike[str], metadata: dict[str, str] | N
     if metadata is None:
         message = f'{name} is neither a Parquet nor an Arrow IPC file, so it holds no profile'
         raise SourceError(issue_codes.NOT_A_DATA_FILE, message, role='profile', value=name)
-    profile = Profile(in_schema_order(embedded_document(path, metadata)))
+    profile = Profile(embedded_document(path, metadata))
     issues = profile.validate()
     if issues:
         raise InvalidProfile(name, issues)

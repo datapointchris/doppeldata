@@ -49,24 +49,17 @@ schema:
 $ doppeldata profile import --from odcs orders.odcs.yaml --out orders.profile.yaml
 $ yq '.generated, .dataset, .columns[0], .columns[3]' orders.profile.yaml
 tool: doppeldata <version>
-at: '2026-11-01T07:47:22Z'
+at: '2026-11-01T09:26:16Z'
 engine: import
 imported_from: odcs:orders.odcs.yaml#orders
 declared:
-  order_id:
-    - low
-  status:
-    - top_values
-  amount:
-    - low
-    - high
-    - scale
-  email:
-    - format
+  order_id: [low]
+  status: [top_values]
+  amount: [low, high, scale]
+  email: [format]
 keys:
   primary:
-    columns:
-      - order_id
+    columns: [order_id]
 name: order_id
 physical_type: int64
 logical_type: integer
@@ -74,9 +67,7 @@ nullable: false
 null_fraction: 0.0
 numeric:
   integral: true
-  sequence:
-    start: 1
-    step: 1
+  sequence: {start: 1, step: 1}
 name: email
 physical_type: string
 logical_type: string
@@ -84,11 +75,10 @@ nullable: true
 null_fraction: 0.05
 semantic:
   type: email
-  generator_hint:
-    provider: email
   sensitivity: sensitive
+  generator_hint: {provider: email}
 $ doppeldata data generate orders.profile.yaml --rows 1000 --seed 7 --out orders/
-wrote 1,000 rows as parquet in 1 file, 22.4 KB, in 0.00 s on 16 threads: 0.50M rows/s
+wrote 1,000 rows as parquet in 1 file, 22.4 KB, in 0.00 s on 16 threads: 0.33M rows/s
 orders/_manifest.json names dataset sha256:…
 $ doppeldata data check orders.profile.yaml orders/
 # doppeldata check passed
@@ -134,10 +124,8 @@ $ yq -o=json -I0 '[.columns[] | {"n": .name, "t": .physical_type}], .generated.d
 ```text
 $ doppeldata profile import --from data-package datapackage.json --out shop.bundle.yaml
 $ yq '.relationships' shop.bundle.yaml
-- from:
-    - orders.customer_id
-  to:
-    - customers.id
+- from: [orders.customer_id]
+  to: [customers.id]
 $ doppeldata data generate shop.bundle.yaml --seed 7 --out shop/
 doppeldata: E-PROFILE-116: shop.bundle.yaml cannot be generated:
   /tables/customers/dataset/rows: customers records no row count for the scale to multiply [E-PROFILE-116]

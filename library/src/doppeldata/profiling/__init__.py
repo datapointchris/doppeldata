@@ -332,7 +332,7 @@ def profiled_bundle(
     profiled, relationships = profiled_tables(backend, tables, settings, None, related=True)
     for listed, _ in listings:
         sources.check_unchanged(listed)
-    bundle = Bundle.of(bundle_name([listed for listed, _ in listings]), profiled, table_profile.reviewable(relationships))
+    bundle = Bundle.of(bundle_name([listed for listed, _ in listings]), profiled, relationships)
     issues = bundle.validate()
     if issues:
         raise InvalidProfile(f'the profile of {data!r}', issues)

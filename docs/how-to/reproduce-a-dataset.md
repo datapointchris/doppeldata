@@ -87,8 +87,9 @@ again-embedded/_manifest.json names dataset sha256:…
 
 - **A profile made from data must pass `profile check` to be embedded**, because each file then
   carries every literal it holds.
-- **`profile expand FILE` writes the embedded profile as YAML**, its keys in the order
-  `profile create` writes them:
+- **`profile expand FILE` writes the embedded profile as YAML, as `profile create` writes it.** A
+  map's own keys, such as a fit's `params`, come out sorted, because the file holds the profile as
+  canonical JSON:
 
   ```text
   $ doppeldata profile expand embedded/part-00000-867ecb7a.parquet --out expanded.profile.yaml

@@ -135,15 +135,13 @@ sd.Profile.expand({'name': None, 'age': sd.integers(18, 90)}, rows=1000).save('p
 ```yaml
 kind: table
 name: table
-dataset:
-  rows: 1000
+dataset: {rows: 1000}
 columns:
   - name: name
     physical_type: string
     logical_type: string
     semantic:
-      generator_hint:
-        provider: name
+      generator_hint: {provider: name}
 ```
 
 The expanded profile generates the same bytes as the list, dict or short YAML it came from. From

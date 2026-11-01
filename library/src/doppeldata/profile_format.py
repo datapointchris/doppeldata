@@ -24,6 +24,9 @@ import jsonschema
 import jsonschema.exceptions
 import rfc8785
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedBase
+from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.comments import CommentedSeq
 from ruamel.yaml.constructor import RoundTripConstructor
 from ruamel.yaml.error import YAMLError
 from ruamel.yaml.nodes import ScalarNode
@@ -226,13 +229,19 @@ def read_document(path: Path, codes: DocumentCodes = PROFILE_DOCUMENT) -> Any:
 
 def write_document(document: Any, path: Path) -> None:
     """Write `document` as JSON where `path` ends `.json`, else as YAML, leaving the old file whole if the write fails."""
-    if path.suffix == '.json':
-        text = json.dumps(to_plain(document), indent=2, allow_nan=False) + '\n'
-    else:
-        buffer = io.StringIO()
-        yaml().dump(document, buffer)
-        text = buffer.getvalue()
-    write_text_whole(text, path)
+    write_text_whole(json_text(document) if path.suffix == '.json' else yaml_text(document), path)
+
+
+def yaml_text(document: Any) -> str:
+    """`document` as the YAML a profile file holds."""
+    buffer = io.StringIO()
+    yaml().dump(written(document), buffer)
+    return buffer.getvalue()
+
+
+def json_text(document: Any) -> str:
+    """`document` as the JSON a `.json` profile file holds."""
+    return json.dumps(to_plain(written(document)), indent=2, allow_nan=False) + '\n'
 
 
 def write_text_whole(text: str, path: Path) -> None:
@@ -273,23 +282,88 @@ def profile_schema() -> dict[str, Any]:
     return json.loads(schema_text('profile'))
 
 
+def written(document: Any) -> Any:
+    """`document` as `save` and `to_yaml` write it. One read from YAML keeps its comments, order and style. Any other
+    is put in the profile schema's order, with each collection of plain values on one line."""
+    if isinstance(document, CommentedBase):
+        return document
+    return reviewable(in_schema_order(document))
+
+
+def reviewable(value: Any) -> Any:
+    """The document as ruamel types, with each collection of plain values on one line, as a reviewer reads them."""
+    if isinstance(value, dict):
+        mapping = CommentedMap((key, reviewable(item)) for key, item in value.items())
+        if all(not isinstance(item, dict | list) for item in value.values()):
+            mapping.fa.set_flow_style()
+        return mapping
+    if isinstance(value, list):
+        sequence = CommentedSeq(reviewable(item) for item in value)
+        if all(not isinstance(item, dict | list) for item in value):
+            sequence.fa.set_flow_style()
+        return sequence
+    return value
+
+
+# A whole number in these is one of a column's own values, written in the column's logical type. Outside a column, each
+# is a count.
+COLUMN_VALUE_SECTIONS = frozenset({'NumericExtremes', 'Quantiles', 'NumericTopValue', 'Histogram'})
+# A whole number in these is a count of bytes.
+COUNT_SECTIONS = frozenset({'FileSizes'})
+
+
 def in_schema_order(document: Any) -> Any:
     """`document` with each mapping's keys in the order the profile schema lists them, the order `profile create` writes,
-    and each key the schema does not list, such as a map's own, after them in the order held."""
+    and each key the schema does not list, such as a map's own, after them in the order held.
+
+    A whole number the schema holds as a float is written as `profile create` writes it, so a document read from JSON,
+    where `0.0` reads as `0`, writes as the profile it came from. A statistic is a float. A column's own value takes the
+    column's logical type, a count of rows, files or bytes stays whole, and so does a discrete family's fitted parameter.
+    """
     schema = profile_schema()
-    return schema_ordered(document, schema, schema['$defs'])
+    return schema_ordered(document, schema, schema['$defs'], floats=True, column_floats=False)
 
 
-def schema_ordered(value: Any, schema: Any, defs: dict[str, Any]) -> Any:
+def schema_ordered(value: Any, schema: Any, defs: dict[str, Any], *, floats: bool, column_floats: bool) -> Any:
     branches = list(schema_branches(schema, defs))
+    sections = {branch['$ref'].rsplit('/', 1)[1] for branch in branches if '$ref' in branch}
+    if 'Rate' in sections:
+        floats = True
+    elif sections & COUNT_SECTIONS:
+        floats = False
+    elif sections & COLUMN_VALUE_SECTIONS:
+        floats = column_floats
     if isinstance(value, dict):
+        if 'logical_type' in value:
+            column_floats = value['logical_type'] == 'number'
         listed, rest = closest_branch(value, branches)
         keys = [key for key in listed if key in value] + [key for key in value if key not in listed]
-        return {key: schema_ordered(value[key], listed.get(key, rest), defs) for key in keys}
+        return {
+            key: schema_ordered(
+                value[key],
+                listed.get(key, rest),
+                defs,
+                floats=floats and not (key == 'params' and discrete_family(value.get('family'))),
+                column_floats=column_floats,
+            )
+            for key in keys
+        }
     if isinstance(value, list):
         items = next((branch['items'] for branch in branches if isinstance(branch.get('items'), dict)), None)
-        return [schema_ordered(item, items, defs) for item in value]
+        return [schema_ordered(item, items, defs, floats=floats, column_floats=column_floats) for item in value]
+    if floats and type(value) is int and any(holds_floats_only(branch) for branch in branches):
+        return float(value)
     return value
+
+
+def discrete_family(family: Any) -> bool:
+    return isinstance(family, str) and bool(_core.fitted_families().get(family, False))
+
+
+def holds_floats_only(schema: dict[str, Any]) -> bool:
+    types = schema.get('type')
+    types = types if isinstance(types, list) else [types]
+    return 'number' in types and 'integer' not in types
 
 
 def schema_branches(schema: Any, defs: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -690,9 +764,11 @@ class Profile:
 
     def to_yaml(self) -> str:
         """The profile as the YAML `save` writes."""
-        text = io.StringIO()
-        yaml().dump(self.document, text)
-        return text.getvalue()
+        return yaml_text(self.document)
+
+    def to_json(self) -> str:
+        """The profile as the JSON `save` writes to a `.json` path."""
+        return json_text(self.document)
 
     def canonical(self) -> bytes:
         """The RFC 8785 canonical JSON the digest is taken over, without the unhashed generated fields."""
@@ -818,9 +894,11 @@ class Bundle:
 
     def to_yaml(self) -> str:
         """The bundle as the single-file YAML `save` writes."""
-        text = io.StringIO()
-        yaml().dump(self.inline(), text)
-        return text.getvalue()
+        return yaml_text(self.inline())
+
+    def to_json(self) -> str:
+        """The bundle as the single-file JSON `save` writes to a `.json` path."""
+        return json_text(self.inline())
 
     def save(self, path: str | Path) -> None:
         """Write the bundle as one file with every table inline, as YAML, or as JSON to a `.json` path."""
