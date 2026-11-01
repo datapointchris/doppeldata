@@ -185,12 +185,19 @@ class CheckFailed(DoppeldataError):
 
     It is a `CheckReport` where generated data missed its profile on a metric or a column, a `BundleCheckReport` where
     a bundle's tables missed it on a table or a relationship, a `ProfileFileCheck` where a profile file breaks its
-    schema or its privacy policy, and a `ScenarioCheck` where a scenario does not hold for its profile.
+    schema or its privacy policy, and a `ScenarioCheck` where a scenario does not hold for its profile. `field` and
+    `value` name the argument the checked thing was given as, where a caller names it.
     """
 
-    def __init__(self, report: 'CheckReport | BundleCheckReport | ProfileFileCheck | ScenarioCheck') -> None:
+    def __init__(
+        self,
+        report: 'CheckReport | BundleCheckReport | ProfileFileCheck | ScenarioCheck',
+        *,
+        field: str | None = None,
+        value: Any = None,
+    ) -> None:
         self.report = report
-        super().__init__(report.failure_code, report.failure_message())
+        super().__init__(report.failure_code, report.failure_message(), field=field, value=value)
 
 
 class ProfileFailsCheck(DoppeldataError, ValueError):

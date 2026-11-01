@@ -148,7 +148,7 @@ def s3_files(url: str) -> list[SourceFile]:
         _, client = s3_session()
     except InvalidArgument as error:
         raise SourceError(error.code, f'{url} could not be listed: {error.message}', role='environment') from error
-    log.debug('%s: listing through %s', url, endpoint_named(client))
+    log.debug(f'{url}: listing through {endpoint_named(client)}')
     with s3_errors(url, endpoint_named(client)):
         # Spark writes a table as a `name.parquet/` directory, so a key with a suffix may still be a prefix.
         if format_of(key) and not key.endswith('/') and (head := object_head(client, bucket, key)):

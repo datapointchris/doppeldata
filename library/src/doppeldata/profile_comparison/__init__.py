@@ -21,6 +21,7 @@ from typing import overload
 from doppeldata import _core
 from doppeldata import issue_codes
 from doppeldata.aws_sessions import aws_profile_chosen
+from doppeldata.counted_nouns import counted
 from doppeldata.dataset_generation import engine_plan
 from doppeldata.errors import CheckStopped
 from doppeldata.errors import ColumnsNotFrozen
@@ -170,7 +171,7 @@ def check(
     `thresholds` is a Thresholds, or the file `Thresholds.load` reads. S3 is read with the credentials of the AWS profile
     `aws_profile` names, else of AWS_PROFILE and boto3's default chain.
 
-    A check that fails once it has begun reading raises an error led by `E-DATA-024`, which exits 3, then the issue that
+    A check that fails once it has begun reading raises CheckStopped, led by DATA_CHECK_STOPPED and then the issue that
     stopped it, so a failure is never read as data that missed its profile. A refusal of the arguments raises as it is.
     """
     if not isinstance(profile, Profile | Bundle | str | os.PathLike):
@@ -206,8 +207,9 @@ def thresholds_of(thresholds: Thresholds | str | os.PathLike[str] | None) -> Thr
 
 @contextlib.contextmanager
 def stopped(code: str, verb: str) -> Iterator[None]:
-    """Lead a failure inside a check with `code`, which exits 3, so the check's own verdicts keep their exit statuses. A
-    refusal that exits 2 or 4 raises as it is. Any other exception is a bug in doppeldata, logged with its traceback."""
+    """Lead a failure inside a check with the stop `code`, so the check's own verdicts keep their exit statuses. A failure
+    to read is one whose code exits 1, or an OSError. Every other refusal raises as it is. Any other exception is a bug
+    in doppeldata, logged with its traceback."""
     stop = Issue(code, None, f'{verb} stopped before it finished')
     try:
         yield
@@ -219,7 +221,7 @@ def stopped(code: str, verb: str) -> Iterator[None]:
         unread = Issue(issue_codes.LOCAL_IO, None, error.strerror or str(error), value=error.filename)
         raise CheckStopped([stop, unread], headline=stop.message) from error
     except Exception as error:
-        log.exception('%s stopped on %s', verb, type(error).__name__)
+        log.exception(f'{verb} stopped on {type(error).__name__}')
         raise CheckStopped([dc.replace(stop, message=f'{verb} stopped on {type(error).__name__}, which is a bug in doppeldata')]) from error
 
 
@@ -547,7 +549,7 @@ def diff(
     Each of `a` and `b` is a Profile, or a file or example name holding one. Overflow is measured where `b` was profiled
     with `a`'s edges frozen, as `profile(..., edges_from=a)` does. A metric `b` holds nothing to measure with passes
     unmeasured, and the `doppeldata` logger warns how many did. `thresholds` is a Thresholds, or the file `Thresholds.load`
-    reads. A diff that fails once it has begun raises an error led by `E-PROFILE-031`, which exits 3, then the issue that
+    reads. A diff that fails once it has begun raises CheckStopped, led by PROFILE_DIFF_STOPPED and then the issue that
     stopped it.
     """
     a, b = one_table(a, 'a'), one_table(b, 'b')
@@ -562,12 +564,10 @@ def diff(
         report = DiffReport(reported(a), reported(b), measured(earlier, later, chosen, unmeasured_passes=True), changes)
     unmeasured = sum(result.unmeasured is not None for result in report.metrics)
     if unmeasured:
+        later_name, earlier_name = report.b.path or report.b.name, report.a.path or report.a.name
         log.warning(
-            '%s unmeasured and passed, because %s holds nothing to compare them with; a profile made with edges_from %s '
-            'carries the overflow boundary_adherence reads',
-            f'{unmeasured} metric{"" if unmeasured == 1 else "s"}',
-            report.b.path or report.b.name,
-            report.a.path or report.a.name,
+            f'{counted(unmeasured, "metric")} unmeasured and passed, because {later_name} holds nothing to compare them with; '
+            f"a later profile made against {earlier_name}'s edges carries the overflow boundary_adherence reads"
         )
     return report
 

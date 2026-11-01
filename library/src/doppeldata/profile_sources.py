@@ -20,10 +20,8 @@ from doppeldata import issue_codes
 from doppeldata.errors import DoppeldataError
 from doppeldata.errors import InvalidArgument
 from doppeldata.errors import UnsupportedArgument
-from doppeldata.example_profiles import bundle_example_names
 from doppeldata.inline_columns import InlineColumn
 from doppeldata.issue_codes import Issue
-from doppeldata.profile_format import BUNDLE_INDEX
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import Profile
@@ -34,8 +32,10 @@ from doppeldata.short_profiles import COMMAND_LINE_REMEDY
 from doppeldata.short_profiles import DICT_SOURCE
 from doppeldata.short_profiles import INLINE_TABLE
 from doppeldata.short_profiles import LIST_SOURCE
+from doppeldata.short_profiles import bundle_named
 from doppeldata.short_profiles import expanded
 from doppeldata.short_profiles import file_profile
+from doppeldata.short_profiles import is_bundle_document
 from doppeldata.short_profiles import named_column
 from doppeldata.short_profiles import no_fake_message
 from doppeldata.short_profiles import validated
@@ -93,28 +93,26 @@ def bundle_from(source: Any) -> Bundle | None:
         return source
     if not isinstance(source, str | os.PathLike):
         return None
+    bundled = bundle_named(source)
+    if isinstance(bundled, Path):
+        return Bundle.load(bundled)
+    if bundled is not None:
+        return Bundle.example(bundled)
     path = Path(source)
-    if path.is_dir():
-        return Bundle.load(path) if (path / BUNDLE_INDEX).is_file() else None
-    if path.is_file():
-        if path.suffix.lower() not in DOCUMENT_SUFFIXES:
-            return None
-        document = read_document(path)
-        return Bundle.load(path) if isinstance(document, dict) and document.get('kind') == 'bundle' else None
-    if isinstance(source, str) and source in bundle_example_names():
-        return Bundle.example(source)
+    if path.is_file() and path.suffix.lower() in DOCUMENT_SUFFIXES and is_bundle_document(read_document(path)):
+        return Bundle.load(path)
     return None
 
 
 @contextlib.contextmanager
-def read_as(field: str) -> Iterator[None]:
-    """Name `field` on each issue of a refusal inside the block that names no place, or names `profile`, the argument a
-    profile is read from. A file that cannot be read is refused as FILE_UNREADABLE at `field`. So a caller reading two
-    profiles learns which of its arguments a refusal is about."""
+def read_as(field: str, *, relabeled: tuple[str, ...] = ('profile',)) -> Iterator[None]:
+    """Name `field` on each issue of a refusal inside the block that names no place, or names one of `relabeled`, by
+    default `profile`, the argument a profile is read from. A file that cannot be read is refused as FILE_UNREADABLE at
+    `field`. So a caller reading two profiles learns which of its arguments a refusal is about."""
     try:
         yield
     except DoppeldataError as error:
-        error.issues = tuple(dc.replace(issue, field=field) if issue.field in (None, 'profile') else issue for issue in error.issues)
+        error.issues = tuple(dc.replace(issue, field=field) if issue.field in (None, *relabeled) else issue for issue in error.issues)
         raise
     except OSError as error:
         named = os.fspath(error.filename) if error.filename is not None else None
@@ -135,11 +133,11 @@ def profile_or_bundle(source: Profile | Bundle | str | os.PathLike[str], field: 
 def profile_or_columns(profile: str | os.PathLike[str] | None, columns: Sequence[str] | None) -> str | os.PathLike[str] | Profile | Bundle:
     """What a caller naming a profile, or the column names to expand into one, generates from. A `profile` naming a bundle
     gives the Bundle, and any other is returned as given, so a data file's write is read where it is generated. Else each
-    column is drawn by the fake its name hints. Both or neither is refused, and so is each column name no fake draws, at
-    `columns`."""
+    column is drawn by the fake its name hints. Both or neither is refused at `profile`, and each column name no fake draws
+    at `columns`."""
     if (profile is None) == (columns is None):
-        given = 'both' if profile is not None else 'neither'
-        message = f'name a profile or the columns to expand into one, not {given}'
+        given = 'both were given' if profile is not None else 'neither was given'
+        message = f'name a profile or the columns to expand into one, and {given}'
         raise InvalidArgument(issue_codes.PROFILE_OR_COLUMNS, message, field='profile')
     if profile is not None:
         with read_as('profile'):

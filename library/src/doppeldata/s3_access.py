@@ -134,7 +134,7 @@ def s3_store_settings(url: str, bucket: str) -> dict[str, Any]:
     client_options: dict[str, Any] = {'connect_timeout': CONNECT_TIMEOUT}
     if endpoint.startswith('http://'):
         client_options['allow_http'] = True
-    log.info('%s: uploading through %s in region %s, with AWS profile %s', url, endpoint, region, profile_in_force())
+    log.info(f'{url}: uploading through {endpoint} in region {region}, with AWS profile {profile_in_force()}')
     return {
         'config': {'region': region, 'endpoint': endpoint},
         'client_options': client_options,

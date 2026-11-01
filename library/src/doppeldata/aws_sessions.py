@@ -71,7 +71,7 @@ def aws_session() -> Any:
     """A boto3 session of the AWS profile the call chose, else of boto3's own choice."""
     boto3 = importlib.import_module('boto3')
     session = boto3.Session(profile_name=chosen_profile())
-    log.debug('AWS session from profile %s', profile_in_force())
+    log.debug(f'AWS session from profile {profile_in_force()}')
     return session
 
 

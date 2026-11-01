@@ -21,7 +21,6 @@ from doppeldata import Bundle
 from doppeldata import BundleManifest
 from doppeldata import BundleWritePlan
 from doppeldata import CheckFailed
-from doppeldata import InvalidCodeList
 from doppeldata import Issue
 from doppeldata import IssueCarrier
 from doppeldata import Manifest
@@ -38,6 +37,7 @@ from doppeldata import diff
 from doppeldata import issue_codes
 from doppeldata import profile
 from doppeldata import profile_tables
+from doppeldata.counted_nouns import counted
 from doppeldata.dataset_generation import one_file_of
 from doppeldata.example_profiles import shipped_example
 from doppeldata.example_profiles import shipped_examples
@@ -52,6 +52,7 @@ from doppeldata.profile_comparison.real_data_scores import SCORES
 from doppeldata.profile_comparison.relationship_metrics import RELATIONSHIP_METRICS
 from doppeldata.profile_exports import EXPORT_FORMATS
 from doppeldata.profile_exports import export
+from doppeldata.profile_format import write_text_whole
 from doppeldata.profile_sources import profile_or_columns
 from doppeldata.profiling import ENGINES
 from doppeldata.published_schemas import output_formats
@@ -73,46 +74,6 @@ from doppeldata_cli.command_surface import flag_names
 
 log = logging.getLogger('doppeldata')
 
-# The command line's name for each argument a library refusal names, so the refusal points at what was typed.
-FLAG_OF = {
-    'a': 'A',
-    'against': '--against',
-    'against_sample': '--against-sample',
-    'aws_profile': '--aws-profile',
-    'b': 'B',
-    'columns': '--columns',
-    'data': 'DATA',
-    'detected-entities': '--detected-entities',
-    'detected_entities': '--detected-entities',
-    'edges_from': '--edges-from',
-    'embed_profile': '--embed-profile',
-    'engine': '--engine',
-    'file_rows': '--file-rows',
-    'format': '--format',
-    'html': '--html',
-    'k_min': '--k-min',
-    'kind': '--from',
-    'manifest': '--manifest',
-    'name': 'NAME',
-    'packs': '--pack',
-    'partition_by': '--partition-by',
-    'partition_style': '--partition-style',
-    'policy': '--policy',
-    'profile': 'PROFILE',
-    'region': '--region',
-    'rows': '--rows',
-    'sample': '--sample',
-    'scale': '--scale',
-    'scenario': '--scenario',
-    'schema': 'SOURCE',
-    'seed': '--seed',
-    'source': 'SOURCE',
-    'table': '--table',
-    'threads': '--threads',
-    'thresholds': '--thresholds',
-    'writer': '--writer',
-}
-
 
 def examples(*rows: tuple[str, str]) -> str:
     """A help screen's examples block: each command beside what it is for.
@@ -131,24 +92,38 @@ def beside(destination: str, name: str) -> str:
 Refusal = TypeVar('Refusal', bound=IssueCarrier)
 
 
-def at_flags(error: Refusal, fields: dict[str, str]) -> Refusal:
-    """`error` with each issue whose field `fields` maps named as the command line names it."""
-    if any(issue.field in fields for issue in error.issues):
+def spelled(parameter: Any) -> str:
+    """A parameter as the command line spells it: --rows, PROFILE. An optional argument's brackets are left off."""
+    if parameter.param_type_name == 'option':
+        return flag_names(parameter)[0]
+    name: str = parameter.human_readable_name
+    return name.removesuffix('...').strip('[]')
+
+
+def flag_of(command: Any, field: str) -> str | None:
+    """The parameter of `command` that the library argument `field` was given through: the one of that name, else the
+    option spelled after it, else the argument it is the metavar of. None where `command` takes no such parameter."""
+    spelling = '--' + field.replace('_', '-')
+    named = next((parameter for parameter in command.params if parameter.name == field), None)
+    if named is None:
+        named = next(
+            (
+                parameter
+                for parameter in command.params
+                if spelling in parameter.opts or (parameter.param_type_name == 'argument' and spelled(parameter).lower() == field)
+            ),
+            None,
+        )
+    return None if named is None else spelled(named)
+
+
+def at_flags(error: Refusal, command: Any) -> Refusal:
+    """`error` with each issue naming a library argument named as the parameter of `command` it was given through."""
+    if command is not None:
         error.issues = tuple(
-            dc.replace(issue, field=fields[issue.field or '']) if issue.field in fields else issue for issue in error.issues
+            dc.replace(issue, field=flag) if issue.field and (flag := flag_of(command, issue.field)) else issue for issue in error.issues
         )
     return error
-
-
-@contextlib.contextmanager
-def refused_at(fields: dict[str, str]) -> Iterator[None]:
-    """Name each issue of a refusal inside the block as `fields` maps it, before the root names the rest by FLAG_OF. A
-    command whose argument shares a library name with another command's flag says so here: SCENARIO, not --scenario."""
-    try:
-        yield
-    except IssueCarrier as error:
-        at_flags(error, fields)
-        raise
 
 
 def report_refusal(error: IssueCarrier, *, as_json: bool) -> None:
@@ -161,9 +136,12 @@ def report_refusal(error: IssueCarrier, *, as_json: bool) -> None:
 
 
 def report_stopped_write(error: StoppedWrite, *, as_json: bool) -> None:
-    """Say why the write stopped, and what it left behind where it stored a partial manifest."""
+    """Say why the write stopped, and what it left behind. Under JSON the partial manifest prints on stdout, as a whole
+    write's manifest does, else its location and count print where it was stored."""
     report_refusal(error, as_json=as_json)
-    if not as_json and error.manifest is not None and error.manifest_stored and error.manifest.partial:
+    if as_json and error.manifest is not None and error.manifest.partial:
+        print_json(error.manifest.document)
+    elif error.manifest is not None and error.manifest_stored and error.manifest.partial:
         location = beside(error.manifest.document['destination'], PARTIAL_MANIFEST_FILE_NAME)
         completed = len(error.manifest.files)
         if error.manifest.cdc is not None:
@@ -199,18 +177,30 @@ def print_notices(caught: list[warnings.WarningMessage]) -> None:
     """Log each profiling warning as a warning of the `doppeldata` logger, so -q drops it, and show any other as Python does."""
     for notice in caught:
         if issubclass(notice.category, ProfilingWarning):
-            log.warning('%s', notice.message)
+            log.warning(str(notice.message))
         else:
             warnings.showwarning(notice.message, notice.category, notice.filename, notice.lineno)
 
 
 # Set in the root context's meta, which every context of one invocation shares, before any parameter is parsed.
 JSON_REQUESTED = 'doppeldata.json'
+# The command each group resolved last, so the root names a refusal's fields as the invoked command's parameters.
+INVOKED_COMMAND = 'doppeldata.command'
 
 
-class DoppeldataGroup(TyperGroup):
+class CommandGroup(TyperGroup):
+    """A group recording the command it resolves in the meta every context of one invocation shares."""
+
+    def resolve_command(self, ctx: Any, args: list[str]) -> Any:
+        name, command, rest = super().resolve_command(ctx, args)
+        ctx.meta[INVOKED_COMMAND] = command
+        return name, command, rest
+
+
+class DoppeldataGroup(CommandGroup):
     """The root group. A refusal prints on stderr with its code, as one line of JSON per issue where the command line asks
-    for JSON, and the command exits with the code's status. Each issue naming a library argument names its flag.
+    for JSON, and the command exits with the code's status. Each issue naming a library argument names the invoked
+    command's parameter it was given through.
 
     Under JSON, a command line the parser refuses prints as E-USAGE-001 and exits 2. Without it, the parser's own text
     prints. The `doppeldata` logger and every profiling warning go to stderr.
@@ -226,10 +216,10 @@ class DoppeldataGroup(TyperGroup):
             try:
                 return self.noticed_invoke(ctx)
             except StoppedWrite as error:
-                report_stopped_write(at_flags(error, FLAG_OF), as_json=as_json)
+                report_stopped_write(at_flags(error, ctx.meta.get(INVOKED_COMMAND)), as_json=as_json)
                 raise typer.Exit(error.exit_code) from error
             except IssueCarrier as error:
-                report_refusal(at_flags(error, FLAG_OF), as_json=as_json)
+                report_refusal(at_flags(error, ctx.meta.get(INVOKED_COMMAND)), as_json=as_json)
                 raise typer.Exit(error.exit_code) from error
             except UsageError as error:
                 if isinstance(error, NoArgsIsHelpError) or not as_json:
@@ -323,22 +313,35 @@ CAPABILITIES_EXAMPLES = examples(
 
 app = typer.Typer(name='doppeldata', no_args_is_help=True, cls=DoppeldataGroup)
 profile_app = typer.Typer(
-    no_args_is_help=True, help='Profiles: reviewable files that describe a dataset without holding its rows.', epilog=PROFILE_EXAMPLES
+    cls=CommandGroup,
+    no_args_is_help=True,
+    help='Profiles: reviewable files that describe a dataset without holding its rows.',
+    epilog=PROFILE_EXAMPLES,
 )
 app.add_typer(profile_app, name='profile', rich_help_panel='Profile and generate')
 data_app = typer.Typer(
+    cls=CommandGroup,
     no_args_is_help=True,
     help='Synthetic datasets generated from a profile, written as files with a manifest, and checked against it.',
     epilog=DATA_EXAMPLES,
 )
 app.add_typer(data_app, name='data', rich_help_panel='Profile and generate')
 scenario_app = typer.Typer(
-    no_args_is_help=True, help='Scenarios: layers over a profile that bend the generated data on purpose.', epilog=SCENARIO_EXAMPLES
+    cls=CommandGroup,
+    no_args_is_help=True,
+    help='Scenarios: layers over a profile that bend the generated data on purpose.',
+    epilog=SCENARIO_EXAMPLES,
 )
 app.add_typer(scenario_app, name='scenario', rich_help_panel='Profile and generate')
-schemas_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas of the files doppeldata reads and writes.', epilog=SCHEMAS_EXAMPLES)
+schemas_app = typer.Typer(
+    cls=CommandGroup,
+    no_args_is_help=True,
+    help='The JSON Schemas of the files doppeldata reads and writes.',
+    epilog=SCHEMAS_EXAMPLES,
+)
 app.add_typer(schemas_app, name='schemas', rich_help_panel='Look up what doppeldata takes')
 capabilities_app = typer.Typer(
+    cls=CommandGroup,
     no_args_is_help=True,
     help='What a program or an agent can name: everything this install takes, read from the registries that refuse a value outside them.',
     epilog=CAPABILITIES_EXAMPLES,
@@ -363,13 +366,17 @@ VerboseOption = Annotated[
     int, typer.Option('--verbose', '-v', count=True, help='Print each step on stderr, and with -vv each file and request.')
 ]
 QuietOption = Annotated[bool, typer.Option('--quiet', '-q', help='Print nothing on stderr but a refusal or a failure.')]
-AwsProfileOption = Annotated[
+AWS_PROFILE_HELP = (
+    'Reach AWS with the credentials and region of the profile NAME in the AWS config. Defaults to AWS_PROFILE, '
+    "then boto3's default chain. A NAME the config lacks is refused before anything is read or written."
+)
+AwsProfileOption = Annotated[str | None, typer.Option('--aws-profile', metavar='NAME', help=AWS_PROFILE_HELP)]
+ProfilingAwsProfileOption = Annotated[
     str | None,
     typer.Option(
         '--aws-profile',
         metavar='NAME',
-        help='Reach AWS with the credentials and region of the profile NAME in the AWS config. Defaults to AWS_PROFILE, '
-        "then boto3's default chain. A NAME the config lacks is refused before anything is read or written.",
+        help=f"{AWS_PROFILE_HELP} --engine spark refuses it, because Spark reads S3 with its session's own credentials.",
     ),
 ]
 # capabilities show wraps each list at this width, and never inside an item.
@@ -517,10 +524,6 @@ SCORE_DEFINITIONS = (
 def print_json(value: Any) -> None:
     """`value` on stdout as indented JSON."""
     typer.echo(json.dumps(value, indent=2, ensure_ascii=False))
-
-
-def counted(count: int, noun: str) -> str:
-    return f'{count:,} {noun}' + ('' if count == 1 else 's')
 
 
 def size(count: int) -> str:
@@ -725,7 +728,7 @@ def profile_create(
             ),
         ),
     ] = False,
-    aws_profile: AwsProfileOption = None,
+    aws_profile: ProfilingAwsProfileOption = None,
     verbose: VerboseOption = 0,
     quiet: QuietOption = False,
     as_json: ProfileJsonOption = False,
@@ -741,15 +744,11 @@ def profile_create(
     writable_out(out)
     named_lists = named_files(code_lists or [], '--code-list')
     settings: dict[str, Any] = {'engine': engine, 'sample': sample, 'policy': policy, 'k_min': k_min, 'packs': packs or ()}
-    try:
-        profiled: Profile | Bundle = (
-            profile_tables(data, **settings, code_lists=named_lists, aws_profile=aws_profile)
-            if tables
-            else profile(data, **settings, edges_from=edges_from, code_lists=named_lists, aws_profile=aws_profile)
-        )
-    except InvalidCodeList as error:
-        error.issues = tuple(dc.replace(issue, field='--code-list') for issue in error.issues)
-        raise
+    profiled: Profile | Bundle = (
+        profile_tables(data, **settings, code_lists=named_lists, aws_profile=aws_profile)
+        if tables
+        else profile(data, **settings, edges_from=edges_from, code_lists=named_lists, aws_profile=aws_profile)
+    )
     saved(profiled, out, as_json=as_json)
 
 
@@ -999,9 +998,9 @@ def profile_export(
         typer.echo(text, nl=False)
         return
     try:
-        out.write_text(text, encoding='utf-8')
-    except OSError as error:
-        message = f'{out} could not be written: {error.strerror or error}'
+        write_text_whole(text, out)
+    except (OSError, UnicodeEncodeError) as error:
+        message = f'{out} could not be written: {getattr(error, "strerror", None) or error}'
         raise doppeldata.InvalidArgument(issue_codes.OUT_UNWRITABLE, message, field='--out', value=str(out)) from error
 
 
@@ -1401,19 +1400,18 @@ def scenario_check(
     the same flags. Exits 0 when the scenario holds, and 3 when it does not, naming each fault and the JSON Pointer to it.
     """
     logged_at(verbose, quiet)
-    with refused_at({'scenario': 'SCENARIO'}):
-        report = check_scenario(
-            scenario_name,
-            profile_name,
-            rows=rows,
-            seed=seed,
-            format=file_format,
-            file_rows=file_rows,
-            partition_by=partition_keys(partition_by, no_partitions),
-        )
+    report = check_scenario(
+        scenario_name,
+        profile_name,
+        rows=rows,
+        seed=seed,
+        format=file_format,
+        file_rows=file_rows,
+        partition_by=partition_keys(partition_by, no_partitions),
+    )
     typer.echo(report.to_json() if as_json else report.to_markdown(), nl=False)
     if not report.passed:
-        raise CheckFailed(report)
+        raise CheckFailed(report, field='scenario', value=scenario_name)
 
 
 @schemas_app.command(

@@ -225,14 +225,21 @@ def read_document(path: Path, codes: DocumentCodes = PROFILE_DOCUMENT) -> Any:
 
 
 def write_document(document: Any, path: Path) -> None:
+    """Write `document` as JSON where `path` ends `.json`, else as YAML, leaving the old file whole if the write fails."""
+    if path.suffix == '.json':
+        text = json.dumps(to_plain(document), indent=2, allow_nan=False) + '\n'
+    else:
+        buffer = io.StringIO()
+        yaml().dump(document, buffer)
+        text = buffer.getvalue()
+    write_text_whole(text, path)
+
+
+def write_text_whole(text: str, path: Path) -> None:
     """Write beside the target, then rename over it, so a write that fails leaves the old file whole."""
     staged = path.with_name(f'.{path.name}.tmp')
     try:
-        if path.suffix == '.json':
-            staged.write_text(json.dumps(to_plain(document), indent=2, allow_nan=False) + '\n')
-        else:
-            with staged.open('w') as fh:
-                yaml().dump(document, fh)
+        staged.write_text(text, encoding='utf-8')
         staged.replace(path)
     finally:
         staged.unlink(missing_ok=True)

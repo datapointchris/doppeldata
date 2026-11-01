@@ -19,6 +19,7 @@ from typing import Any
 from doppeldata import errors
 from doppeldata import issue_codes
 from doppeldata.aws_sessions import aws_profile_chosen
+from doppeldata.counted_nouns import counted
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import InvalidArgument
@@ -248,7 +249,7 @@ def profile_in_dialect(
         )
         if changed is None:
             named = edges_from.path or edges_from.document.get('name')
-            log.warning('%s was made from these files with these settings, so it is returned unchanged', named)
+            log.warning(f'{named} was made from these files with these settings, so it is returned unchanged')
             return edges_from
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=3)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
@@ -256,17 +257,11 @@ def profile_in_dialect(
     importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
     issues = only.validate()
     if issues:
-        log.error('the profile written of %s fails its own schema, which is a bug in doppeldata', ', '.join(source.roots))
+        log.error(f'the profile written of {", ".join(source.roots)} fails its own schema, which is a bug in doppeldata')
         raise InvalidProfile(f'the profile of {data!r}', issues)
     held = only.document
-    log.info(
-        '%s: profiled %s rows and %d columns with %s in %.2f s',
-        source.name,
-        f'{held["dataset"]["rows"]:,}',
-        len(held['columns']),
-        engine,
-        time.monotonic() - started,
-    )
+    measured = f'{counted(held["dataset"]["rows"], "row")} and {counted(len(held["columns"]), "column")}'
+    log.info(f'{source.name}: profiled {measured} with {engine} in {time.monotonic() - started:.2f} s')
     if edges_from is not None:
         earlier, now = (column_names(document.to_plain()) for document in (edges_from, only))
         undescribed, missing = [name for name in now if name not in earlier], [name for name in earlier if name not in now]
@@ -467,10 +462,11 @@ def listed_source(data: Any, engine: str = 'polars') -> tuple[Source, list[Engin
     sources = importlib.import_module(SOURCES_MODULE)
     source: Source = sources.resolve(data)
     if source.format is not None:
-        held = f'{sum(file.size for file in source.files):,}'
-        log.info('%s: %d %s files, %s bytes', ', '.join(source.roots), len(source.files), source.format.value, held)
+        files = counted(len(source.files), f'{source.format.value} file')
+        held = counted(sum(file.size for file in source.files), 'byte')
+        log.info(f'{", ".join(source.roots)}: {files}, {held}')
         for file in source.files:
-            log.debug('%s: %s bytes', file.path, f'{file.size:,}')
+            log.debug(f'{file.path}: {counted(file.size, "byte")}')
     if source.table is not None and sources.is_spark_frame(source.table) and not chosen.sessioned:
         message = f"a Spark DataFrame is profiled with engine='spark', and this run chose {engine}"
         raise SourceError(issue_codes.ENGINE_DOES_NOT_READ, message, value=engine, valid=['spark'])

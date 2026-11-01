@@ -1,7 +1,6 @@
 """The public `generate`, `sample`, `stream`, `plan` and `write`, each taking one table's profile or a Bundle, above the modules
 that generate each."""
 
-import json
 import logging
 import os
 import time
@@ -17,6 +16,7 @@ from doppeldata.bundle_generation import plan_bundle
 from doppeldata.bundle_generation import run_of
 from doppeldata.bundle_generation import write_bundle
 from doppeldata.column_overrides import Overrides
+from doppeldata.counted_nouns import counted
 from doppeldata.dataset_generation import ArrowStreamExportable
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.dataset_generation import WritePlan
@@ -238,8 +238,7 @@ def plan(
         if isinstance(run, BundleRun):
             return plan_bundle(run, out, choices=choices, scenario=scenario)
         prepared = prepared_write(run.profile, out, run.rows, run.seed, choices, scenario)
-        applied = json.loads(prepared.arguments.scenario[0])['scenario'] if prepared.arguments.scenario is not None else None
-        return write_plan_of(prepared.engine, prepared.options, prepared.destination, prepared.one_file, applied)
+        return write_plan_of(prepared.engine, prepared.options, prepared.destination, prepared.scenario, prepared.one_file)
 
 
 @overload
@@ -377,14 +376,10 @@ def write(
             store = prepared.engine.write(prepared.options, prepared.destination, threads=threads, replace=replace, s3_store=s3_store)
             written = Manifest.from_json(store)
     rows_written = sum(file['rows'] for file in written.files)
-    log.info(
-        '%s: wrote %d %s files holding %s rows in %.2f s',
-        prepared.destination,
-        len(written.files),
-        written.format,
-        f'{rows_written:,}',
-        time.monotonic() - started,
-    )
+    target = prepared.one_file if prepared.one_file is not None else prepared.destination
+    elapsed = time.monotonic() - started
+    files = counted(len(written.files), f'{written.format} file')
+    log.info(f'{target}: wrote {files} holding {counted(rows_written, "row")} in {elapsed:.2f} s')
     for file in written.files:
-        log.debug('%s: %s rows, %s bytes', file['path'], f'{file["rows"]:,}', f'{file["bytes"]:,}')
+        log.debug(f'{file["path"]}: {counted(file["rows"], "row")}, {counted(file["bytes"], "byte")}')
     return written

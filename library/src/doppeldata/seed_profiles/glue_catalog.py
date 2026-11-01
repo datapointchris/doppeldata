@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from doppeldata import issue_codes
+from doppeldata.counted_nouns import counted
 from doppeldata.errors import PackagesMissing
 from doppeldata.errors import SourceError
 from doppeldata.errors import uninstalled
@@ -89,7 +90,8 @@ def glue_profile(
             pages = client.get_paginator('get_partitions').paginate(**located, TableName=described['Name'], ExcludeColumnSchema=True)
             partitions = [partition['Values'] for page in pages for partition in page['Partitions']]
     columns = len(described.get('StorageDescriptor', {}).get('Columns') or [])
-    log.info('%s: %d columns and %d listed partitions, read through %s', named, columns, len(partitions), client.meta.endpoint_url)
+    listed = counted(len(partitions), 'listed partition')
+    log.info(f'{named}: {counted(columns, "column")} and {listed}, read through {client.meta.endpoint_url}')
     return catalog_table(described, partitions, named, detected_entities or {}).profile()
 
 
@@ -102,7 +104,7 @@ def glue_client(region: str | None) -> Any:
 
     try:
         client = aws_session().client('glue', region_name=region, config=CLIENT_CONFIG)
-        log.info('reading the Glue Data Catalog in region %s, with AWS profile %s', client.meta.region_name, profile_in_force())
+        log.info(f'reading the Glue Data Catalog in region {client.meta.region_name}, with AWS profile {profile_in_force()}')
         return client
     except exceptions.NoRegionError as error:
         message = "the Glue Data Catalog is regional, and the AWS environment names no region; give the catalog's, or set AWS_REGION"

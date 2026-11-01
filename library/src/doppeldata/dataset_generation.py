@@ -386,7 +386,7 @@ def generation_source(
     if scenario is None and written.scenario is not None:
         taken.append(f'scenario {written.scenario.name}')
     if taken:
-        log.warning('%s, as %s was written', ', '.join(taken), written.path)
+        log.warning(f'{", ".join(taken)}, as {written.path} was written')
     return source
 
 
@@ -492,7 +492,8 @@ def rows_plan(
 class PreparedWrite:
     """A write's destination and the engine's options for it, resolved from the arguments `plan` and `write` take.
 
-    `one_file` is the file a write to one local file makes, and `destination` is then its directory.
+    `scenario` is the one scenario the engine applies, composed from those given. `one_file` is the file a write to one
+    local file makes, and `destination` is then its directory.
     """
 
     destination: str
@@ -502,6 +503,7 @@ class PreparedWrite:
     engine: '_core.Plan'
     choices_json: str
     options: '_core.WriteOptions'
+    scenario: Scenario | None
     one_file: Path | None = None
 
 
@@ -532,7 +534,7 @@ def prepared_write(
     engine.check_writable(options)
     if one_file is not None:
         refuse_other_extension(one_file, engine.ranges_json(options))
-    return PreparedWrite(destination, scheme, bucket, arguments, engine, choices_json, options, one_file)
+    return PreparedWrite(destination, scheme, bucket, arguments, engine, choices_json, options, applied, one_file)
 
 
 def s3_store_of(destination: str, bucket: str | None) -> dict[str, Any] | None:
@@ -545,10 +547,10 @@ def s3_store_of(destination: str, bucket: str | None) -> dict[str, Any] | None:
 
 
 def write_plan_of(
-    engine: '_core.Plan', options: '_core.WriteOptions', destination: str, target: Path | None = None, scenario: str | None = None
+    engine: '_core.Plan', options: '_core.WriteOptions', destination: str, scenario: Scenario | None, target: Path | None = None
 ) -> WritePlan:
-    """What writing `engine`'s dataset with `options` to `destination` would do, as the one file `target` where given,
-    under the scenario named `scenario`."""
+    """What writing `engine`'s dataset with `options` to `destination` would do, as the one file `target` where given.
+    `scenario` is the one the engine was planned with, so every caller names it, None included."""
     settings = json.loads(engine.written_settings_json(options))
     ranges = [PlannedRange(**planned) for planned in json.loads(engine.ranges_json(options))]
     if target is not None:
@@ -569,6 +571,6 @@ def write_plan_of(
         rows_written=engine.rows_written,
         estimated_bytes=engine.estimate_bytes(options),
         cdc=stream,
-        scenario=scenario,
+        scenario=scenario.name if scenario is not None else None,
         one_file=str(target) if target is not None else None,
     )

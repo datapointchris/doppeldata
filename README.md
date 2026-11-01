@@ -227,7 +227,9 @@ uv add sweetviz  # for check(..., html=...), the side-by-side HTML
 and charset-normalizer for CSV or TSV. A Spark install brings pyspark, and the CLI declares none.
 
 Code that writes to S3 installs boto3, which resolves the AWS environment's credentials, SSO
-profiles included. Each call reaching AWS takes `aws_profile=` to name the profile for that call.
+profiles included. Each call reaching S3 or the Glue catalog through boto3 takes `aws_profile=` to
+name the profile for that call. Spark reads S3 with its session's own credentials, so
+`doppeldata.spark` takes none.
 
 The library runs on Python 3.11 and later, and the command line on 3.13 and later. The command line
 is a separate distribution, so a project importing the library installs no CLI dependencies. The
@@ -255,7 +257,8 @@ doppeldata data check orders.profile.yaml synthetic/orders/        # the data ag
   profile, row count and seed. Each records it in its `_manifest.json`.
 - **`--aws-profile` names the AWS profile S3 and the Glue Data Catalog are reached with.** Left out,
   `AWS_PROFILE` names it, then boto3's default chain. A name the AWS config lacks is refused before
-  a byte is written.
+  a byte is written. `profile create --engine spark` refuses it, because Spark reads S3 with its
+  session's own credentials.
 - **`profile check` and `data check` exit 0 when clean and 3 on a finding**, so CI can run either.
   Each prints a Markdown report a pull request takes as it is.
 - **With no data at hand, an example stands in.** `doppeldata profile list` names them, and

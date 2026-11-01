@@ -7,6 +7,7 @@ import os
 from typing import ClassVar
 
 from doppeldata import issue_codes
+from doppeldata.counted_nouns import counted
 from doppeldata.dataset_generation import WriteChoices
 from doppeldata.dataset_generation import prepared_write
 from doppeldata.issue_codes import Issue
@@ -16,10 +17,6 @@ from doppeldata.profile_sources import profile_from
 from doppeldata.profile_sources import read_as
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
-
-
-def counted(count: int, noun: str) -> str:
-    return f'{count:,} {noun}' + ('' if count == 1 else 's')
 
 
 @dc.dataclass(frozen=True)
