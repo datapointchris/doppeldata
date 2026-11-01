@@ -167,6 +167,13 @@ table, naming its columns in `column` and `paired_with`.
   lists leave the check. So no cell's count is written or reported. A frozen value list
   keeps its floor, because a column's `overflow` change reports the share of values outside it.
   `profile diff` reads B's tables as B states them, since B is a file that keeps the floor.
+- **A check measures the generated data's correlations on `CHECKED_DEPENDENCE_SAMPLE_ROWS`, ten
+  times PROFILE's sample.** PROFILE states each Spearman value from a seeded sample of
+  `FIT_SAMPLE_ROWS`. A second sample that size would double the variance of the difference between
+  the two. A sample's variance falls with its rows, so ten times the rows adds a tenth of PROFILE's.
+  The difference then spreads by √1.1 of PROFILE's own spread, within 5% of what every generated
+  row would give. Every row would cost a sort of every row per ranked column on a large Spark
+  output. The fits read a sample of `FIT_SAMPLE_ROWS` of those rows.
 
 300,000 rows generated from the committed fixture pass both:
 

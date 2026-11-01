@@ -44,7 +44,8 @@ PAIR_ROWS = 100
 ROWS_PER_CELL = 5
 # A string or integer column holding no more distinct values than a string lists is categorical, as a boolean is.
 CATEGORICAL_VALUES = TOP_VALUES_THRESHOLD
-# A conditional table is given the column of a correlated categorical pair holding fewer values, where it holds this many at most.
+# A conditional table is given the column of a correlated categorical pair holding fewer values, or a float column
+# listing every value it holds, where it holds this many at most.
 GIVEN_VALUES = 50
 # A categorical pair whose sampled Cramér's V reaches this is counted over every row, and gets a conditional table where
 # the V of those counts reaches CORRELATION_FLOOR. The sample picks which pairs are counted, so two engines' samples can
@@ -165,20 +166,26 @@ def column_dependence(
     measured = measured_pairs(backend, sample, columns, k_min)
     correlations, ratios = kept_correlations(measured, position, frozen)
     dependencies, looked_up = functional_dependencies(backend, described, columns, rows, k_min, position)
-    tables, table_floors = conditional_tables(backend, described, columns, measured, k_min, frozen)
-    before_warps = {'correlations': correlations, 'dependencies': dependencies, 'conditionals': tables}
-    copula = copula_pairs(correlations, draft_plan(columns, derived, before_warps).copula_groups())
-    quantiles, quantile_floors = conditional_quantiles(backend, described, columns, measured, k_min, frozen, copula)
-    curve_parents = {entry['column']: entry['given'] for entry in quantiles}
-    rates, rate_floors = conditional_fractions(backend, sample, described, columns, k_min, frozen, curve_parents, copula)
-    sections = {
-        'correlations': correlations,
-        'correlation_ratios': ratios,
-        'conditionals': tables,
-        'conditional_quantiles': quantiles,
-        'conditional_fractions': rates,
-        'dependencies': dependencies,
-    }
+    refused: frozenset[tuple[str, str]] = frozenset()
+    while True:
+        tables, table_floors = conditional_tables(backend, sample, described, columns, measured, k_min, frozen, refused)
+        before_warps = {'correlations': correlations, 'dependencies': dependencies, 'conditionals': tables}
+        copula = copula_pairs(correlations, draft_plan(columns, derived, before_warps).copula_groups())
+        quantiles, quantile_floors = conditional_quantiles(backend, described, columns, measured, k_min, frozen, copula)
+        curve_parents = {entry['column']: entry['given'] for entry in quantiles}
+        rates, rate_floors = conditional_fractions(backend, sample, described, columns, k_min, frozen, curve_parents, copula)
+        sections = {
+            'correlations': correlations,
+            'correlation_ratios': ratios,
+            'conditionals': tables,
+            'conditional_quantiles': quantiles,
+            'conditional_fractions': rates,
+            'dependencies': dependencies,
+        }
+        refusing = refused_float_tables(columns, derived, sections)
+        if not refusing:
+            break
+        refused |= refusing
     sections = without_set_aside(sections, draft_plan(columns, derived, sections).set_aside())
     floors: dict[tuple[str, str, str], int] = {}
     for name, floored in (('conditionals', table_floors), ('conditional_quantiles', quantile_floors)):
@@ -191,6 +198,34 @@ def column_dependence(
             lhs, rhs = dependency['lhs'][0], dependency['rhs']
             floors[('dependencies', lhs, rhs)] = looked_up[(lhs, rhs)]
     return Dependence(sections, floors)
+
+
+def refused_float_tables(
+    columns: list[DependenceColumn], derived: dict[str, dict[str, Any]], sections: dict[str, Any]
+) -> frozenset[tuple[str, str]]:
+    """Each table given a float column, by its given and child, that the engine's plan of the draft without such tables
+    draws in a copula group, or whose adding makes the plan set aside an entry that draft keeps. The first would take
+    its child out of the copula, splitting the group where the child joined two of its parts. The second is a loop
+    through the table, such as its given's null rate stated given its child, which the engine breaks by setting the
+    later entry aside and losing what it places. So the table is refused, and its child takes its next strongest
+    given."""
+    floats = {column.name for column in columns if listed_float(column)}
+    tables = sections['conditionals']
+    plain = [table for table in tables if table['given'] not in floats]
+    if len(plain) == len(tables):
+        return frozenset()
+    without = sections | {'conditionals': plain}
+    plan = draft_plan(columns, derived, without)
+    members = {name for group in plan.copula_groups() for name in group}
+    kept = set(plan.set_aside())
+    return frozenset(
+        (table['given'], table['column'])
+        for table in tables
+        if table['given'] in floats
+        and (
+            table['column'] in members or set(draft_plan(columns, derived, without | {'conditionals': [*plain, table]}).set_aside()) - kept
+        )
+    )
 
 
 def draft_plan(columns: list[DependenceColumn], derived: dict[str, dict[str, Any]], sections: dict[str, Any]) -> _core.Plan:
@@ -299,21 +334,56 @@ def measured_pairs(
         (a, b, SPEARMAN, value if held >= least else None)
         for (a, b), (value, held) in zip(rank_pairs, backend.rank_correlations(sample, rank_pairs), strict=True)
     ]
-    held_cells = [both_held(cells) for cells in backend.cross_counts(sample, category_pairs)]
     found += [
-        (
-            a,
-            b,
-            CRAMERS_V,
-            cramers_v(cells) if sum(count for _, _, count in cells) >= max(least, ROWS_PER_CELL * table_cells(cells)) else None,
-        )
-        for (a, b), cells in zip(category_pairs, held_cells, strict=True)
+        (a, b, CRAMERS_V, sampled_v(both_held(cells), least))
+        for (a, b), cells in zip(category_pairs, backend.cross_counts(sample, category_pairs), strict=True)
     ]
     found += [
         (a, b, CORRELATION_RATIO, correlation_ratio(groups) if enough_spread(groups, spread[a], least) else None)
         for (a, b), groups in zip(ratio_pairs, backend.rank_moments(sample, ratio_pairs), strict=True)
     ]
     return found
+
+
+def sampled_v(cells: list[tuple[str, str, int]], least: int) -> float | None:
+    """The bias-corrected Cramér's V of a sampled pair's `cells`, or None where they hold fewer than `least` rows or
+    `ROWS_PER_CELL` per cell."""
+    return cramers_v(cells) if sum(count for _, _, count in cells) >= max(least, ROWS_PER_CELL * table_cells(cells)) else None
+
+
+def listed_float(column: DependenceColumn) -> bool:
+    """Whether a float column lists every value it holds, `GIVEN_VALUES` at most, each finite. Its values then key a
+    conditional table's rows as a category's do, each written by `float_keyed`, which the engine reads back as the same
+    number. The engine places no row by an infinity or a NaN."""
+    numeric = column.entry.get('numeric') or {}
+    listed = numeric.get('top_values') or []
+    return (
+        column.spec.kind is ColumnKind.FLOAT
+        and role(column) == RANKED
+        and column.distinct <= GIVEN_VALUES
+        and bool(listed)
+        and not numeric.get('other_fraction')
+        and all(math.isfinite(item['value']) for item in listed)
+    )
+
+
+def float_keyed(cells: list[tuple[str | None, str | None, int]]) -> list[tuple[str | None, str | None, int]]:
+    """`cells` with each given value written as Python writes the float, the shortest text reading back as the same
+    number, as `listed_values` writes the given's list. Polars and Spark each spell an exponent their own way."""
+    return [(None if given is None else repr(float(given)), child, count) for given, child, count in cells]
+
+
+def listed_float_trials(
+    backend: Backend, sample: Table, columns: list[DependenceColumn], k_min: int
+) -> list[tuple[str, str, float | None]]:
+    """Each pair of a float column `listed_float` admits and a categorical column holding as many values or more, the
+    float column first, with their Cramér's V on `sample` as a categorical pair's."""
+    categorical = [column for column in columns if role(column) == CATEGORICAL]
+    pairs = [
+        (given.name, child.name) for given in columns if listed_float(given) for child in categorical if given.distinct <= child.distinct
+    ]
+    least = max(PAIR_ROWS, k_min)
+    return [(a, b, sampled_v(both_held(cells), least)) for (a, b), cells in zip(pairs, backend.cross_counts(sample, pairs), strict=True)]
 
 
 def both_held(cells: list[tuple[str | None, str | None, int]]) -> list[tuple[str, str, int]]:
@@ -399,25 +469,32 @@ def correlation_ratio(groups: list[tuple[int, float, float]]) -> float | None:
 
 def conditional_tables(
     backend: Backend,
+    sample: Table,
     described: Table,
     columns: list[DependenceColumn],
     measured: list[tuple[str, str, str, float | None]],
     k_min: int,
     frozen: FrozenPairs,
+    refused: frozenset[tuple[str, str]] = frozenset(),
 ) -> tuple[list[dict[str, Any]], dict[tuple[str, str], int]]:
     """A conditional table for each categorical pair whose column of fewer values holds `GIVEN_VALUES` at most, and
     whose Cramér's V reaches `CONDITIONAL_TRIED` on the sample and `CORRELATION_FLOOR` over every row, and for each
-    pair `frozen` holds whose columns list values. The generator draws a column from one table, so a child keeps the
-    pair `frozen` holds, else its strongest. The fewest rows a kept cell holds, by its given and child column."""
+    pair `frozen` holds whose columns list values. A float column `listed_float` admits is a given as a categorical
+    column is, of a categorical column holding as many values or more. A copula member drawn so then places the
+    rows of a column it otherwise draws apart from, as the source does. A pair `refused` names by its given and child
+    is left out. The generator draws a column from one table, so a child keeps the pair `frozen` holds, else its
+    strongest. The fewest rows a kept cell holds, by its given and child column."""
     by_name = {column.name: column for column in columns}
+    trials = [(a, b, value) for a, b, method, value in measured if method == CRAMERS_V]
+    trials += listed_float_trials(backend, sample, columns, k_min)
     pairs: list[tuple[str, str, list[str], list[str]]] = []
-    for a, b, method, value in measured:
-        if method != CRAMERS_V:
-            continue
+    for a, b, value in trials:
         first, second = by_name[a], by_name[b]
         fewer, more = (first, second) if first.distinct <= second.distinct else (second, first)
         held = frozen.gives('conditionals', fewer.name, more.name) or frozen.gives('conditionals', more.name, fewer.name)
-        if not held and (value is None or value < CONDITIONAL_TRIED or fewer.distinct > GIVEN_VALUES):
+        if (fewer.name, more.name) in refused or (
+            not held and (value is None or value < CONDITIONAL_TRIED or fewer.distinct > GIVEN_VALUES)
+        ):
             continue
         if held and not frozen.gives('conditionals', fewer.name, more.name):
             fewer, more = more, fewer
@@ -426,7 +503,9 @@ def conditional_tables(
             pairs.append((fewer.name, more.name, fewer_values, more_values))
     strongest: dict[str, tuple[tuple[bool, float], dict[str, Any], int]] = {}
     counted = backend.cross_counts(described, [(given, child) for given, child, _, _ in pairs])
-    for (given, child, given_values, child_values), cells in zip(pairs, counted, strict=True):
+    floats = {column.name for column in columns if listed_float(column)}
+    for (given, child, given_values, child_values), counts in zip(pairs, counted, strict=True):
+        cells = float_keyed(counts) if given in floats else counts
         held, strength = frozen.gives('conditionals', given, child), cramers_v(both_held(cells)) or 0.0
         if not held and strength < CORRELATION_FLOOR:
             continue
@@ -511,18 +590,19 @@ def conditional_table(
 
 
 def conditionals_without_floor(
-    backend: Backend, described: Table, frozen: tuple[FrozenConditional, ...], columns: set[str]
+    backend: Backend, described: Table, frozen: tuple[FrozenConditional, ...], columns: set[str], floats: frozenset[str] = frozenset()
 ) -> list[dict[str, Any]]:
     """Each table `frozen` holds whose two columns `columns` names, counted over `described` cell for cell: each child
     value an earlier row states, as its share of the given value's rows holding a child value, whatever its rows. A given
-    value no such row holds has no row. No floor holds a cell, so no profile may hold these tables."""
+    value no such row holds has no row. A given `floats` names is keyed by `float_keyed`. No floor holds a cell, so no
+    profile may hold these tables."""
     held = [entry for entry in frozen if {entry.given, entry.child} <= columns]
     if not held:
         return []
     tables = []
-    for entry, cells in zip(held, backend.cross_counts(described, [(entry.given, entry.child) for entry in held]), strict=True):
+    for entry, counts in zip(held, backend.cross_counts(described, [(entry.given, entry.child) for entry in held]), strict=True):
         by_given: dict[str, collections.Counter[str]] = collections.defaultdict(collections.Counter)
-        for given_value, child_value, count in cells:
+        for given_value, child_value, count in float_keyed(counts) if entry.given in floats else counts:
             if given_value is not None and child_value is not None:
                 by_given[given_value][child_value] += count
         fractions = {

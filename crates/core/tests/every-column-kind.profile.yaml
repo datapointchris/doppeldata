@@ -372,6 +372,16 @@ columns:
     null_fraction: 0.02
     string:
       top_values: [{value: web, fraction: 0.5}, {value: store, fraction: 0.3}, {value: phone, fraction: 0.2}]
+  # A float listing every value it holds, a conditional table's given.
+  - name: listed_float_given
+    physical_type: double
+    numeric:
+      top_values: [{value: 1.0, fraction: 0.9}, {value: -1.0, fraction: 0.1}]
+      other_fraction: 0.0
+  # Drawn from its conditional table given listed_float_given, each row leaving a share to the values it states least.
+  - name: drawn_given_a_float
+    string:
+      top_values: [{value: paid, fraction: 0.56}, {value: owed, fraction: 0.3}, {value: void, fraction: 0.14}]
   # Drawn through its quantiles given channel, with its zero and null rates given channel.
   - name: paid_amount
     physical_type: double
@@ -428,6 +438,18 @@ dataset:
       column: top_values_with_indexed_other
       fractions:
         'true': {shipped: 0.5}
+    # Rust writes -1.0 as -1 and Arrow as -1.0, so a float given's rows are found by the number each key spells.
+    - given: listed_float_given
+      column: drawn_given_a_float
+      fractions:
+        '1.0': {paid: 0.6, owed: 0.3}
+        '-1.0': {void: 0.5}
+    # Each row's rest draws the value beyond the child's extremes too.
+    - given: listed_float_given
+      column: top_values_with_one_beyond_the_extremes
+      fractions:
+        '1.0': {'1': 0.7778, '2': 0.1333}
+        '-1.0': {'1': 0.417, '2': 0.147}
   conditional_quantiles:
     - given: channel
       column: paid_amount

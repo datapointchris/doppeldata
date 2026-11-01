@@ -49,6 +49,8 @@ use self::formula::Formula;
 use self::parent_keys::NULL;
 use self::parent_keys::OTHER;
 use self::parent_keys::ParentKeys;
+use self::parent_keys::float_bits;
+use self::parent_keys::float_value;
 use super::BlockPosition;
 use super::ColumnPlan;
 use super::PlanContext;
@@ -201,7 +203,7 @@ enum ChildValues {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Slot<T> {
     Value(T),
-    /// A value the child lists none of, drawn as the child's listed draw draws one on a miss.
+    /// A value the child's profile lists none of, drawn as the child's own draw draws one.
     Rest,
     Own,
 }
@@ -392,8 +394,8 @@ const SHARE_SLACK: f64 = 1e-9;
 const UNSTATED_FLOOR: f64 = 0.01;
 
 /// Each value a column lists, keyed as a table keys it, with its share of the column's values, and the share of
-/// values it lists none of.
-fn listed_shares(column: &Column) -> Option<(Vec<(String, f64)>, f64)> {
+/// values it lists none of. A number takes the spelling of the key in `spellings` naming it, so `-1.0` and `-1` meet.
+fn listed_shares<'a>(column: &Column, spellings: impl IntoIterator<Item = &'a String>) -> Option<(Vec<(String, f64)>, f64)> {
     let other = |rate: Option<Rate>| rate.map_or(0.0, |rate| rate.0);
     if let Some(string) = &column.string
         && let Some(top) = &string.top_values
@@ -406,7 +408,16 @@ fn listed_shares(column: &Column) -> Option<(Vec<(String, f64)>, f64)> {
     if let Some(numeric) = &column.numeric
         && let Some(top) = &numeric.top_values
     {
-        let listed = top.iter().map(|listed| (format!("{}", listed.value), listed.fraction.0)).collect();
+        let spelled: HashMap<u64, &String> = spellings
+            .into_iter()
+            .filter_map(|key| float_value(key).map(|value| (value, key)))
+            .collect();
+        let key = |value: f64| {
+            float_bits(value)
+                .and_then(|bits| spelled.get(&bits))
+                .map_or_else(|| format!("{value}"), |key| (*key).clone())
+        };
+        let listed = top.iter().map(|listed| (key(listed.value), listed.fraction.0)).collect();
         return Some((listed, other(numeric.other_fraction)));
     }
     let yes = column.boolean.as_ref()?.true_fraction?.0;
@@ -428,8 +439,13 @@ impl RestShares {
     /// The rest of `conditional`'s rows, or `None` where its given or child column lists no values, which leaves each
     /// row's rest, and each given value with no row, to the child's own draw.
     fn of(conditional: &Conditional, given: &Column, child: &Column) -> Option<Self> {
-        let (child_listed, unlisted) = listed_shares(child)?;
-        let (given_listed, given_other) = listed_shares(given)?;
+        let child_keys = conditional
+            .fractions
+            .values()
+            .chain(&conditional.other_fractions)
+            .flat_map(BTreeMap::keys);
+        let (child_listed, unlisted) = listed_shares(child, child_keys)?;
+        let (given_listed, given_other) = listed_shares(given, conditional.fractions.keys())?;
         let share_of = |key: &str| given_listed.iter().find(|(value, _)| value == key).map_or(0.0, |(_, rate)| *rate);
         let other_share = given_other
             + given_listed

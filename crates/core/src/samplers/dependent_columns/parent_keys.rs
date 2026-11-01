@@ -1,14 +1,24 @@
 //! Each row's place among the values a dependence lists for its parent column. A value is a key as
 //! the profile writes a category: a string as itself, an integer in decimal, a boolean as `true` or
-//! `false`, and any other type as Arrow writes it as text.
+//! `false`, a float by the number its key spells, and any other type as Arrow writes it as text.
 
 use std::collections::HashMap;
 
 use arrow_array::Array;
 use arrow_array::ArrayRef;
 use arrow_array::cast::AsArray;
+use arrow_array::types::Float64Type;
 use arrow_array::types::Int64Type;
 use arrow_schema::DataType;
+
+/// The number a float key names, -0 read as 0, so `1`, `1.0` and `1e0` name one value whatever wrote them.
+pub(crate) fn float_value(key: &str) -> Option<u64> {
+    key.parse::<f64>().ok().and_then(float_bits)
+}
+
+pub(crate) fn float_bits(value: f64) -> Option<u64> {
+    value.is_finite().then(|| (value + 0.0).to_bits())
+}
 
 /// A row whose parent holds a value the dependence does not list.
 pub(crate) const OTHER: u32 = u32::MAX - 1;
@@ -19,6 +29,7 @@ pub(crate) const NULL: u32 = u32::MAX;
 pub(crate) struct ParentKeys {
     by_text: HashMap<String, u32>,
     by_integer: HashMap<i64, u32>,
+    by_float: HashMap<u64, u32>,
 }
 
 impl ParentKeys {
@@ -34,7 +45,15 @@ impl ParentKeys {
                     .map(|value| (value, at))
             })
             .collect();
-        Self { by_text, by_integer }
+        let by_float = by_text
+            .iter()
+            .filter_map(|(key, &at)| float_value(key).map(|value| (value, at)))
+            .collect();
+        Self {
+            by_text,
+            by_integer,
+            by_float,
+        }
     }
 
     /// Each row's place among the keys, or [`OTHER`] or [`NULL`].
@@ -68,6 +87,17 @@ impl ParentKeys {
                 rows.map(|row| match integers.is_null(row) {
                     true => NULL,
                     false => self.by_integer.get(&integers.value(row)).copied().unwrap_or(OTHER),
+                })
+                .collect()
+            }
+            data_type if data_type.is_floating() => {
+                let floats = arrow_cast::cast(array, &DataType::Float64).expect("a float array casts to Float64");
+                let floats = floats.as_primitive::<Float64Type>();
+                rows.map(|row| match floats.is_null(row) {
+                    true => NULL,
+                    false => float_bits(floats.value(row))
+                        .and_then(|value| self.by_float.get(&value).copied())
+                        .unwrap_or(OTHER),
                 })
                 .collect()
             }

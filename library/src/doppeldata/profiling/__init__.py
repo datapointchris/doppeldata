@@ -223,6 +223,7 @@ def profile_in_dialect(
     type_mix_columns: Collection[str] = (),
     reuse_unchanged: bool = True,
     count_frozen_conditionals_without_floor: bool = False,
+    dependence_sample_rows: int = table_profile.FIT_SAMPLE_ROWS,
 ) -> tuple[Profile, list[dict[str, Any]]]:
     """`profile`, reading delimited `data` in `dialect` where one is given rather than in the dialect its files are
     sniffed in, as a check reads files whose manifest records how they were written. Each string column `type_mix_columns`
@@ -231,7 +232,8 @@ def profile_in_dialect(
 
     Beside the profile, each conditional table `edges_from` states, counted cell for cell whatever its rows where
     `count_frozen_conditionals_without_floor`. No floor holds those cells, so they never enter the profile. A check
-    sets it, and reports only the divergence they give."""
+    sets it, and reports only the divergence they give. The correlations read a seeded sample of
+    `dependence_sample_rows` rows, which a check sets larger, so its sampling adds little to the earlier profile's."""
     settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
     started = time.monotonic()
     listed, reading = listed_source(data, engine)
@@ -258,7 +260,11 @@ def profile_in_dialect(
             return edges_from, []
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=3)
     frozen = (
-        table_profile.FrozenLayout.of(edges_from.to_plain(), count_conditionals_without_floor=count_frozen_conditionals_without_floor)
+        table_profile.FrozenLayout.of(
+            edges_from.to_plain(),
+            count_conditionals_without_floor=count_frozen_conditionals_without_floor,
+            dependence_sample_rows=dependence_sample_rows,
+        )
         if edges_from is not None
         else None
     )

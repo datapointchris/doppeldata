@@ -401,6 +401,9 @@ pub(crate) struct NumericSampler {
     /// The profile's listed values, then those drawn beyond the trimmed extremes.
     pub(crate) listed: Option<ListedValues<f64>>,
     pub(crate) beyond_extremes: usize,
+    /// The values drawn beyond the trimmed extremes, beside the share `cdf` draws, which a conditional table's rest
+    /// draws from. `None` where no value lies beyond them, and the rest draws through `cdf` alone.
+    pub(crate) unlisted: Option<ListedValues<f64>>,
     /// Where set, a value drawn through `cdf` is the one at an index the row draws.
     pub(crate) index: Option<ValueIndex>,
 }
@@ -427,6 +430,7 @@ impl NumericSampler {
                 output,
                 listed: None,
                 beyond_extremes: 0,
+                unlisted: None,
                 index,
             });
         };
@@ -440,6 +444,7 @@ impl NumericSampler {
             output,
             listed: Some(listed),
             beyond_extremes: numbers.beyond_extremes,
+            unlisted: numbers.unlisted,
             index,
         })
     }
@@ -448,9 +453,10 @@ impl NumericSampler {
         self.draw(self.listed.as_ref(), at, keys, rows, nulls)
     }
 
-    /// Each row drawn as a listed draw's miss draws it: through `cdf`, which leaves the listed values out.
+    /// Each row a value the profile lists none of: one beyond the trimmed extremes by its rate, or else drawn as a
+    /// listed draw's miss draws it, through `cdf`, which leaves the listed values out.
     pub(crate) fn generate_rest(&self, at: &BlockPosition, keys: &StreamKeys, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
-        self.draw(None, at, keys, rows, nulls)
+        self.draw(self.unlisted.as_ref(), at, keys, rows, nulls)
     }
 
     fn draw(

@@ -69,12 +69,13 @@ dataset:
   with congestion_surcharge`. No matrix lifts the pair past what it holds at that Pearson. So
   where that sits further under the stated value than `correlation_max_abs_diff` allows, `data
   check` fails the pair.
-- **A group draws each member's nulls apart from the other members.** So the rows holding a pair
-  keep each column's own margins. In the New York yellow taxi trips, every `congestion_surcharge`
-  null falls on a row whose `improvement_surcharge` is 1.0. The rows holding both then carry more
-  refunds than either margin says. So their Spearman value is higher than any coupling of the
-  margins reaches. Profiled from April 2024 or January 2025, that pair fails `data check`. In April the privacy
-  floor also folds the −2.5 refunds into the other share, whose curve spreads them.
+- **A group draws each member's nulls apart from the other members, from the column its null rate
+  is given.** In the New York yellow taxi trips, `congestion_surcharge` is null exactly where
+  `payment_type` is 0, and almost no refund has type 0. So the rows holding both surcharges carry more
+  refunds than either margin says, and their Spearman value is higher than any coupling of the
+  margins reaches. Drawn apart from the copula, `payment_type` would put refunds on type 0 at its
+  own share of rows, and null their surcharge. So it is drawn from a conditional table given
+  `improvement_surcharge`, a member listing every value it holds, and refunds keep their surcharge.
 - **Where no matrix holds every stated pair, the group holds a valid one fitted toward the stated
   Spearman values.** Ties raise the Pearson a pair needs. So Spearman values that a valid matrix of
   ranks holds can still ask for Pearsons no valid matrix holds. A column that is the sum of others,
@@ -143,10 +144,12 @@ holds. Minimax only moves that pair nearer its value at the cap, a few thousandt
   that share as no row states of it, each row weighted by its given value's share. That is one step
   of iterative proportional fitting toward the child's own shares, so its marginal holds.
 - **The share of values the column lists none of draws only such values.** It draws as the
-  column's own draw does when its listed draw misses. A string comes from the source below its
-  `top_values`, and a number from the CDF with its listed values cut out. That draw has its own
-  streams. The value at a distinct index is the one the column's own draw holds there, so the two
-  share their distinct values.
+  column's own draw does outside its listed values. A string comes from the source below its
+  `top_values`. A number is one of the values beyond its trimmed extremes at its rate, or else
+  comes from the CDF with its listed values cut out. So `payment_type` drawn given
+  `improvement_surcharge` draws the 5 its distinct count puts beyond its extremes. That draw has
+  its own streams. The value at a distinct index is the one the column's own draw holds there, so
+  the two share their distinct values.
 - **Without `other_fractions`, a given value with no row draws what the rows leave of the child's
   own shares.** Each child value, and the share it lists none of, takes its own share less what
   every row draws of it, each row weighted by its given value's share. A row's draw is its cells and
@@ -158,7 +161,9 @@ holds. Minimax only moves that pair nearer its value at the cap, a few thousandt
   the writer holds at 0 or at least `k_min`. For a child value no row states, it is only what the
   spread estimates.
 - **A value is a key as its text**: a string as itself, an integer in decimal, a boolean as
-  `true` or `false`.
+  `true` or `false`. A float is a key as the number its text reads as, so `-1`, `-1.0` and
+  `-1e0` name one row. The profiler writes a float the way Python does, with the fewest digits
+  that read back as it. Polars, Spark, Arrow and Rust each write some floats differently.
 - **A column takes one parent.** Where two entries name the same child, the first is drawn and the
   second set aside.
 

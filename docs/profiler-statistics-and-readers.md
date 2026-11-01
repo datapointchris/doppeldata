@@ -582,8 +582,9 @@ which `--sample` makes its sample.
   seeded sample repeats none of its values, then confirmed over the whole table. A pair names its
   columns in table order, so Spark's estimated counts never reorder it.
 - **A correlation is measured on the seeded sample of `FIT_SAMPLE_ROWS` rows the fits read.** A
-  correlation names no value, so a sample costs the floor nothing. The measure follows the
-  columns' roles:
+  correlation names no value, so a sample costs the floor nothing. A check's profile of generated
+  data reads `CHECKED_DEPENDENCE_SAMPLE_ROWS`, ten times as many, and fits `FIT_SAMPLE_ROWS` of
+  them. The measure follows the columns' roles:
 
   | Columns | Written as | Measure |
   | --- | --- | --- |
@@ -626,8 +627,20 @@ which `--sample` makes its sample.
   over the 156 sampled rows holding both, against 0.10 over all 19,394.
 
   A table is given the column holding fewer values, where that holds at most `GIVEN_VALUES`, and
-  only where both columns list their values. Its cells are counted, then floored, and each row
-  states its kept cells as shares of their rows. The given column's listed counts and the child
+  only where both columns list their values. A float column listing every value it holds is a
+  given too, of a categorical column holding as many values or more. Its values must be finite.
+  Each key is written as Python writes the float, the shortest text that reads back as it, whichever
+  engine counted the cells. A copula member then places the rows of a column the engine would
+  otherwise draw apart from it. The profiler plans the draft without float-given tables, then
+  with each one, and refuses a table two ways:
+  - **its child is in a copula group without it.** Drawn from the table, the child would leave the
+    copula. In the March 2024 taxi trips, `RatecodeID` given `Airport_fee` would split the
+    surcharges' group from the fares'.
+  - **adding it sets an entry aside.** That is a loop through the table, as where its given's null
+    rate is stated given its child, which the engine breaks by setting an entry aside.
+
+  The child then takes its next strongest given. A table's cells are counted, then floored, and
+  each row states its kept cells as shares of their rows. The given column's listed counts and the child
   column's both stand beside the table, so the floor holds each difference against them:
   - a cell under `k_min` rows is dropped;
   - a given value left with no cell joins `other`, beside the given values the column does not

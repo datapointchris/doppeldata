@@ -102,8 +102,11 @@ NUMERIC_LEVELS = tuple(sorted({*QUANTILES.values(), *EQUAL_DEPTH_LEVELS}))
 LENGTH_LEVELS = tuple(QUANTILES.values())
 # Each place tried is one more comparison of every float value. A column holding more places is drawn continuous.
 DECIMAL_PLACES_TRIED = 9
-# A scipy fit's time grows with its values, so a fit is made on a seeded sample this size, which the correlations read too.
+# A scipy fit's time grows with its values, so a fit is made on a seeded sample this size. A profile's correlations read
+# the same sample.
 FIT_SAMPLE_ROWS = 20_000
+# A check measures generated data's dependence on a sample this size, so its spread adds little to the source's own.
+CHECKED_DEPENDENCE_SAMPLE_ROWS = 10 * FIT_SAMPLE_ROWS
 # A strictly monotonic integer column with gaps is a counting sequence where it holds this share of the integers between
 # its trimmed extremes at its least step, so a key some of whose rows were rejected still generates unique.
 SEQUENCE_FILL = 0.5
@@ -168,9 +171,13 @@ class FrozenLayout:
     pairs: FrozenPairs = dc.field(default_factory=FrozenPairs)
     # The conditional tables a check counts cell for cell without a floor, and no other re-profile.
     conditionals: tuple[FrozenConditional, ...] = ()
+    # The rows of the sample the correlations read, which a check sets larger.
+    dependence_sample_rows: int = FIT_SAMPLE_ROWS
 
     @classmethod
-    def of(cls, document: dict[str, Any], *, count_conditionals_without_floor: bool = False) -> 'FrozenLayout':
+    def of(
+        cls, document: dict[str, Any], *, count_conditionals_without_floor: bool = False, dependence_sample_rows: int = FIT_SAMPLE_ROWS
+    ) -> 'FrozenLayout':
         histograms, values = {}, {}
         described = described_rows(document)
         for column in document.get('columns') or []:
@@ -187,7 +194,7 @@ class FrozenLayout:
                 baseline = max(0.0, other - drifted / held) if held else other
                 values[column['name']] = FrozenValues(tuple(entry['value'] for entry in section['top_values']), baseline, section_name)
         conditionals = FrozenConditional.all_in(document) if count_conditionals_without_floor else ()
-        return cls(histograms, values, FrozenPairs.of(document), conditionals)
+        return cls(histograms, values, FrozenPairs.of(document), conditionals, dependence_sample_rows)
 
 
 def relisted_columns(earlier: dict[str, Any], now: dict[str, Any]) -> list[str]:
@@ -294,7 +301,13 @@ def profile_table(
         document['source'] = file_traits.source_section(backend, source, read, profiled, rows, k_min)
     document['dataset'] = dataset
     document['columns'] = profiled.columns
-    unfloored = conditionals_without_floor(backend, profiled.table, settings.frozen.conditionals, {spec.name for spec in profiled.specs})
+    unfloored = conditionals_without_floor(
+        backend,
+        profiled.table,
+        settings.frozen.conditionals,
+        {spec.name for spec in profiled.specs},
+        frozenset(spec.name for spec in profiled.specs if spec.kind is ColumnKind.FLOAT),
+    )
     return ProfiledTable(withheld(document, policy, k_min, cell_floors), full, profiled.specs, unfloored)
 
 
@@ -427,8 +440,9 @@ def profile_columns(
     fitting, import_error = fitting_module()
     # A fit's support would reach past what the policy withholds, so a column kept to no value, or an age, is not fitted.
     fitted = [spec for spec in specs if not treatments[spec.name].keeps_no_value and treatments[spec.name] is not Treatment.AGE]
-    # The fits and the correlations read one sample, which a record table holds and an array's elements need not.
-    dependence = backend.sampled(table, FIT_SAMPLE_ROWS, SAMPLE_SEED) if json_root is None else None
+    # The correlations read this sample and the fits read a sample of it, which a record table holds and an array's
+    # elements need not.
+    dependence = backend.sampled(table, layout.dependence_sample_rows, SAMPLE_SEED) if json_root is None else None
     fitted = [spec for spec in fitted if spec.name not in sequences]
     fits = column_fits(
         backend, table if dependence is None else dependence, fitted, stats, described, distinct, k_min, fitting, import_error
