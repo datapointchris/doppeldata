@@ -5,7 +5,6 @@ import re
 from pathlib import Path
 
 import doppeldata as sd
-import polars as pl
 import pytest
 from doppeldata import Bundle
 from doppeldata import InvalidProfile
@@ -116,12 +115,3 @@ def test_a_file_written_with_its_profile_embedded_gives_the_profile_back_and_a_p
     assert Profile.from_data_file(embedded).sha256 == orders.sha256
     with pytest.raises(SourceError):
         Profile.from_data_file(plain)
-
-
-def test_a_remainder_under_k_min_rows_is_counted_with_the_most_held_value_over_every_row():
-    frame = pl.DataFrame({'code': ['a'] * 205 + ['b'] * 57 + ['c', 'd', 'e']})
-
-    listed = sd.profile(frame, k_min=11).document['columns'][0]['string']
-
-    assert [(entry['value'], round(entry['fraction'] * 265, 2)) for entry in listed['top_values']] == [('a', 208), ('b', 57)]
-    assert listed['other_fraction'] == 0

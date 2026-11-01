@@ -99,10 +99,10 @@ determinism fixture's `top_values_with_one_beyond_the_extremes` reads "4 top val
 the extremes, the rest from quantiles with linear tails".
 
 On the NYC yellow taxi trips for February to April 2024, `payment_type` holds six values. Value 5
-sits on 2 rows, so the floor counts them with value 1, the most held. `other_fraction` is then 0,
-so the generator draws the five listed values and nothing beyond the extremes, 0 and 4. The taxi
-figures on this page come from a round trip of those months, with each column's values counted
-by Polars from `taxi-generated/`:
+sits on 2 rows, which would leave `other` under `k_min` rows, so value 3's 64,979 rows fold into
+it. The extremes are 0 and 4, so the sixth value is drawn as 5, on 2 of 10M generated rows.
+`boundary_adherence` stays at 1.0. The taxi figures on this page come from this round trip, with
+each column's values counted by Polars from `taxi-generated/`:
 
 ```bash
 doppeldata profile create yellow_tripdata_2024-02.parquet yellow_tripdata_2024-03.parquet \

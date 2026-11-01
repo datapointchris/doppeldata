@@ -104,10 +104,7 @@ can be derived. That gives a domain-neutral default, `k_min: 11`, configurable p
 The `default` policy:
 
 1. A literal is stored only when at least `k_min` rows hold it, and only in a column not typed
-   `identifier`. The "other" remainder of a top-k list obeys the same floor. A remainder of 1 to
-   `k_min - 1` rows is counted with the most held listed value, so `other_fraction` is 0 and every
-   share stays a whole count over the column's rows. That is global recoding of the rare values
-   into the modal one.
+   `identifier`. The "other" remainder of a top-k list obeys the same floor.
 2. An `identifier` column stores no literals, no extremes and no top-k. It keeps its null rate,
    distinct ratio, length distribution, character-shape histogram and a generalized pattern. An
    integer identifier's extremes become `method: digit_bounds`, the least and greatest integers
@@ -121,14 +118,6 @@ The `default` policy:
    bin's count less the values listed in it, or `negative_fraction` less the listed negative values.
 6. Parquet footer minimums and maximums are never copied for an `identifier` or `sensitive` column.
 7. A pattern is stored only when it holds no alternation of data literals.
-
-Recoding a small remainder misstates the column by those few rows. Each alternative costs more.
-Folding the least held listed value into the remainder misstates the column by every row that
-value holds, which in a large table runs to tens of thousands. Taking the listed shares over the
-listed rows alone leaks the remainder. A share carries four significant digits, so in a column of
-265 rows, 205 of 262 reads 0.7824 where 205 of 265 reads 0.7736. Times 265 it is no whole number.
-A reader can then find 262 and learn that 3 rows are hidden, which is a percentage a cell under
-`k_min` can be derived from.
 
 `strict` also treats quasi-identifiers as identifiers. It drops every lookup, conditional table,
 conditional quantiles and rates given one, and every lag counting from one. `healthcare` adds
