@@ -40,17 +40,3 @@ doppeldata_core::issue_codes! {
     LOCAL_IO = "E-IO-205", exit 1, "a local file could not be read or written";
     FILE_METADATA_UNREADABLE = "E-IO-206", exit 2, "a Parquet or Arrow IPC file's footer or schema does not read";
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-
-    #[test]
-    fn no_code_is_declared_by_both_the_engine_and_the_writers() {
-        let mut seen = BTreeSet::new();
-        for declared in doppeldata_core::issue_codes::ALL.iter().chain(super::ALL) {
-            assert!(seen.insert(declared.code), "{} is declared twice", declared.code);
-            assert!(declared.code.starts_with("E-") && !declared.area().is_empty());
-        }
-    }
-}

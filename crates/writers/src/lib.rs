@@ -125,9 +125,7 @@ pub enum WriteError {
 }
 
 impl WriteError {
-    /// The code a caller branches on. Its exit status says what kind of failure it is: 2 where
-    /// the arguments cannot be written as given, so nothing was written, and 1 where the write was
-    /// attempted and failed.
+    /// The code a caller branches on, whose exit status docs/issue-codes.md lists.
     pub fn code(&self) -> &'static IssueCode {
         match self {
             Self::Layout(LayoutError::Scenario { fault, .. }) => fault.code(),

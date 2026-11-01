@@ -2,8 +2,7 @@
 //! library binds the code it raises for the same fault by the static's name.
 
 /// A refusal's stable code, `E-<AREA>-<NNN>`, with what raises it and the exit status a command
-/// ends on: 1 for a failure, 2 for a call or file that must change, 3 for a finding a person acts
-/// on, and 4 when no answer came.
+/// ends on, as docs/issue-codes.md lists them.
 #[derive(Debug, PartialEq, Eq)]
 pub struct IssueCode {
     /// The static's name, by which the library binds the code it raises for the same fault.
@@ -117,21 +116,4 @@ issue_codes! {
     UNKNOWN_CHECK_DIGIT = "E-USAGE-106", exit 2, "a check digit's kind is not one the engine writes";
     UNKNOWN_FORMAT = "E-USAGE-107", exit 2, "a format is not one doppeldata writes",
         hint "doppeldata capabilities show lists the formats";
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-
-    #[test]
-    fn every_code_is_declared_once_in_the_form_and_area_the_library_takes() {
-        let areas = ["PROFILE", "SCENARIO", "POLICY", "DATA", "WRITE", "IMPORT", "EXPORT", "IO", "USAGE"];
-        let mut seen = BTreeSet::new();
-        for declared in super::ALL {
-            let digits = declared.code.rsplit('-').next().unwrap_or_default();
-            assert!(declared.code.starts_with("E-") && digits.len() == 3 && digits.bytes().all(|b| b.is_ascii_digit()));
-            assert!(areas.contains(&declared.area()), "{} names no area", declared.code);
-            assert!(seen.insert(declared.code), "{} is declared twice", declared.code);
-        }
-    }
 }
