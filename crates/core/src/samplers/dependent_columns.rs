@@ -1287,7 +1287,7 @@ fn copula_groups(
                 let (a, b) = (names[a], names[b]);
                 stored.get(&(a.min(b), a.max(b))).copied()
             },
-            |a, b, rho| calibrated(rho, &pair_series(by_index[&a], by_index[&b], &grid)),
+            |a, b| pair_series(by_index[&a], by_index[&b], &grid),
         ));
     }
     (groups, set_aside)

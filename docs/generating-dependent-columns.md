@@ -67,21 +67,47 @@ dataset:
   each holding one value on most rows reach a Spearman value near their comonotone bound only as
   the Pearson nears 1. The plan names such a pair: `its ties holding no copula at its Spearman
   with congestion_surcharge`.
-- **Where no matrix holds every stated pair, the group holds the valid one nearest them.**
-  Alternating projections between the positive definite matrices and those holding each stated
-  Pearson settle on it, as Higham (2002) finds a nearest correlation matrix, and leave each
-  unstated pair free. The plan says `its correlations repaired to the nearest valid matrix`. A
-  column that is the sum of others, such as a fare total, gives such a group.
+- **Where no matrix holds every stated pair, the group holds the valid one whose Spearman values
+  lie nearest those stated.** Ties raise the Pearson a pair needs. So Spearman values that a valid
+  matrix of ranks holds can still ask for Pearsons no valid matrix holds. A column that is the sum
+  of others, such as a fare total, gives such a group. So do three columns each holding one value
+  on most rows. The plan says `its correlations repaired to the nearest valid matrix`.
+- **The repair first projects, then fits the Spearman values.** Alternating projections between
+  the positive definite matrices and those holding each stated Pearson find the valid matrix
+  nearest those Pearsons, as Higham (2002) finds a nearest correlation matrix. Levenberg–Marquardt
+  then moves it to the matrix whose stated pairs' Spearman values, read through each pair's
+  series, lie nearest those stated in least squares. That is what `data check` measures. Each
+  member's row of the factor is a unit vector, as Rebonato and Jäckel (1999) parametrize a
+  correlation matrix, so every step is a valid matrix. Where no step improves on the projection,
+  the projection stands. Each unstated pair stays free. The fit takes a fixed number of steps at
+  most, on a fixed damping schedule, in IEEE arithmetic, `sqrt` and `libm`. So a repaired group
+  draws the same bits on every platform, and the fixture's repaired group pins it.
 
-`cargo test --test dependent_columns`, run from `crates/`, draws rows from the fixture and holds
-each stated Spearman value within the tolerance it sets. [performance.md](performance.md) gives
-the copula's speed.
+`cargo test --test dependent_columns`, run from `crates/`, draws rows from the fixture. It holds
+each stated Spearman value within the tolerance it sets, and a repaired group's within the 0.05
+`data check` sets. [performance.md](performance.md) gives the copula's speed.
 
 *Rejected:* the plain `2·sin(πρ/6)` for a tied column. Ties lower the Spearman value a Pearson
 holds, so each tied pair drew under its stated value.
 
 *Rejected:* filling an unstated pair with 0, and clipping the eigenvalues where that breaks the
 matrix. Clipping shrinks every pair toward 0, the stated ones too.
+
+*Rejected:* the projection alone. It weighs every pair's Pearson alike. But near a Pearson of 1, a
+step moves a tied pair's Spearman value twice as far as a continuous pair's, or more. The
+fixture's repaired group drew one pair 0.075 under its stated value through the projection, and
+0.015 under through the fit.
+
+*Rejected:* an H-weighted nearest correlation matrix, each pair weighted by the square of its
+Spearman value's slope, as Qi and Sun (2011) solve one. It is the fit's first-order form.
+Elementwise weights have no closed-form projection onto the positive definite matrices, so
+alternating projections cannot take them. Qi and Sun's semismooth Newton method is the larger
+build. On a ten-column group of fares and surcharges, its largest miss was 0.0265 and the fit's
+0.0252.
+
+*Rejected:* the minimax fit, holding the largest miss as low as it goes, which
+`correlation_max_abs_diff` measures. It needs a constrained solver, and on that group it gained
+0.003 over least squares.
 
 ## A conditional table draws a categorical column from the row its parent's value picks
 

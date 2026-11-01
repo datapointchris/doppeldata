@@ -14,6 +14,8 @@ use rayon::prelude::*;
 const PROFILE_SHA256: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ROWS: u64 = 100_000;
 const CORRELATION_TOLERANCE: f64 = 0.01;
+/// A repaired group holds its pairs as near as a valid matrix allows, within the bound `data check` sets by default.
+const REPAIRED_TOLERANCE: f64 = 0.05;
 const SHARE_TOLERANCE: f64 = 0.01;
 
 fn generated(document: &serde_json::Value) -> Vec<RecordBatch> {
@@ -99,8 +101,13 @@ fn generated_rows_hold_each_stated_correlation_and_each_conditional_share() {
             })
             .collect();
         let (measured, value) = (spearman(&pairs), stated["value"].as_f64().unwrap());
+        let tolerance = if a.starts_with("repaired_") {
+            REPAIRED_TOLERANCE
+        } else {
+            CORRELATION_TOLERANCE
+        };
         assert!(
-            (measured - value).abs() < CORRELATION_TOLERANCE,
+            (measured - value).abs() < tolerance,
             "{a} x {b}: {measured:.4} against the stated {value}"
         );
     }
