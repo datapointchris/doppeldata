@@ -33,11 +33,11 @@ $ jq '{profile, identity}' first/_manifest.json
   },
   "identity": {
     "dataset_rows": "50000",
-    "profile_digest": "sha256:7a3c827a291ca3aade44e80b5b318a0401c8deafa82ccb03087d21367e3998b4",
+    "profile_digest": "sha256:…",
     "scale": null,
-    "scenario_digest": "sha256:84079dcd4a5a5bcea2805efb529f1cf7c76141b2efb8f9fbbf295b99e587aa83",
+    "scenario_digest": "sha256:…",
     "seed": "11",
-    "stream_version": 12,
+    "stream_version": <n>,
     "table": null
   }
 }
@@ -69,7 +69,7 @@ names the one a dataset was made at.
 $ doppeldata data generate embedded/part-00000-867ecb7a.parquet --embed-profile --out again-embedded/
 doppeldata: seed 7, 100,000 rows, scenario hot-key, as embedded/part-00000-867ecb7a.parquet was written
 wrote 100,000 rows as parquet in 1 file, 2.2 MB, in 0.10 s on 16 threads: 0.99M rows/s
-again-embedded/_manifest.json names dataset sha256:867ecb7a0e0d427fcf7f946d641894abaaf31d5e85d565218302d862baaefbb2
+again-embedded/_manifest.json names dataset sha256:…
 ```
 
 - **Every PROFILE argument takes such a file.** `data generate`, `data plan`, `data check`,

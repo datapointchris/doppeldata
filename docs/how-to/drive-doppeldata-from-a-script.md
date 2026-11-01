@@ -155,7 +155,7 @@ $ doppeldata data plan orders --scenario hot-key --out out/ --json | jq '.column
 $ doppeldata profile create s3://your-bucket/orders-november/ --edges-from october.profile.yaml --aws-profile analytics --out november.profile.yaml -v
 doppeldata: s3://your-bucket/orders-november/: 4 parquet files, 655,962 bytes
 doppeldata: orders-november: profiled 20,000 rows and 8 columns with polars in 2.19 s
-doppeldata: the earlier profile is not returned unchanged, because its generated.source_fingerprint is sha256:4930bca3c82280f05763b2a2b4b00c319b14e33988b2935b5db92339f62a9756, and this run writes sha256:82247caf702ca39a07e71993a36138a2749acba019df16cfba3a39ed0261b42f; each column it holds histogram edges or a value list for is counted against them
+doppeldata: the earlier profile is not returned unchanged, because its generated.source_fingerprint is sha256:…, and this run writes sha256:…; each column it holds histogram edges or a value list for is counted against them
 $ doppeldata profile create s3://your-bucket/orders-november/ --edges-from october.profile.yaml --aws-profile analytics --out november.profile.yaml -q
 ```
 
@@ -186,7 +186,7 @@ except sd.EarlierProfileNotReused as warning:
 ```text
 $ python warnings_as_errors.py
 doppeldata.profiling INFO s3://your-bucket/orders-november/: 4 parquet files, 655,962 bytes
-not reused: its generated.source_fingerprint is sha256:4930bca3c82280f05763b2a2b4b00c319b14e33988b2935b5db92339f62a9756, and this run writes sha256:82247caf702ca39a07e71993a36138a2749acba019df16cfba3a39ed0261b42f
+not reused: its generated.source_fingerprint is sha256:…, and this run writes sha256:…
 ```
 
 `october.profile.yaml` is the profile [Measure drift between two

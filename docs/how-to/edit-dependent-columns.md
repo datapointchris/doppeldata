@@ -118,7 +118,7 @@ column.
 $ doppeldata data check checkouts.profile.yaml generated/
 # doppeldata check passed
 
-`generated/`, 1,000,000 rows, against profile `checkouts` (sha256:a0b848592e44bff6ab983944edb9f45bbb59f070e45332fda0f8bd447e59924c).
+`generated/`, 1,000,000 rows, against profile `checkouts` (sha256:…).
 
 0 of 38 metrics failed.
 ...

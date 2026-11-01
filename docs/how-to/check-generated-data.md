@@ -34,7 +34,7 @@ print(scored.to_markdown())
 $ doppeldata data check orders.profile.yaml generated/
 # doppeldata check passed
 
-`generated/`, 20,000 rows, against profile `orders` (sha256:1766b651a79954550ab637cf01644a9a8e9e326e418d2108e876803db34ab397).
+`generated/`, 20,000 rows, against profile `orders` (sha256:…).
 
 0 of 31 metrics failed.
 
@@ -69,7 +69,7 @@ $ doppeldata data check orders.profile.yaml generated/
   ```text
   $ doppeldata data check orders.profile.yaml big/
   ...
-  `big/`, 200,000 rows, against profile `orders` (sha256:1766b651a79954550ab637cf01644a9a8e9e326e418d2108e876803db34ab397).
+  `big/`, 200,000 rows, against profile `orders` (sha256:…).
 
   0 of 31 metrics failed.
   ...
@@ -90,7 +90,7 @@ columns:
 $ doppeldata data check orders.profile.yaml generated/ --thresholds thresholds.yaml
 # doppeldata check failed
 
-`generated/`, 20,000 rows, against profile `orders` (sha256:1766b651a79954550ab637cf01644a9a8e9e326e418d2108e876803db34ab397).
+`generated/`, 20,000 rows, against profile `orders` (sha256:…).
 
 2 of 31 metrics failed.
 ...
@@ -122,7 +122,7 @@ doppeldata: E-DATA-014: the data missed its profile on 2 of 31 metrics and 0 of 
 $ doppeldata data check orders.profile.yaml generated/ --against s3://your-bucket/orders/ --aws-profile analytics
 # doppeldata check passed
 
-`generated/`, 20,000 rows, against profile `orders` (sha256:1766b651a79954550ab637cf01644a9a8e9e326e418d2108e876803db34ab397).
+`generated/`, 20,000 rows, against profile `orders` (sha256:…).
 
 Scored against the real data at `s3://your-bucket/orders/`, 20,000 rows, on a seeded sample of 20,000 rows from each side.
 
@@ -160,7 +160,8 @@ Scores that decide nothing, because no thresholds file sets their threshold: 20.
   doppeldata: E-DATA-014: the data missed its profile on 3 of 35 metrics and 0 of 0 field changes: KSComplement on customer_id, KSComplement on amount, KSComplement on ordered_at
   ```
 
-- **`--against-sample N` scores a seeded sample of N rows from each side.** It defaults to 100,000.
+- **`--against-sample N` scores a seeded sample of N rows from each side.** `data check --help`
+  prints its default.
 - **`--html FILE` writes the two samples side by side with sweetviz**, which doppeldata does not
   install. Install it beside doppeldata first. The page shows the real data's extremes and
   categories, so it is not for sharing.

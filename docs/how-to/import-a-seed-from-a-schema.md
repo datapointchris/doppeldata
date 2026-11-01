@@ -48,7 +48,7 @@ schema:
 ```text
 $ doppeldata profile import --from odcs orders.odcs.yaml --out orders.profile.yaml
 $ yq '.generated, .dataset, .columns[0], .columns[3]' orders.profile.yaml
-tool: doppeldata 0.0.0
+tool: doppeldata <version>
 at: '2026-11-01T07:47:22Z'
 engine: import
 imported_from: odcs:orders.odcs.yaml#orders
@@ -89,11 +89,11 @@ semantic:
   sensitivity: sensitive
 $ doppeldata data generate orders.profile.yaml --rows 1000 --seed 7 --out orders/
 wrote 1,000 rows as parquet in 1 file, 22.4 KB, in 0.00 s on 16 threads: 0.50M rows/s
-orders/_manifest.json names dataset sha256:b1280aacba00f5a850b9136c60cdab311560c0416e4f723a0130a863b8172e1d
+orders/_manifest.json names dataset sha256:…
 $ doppeldata data check orders.profile.yaml orders/
 # doppeldata check passed
 
-`orders/`, 1,000 rows, against profile `orders` (sha256:8dded05345f01f2abb6a6690e568b4dc37a7f505cd3dede5a5414a321e98b202).
+`orders/`, 1,000 rows, against profile `orders` (sha256:…).
 
 0 of 6 metrics failed.
 ```
@@ -146,11 +146,11 @@ $ yq -i '.tables.customers.dataset.rows = 500 | .tables.orders.dataset.rows = 50
 $ doppeldata data generate shop.bundle.yaml --seed 7 --out shop/
 customers  wrote 500 rows as parquet in 1 file, 9.1 KB
 orders     wrote 5,000 rows as parquet in 1 file, 66.1 KB
-in 0.01 s on 16 threads; shop/_manifest.json names dataset sha256:408b88cae5d372b0bfa1edb3e931d398689f46c86102621ed794b0b4d1d130c3
+in 0.01 s on 16 threads; shop/_manifest.json names dataset sha256:…
 $ doppeldata data check shop.bundle.yaml shop/
 # doppeldata bundle check passed
 
-`shop/`, 5,500 rows in 2 tables, against bundle `shop` (sha256:c1bdc2ff88b51cccf14989a55fcd5cfda2eb46464bd4367dd84a1d74fcd70f84).
+`shop/`, 5,500 rows in 2 tables, against bundle `shop` (sha256:…).
 
 0 of 1 relationship metrics failed.
 
@@ -179,7 +179,7 @@ $ yq -o=json -I0 '.generated.imported_from, .source, .dataset' glue.profile.yaml
 {"rows":400}
 $ doppeldata data generate glue.profile.yaml --seed 7 --out glue-orders/
 wrote 400 rows as csv in 4 files, 16.5 KB, in 0.01 s on 16 threads: 0.08M rows/s
-glue-orders/_manifest.json names dataset sha256:784d906f31af3db1f13305f31fed574dc57e23182e66288a80708357e132e5cd
+glue-orders/_manifest.json names dataset sha256:…
 $ eza -D glue-orders/*
 glue-orders/region=eu:
 order_date=2025-03-01  order_date=2025-03-02
@@ -249,7 +249,7 @@ $ python schema_classes.py
 schema_classes.py:16: ProfilingWarning: dataframely:__main__.Orders: columns of a dictionary type are drawn as text, so validate with cast=True: status
   orders = sd.generate(Orders, rows=1000)
 (1000, 4)
-sha256:55c087fe9a7a165f26d63ad775ea4f084d3a31197538efe33bee756dcacac08c
+sha256:…
 (1000, 4)
 Schema({'order_id': Int64, 'ordered_at': Datetime(time_unit='us', time_zone='UTC'), 'tags': List(String)})
 ```

@@ -94,7 +94,7 @@ doppeldata: E-SCENARIO-019: promo-week.scenario.yaml does not hold for profile o
 $ doppeldata scenario check promo-week.scenario.yaml orders
 # doppeldata scenario check passed
 
-promo-week.scenario.yaml holds for profile `orders`: 2 perturbations and 1 expectation, scenario sha256:b93b806f5b350f146b62592bc92d936149e1d8e3f985999b3090055745313905.
+promo-week.scenario.yaml holds for profile `orders`: 2 perturbations and 1 expectation, scenario sha256:….
 ```
 
 `--json` prints `passed` and each issue's `code` and `field`. `data plan` and `data generate` refuse
@@ -105,7 +105,7 @@ the same scenario with exit 2.
 ```text
 $ doppeldata data plan orders --seed 7 --scenario promo-week.scenario.yaml --out promo/
 ...
-scenario   promo-week sha256:b93b806f5b350f146b62592bc92d936149e1d8e3f985999b3090055745313905
+scenario   promo-week sha256:…
 ...
 amount          decimal128(12, 2)      quantiles with fitted lognorm tails, 3 fields patched
 status          string                 5 top values, written by categorical_shift:status:0
@@ -118,7 +118,7 @@ customer_email  string                 the email provider, at the profiled disti
 $ doppeldata data check orders promo/ --scenario promo-week.scenario.yaml
 # doppeldata check passed
 
-`promo/`, 200,000 rows, against profile `orders` (sha256:95abee1ddc215b0b2aa73077d2e02925d48b8acfc2461ded17ba7cddbeec16e2) under scenario `promo-week` (sha256:b93b806f5b350f146b62592bc92d936149e1d8e3f985999b3090055745313905).
+`promo/`, 200,000 rows, against profile `orders` (sha256:…) under scenario `promo-week` (sha256:…).
 
 0 of 20 metrics failed.
 
@@ -141,7 +141,7 @@ $ doppeldata data check orders promo/ --scenario promo-week.scenario.yaml
   ```text
   $ doppeldata data check orders promo/
   doppeldata: E-SCENARIO-015: promo/ cannot be checked with no scenario:
-    /: promo/ was written under scenario promo-week (sha256:b93b806f5b350f146b62592bc92d936149e1d8e3f985999b3090055745313905); check it under that scenario [E-SCENARIO-015]
+    /: promo/ was written under scenario promo-week (sha256:…); check it under that scenario [E-SCENARIO-015]
     hint: check it under the scenario its manifest names
   ```
 
@@ -152,7 +152,7 @@ and runs every perturbation and expectation. The manifest names the composition 
 
 ```text
 $ jq -c '.scenario | {name, path, composed_of: [.composed_of[] | {name, digest}]}' both/_manifest.json
-{"name":"hot-key+late-data","path":null,"composed_of":[{"name":"hot-key","digest":"sha256:84079dcd4a5a5bcea2805efb529f1cf7c76141b2efb8f9fbbf295b99e587aa83"},{"name":"late-data","digest":"sha256:57c891fb8a72704ebe48eb414741ef351435288432ef0fa8fa99fac5f9efe9d4"}]}
+{"name":"hot-key+late-data","path":null,"composed_of":[{"name":"hot-key","digest":"sha256:…"},{"name":"late-data","digest":"sha256:…"}]}
 ```
 
 `Scenario.example(name, **parameters)` replaces the example's parameters, such as `keys=3`. A

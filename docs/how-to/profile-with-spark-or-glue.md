@@ -63,14 +63,14 @@ $ doppeldata profile diff orders.profile.yaml orders.spark.profile.yaml
 doppeldata: 3 metrics unmeasured and passed, because orders.spark.profile.yaml holds nothing to compare them with; a later profile made against orders.profile.yaml's edges carries the overflow boundary_adherence reads
 # doppeldata profiles agree
 
-`orders.spark.profile.yaml` (sha256:5f9abf91fcb4dffb1f960753a83f1a80b7d77eb5cb88eb3c908b0eb3c985d27d) against `orders.profile.yaml` (sha256:1766b651a79954550ab637cf01644a9a8e9e326e418d2108e876803db34ab397).
+`orders.spark.profile.yaml` (sha256:…) against `orders.profile.yaml` (sha256:…).
 
 0 of 31 metrics failed.
 ```
 
 The two SHA-256s differ. The hash keeps `generated.engine`, and Spark estimates the distinct counts
-Polars counts. The Python script above and the CLI over Spark Connect wrote the
-same `sha256:5f9abf91…` profile of these files.
+Polars counts. The Python script above and the CLI over Spark Connect wrote profiles of these files
+with the same SHA-256.
 
 ## Install pyspark beside the CLI, or beside the library
 
@@ -84,7 +84,7 @@ uv pip install --index https://pypi.ichrisbirch.com/simple/ doppeldata pyspark==
 uv pip install --index https://pypi.ichrisbirch.com/simple/ doppeldata 'pyspark[connect]==4.1.3' pyarrow scipy
 ```
 
-- **A local session needs Java**, which pyspark starts its JVM with. Spark 4 runs on Java 17 or 21.
+- **A local session needs the Java its Spark release names**, which pyspark starts its JVM with.
 - **Over Spark Connect, `pyspark[connect]` matches the server's Spark version.**
 - **scipy fits each numeric column's distribution family.** Without it, each `fit` is written as
   null and the profile warns `FitsSkipped`.
@@ -117,8 +117,9 @@ every statistic.
 
 - **The executors need the wheel alone**, beside the pyarrow and pandas PySpark's `mapInArrow`
   needs. scipy, boto3 and the CSV packages are the client's.
-- **The CLI needs Python 3.13 or later**, so it profiles over a server whose executors run 3.13.
-  Glue 5.x executors run 3.11, so a Glue session is profiled from Python.
+- **The CLI profiles only over a server whose executors run its own Python.** A session on an older
+  Python is profiled from the library on that Python. [AWS Glue support](../aws-glue-support.md)
+  gives each Glue's.
 - **The server reads a local path itself**, so the files must be at that path on the server too.
   On a cluster, name an `s3://` prefix.
 
@@ -195,9 +196,9 @@ Its `generated.readers` names the job's Spark, `pyspark: 3.5.4-amzn-0`, with `py
 
 - **The executors import the library for the `mapInArrow` passes**, so the wheel is named in every
   case.
-- **Every supported Glue preinstalls pyarrow, pandas and boto3.** The driver lists S3 through
-  boto3.
-- **No Glue preinstalls scipy.** A job without it fits no column.
+- **The table names only what no supported Glue preinstalls.**
+  [AWS Glue support](../aws-glue-support.md#a-glue-job-adds-only-the-wheel-because-glue-installs-the-pandas-and-pyarrow-doppeldataspark-needs)
+  lists what each one does. A job without scipy fits no column.
 - **Over Spark Connect the client builds the profile**, so the client holds scipy and the CSV
   packages.
 - **Pin `duckdb` and `clevercsv` to the versions the release's `uv.lock` resolves.** A profile

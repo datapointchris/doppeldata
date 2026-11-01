@@ -28,7 +28,7 @@ and value compares one for one. Its overflow counts are what `boundary_adherence
 
 ```text
 $ doppeldata profile create s3://your-bucket/orders-november/ --aws-profile analytics --edges-from october.profile.yaml --out november.profile.yaml
-doppeldata: the earlier profile is not returned unchanged, because its generated.source_fingerprint is sha256:4930bca3c82280f05763b2a2b4b00c319b14e33988b2935b5db92339f62a9756, and this run writes sha256:82247caf702ca39a07e71993a36138a2749acba019df16cfba3a39ed0261b42f; each column it holds histogram edges or a value list for is counted against them
+doppeldata: the earlier profile is not returned unchanged, because its generated.source_fingerprint is sha256:…, and this run writes sha256:…; each column it holds histogram edges or a value list for is counted against them
 ```
 
 - **The notice says the source changed.** Run against the files A was made from, `--edges-from`
@@ -59,7 +59,7 @@ A month at the same distribution agrees:
 $ doppeldata profile diff october.profile.yaml steady.profile.yaml
 # doppeldata profiles agree
 
-`steady.profile.yaml` (sha256:a24881e5a15abdd76c6b9de4714a5132c46fe4162f057d4d71724b31a2cb3aa7) against `october.profile.yaml` (sha256:7a3c827a291ca3aade44e80b5b318a0401c8deafa82ccb03087d21367e3998b4).
+`steady.profile.yaml` (sha256:…) against `october.profile.yaml` (sha256:…).
 
 0 of 31 metrics failed.
 ...
@@ -71,7 +71,7 @@ A month where more orders were delivered and `ship_zip` started arriving empty d
 $ doppeldata profile diff october.profile.yaml november.profile.yaml
 # doppeldata profiles drifted
 
-`november.profile.yaml` (sha256:ce383ca6b9dfa5c2eb7ec0324a500adf75b5577102e46363df1553a78741701c) against `october.profile.yaml` (sha256:7a3c827a291ca3aade44e80b5b318a0401c8deafa82ccb03087d21367e3998b4).
+`november.profile.yaml` (sha256:…) against `october.profile.yaml` (sha256:…).
 
 2 of 31 metrics failed.
 

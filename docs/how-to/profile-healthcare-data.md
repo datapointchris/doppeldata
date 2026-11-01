@@ -103,7 +103,7 @@ FILE holds one code a line. Write each list from the file its publisher issues:
 
   ```text
   $ yq '.generated.code_lists' claims.profile.yaml
-  {icd10cm: 'sha256:6b36b937c45262b9e5d3315c2f9550ea4092394393106d465c02754feb9e0498'}
+  {icd10cm: 'sha256:…'}
   ```
 
 - **A list no enabled detector reads is refused**, exit 2, naming those it reads:

@@ -55,8 +55,8 @@ $ yq '.relationships' shop.bundle.yaml
 
 ```text
 $ doppeldata data plan shop.bundle.yaml --scale 2 --seed 7 --out shop/
-dataset    sha256:3c6883e6ef0cfd2d240e7b0cfe60ca31590dfa703429029c21862f9b77e43ab2
-identity   118,000 rows at scale 2 from seed 7, bundle sha256:52b000b66cc94165bc2799bbe99161052603388e8a43532710a2db4706e70dc8, stream version 12
+dataset    sha256:…
+identity   118,000 rows at scale 2 from seed 7, bundle sha256:…, stream version <n>
 
 customers  8,000 rows as parquet, up to 2 files to shop/customers, estimate 93.8 KB
 orders     110,000 rows as parquet, up to 2 files to shop/orders, estimate 1.8 MB
@@ -71,7 +71,7 @@ A bundle takes `--scale`, never `--rows`. Each table writes its own directory an
 $ doppeldata data generate shop.bundle.yaml --scale 2 --seed 7 --out shop/
 customers  wrote 8,000 rows as parquet in 2 files, 95.6 KB
 orders     wrote 110,000 rows as parquet in 2 files, 1.8 MB
-in 0.15 s on 16 threads; shop/_manifest.json names dataset sha256:3c6883e6ef0cfd2d240e7b0cfe60ca31590dfa703429029c21862f9b77e43ab2
+in 0.15 s on 16 threads; shop/_manifest.json names dataset sha256:…
 $ eza -T shop
 shop
 ├── _manifest.json
@@ -93,7 +93,7 @@ shop
 $ doppeldata data check shop.bundle.yaml shop/
 # doppeldata bundle check passed
 
-`shop/`, 118,000 rows in 2 tables, against bundle `shop` (sha256:52b000b66cc94165bc2799bbe99161052603388e8a43532710a2db4706e70dc8).
+`shop/`, 118,000 rows in 2 tables, against bundle `shop` (sha256:…).
 
 0 of 3 relationship metrics failed.
 

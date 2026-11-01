@@ -33,8 +33,8 @@ above runs with no file at hand.
 ## `data plan` prints what `data generate` writes with the same flags
 
 ```text
-dataset    sha256:722fe1c298c9b8a069be18588bcb10bbcd949b9f7acf8a20cc452e4a27a949bc
-identity   250,000 rows from seed 7, profile sha256:95abee1ddc215b0b2aa73077d2e02925d48b8acfc2461ded17ba7cddbeec16e2, stream version 12
+dataset    sha256:…
+identity   250,000 rows from seed 7, profile sha256:…, stream version <n>
 format     parquet {"compression":"zstd","compression_level":null,"dictionary_columns":null,"row_group_rows":1048576,"statistics":"page","timestamp_unit":null}
 files      3 files to orders/
 estimate   6.6 MB, from the first blocks encoded with these settings
@@ -58,28 +58,17 @@ dataset SHA-256:
 
 ```text
 wrote 250,000 rows as parquet in 3 files, 6.8 MB, in 0.18 s on 16 threads: 1.39M rows/s
-orders/_manifest.json names dataset sha256:722fe1c298c9b8a069be18588bcb10bbcd949b9f7acf8a20cc452e4a27a949bc
+orders/_manifest.json names dataset sha256:…
 ```
 
 `sd.plan` returns that plan as a `WritePlan`, and `sd.write` returns the `Manifest` it stored.
 `data plan --json` traces each column to the profile fields it reads, as
 [Drive doppeldata from a script](drive-doppeldata-from-a-script.md) shows.
 
-## The flags choose the format, the files and the layout
+## The flags choose the format, the files and the layout, each from the profile where left out
 
-`data generate --help` lists every flag. Each one left out takes what the profile records of its
-source, else a default:
-
-| Flag, and the SDK's argument | Chooses | Left out |
-| --- | --- | --- |
-| `--rows`, `rows=` | the rows generated | the profile's `dataset.rows` |
-| `--seed`, `seed=` | the seed; one profile, seed and row count give the same values anywhere | 0 |
-| `--format`, `format=` | `parquet`, `arrow`, `csv`, `tsv`, `json` or `ndjson` | the profile's format, else Parquet |
-| `--writer`, `writer=` | the format's settings, as JSON | the profile's settings, else the format's defaults |
-| `--file-rows`, `file_rows=` | rows in each file | sizes drawn from the profile's layout, else 1,000,000 |
-| `--partition-by`, `partition_by=` | a directory per value of a column | the profile's Hive keys |
-| `--no-partitions`, `partition_by=[]` | no partition directories | |
-| `--threads`, `threads=` | threads that generate and encode | one per core |
+`doppeldata data generate --help` prints each flag with its default, and `help(sd.write)` each
+argument. A flag left out takes what the profile records of its source, else a default.
 
 `doppeldata schemas show manifest` lists every format's writer settings. A CSV with a pipe and a
 null token:

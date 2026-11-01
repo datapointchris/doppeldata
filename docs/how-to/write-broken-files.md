@@ -60,7 +60,7 @@ perturbations:
 ```text
 $ doppeldata data generate orders --seed 7 --scenario ragged-rows.scenario.yaml --format csv --file-rows 25000 --out orders-ragged/
 wrote 100,000 rows as csv in 4 files, 8.2 MB, in 0.07 s on 16 threads: 1.52M rows/s
-orders-ragged/_manifest.json names dataset sha256:da9837ac5e58a671c6de6c23bcd34057ed2b44b683a4f895a4c615ffd545286a
+orders-ragged/_manifest.json names dataset sha256:…
 $ jq -c .faults orders-ragged/_manifest.json
 {"ragged_short":530,"ragged_long":496,"bom":2}
 ```
@@ -75,7 +75,7 @@ doppeldata: E-SCENARIO-105: decimal-drift.scenario.yaml is not a valid scenario:
   hint: doppeldata capabilities show lists the formats each op takes
 $ doppeldata data generate orders --seed 7 --scenario decimal-drift.scenario.yaml --file-rows 25000 --out drift/
 wrote 100,000 rows as parquet in 4 files, 2.8 MB, in 0.07 s on 16 threads: 1.35M rows/s
-drift/_manifest.json names dataset sha256:77d587a19a457ac3647be70a701effd4f3213c848f705864773ab7149d8e05ad
+drift/_manifest.json names dataset sha256:…
 $ cat drift/_faults.jsonl
 {"file":"part-00001-77d587a1.parquet","line":null,"row":null,"kind":"parquet_decimal_scale_drift","column":null,"detail":{"columns":{"amount":"decimal128(13, 3)"}}}
 {"file":"part-00002-77d587a1.parquet","line":null,"row":null,"kind":"parquet_decimal_scale_drift","column":null,"detail":{"columns":{"amount":"decimal128(13, 3)"}}}
@@ -110,7 +110,7 @@ $ head -2 orders-bad/_faults.jsonl
   ```text
   $ doppeldata data generate orders --seed 7 --scenario bad-csv --out landing/orders.csv
   wrote 100,000 rows as csv in 1 file, 8.2 MB, in 0.23 s on 16 threads: 0.43M rows/s
-  landing/orders.csv holds dataset sha256:f337b5bc390747853924abd1a2dc4244c70f5b65bafc7c0f784f765a69edd3cd
+  landing/orders.csv holds dataset sha256:…
   $ eza -a landing/
   _orders.csv.faults.jsonl  orders.csv
   ```
@@ -160,7 +160,7 @@ $ python quarantine.py
 $ doppeldata data check orders orders-bad/ --scenario bad-csv
 # doppeldata check passed
 
-`orders-bad/`, 98,657 rows, against profile `orders` (sha256:95abee1ddc215b0b2aa73077d2e02925d48b8acfc2461ded17ba7cddbeec16e2) under scenario `bad-csv` (sha256:ac1bf35685eab09b7ec83724d12b9e18f58be8dcb9be562a174dd6d0c3d98e14).
+`orders-bad/`, 98,657 rows, against profile `orders` (sha256:…) under scenario `bad-csv` (sha256:…).
 
 0 of 20 metrics failed.
 
@@ -206,13 +206,13 @@ $ yq -o=json -I0 .source.csv.malformed source.profile.yaml
 {"fraction":0.01026,"type_fractions":{"missing_columns":0.0053,"too_many_columns":0.00496}}
 $ doppeldata data generate source.profile.yaml --seed 7 --scenario reproduce.scenario.yaml --out reproduced/
 wrote 98,974 rows as csv in 4 files, 8.1 MB, in 0.08 s on 16 threads: 1.25M rows/s
-reproduced/_manifest.json names dataset sha256:37985438ff5fef848c1e69bd446ea8f3d01d72558b42c966063731551386a645
+reproduced/_manifest.json names dataset sha256:…
 $ jq -c .faults reproduced/_manifest.json
 {"ragged_short":528,"ragged_long":436}
 $ doppeldata data check source.profile.yaml reproduced/ --scenario reproduce.scenario.yaml
 # doppeldata check passed
 
-`reproduced/`, 98,010 rows, against profile `source` (sha256:ae6946f43e00ab79887a14914d561ccbcf12af5e0298dc136034f80f100983d2) under scenario `reproduce` (sha256:401d63fe6be3d26ed18b3c9525676865ade7c07a6eca92f8552134f092862a1b).
+`reproduced/`, 98,010 rows, against profile `source` (sha256:…) under scenario `reproduce` (sha256:…).
 
 0 of 32 metrics failed.
 ...

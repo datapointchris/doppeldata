@@ -28,7 +28,7 @@ table = sd.generate(['name', 'email', 'city', 'zip'], rows=1000)   # an Arrow ta
 ```text
 $ doppeldata data generate --columns name,email,city,zip --rows 1000 --out people.csv
 wrote 1,000 rows as csv in 1 file, 61.3 KB, in 0.00 s on 16 threads: 1.00M rows/s
-people.csv holds dataset sha256:9b19bca5d364d65f32fd03648a6fc4ea23991302aef4ee653ea83f297d9c95aa
+people.csv holds dataset sha256:…
 $ head -4 people.csv
 name,email,city,zip
 Arlie Larson,heidi.reichert@example.net,Rempelton,65947
@@ -84,7 +84,7 @@ columns:
 ```text
 $ doppeldata data generate people.yaml --out people.csv
 wrote 1,000 rows as csv in 1 file, 69.3 KB, in 0.00 s on 16 threads: 0.25M rows/s
-people.csv holds dataset sha256:caba3bd0b1728702ff875b15e6cca81c43184782d8ed8d5d5a95f6f98b9415cd
+people.csv holds dataset sha256:…
 $ head -4 people.csv
 name,email,city,zip,age,plan
 Kelsie Senger,annabel.mueller@example.com,South Golden Hyattshire,77030,55,pro
@@ -104,13 +104,13 @@ $ head -17 orders.profile.yaml
 kind: table
 name: orders
 generated:
-  tool: doppeldata 0.0.0
+  tool: doppeldata <version>
   at: '2026-11-01T08:43:10Z'
   engine: polars
   fitter: scipy 1.18.1
-  detector_packs: {general: doppeldata 0.0.0}
+  detector_packs: {general: doppeldata <version>}
   readers: {polars: 2.0.0, pyarrow: 26.0.0}
-  source_fingerprint: sha256:4930bca3c82280f05763b2a2b4b00c319b14e33988b2935b5db92339f62a9756
+  source_fingerprint: sha256:…
   sample: {strategy: full}
 privacy:
   policy: default
@@ -132,17 +132,17 @@ table = sd.generate(profile, rows=100_000, seed=7)
 ```text
 $ doppeldata data generate orders.profile.yaml --rows 100000 --seed 7 --out synthetic/orders/
 wrote 100,000 rows as parquet in 20 files, 3.4 MB, in 0.07 s on 16 threads: 1.35M rows/s
-synthetic/orders/_manifest.json names dataset sha256:83ff122c7ef321edb1ac7ccf7b2819ab8f5a19eb7164e0a78ac80be00df7ac6f
+synthetic/orders/_manifest.json names dataset sha256:…
 ```
 
-The Python table is the same dataset, `sha256:83ff122c…`. A dataset is a pure function of its
+The Python table is the same dataset, with the SHA-256 the command printed. A dataset is a pure function of its
 profile, row count and seed.
 
 ### The saved YAML is reviewed, committed, and generates the same rows anywhere
 
 ```python
 profile.save('orders.profile.yaml')
-again = sd.generate(sd.Profile.load('orders.profile.yaml'), rows=100_000, seed=7)   # sha256:83ff122c…
+again = sd.generate(sd.Profile.load('orders.profile.yaml'), rows=100_000, seed=7)   # the same dataset
 ```
 
 ```text
@@ -172,7 +172,7 @@ reads each section.
 ```text
 $ doppeldata data generate orders.profile.yaml --rows 100000 --seed 7 --scenario hot-key --out hot/
 wrote 100,000 rows as parquet in 20 files, 3.2 MB, in 0.09 s on 16 threads: 1.08M rows/s
-hot/_manifest.json names dataset sha256:7d0663432c3472104242943990e6fb5e54963f9079e363e6caed350f23d85317
+hot/_manifest.json names dataset sha256:…
 $ doppeldata data check orders.profile.yaml hot/ --scenario hot-key
 # doppeldata check passed
 ...
@@ -190,7 +190,7 @@ The command line:
 ```text
 $ uv tool install --index https://pypi.ichrisbirch.com/simple/ doppeldata-cli
 $ doppeldata --version
-doppeldata 0.33.0
+doppeldata <version>
 ```
 
 The command ships in the `doppeldata-cli` distribution, so a one-off run names both:
@@ -243,7 +243,7 @@ $ pip download --no-deps --index-url https://pypi.ichrisbirch.com/simple/ \
     --platform manylinux2014_x86_64 --python-version 311 --only-binary=:all: \
     --dest wheels doppeldata
 $ ls wheels/
-doppeldata-0.33.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+doppeldata-<version>-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
 $ aws s3 cp --recursive wheels/ s3://your-bucket/glue/
 ```
 
@@ -314,8 +314,8 @@ $ rg 'column: (status|ship_zip)' orders.profile.yaml
 
 ```text
 $ doppeldata data plan orders.profile.yaml --rows 1000000 --seed 7 --out synthetic/orders/
-dataset    sha256:54f7e4b5cfa6b79ea9c17e89c5b9f094b23b93ce5aa1ee8be109209288f903a4
-identity   1,000,000 rows from seed 7, profile sha256:7a3c827a291ca3aade44e80b5b318a0401c8deafa82ccb03087d21367e3998b4, stream version 12
+dataset    sha256:…
+identity   1,000,000 rows from seed 7, profile sha256:…, stream version <n>
 format     parquet {"compression":"zstd","compression_level":null,"dictionary_columns":null,"row_group_rows":5000,"statistics":"page","timestamp_unit":"us"}
 files      200 files to synthetic/orders/
 estimate   34.7 MB, from the first blocks encoded with these settings
@@ -331,11 +331,11 @@ ship_zip        string                 a pattern
 ...
 $ doppeldata data generate orders.profile.yaml --rows 1000000 --seed 7 --out synthetic/orders/
 wrote 1,000,000 rows as parquet in 200 files, 34.5 MB, in 0.54 s on 16 threads: 1.87M rows/s
-synthetic/orders/_manifest.json names dataset sha256:54f7e4b5cfa6b79ea9c17e89c5b9f094b23b93ce5aa1ee8be109209288f903a4
+synthetic/orders/_manifest.json names dataset sha256:…
 $ doppeldata data check orders.profile.yaml synthetic/orders/
 # doppeldata check passed
 
-`synthetic/orders/`, 1,000,000 rows, against profile `orders` (sha256:7a3c827a291ca3aade44e80b5b318a0401c8deafa82ccb03087d21367e3998b4).
+`synthetic/orders/`, 1,000,000 rows, against profile `orders` (sha256:…).
 
 0 of 31 metrics failed.
 ```

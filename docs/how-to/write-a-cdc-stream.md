@@ -49,7 +49,7 @@ estimate   44.1 MB, from the first blocks encoded with these settings
 $ doppeldata data generate orders --seed 7 --scenario cdc-dms --format parquet --out orders-cdc/
 wrote 100,000 rows as parquet in 1 file, 2.3 MB, in 0.56 s on 16 threads: 0.18M rows/s
 and 20,672 changes as dms in 8,798 files, 42.5 MB, under sales/orders/, beside _expected/sales/orders/, 2.4 MB, the table a merge in commit order reaches
-orders-cdc/_manifest.json names dataset sha256:478e44683b92a29c94c094fac2460c679998256de2d80a9276301a187228cb44
+orders-cdc/_manifest.json names dataset sha256:…
 $ eza --tree --level 4 orders-cdc
 orders-cdc
 ├── _expected
@@ -164,7 +164,7 @@ perturbations:
 $ doppeldata data generate orders --seed 7 --scenario orders-day.scenario.yaml --format csv --writer '{"header": false}' --out orders-day/
 wrote 100,000 rows as csv in 1 file, 11.0 MB, in 0.18 s on 16 threads: 0.54M rows/s
 and 40,728 changes as dms in 144 files, 4.5 MB, under sales/orders/, beside _expected/sales/orders/, 2.3 MB, the table a merge in commit order reaches
-orders-day/_manifest.json names dataset sha256:dca79c195c56f6c352479b3c8ac6ce6803585c67fd3b7996fe848c4a037bdfd3
+orders-day/_manifest.json names dataset sha256:…
 $ head -2 orders-day/sales/orders/LOAD00000001.csv
 2026-10-01 00:00:00.000000,1,87816,80.73,4,cancelled,2025-12-03T22:42:06Z,lee.murazik@example.com,64077
 2026-10-01 00:00:00.000000,2,72527,53.75,2,shipped,2025-12-29T05:13:09Z,gerald.leuschke@example.net,98334
@@ -229,7 +229,7 @@ $ duckdb < merge-csv.sql
 $ doppeldata data check orders orders-cdc/ --scenario cdc-dms
 # doppeldata check passed
 
-`orders-cdc/`, 100,000 rows, against profile `orders` (sha256:95abee1ddc215b0b2aa73077d2e02925d48b8acfc2461ded17ba7cddbeec16e2) under scenario `cdc-dms` (sha256:3ad3c44f45ac6323f95c745ede170e444fa15911c7534782f1112327abd24104).
+`orders-cdc/`, 100,000 rows, against profile `orders` (sha256:…) under scenario `cdc-dms` (sha256:…).
 
 0 of 20 metrics failed.
 ...

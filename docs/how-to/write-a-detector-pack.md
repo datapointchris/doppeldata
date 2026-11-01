@@ -116,7 +116,7 @@ $ yq '.privacy.suppressed' orders.profile.yaml
 ```text
 $ doppeldata data generate orders.profile.yaml --rows 100000 --seed 7 --out generated/
 wrote 100,000 rows as csv in 20 files, 2.1 MB, in 0.02 s on 16 threads: 4.17M rows/s
-generated/_manifest.json names dataset sha256:5945424cfb8b79b0b74f0fbd647d8052ea946dbf49beeb5b42b4e44358a88a9f
+generated/_manifest.json names dataset sha256:…
 $ duckdb -c "select count(*) as rows, count(*) filter (where regexp_full_match(loyalty_card, 'LC\d{10}')) as matching, count(distinct loyalty_card) as distinct_cards from 'generated/*.csv'"
 ┌────────┬──────────┬────────────────┐
 │  rows  │ matching │ distinct_cards │
@@ -127,7 +127,7 @@ $ duckdb -c "select count(*) as rows, count(*) filter (where regexp_full_match(l
 $ doppeldata data check orders.profile.yaml generated/
 # doppeldata check passed
 
-`generated/`, 100,000 rows, against profile `orders` (sha256:2daa6aead208c0dc3a160aa6afd50fe9939076ef3ef90b7432d645ef9e9bdf73).
+`generated/`, 100,000 rows, against profile `orders` (sha256:…).
 
 0 of 13 metrics failed.
 ...

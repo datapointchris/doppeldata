@@ -45,10 +45,10 @@ print(frame.count(), frame.select('category').distinct().collect())
 |   shipped|217715|
 +----------+------+
 
-sha256:a998ad43a2261c8a890d5de9df415c08a08854c935790bbf896dbb489cb23063 50
-sha256:a998ad43a2261c8a890d5de9df415c08a08854c935790bbf896dbb489cb23063 50
+sha256:… 50
+sha256:… 50
 {'customers': 4000, 'orders': 55000}
-sha256:e92c3f5684dd18e84a9c298ae946ae62e8b45ff5abc6c6ddb2cc91443cd562d5
+sha256:…
 50 [Row(category='A')]
 ```
 
@@ -58,11 +58,11 @@ bundle's, is identical to the executors':
 ```text
 $ doppeldata data generate orders.profile.yaml --rows 1000000 --seed 7 --out orders/
 wrote 1,000,000 rows as parquet in 50 files, 33.9 MB, in 0.22 s on 16 threads: 4.52M rows/s
-orders/_manifest.json names dataset sha256:a998ad43a2261c8a890d5de9df415c08a08854c935790bbf896dbb489cb23063
+orders/_manifest.json names dataset sha256:…
 $ doppeldata data generate orders-customers --scale 0.1 --seed 7 --out shop/
 customers  wrote 4,000 rows as parquet in 1 file, 48.1 KB
 orders     wrote 55,000 rows as parquet in 1 file, 898.4 KB
-in 0.03 s on 16 threads; shop/_manifest.json names dataset sha256:e92c3f5684dd18e84a9c298ae946ae62e8b45ff5abc6c6ddb2cc91443cd562d5
+in 0.03 s on 16 threads; shop/_manifest.json names dataset sha256:…
 ```
 
 ## The four calls
@@ -122,8 +122,10 @@ manifest = sd.spark.write(spark, profile, args['out'], rows=int(args['rows']), s
 print(manifest.dataset_digest, len(manifest.files))
 ```
 
-Glue preinstalls pyarrow, pandas and boto3, so the job names the wheel alone. [Install the wheel on
-Glue](../../README.md#run-the-library-inside-an-aws-glue-job) downloads it.
+The job names the wheel alone, because Glue preinstalls the rest, as
+[AWS Glue support](../aws-glue-support.md#a-glue-job-adds-only-the-wheel-because-glue-installs-the-pandas-and-pyarrow-doppeldataspark-needs)
+lists. [Install the wheel on Glue](../../README.md#run-the-library-inside-an-aws-glue-job)
+downloads it.
 
 ```bash
 aws s3 cp generate_table.py s3://your-bucket/glue/
@@ -144,15 +146,14 @@ aws glue start-job-run --job-name generate-orders \
 }
 ```
 
-The job printed `sha256:3e20d2e1c32ee0080d6f1df0e2e3911bfa0362131919837eaa42e8b835b72738 200`. A
-`doppeldata data generate` of the same profile, rows and seed named the same dataset. Check what
-the job wrote against its profile:
+The job printed the dataset's SHA-256 and 200 files. A `doppeldata data generate` of the same
+profile, rows and seed named the same dataset. Check what the job wrote against its profile:
 
 ```text
 $ doppeldata data check orders.profile.yaml s3://your-bucket/glue-orders/
 # doppeldata check passed
 
-`s3://your-bucket/glue-orders/`, 1,000,000 rows, against profile `orders` (sha256:b9e6f3b7b1fbcccd7a760918aa87794df5d276561a9bb952099156eef9869f14).
+`s3://your-bucket/glue-orders/`, 1,000,000 rows, against profile `orders` (sha256:…).
 
 0 of 31 metrics failed.
 ```

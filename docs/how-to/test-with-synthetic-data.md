@@ -104,7 +104,7 @@ $ pytest failing/test_amounts.py
 E       AssertionError: assert Decimal('1680.46') < 500
 ...
 ---------------------------------- doppeldata ----------------------------------
-synthetic data generated from seed 310323816371029483, at stream version 12; rerun with --doppeldata-seed 310323816371029483
+synthetic data generated from seed 310323816371029483, at stream version <n>; rerun with --doppeldata-seed 310323816371029483
 $ pytest --doppeldata-seed 310323816371029483 failing/test_amounts.py::test_no_order_tops_500
 ...
 doppeldata: every synthetic table generated from seed 310323816371029483

@@ -130,5 +130,5 @@ key order. Run `profile check` after each edit, then `data plan` to see how each
 ## Why
 
 [The profile format and its privacy floor](../profile-format-and-privacy-floor.md) says why a
-profile is YAML, why no value rests on fewer than 11 rows, what each audit rule admits, and what
+profile is YAML, why no value rests on fewer than `k_min` rows, what each audit rule admits, and what
 `profile check` can and cannot recompute.

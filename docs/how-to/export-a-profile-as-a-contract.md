@@ -20,14 +20,17 @@ import doppeldata as sd
 contract = sd.export('orders', 'odcs')     # the contract's text
 ```
 
+`doppeldata profile export --help` lists the formats and what each carries. Each is read by another
+tool:
+
 | `--format` | Writes | Read by |
 | --- | --- | --- |
 | `pandera` | a module of a `pandera.polars.DataFrameModel` of each table | pandera, `sd.generate` |
 | `dataframely` | a module of a `dataframely.Schema` of each table | dataframely, `sd.generate` |
 | `pyspark-schemas` | a module of each table's `StructType` and `pandera.pyspark.DataFrameModel` | Spark, pandera |
-| `table-schema` | a Frictionless Table Schema v2, and for a bundle a Data Package v2 | frictionless, `profile import --from table-schema`, and `--from data-package` for a bundle's |
-| `json-schema` | the record schema: a JSON Schema 2020-12 of one record | any JSON Schema validator, `profile import --from json-schema` |
-| `odcs` | an Open Data Contract Standard v3.2.0 contract | datacontract-cli, `profile import --from odcs` |
+| `table-schema` | a Frictionless Table Schema, and for a bundle a Data Package | frictionless, `profile import --from table-schema`, and `--from data-package` for a bundle's |
+| `json-schema` | the record schema: a JSON Schema of one record | any JSON Schema validator, `profile import --from json-schema` |
+| `odcs` | an Open Data Contract Standard contract | datacontract-cli, `profile import --from odcs` |
 | `dqdl` | an AWS Glue Data Quality ruleset of each table | Glue Data Quality, Deequ |
 
 PROFILE is a profile file, a bundle, an example's name, or a data file holding an embedded profile.
@@ -39,7 +42,7 @@ Without `--out` the export prints.
 $ cat orders_pandera.py
 """The pandera models of orders, exported from its doppeldata profile.
 
-profile_sha256: 95abee1ddc215b0b2aa73077d2e02925d48b8acfc2461ded17ba7cddbeec16e2
+profile_sha256: …
 """
 
 # Left out:
@@ -101,7 +104,7 @@ examples:
 
 ```text
 $ cat orders.dqdl
-# The ruleset of orders, exported from its doppeldata profile sha256:95abee1ddc215b0b2aa73077d2e02925d48b8acfc2461ded17ba7cddbeec16e2.
+# The ruleset of orders, exported from its doppeldata profile sha256:….
 # Each threshold lies 3 standard errors below the share the profile states of 100000 rows.
 # Left out:
 #   customer_email: the lengths 9 to 64, trimmed, as ColumnLength takes no threshold

@@ -43,8 +43,8 @@ schema class of each library, and a generate and check from the seed.
 
 ## `profile import` writes a seed from a schema file or a Glue table
 
-`--from` names the kind: `odcs`, `json-schema`, `table-schema`, `data-package` or `glue`. Each has
-a `Profile.from_*` call, and `Bundle.from_data_package` reads a package whole. Without `--out` the
+`--from` names the kind, and `doppeldata profile import --help` lists them. Each has a
+`Profile.from_*` call, and `Bundle.from_data_package` reads a package whole. Without `--out` the
 seed prints as YAML. A file names its table up to its first dot, so
 `orders.schema.json` imports as `orders`.
 

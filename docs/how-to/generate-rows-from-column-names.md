@@ -103,9 +103,9 @@ doppeldata data generate people.yaml --out people/
 
 ```text
 wrote 1,000 rows as csv in 1 file, 69.3 KB, in 0.00 s on 16 threads: 0.33M rows/s
-./_manifest.json names dataset sha256:caba3bd0b1728702ff875b15e6cca81c43184782d8ed8d5d5a95f6f98b9415cd
+./_manifest.json names dataset sha256:…
 wrote 1,000 rows as parquet in 1 file, 37.9 KB, in 0.00 s on 16 threads: 0.25M rows/s
-people/_manifest.json names dataset sha256:caba3bd0b1728702ff875b15e6cca81c43184782d8ed8d5d5a95f6f98b9415cd
+people/_manifest.json names dataset sha256:…
 ```
 
 - **`--out people.csv` writes that file and nothing beside it.** `--manifest`, or `manifest=True`

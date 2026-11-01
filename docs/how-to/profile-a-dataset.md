@@ -49,20 +49,21 @@ writes JSON.
 - **A source that changes while it is read fails the profile, exit 1.** The files are listed again
   after the last read, and any file whose size or revision moved is named.
 
-## The flags that change the profile
+## `--help` prints every flag, and a page shows each one that changes the profile
 
-| Flag, and the SDK's argument | Does |
-| --- | --- |
-| `--sample N`, `sample=` | profiles a seeded random sample of N rows; distinct counts, repeated rows and keys still count every row |
-| `--policy`, `policy=` | the privacy policy, as [Review and commit a profile](review-and-commit-a-profile.md) shows |
-| `--k-min`, `k_min=` | the fewest rows any stored value rests on, 11 by default |
-| `--pack`, `packs=` | an installed detector pack to type columns with, beside the general one; [Write a detector pack](write-a-detector-pack.md) |
-| `--code-list`, `code_lists=` | a code list a detector reads; [Profile healthcare data](profile-healthcare-data.md) |
-| `--edges-from`, `edges_from=` | an earlier profile's bin edges and value lists, so two profiles compare; [Measure drift between profiles](measure-drift-between-profiles.md) |
-| `--tables`, `sd.profile_tables` | a bundle of every table the source holds, with the foreign keys between them |
-| `--engine spark`, `engine='spark'` | Spark computes the statistics |
+`doppeldata profile create --help` prints each flag with its default, and `help(sd.profile)` each
+argument. The flags that change the profile each have a page:
 
-A sampled profile records how many rows it read:
+- `--policy` and `--k-min`, `policy=` and `k_min=`:
+  [Review and commit a profile](review-and-commit-a-profile.md)
+- `--pack`, `packs=`: [Write a detector pack](write-a-detector-pack.md)
+- `--code-list`, `code_lists=`: [Profile healthcare data](profile-healthcare-data.md)
+- `--edges-from`, `edges_from=`: [Measure drift between two profiles](measure-drift-between-profiles.md)
+- `--tables`, `sd.profile_tables`: [Generate related tables](generate-related-tables.md)
+- `--engine spark`, `engine='spark'`: [Profile with Spark or AWS Glue](profile-with-spark-or-glue.md)
+
+`--sample N`, `sample=`, profiles a seeded random sample of N rows. Distinct counts, repeated rows
+and keys still count every row. A sampled profile records how many rows it read:
 
 ```yaml
   sample: {strategy: reservoir, rows_read: 5000}
