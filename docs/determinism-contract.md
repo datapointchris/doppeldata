@@ -50,6 +50,11 @@ The SHA-256 is taken over the RFC 8785 canonical JSON of one object with a key f
 - **The profile's digest is the profile's as given, before a scenario patches it.** The scenario's
   digest covers the patch. A scenario's digest resolves every perturbation's id and leaves out its
   `description` and `expect`. So rewording it or moving a bound keeps the dataset's identity.
+- **A profile or scenario key renamed moves the identity, and the values stay.** Key names are
+  part of the canonical JSON each digest hashes. So a rename changes the profile digest, the
+  dataset digest and every part name's `identity8`. Each stream is keyed by its table, its column's
+  path and its draw's own name, never by a profile key. So the same profile under the new names
+  draws the same bits.
 
 A test pins the digest of one fixed identity, which the library's `rfc8785` package reproduces.
 

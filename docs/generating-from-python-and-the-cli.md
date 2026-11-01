@@ -425,8 +425,9 @@ and `write`. [scenario-overlays.md](scenario-overlays.md) holds the format and w
   `scenario show` prints an op's parameters with their types and meanings, or an example's YAML.
 - **`scenario check SCENARIO PROFILE` plans a write without generating a row.** It takes `data
   plan`'s `--rows`, `--seed`, `--format`, `--file-rows`, `--partition-by` and `--no-partitions`,
-  so it refuses what `data generate` would with the same flags. A refusal exits 3, and `--json`
-  prints `passed` and each issue as [issue-codes.md](issue-codes.md) describes one.
+  so it refuses what `data generate` would with the same flags. A refusal exits 3 as
+  `E-SCENARIO-019`, and `--json` prints `passed` and each issue as
+  [issue-codes.md](issue-codes.md) describes one.
 
 ## A stopped write's code decides its exit status
 

@@ -8,7 +8,7 @@ what each refusal was from its issue code, and how each column will be drawn fro
 
 ```bash
 doppeldata capabilities show          # each command, then each list on a line
-doppeldata capabilities show --json   # every command's flags, each op's fields, each code's exit status and hint
+doppeldata capabilities show --json   # the same lists whole, as one document
 ```
 
 | Key | Holds | Read from |
@@ -33,9 +33,8 @@ doppeldata capabilities show --json   # every command's flags, each op's fields,
   generate` writes it into the scenario schema.
 - **The formats each op takes are decided once, in the engine.** `op_takes_format` in
   `crates/core/src/scenario.rs` is what the writers' refusals of `cdc` and `schema_drift` read, and
-  what the manifest lists. `cdc` takes CSV and Parquet, `schema_drift` a format that reads as one
-  table under several schemas, `malformed_rows` a format one of its kinds can be held in, and every
-  other op every format.
+  what the manifest lists. It matches every `Op` by name, so an op added fails to compile until it
+  says which formats take it.
 - **The library builds the manifest, and the command line hands it the commands.** Only a command
   can walk its own tree, and the library never imports Typer, so `sd.capabilities(commands)` takes
   the list the CLI walked from its root. Called with none, it lists everything else.
@@ -50,13 +49,14 @@ doppeldata capabilities show --json   # every command's flags, each op's fields,
 {
   "name": "customer_id",
   "physical_type": "int64",
-  "sampler": "numeric",
+  "sampler_kind": "numeric",
   "summary": "uniform between the extremes, at the profiled distinct ratio",
   "parameters": [
-    {"name": "extremes", "field": "/columns/1/numeric/extremes", "value": {"high": 99999, "low": 10, "method": "digit_bounds"}},
-    {"name": "integral", "field": "/columns/1/numeric/integral", "value": true},
+    {"name": "null_fraction", "field": "/columns/1/null_fraction", "value": 0.0},
     {"name": "distinct_ratio", "field": "/columns/1/distinct/ratio", "value": 0.2},
-    {"name": "null_fraction", "field": "/columns/1/null_fraction", "value": 0.0}
+    {"name": "approx_values", "field": "/columns/1/distinct/approx_values", "value": 20000},
+    {"name": "extremes", "field": "/columns/1/numeric/extremes", "value": {"high": 99999, "low": 10, "method": "digit_bounds"}},
+    {"name": "integral", "field": "/columns/1/numeric/integral", "value": true}
   ],
   "null_fraction": 0.0,
   "origin": "overlaid",

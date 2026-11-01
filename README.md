@@ -281,13 +281,13 @@ loop profiles a table, bends it with a scenario, and verifies the result. A tabl
 the `orders` example stands in for real data:
 
 ```bash
-doppeldata capabilities show --json            # every command and flag, format, op, fake, policy and issue code
-doppeldata data generate orders --rows 20000 --seed 1 --out real/
-doppeldata profile create real/ --out orders.profile.yaml
+doppeldata capabilities show --json   # everything this install takes, read from the registries that refuse a value outside them
+doppeldata data generate orders --rows 20000 --seed 1 --out real/ --json                  # the manifest
+doppeldata profile create real/ --out orders.profile.yaml --json
 doppeldata profile check orders.profile.yaml --json                       # "passed": true, or each issue at its field
 doppeldata scenario check hot-key orders.profile.yaml --json              # "passed": true
 doppeldata data plan orders.profile.yaml --scenario hot-key --seed 7 --out out/ --json
-doppeldata data generate orders.profile.yaml --scenario hot-key --seed 7 --out out/
+doppeldata data generate orders.profile.yaml --scenario hot-key --seed 7 --out out/ --json  # the manifest
 doppeldata data check orders.profile.yaml out/ --scenario hot-key --json  # "passed": true, "verified": true
 ```
 
@@ -297,8 +297,10 @@ doppeldata data check orders.profile.yaml out/ --scenario hot-key --json  # "pas
 - **Every refusal names a registered `E-<AREA>-<NNN>` code.** Under `--json` each issue prints on
   stderr as one line, with the field refused, the value given, every valid value, the closest of
   them and a hint. [Issue codes](docs/issue-codes.md) says what each exit status means.
-- **`data plan --json` traces each column.** It names the sampler, each profile field the sampler
-  reads with its pointer and value, and the id of each op writing the column. `origin` says whether
+- **Every write verb takes `--json` too.** `data generate` prints the manifest it wrote. `profile
+  create`, `import` and `expand` print the profile as JSON when no `--out` is given.
+- **`data plan --json` traces each column.** It names the sampler's kind, each profile field the
+  sampler reads with its pointer and value, and the id of each op writing the column. `origin` says whether
   the column is profiled, derived from others, overlaid by the scenario or pinned.
 - **Without `--json`, `profile check`, `scenario check`, `data check` and `profile diff` print
   GitHub Markdown**, so a report pastes into a pull request as it is.

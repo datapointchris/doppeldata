@@ -38,7 +38,9 @@ what raises it and its hint.
 - **`Issue` refuses an unregistered code when it is built**, and takes the code's hint where the
   raiser gives none.
 - **`cli/tests/test_issue_codes.py` refuses a source that spells a code**, or builds a refusal from
-  a string literal. So every code a refusal carries comes through the registry.
+  a string literal. So every code a refusal carries comes through the registry. It takes as a
+  refusal every class whose first field is `code` and every function whose first parameter is, so
+  a carrier added is covered with no edit to the test.
 
 ## The exit status belongs to the code
 
@@ -49,12 +51,18 @@ what raises it and its hint.
 | 3 | A check found what a person must act on: data missed its profile, or a profile breaks its policy |
 | 4 | A store or service never answered |
 
-- **`exit_code` is read from the first issue's code.** An error holding several issues ends on
-  the first one's status.
-- **A check verb ends on 3 where something it wraps fails with 1.** So `profile diff` keeps 1 for
-  drift and nothing else, and `data check` ends on 3 whenever it does not pass.
-- **A profile `data generate` refuses because it fails `profile check` exits 2.** `profile check`
-  itself exits 3 on the same profile, because there the check is the command.
+- **`exit_code` is read from the first issue's code, and nothing overrides it.** An error holding
+  several issues ends on the first one's status. So the status `capabilities show` lists for a
+  code is the one the process returns.
+- **A check that fails ends on its verdict.** `profile check` fails as `E-PROFILE-029`, `scenario
+  check` as `E-SCENARIO-019` and `data check` as `E-DATA-014`. Each exits 3, after its report.
+- **A check that cannot finish leads with its stop code, then the issue that stopped it.**
+  `data check` leads with `E-DATA-024` and `profile diff` with `E-PROFILE-031`, each exiting 3. A
+  file `data check` cannot read gives `E-DATA-024`, then `E-DATA-009`.
+- **`profile diff` exits 1 on drift alone**, as `E-PROFILE-027`.
+- **An export, or a write with `--embed-profile`, refuses a profile that fails `profile check` as
+  `E-PROFILE-030`, exiting 2.** Each violation follows it. `profile check` on the same profile exits 3, because there the
+  check is the command.
 
 ## An issue says where, what was given, what is taken, and what to do
 

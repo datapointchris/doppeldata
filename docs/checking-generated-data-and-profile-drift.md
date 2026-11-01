@@ -425,7 +425,8 @@ Drift between two months of one dataset is expected, so `profile diff` exits 1, 
 
 - **A check whose scenario's expectation misses its bounds exits 3**, as a failed metric does.
 - **A check or a diff that could not finish exits 3**, from a refused S3 listing to a crash. It
-  needs a person too, and 1 then means drift and nothing else.
+  needs a person too, and 1 then means drift and nothing else. `data check` leads with
+  `E-DATA-024` and `profile diff` with `E-PROFILE-031`, then the issue that stopped it.
 - **No answer from S3 exits 4**, because the next run can succeed with nobody acting.
 - **A missing file, an unreadable profile, an invalid scenario or a bad thresholds file exits
   2.** So does DATA holding
