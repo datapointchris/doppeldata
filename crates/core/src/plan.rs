@@ -236,8 +236,7 @@ pub struct ColumnTrace {
 pub struct SamplerParameter {
     pub name: &'static str,
     pub field: String,
-    #[serde(serialize_with = "crate::sorted_keys::serialize")]
-    pub value: Value,
+    pub value: crate::SortedKeys<Value>,
 }
 
 /// What decides a column's values. A column the scenario changes is `overlaid` though it also
@@ -878,7 +877,7 @@ impl Plan {
                         Some(SamplerParameter {
                             name: parameter,
                             field: field.clone(),
-                            value,
+                            value: value.into(),
                         })
                     })
                     .collect();

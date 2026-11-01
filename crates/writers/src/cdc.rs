@@ -425,7 +425,7 @@ impl Jobs<'_> {
             row: Some(fault.row),
             kind: ListedFault::Stream(fault.kind),
             column: None,
-            detail,
+            detail: detail.into(),
         }
     }
 

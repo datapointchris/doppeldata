@@ -65,7 +65,7 @@ pub(crate) fn fault_record(
         row,
         kind: kind.into(),
         column: column.map(String::from),
-        detail,
+        detail: detail.into(),
     }
 }
 

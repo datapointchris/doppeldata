@@ -227,3 +227,18 @@ stayed level. It compares only the pins that release held, so a new pin starts a
 Where a fixture changed since the release at a level stream version, its hash cannot be compared.
 The workflow then generates the release's own fixtures with this build, which must reach the
 release's hash.
+
+## Every JSON object the engine writes or hands Python holds its keys sorted
+
+schemars' `preserve_order` writes each published schema in the model's field order. It also turns
+on serde_json's insertion order for the whole workspace. So a `Value` or `Map` keeps its keys in
+the order they were inserted, and an unrelated change to the code building it can move them.
+
+- **A `Value` or `Map` that reaches written bytes, a SHA-256 or Python is held as `SortedKeys`.**
+  Its `Serialize` sorts every object's keys at any depth. So the field writes the same bytes
+  however it was built. `rg -n 'SortedKeys<' crates` lists the fields.
+- **Every binding returning a `Value` it built returns it through `json_text`** in
+  `crates/python`, which serializes through `SortedKeys`.
+- **A struct needs neither.** Its fields serialize in declaration order.
+- **A scenario's `patch` is sorted as it is read.** Its key order decides the order each column,
+  field and relationship is applied in. A sort when it is written cannot reach that.
