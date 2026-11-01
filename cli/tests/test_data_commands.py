@@ -36,6 +36,14 @@ def test_data_generate_to_one_file_with_manifest_then_with_replace_alone_leaves_
     assert out.read_text().splitlines()[0] == 'name,street,zip'
 
 
+def test_a_write_refused_for_a_fault_its_format_cannot_hold_leaves_no_directory(tmp_path):
+    refused = CliRunner().invoke(
+        app, ['data', 'generate', 'orders', '--scenario', 'bad-csv', '--format', 'parquet', '--out', f'{tmp_path}/bad/']
+    )
+    assert refused.exit_code == 2, refused.output
+    assert not (tmp_path / 'bad').exists()
+
+
 def test_profile_expand_writes_the_profile_a_short_yaml_stands_for_which_generates_the_same_bytes(tmp_path):
     """A short YAML with `credit_card:` written to CSV passes `data check`, though a CSV reads its 16 digits as integers."""
     short = tmp_path / 'people.yaml'

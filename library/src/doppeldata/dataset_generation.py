@@ -515,6 +515,7 @@ def prepared_write(
     engine = generation.checked(arguments.plan())
     choices_json = choices.engine_json(profile, applied)
     options = engine.write_options(choices_json)
+    engine.check_writable(options)
     if one_file is not None:
         refuse_other_extension(one_file, engine.ranges_json(options))
     return PreparedWrite(destination, scheme, bucket, arguments, engine, choices_json, options, one_file)

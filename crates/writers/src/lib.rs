@@ -52,6 +52,7 @@ pub use write::RangesWritten;
 pub use write::RunOptions;
 pub use write::SplitRun;
 pub use write::WriteFailure;
+pub use write::check_writable;
 pub use write::claim;
 pub use write::commit;
 pub use write::regenerate;

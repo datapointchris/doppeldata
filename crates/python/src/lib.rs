@@ -572,6 +572,14 @@ mod _core {
             Ok(WriteOptions { options })
         }
 
+        /// Refuses what ``write`` would refuse before claiming a destination: a layout the files
+        /// cannot take, a format that cannot encode them, or a fault they cannot hold. ``write``
+        /// opens the destination first, and a local one is created as it opens, so a caller
+        /// refuses these before it.
+        fn check_writable(&self, py: Python<'_>, options: PyRef<'_, WriteOptions>) -> PyResult<()> {
+            doppeldata_writers::check_writable(&self.plan, &options.options).map_err(|error| self.refused(py, error))
+        }
+
         /// Each row range the write would make, as a JSON list of objects keyed as the manifest
         /// keys its files: ``path``, ``range``, ``first_row`` and ``range_rows``, with
         /// ``objects_at_most``. A partitioned range's path holds ``*`` for each partition value.

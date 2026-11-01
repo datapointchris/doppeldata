@@ -108,6 +108,15 @@ pub fn write(plan: &Plan, options: &WriteOptions, run: &RunOptions, destination:
     }
 }
 
+/// Refuses what [`write`] refuses of `plan` and `options` before it claims a destination: a layout
+/// the files cannot take, a format that cannot encode them, or a fault they cannot hold. A caller
+/// runs it before opening the destination, which for a local directory creates it.
+pub fn check_writable(plan: &Plan, options: &WriteOptions) -> Result<(), WriteError> {
+    let layout = layout(plan, &options.layout, &options.output)?;
+    check_encodable(plan, &layout, &options.output)?;
+    check_invalid_utf8_reach(plan, &layout, &options.output)
+}
+
 /// Refuses a write split across processes under an op that orders the whole table.
 fn refuse_split(plan: &Plan) -> Result<(), WriteError> {
     match plan.one_process_op() {

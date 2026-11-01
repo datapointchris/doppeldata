@@ -158,6 +158,13 @@ class Plan:
     def __new__(cls, /, profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, source: str, scenario: tuple[str, str, str] |None = None, overrides: str |None = None) -> Plan: ...
     @property
     def block_count(self, /) -> int: ...
+    def check_writable(self, /, options: WriteOptions) -> None:
+        """
+        Refuses what ``write`` would refuse before claiming a destination: a layout the files
+        cannot take, a format that cannot encode them, or a fault they cannot hold. ``write``
+        opens the destination first, and a local one is created as it opens, so a caller
+        refuses these before it.
+        """
     def claim(self, /, options: WriteOptions, destination: str, *, replace: bool, s3_store: dict |None = None) -> None:
         """
         Claims ``destination`` for the dataset ``write`` would write there, as ``write`` does
