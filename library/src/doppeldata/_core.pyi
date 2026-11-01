@@ -225,6 +225,14 @@ class Plan:
         keys its files: ``path``, ``range``, ``first_row`` and ``range_rows``, with
         ``objects_at_most``. A partitioned range's path holds ``*`` for each partition value.
         """
+    def regenerate(self, /, manifest_json: str, destination: str, *, threads: SupportsIndex, replace: bool, s3_store: dict |None = None) -> str:
+        """
+        Writes every file the whole manifest ``manifest_json`` records again, to ``destination``,
+        in the format, settings and layout it records, and returns the fresh manifest as JSON.
+        The plan must have the manifest's identity. A file whose record differs raises
+        ``WriteFailed`` once the fresh manifest is stored, with an issue at each such file's path
+        saying what differed.
+        """
     @property
     def rows_written(self, /) -> int:
         """

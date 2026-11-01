@@ -133,6 +133,7 @@ pub fn commit_bundle(
             return Err(WriteError::IdentityMismatch {
                 plan: table.dataset_sha256.clone(),
                 manifest: manifest.dataset_sha256.clone(),
+                differing: Vec::new(),
             }
             .into());
         }

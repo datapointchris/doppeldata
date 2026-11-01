@@ -25,6 +25,7 @@ use doppeldata_core::manifest::FaultRecord;
 use doppeldata_core::manifest::MANIFEST_FILE_NAME;
 use doppeldata_core::manifest::Manifest;
 use doppeldata_core::manifest::ManifestFile;
+use doppeldata_core::manifest::ManifestIdentity;
 use doppeldata_core::manifest::ManifestProfile;
 use doppeldata_core::manifest::PARTIAL_MANIFEST_FILE_NAME;
 use doppeldata_core::profile::provenance;
@@ -47,6 +48,8 @@ use crate::layout::layout;
 use crate::layout::layout_from_manifest;
 use crate::partition::PartitionValues;
 use crate::partition::Partitioner;
+use crate::regenerated_files::differing_files;
+use crate::regenerated_files::differing_stream_files;
 use crate::size_estimate::check_invalid_utf8_reach;
 use crate::write_options::WriteOptions;
 
@@ -261,39 +264,44 @@ fn check_encodable(plan: &Plan, layout: &FileLayout, output: &Output) -> Result<
 }
 
 /// Writes every file a whole `manifest` names again, from `plan`, which must have the manifest's
-/// identity, then compares each object's path, rows, bytes and SHA-256 with the record. A partial
-/// manifest is refused, and so is one whose files embed the profile, whose JSON a plan never holds.
+/// identity, then compares each object's record with the manifest's: its path, range, rows, bytes,
+/// SHA-256 and partition. The fresh manifest records the manifest's profile and scenario. A
+/// partial manifest is refused, and so is one whose files embed the profile, whose JSON a plan
+/// never holds, and one recording a write to one file, whose name no part takes.
 pub fn regenerate(plan: &Plan, manifest: &Manifest, run: &RunOptions, destination: &Destination) -> Result<Manifest, WriteFailure> {
     if manifest.partial {
         return Err(WriteError::PartialManifest.into());
     }
     if manifest.profile.embedded {
-        let refusal =
-            "the manifest's files embed the profile's JSON, which a plan does not hold; write the dataset again with the profile embedded";
-        return Err(WriteError::Settings(refusal.into()).into());
+        return Err(WriteError::EmbeddedProfileManifest.into());
     }
-    let identity = plan.identity().sha256();
-    if identity != manifest.dataset_sha256 {
+    if let Some(file) = &manifest.one_file {
+        return Err(WriteError::OneFileManifest { file: file.clone() }.into());
+    }
+    let identity = plan.identity();
+    if identity.sha256() != manifest.dataset_sha256 {
         return Err(WriteError::IdentityMismatch {
-            plan: identity,
+            plan: identity.sha256(),
             manifest: manifest.dataset_sha256.clone(),
+            differing: identity_differences(&ManifestIdentity::from(identity), &manifest.identity),
         }
         .into());
     }
     let layout = layout_from_manifest(plan, manifest).map_err(WriteError::from)?;
-    let fresh = Manifest::new(
-        plan.identity(),
+    let mut fresh = Manifest::new(
+        identity,
         manifest.profile.clone(),
         manifest.output.clone(),
         manifest.layout.clone(),
         destination.url.clone(),
     );
+    fresh.scenario = manifest.scenario.clone();
     let written = match plan.cdc() {
         Some(cdc) => cdc::write(plan, cdc, &layout, fresh, run, destination)?,
         None => execute(plan, &layout, fresh, run, destination)?,
     };
     let mut differ = differing_files(&manifest.files, &written.files);
-    differ.extend(cdc::differing_stream_files(manifest.cdc.as_ref(), written.cdc.as_ref()));
+    differ.extend(differing_stream_files(manifest.cdc.as_ref(), written.cdc.as_ref()));
     if differ.is_empty() {
         Ok(written)
     } else {
@@ -306,15 +314,17 @@ pub fn regenerate(plan: &Plan, manifest: &Manifest, run: &RunOptions, destinatio
     }
 }
 
-/// The paths whose record differs between `recorded` and `written`, or that only one of them lists.
-fn differing_files(recorded: &[ManifestFile], written: &[ManifestFile]) -> Vec<String> {
-    let recorded: BTreeMap<&str, &ManifestFile> = recorded.iter().map(|file| (file.path.as_str(), file)).collect();
-    let written: BTreeMap<&str, &ManifestFile> = written.iter().map(|file| (file.path.as_str(), file)).collect();
-    let paths: BTreeSet<&str> = recorded.keys().chain(written.keys()).copied().collect();
-    paths
-        .into_iter()
-        .filter(|path| recorded.get(path) != written.get(path))
-        .map(String::from)
+/// The keys of the identity whose values differ between the plan's and the manifest's record.
+fn identity_differences(plan: &ManifestIdentity, recorded: &ManifestIdentity) -> Vec<String> {
+    let as_map = |identity: &ManifestIdentity| match serde_json::to_value(identity).expect("an identity always serializes") {
+        serde_json::Value::Object(map) => map,
+        _ => unreachable!("an identity serializes as an object"),
+    };
+    let (plan, recorded) = (as_map(plan), as_map(recorded));
+    let keys: BTreeSet<&String> = plan.keys().chain(recorded.keys()).collect();
+    keys.into_iter()
+        .filter(|key| plan.get(*key) != recorded.get(*key))
+        .cloned()
         .collect()
 }
 

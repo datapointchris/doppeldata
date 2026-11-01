@@ -115,11 +115,23 @@ class StoppedWrite(IssueCarrier):
     a cancelled one, and its exit status is the code's, as docs/issue-codes.md lists them.
 
     `manifest` is the record of what a run that claimed its destination wrote, marked partial when it stopped early, and
-    None for a refusal before the claim. `manifest_stored` says whether that record is in the store.
+    None for a refusal before the claim. `manifest_stored` says whether that record is in the store. `issues`, where given,
+    holds an issue for each thing found, such as each file a regeneration found differing, and `message` leads them.
     """
 
-    def __init__(self, code: str, message: str, *, manifest_json: str | None = None, manifest_stored: bool = False) -> None:
-        IssueCarrier.__init__(self, [Issue(code, None, message)])
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        manifest_json: str | None = None,
+        manifest_stored: bool = False,
+        issues: Sequence[Issue] | None = None,
+    ) -> None:
+        if issues:
+            IssueCarrier.__init__(self, issues, headline=message)
+        else:
+            IssueCarrier.__init__(self, [Issue(code, None, message)])
         self.manifest = Manifest.from_json(manifest_json) if manifest_json is not None else None
         self.manifest_stored = manifest_stored
 

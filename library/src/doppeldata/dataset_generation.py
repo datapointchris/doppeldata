@@ -247,18 +247,18 @@ def one_file_scenario(scenario: Scenario | Sequence[Scenario] | None) -> Scenari
     return applied
 
 
-def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, replace: bool, manifest: bool) -> Manifest:
-    """Write the dataset as the one file `target`, and `_manifest.json` beside it only where `manifest` asks.
+def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, replace: bool, manifest_beside: bool) -> Manifest:
+    """Write the dataset as the one file `target`, and `_manifest.json` beside it only where `manifest_beside` asks.
 
     The engine writes into `.{target.name}.doppeldata-staging` beside `target`, and the file is moved into place whole. A
     write that fails or that a signal stops removes that directory. One killed outright leaves it, and the next write to
     `target` holds it as it holds the file: refused, or removed under `replace`. A manifest beside `target` recording it
-    alone describes the rows this write replaces, so it goes before the file moves, whether or not `manifest` writes
+    alone describes the rows this write replaces, so it goes before the file moves, whether or not `manifest_beside` writes
     another. One recording other files makes that directory their dataset, so it refuses the write. The manifest returned
-    names `target`'s directory as its destination, and `target` as its one file. No rows write no file, as they write none
-    in a directory. Under `malformed_rows` the write lists its faults beside `target` every time, in the list
-    `_core.one_file_faults_name` names for it, such as `_orders.csv.faults.jsonl`. One already there describes the bytes
-    this write replaces, so it is held as the file is.
+    names `target`'s directory as its destination, and `target` as its one file under `files` and `one_file`. No rows write
+    no file, as they write none in a directory. Under `malformed_rows` the write lists its faults beside `target` every
+    time, in the list `_core.one_file_faults_name` names for it, such as `_orders.csv.faults.jsonl`. One already there
+    describes the bytes this write replaces, so it is held as the file is.
     """
     if target.is_dir():
         message = f'{target} is a directory; end the path with / to write the dataset into it'
@@ -292,8 +292,8 @@ def write_one_file(prepared: 'PreparedWrite', target: Path, *, threads: int, rep
     try:
         written = Manifest.from_json(prepared.engine.write(prepared.options, str(staging), threads=threads, replace=False))
         files = [{**file, 'path': target.name} for file in written.files]
-        moved = Manifest({**written.document, 'destination': str(target.parent), 'files': files})
-        if manifest:
+        moved = Manifest({**written.document, 'destination': str(target.parent), 'files': files, 'one_file': target.name})
+        if manifest_beside:
             (staging / MANIFEST_FILE_NAME).write_text(json.dumps(moved.document, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
         else:
             (staging / MANIFEST_FILE_NAME).unlink(missing_ok=True)

@@ -63,6 +63,7 @@ from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 from doppeldata.table_or_bundle_generation import generate
 from doppeldata.table_or_bundle_generation import plan
+from doppeldata.table_or_bundle_generation import regenerate
 from doppeldata.table_or_bundle_generation import sample
 from doppeldata.table_or_bundle_generation import stream
 from doppeldata.table_or_bundle_generation import write
@@ -126,6 +127,7 @@ __all__ = [
     'plan',
     'profile',
     'profile_tables',
+    'regenerate',
     'sample',
     'stream',
     'write',

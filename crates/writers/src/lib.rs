@@ -16,6 +16,7 @@ pub mod issue_codes;
 mod layout;
 mod partition;
 mod planned_ranges;
+mod regenerated_files;
 mod size_estimate;
 mod write;
 mod write_options;
@@ -47,6 +48,9 @@ pub use planned_ranges::file_columns;
 pub use planned_ranges::planned_output;
 pub use planned_ranges::planned_ranges;
 pub use planned_ranges::planned_stream;
+pub use regenerated_files::DifferenceKind;
+pub use regenerated_files::FieldDifference;
+pub use regenerated_files::FileDifference;
 pub use size_estimate::estimate_bytes;
 pub use write::RangesWritten;
 pub use write::RunOptions;
@@ -96,12 +100,21 @@ pub enum WriteError {
     CurrentThreadRuntime,
     #[error("object name {name:?}: {reason}")]
     ObjectName { name: String, reason: String },
-    #[error("the plan's identity {plan} is not the manifest's {manifest}")]
-    IdentityMismatch { plan: String, manifest: String },
+    /// `differing` names each identity key whose value the two hold differently, where it is known.
+    #[error("the plan's identity {plan} is not the manifest's {manifest}{}", because_differing(differing))]
+    IdentityMismatch {
+        plan: String,
+        manifest: String,
+        differing: Vec<String>,
+    },
     #[error("the manifest is partial, so it lists only what a stopped run completed; write the dataset again instead")]
     PartialManifest,
-    #[error("{} regenerated objects differ from the manifest's record: {}", files.len(), files.join(", "))]
-    RegeneratedFilesDiffer { files: Vec<String> },
+    #[error("the manifest's files embed the profile's JSON, which a plan does not hold")]
+    EmbeddedProfileManifest,
+    #[error("the manifest records the one file {file}, and a regeneration writes a directory of parts")]
+    OneFileManifest { file: String },
+    #[error("{} regenerated objects differ from the manifest's record: {}", files.len(), listed(files))]
+    RegeneratedFilesDiffer { files: Vec<FileDifference> },
     #[error("the write was cancelled")]
     Cancelled,
     #[error("range {range} is past the layout's {ranges} ranges")]
@@ -141,6 +154,8 @@ impl WriteError {
             Self::CurrentThreadRuntime => &issue_codes::CURRENT_THREAD_RUNTIME,
             Self::IdentityMismatch { .. } => &issue_codes::IDENTITY_MISMATCH,
             Self::PartialManifest => &issue_codes::PARTIAL_MANIFEST,
+            Self::EmbeddedProfileManifest => &issue_codes::EMBEDDED_PROFILE_MANIFEST,
+            Self::OneFileManifest { .. } => &issue_codes::ONE_FILE_MANIFEST,
             Self::RegeneratedFilesDiffer { .. } => &issue_codes::REGENERATED_FILES_DIFFER,
             Self::Cancelled => &issue_codes::CANCELLED,
             Self::RangeOutOfLayout { .. } => &issue_codes::RANGE_OUT_OF_LAYOUT,
@@ -156,4 +171,17 @@ impl WriteError {
             Self::ClaimNotRemoved { .. } => &issue_codes::CLAIM_NOT_REMOVED,
         }
     }
+}
+
+/// `, because the two differ in <keys>`, or nothing where no key is named.
+fn because_differing(differing: &[String]) -> String {
+    match differing {
+        [] => String::new(),
+        keys => format!(", because the two differ in {}", keys.join(" and ")),
+    }
+}
+
+/// Each differing object as `path: what differs`, one after another.
+fn listed(files: &[FileDifference]) -> String {
+    files.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")
 }

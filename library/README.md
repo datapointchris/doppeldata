@@ -25,6 +25,8 @@ read it with no copy, and none of them is needed to generate. `sd.stream()` retu
 RecordBatchReader for data larger than memory. `sd.write()` writes a directory of files with a
 manifest, or one file such as `people.csv`, and
 `sd.plan()` says what it would write. A write that stops raises a `StoppedWrite`.
+`sd.regenerate(profile, manifest, out)` writes the dataset a manifest records again, and raises
+`WriteFailed` naming each file whose bytes differ from its record.
 `sd.spark.generate()` and `sd.spark.write()` do the same inside Spark's executors, with the values
 and files a local run gives. They need PySpark 3.5 or later, with pyarrow 15 or later and the pandas
 PySpark asks for, and doppeldata installed on every executor. A write to S3 needs boto3 on every

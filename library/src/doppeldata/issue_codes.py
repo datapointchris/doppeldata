@@ -409,6 +409,14 @@ UNKNOWN_PARTITION_STYLE = declare(
     exit_code=2,
     hint='doppeldata capabilities show lists the partition styles',
 )
+REGENERATES_A_DIRECTORY = declare(
+    'E-WRITE-014', 'a regeneration names one file as its destination, and a regeneration writes a directory of parts', exit_code=2
+)
+MANIFEST_NOT_FOUND = declare('E-WRITE-015', 'a manifest named to regenerate from is not at the path or URL given', exit_code=2)
+IDENTITY_MISMATCH = engine('IDENTITY_MISMATCH')
+PARTIAL_MANIFEST = engine('PARTIAL_MANIFEST')
+REGENERATED_FILES_DIFFER = engine('REGENERATED_FILES_DIFFER')
+MANIFEST_UNREADABLE = engine('MANIFEST_UNREADABLE')
 
 NO_CREDENTIALS = engine('NO_CREDENTIALS')
 STORE_REFUSED = engine('STORE_REFUSED')
@@ -463,7 +471,7 @@ NOT_A_SCENARIO = declare('E-USAGE-005', 'scenario= is given neither a Scenario n
 COMPOSE_NOTHING = declare('E-USAGE-006', 'Scenario.compose was given no scenario', exit_code=2)
 SAVE_NEEDS_PATH = declare('E-USAGE-007', 'a profile with no file of its own was saved with no path', exit_code=2)
 INVALID_PARTITIONS = declare('E-USAGE-008', 'partitions is under 1', exit_code=2)
-MANIFEST_ON_BUNDLE = declare('E-USAGE-009', 'manifest= was given for a bundle, which always writes its manifests', exit_code=2)
+MANIFEST_ON_BUNDLE = declare('E-USAGE-009', 'manifest_beside= was given for a bundle, which always writes its manifests', exit_code=2)
 UNSUPPORTED_PROFILE_SOURCE = declare(
     'E-USAGE-010', 'a call was given a profile source of a type it does not read, such as a number', exit_code=2
 )
@@ -500,3 +508,8 @@ AWS_PROFILE_WITH_SPARK = declare(
     'E-USAGE-024', "an AWS profile was named for Spark profiling, which reads S3 with its own session's credentials", exit_code=2
 )
 PROFILE_OR_COLUMNS = declare('E-USAGE-025', 'a call was given both a profile and column names, or neither', exit_code=2)
+SETTLED_BY_MANIFEST = declare(
+    'E-USAGE-026',
+    'a regeneration was given a value its manifest settles: the seed, rows, scale, scenario, format, writer settings or layout',
+    exit_code=2,
+)

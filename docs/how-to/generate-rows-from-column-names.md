@@ -97,7 +97,7 @@ data.
 ## A path with a format's suffix is one file, and anything else a directory
 
 ```bash
-doppeldata data generate people.yaml --out people.csv --manifest
+doppeldata data generate people.yaml --out people.csv --manifest-beside
 doppeldata data generate people.yaml --out people/
 ```
 
@@ -108,8 +108,9 @@ wrote 1,000 rows as parquet in 1 file, 37.9 KB, in 0.00 s on 16 threads: 0.25M r
 people/_manifest.json names dataset sha256:…
 ```
 
-- **`--out people.csv` writes that file and nothing beside it.** `--manifest`, or `manifest=True`
-  on `sd.write`, adds `_manifest.json`. A directory or S3 destination always holds one.
+- **`--out people.csv` writes that file and nothing beside it.** `--manifest-beside`, or
+  `manifest_beside=True` on `sd.write`, adds `_manifest.json`. A directory or S3 destination always
+  holds one.
 - **`--out people/`, or a path with no format suffix, is a directory** of `part-*` files.
 - **`--replace` writes over the file.** A directory whose manifest records another file refuses the
   write, even with `--replace`:

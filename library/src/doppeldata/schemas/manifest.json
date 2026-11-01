@@ -72,6 +72,14 @@
       ],
       "default": null
     },
+    "one_file": {
+      "description": "The name of the one file a write to a local file wrote every row to, beside this manifest,\nwhich `files` lists under that name. Null for a write to a directory or a store. A\nregeneration writes a directory of parts, so it refuses such a manifest.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
     "partial": {
       "description": "True when the run stopped early, so `files` lists only the objects that completed. Such a\nmanifest is stored as `_manifest.partial.json`, and regenerates nothing.",
       "type": "boolean"

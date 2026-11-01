@@ -65,6 +65,13 @@ class Manifest:
         cdc: dict[str, Any] | None = self.document.get('cdc')
         return cdc
 
+    @property
+    def one_file(self) -> str | None:
+        """The name of the one file a write to a local file wrote every row to, beside this manifest, or None for a write to
+        a directory or a store."""
+        one_file: str | None = self.document.get('one_file')
+        return one_file
+
 
 @dc.dataclass(frozen=True)
 class BundleManifest:

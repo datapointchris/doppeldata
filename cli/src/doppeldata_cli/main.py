@@ -1191,6 +1191,10 @@ def bundle_plan_text(planned: BundleWritePlan) -> str:
         ('doppeldata data generate orders --out s3://bucket/orders/ --aws-profile analytics', 'write to S3 with a named AWS profile'),
         ('doppeldata data generate orders-customers --scale 0.1 --out shop/', 'related tables, each foreign key drawn from its parent'),
         ('doppeldata data generate orders --scenario hot-key --out skewed/', 'bend the data with an example scenario'),
+        (
+            'doppeldata data generate orders.profile.yaml --manifest orders/_manifest.json --out again/',
+            'write a dataset again from its manifest, comparing every file with its record',
+        ),
     ),
 )
 def data_generate(
@@ -1220,8 +1224,18 @@ def data_generate(
     scenario: ScenarioOption = None,
     manifest_beside: Annotated[
         bool,
-        typer.Option('--manifest', help='Write _manifest.json beside a one-file --out. A directory or S3 write always writes one.'),
+        typer.Option('--manifest-beside', help='Write _manifest.json beside a one-file --out. A directory or S3 write always writes one.'),
     ] = False,
+    manifest: Annotated[
+        str | None,
+        typer.Option(
+            '--manifest',
+            metavar='FILE',
+            help='Write again the dataset the _manifest.json FILE records, a local path or an s3:// URL, from PROFILE, and '
+            'compare every file with its record. FILE settles the seed, rows, scale, scenario, format, writer settings and '
+            'layout, so a flag giving one is refused beside it.',
+        ),
+    ] = None,
     scale: ScaleOption = None,
     aws_profile: AwsProfileOption = None,
     verbose: VerboseOption = 0,
@@ -1240,9 +1254,48 @@ def data_generate(
 
     A bundle PROFILE writes each table under `--out/<table>/` with its own manifest, parents first, each foreign key drawn
     from its parent's keys, and a _manifest.json at --out naming each. Each --scenario bends the table it names.
+
+    --manifest FILE writes the dataset FILE records again to a directory or S3 --out, and exits 1 naming each file whose
+    rows, bytes or SHA-256 differ from its record. A PROFILE whose dataset is not the one FILE names is refused, and so is a
+    FILE that is partial, records files embedding the profile, or records a write to one file. A bundle's FILE regenerates
+    every table, with the bundle as PROFILE.
     """
     logged_at(verbose, quiet)
     source = profile_or_columns(profile_name, column_names(columns))
+    if manifest is not None:
+        settled = {
+            '--rows': rows is not None,
+            '--seed': seed is not None,
+            '--scale': scale is not None,
+            '--scenario': bool(scenario),
+            '--format': file_format is not None,
+            '--file-rows': file_rows is not None,
+            '--partition-by': bool(partition_by),
+            '--no-partitions': no_partitions,
+            '--partition-style': partition_style is not None,
+            '--writer': writer is not None,
+            '--embed-profile': embed_profile,
+            '--manifest-beside': manifest_beside,
+        }
+        given = [flag for flag, held in settled.items() if held]
+        if given:
+            dropped = 'it' if len(given) == 1 else 'them'
+            message = f'{manifest} settles {" and ".join(given)}, and a regeneration takes each value it settles from it; drop {dropped}'
+            raise doppeldata.InvalidArgument(issue_codes.SETTLED_BY_MANIFEST, message, field=given[0])
+        terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
+        try:
+            regenerated = doppeldata.regenerate(source, manifest, out, threads=threads, replace=replace, aws_profile=aws_profile)
+        finally:
+            signal.signal(signal.SIGTERM, terminate)
+        if as_json:
+            print_json(regenerated.document)
+            return
+        if isinstance(regenerated, BundleManifest):
+            print_bundle_written(regenerated)
+        else:
+            print_written(regenerated, None)
+        typer.echo(f'every file matches its record in {manifest}')
+        return
     arguments: dict[str, Any] = {
         'rows': rows,
         'seed': seed,
@@ -1254,7 +1307,7 @@ def data_generate(
         'writer': write_settings(writer),
         'scenario': scenarios_named(scenario),
         'embed_profile': embed_profile,
-        'manifest': manifest_beside,
+        'manifest_beside': manifest_beside,
         'aws_profile': aws_profile,
     }
     terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
