@@ -17,7 +17,7 @@ from doppeldata import _core
 from ruamel.yaml import YAML
 
 TESTS = Path(__file__).resolve().parent / 'core' / 'tests'
-CONSTANT = re.compile(r'^const (?P<name>[A-Z_]+): [^=]+ = "?(?P<value>[0-9a-z_:]+)"?;$', re.MULTILINE)
+CONSTANT = re.compile(r'^const (?P<name>[A-Z][A-Z0-9_]*): [^=]+ = "?(?P<value>[0-9a-z_:]+)"?;$', re.MULTILINE)
 
 
 def main() -> int:
@@ -33,16 +33,16 @@ def main() -> int:
     scenario_json = json.dumps(YAML(typ='safe').load(TESTS / 'every-column-kind.scenario.yaml'), allow_nan=False)
     cdc_json = json.dumps(YAML(typ='safe').load(TESTS / 'every-column-kind.cdc.scenario.yaml'), allow_nan=False)
     bundle_json = json.dumps(Bundle.load(TESTS / 'every-column-kind.bundle.yaml').to_plain(), allow_nan=False)
-    digest, seed, rows = constants['PROFILE_DIGEST'], int(constants['SEED']), int(constants['ROWS'])
+    profile_sha256, seed, rows = constants['PROFILE_SHA256'], int(constants['SEED']), int(constants['ROWS'])
 
     def table(scenario: tuple[str, str] | None) -> Callable[[], str]:
-        return lambda: _core.determinism_values_digest(profile_json, digest, seed, rows, threads=0, scenario=scenario)
+        return lambda: _core.determinism_values_sha256(profile_json, profile_sha256, seed, rows, threads=0, scenario=scenario)
 
     runs = {
         'PINNED_VALUES': table(None),
-        'PINNED_SCENARIO_VALUES': table((scenario_json, constants['SCENARIO_DIGEST'])),
-        'PINNED_CDC_VALUES': table((cdc_json, constants['SCENARIO_DIGEST'])),
-        'PINNED_BUNDLE_VALUES': lambda: _core.determinism_bundle_values_digest(bundle_json, digest, seed, 1.0, threads=0),
+        'PINNED_SCENARIO_VALUES': table((scenario_json, constants['SCENARIO_SHA256'])),
+        'PINNED_CDC_VALUES': table((cdc_json, constants['SCENARIO_SHA256'])),
+        'PINNED_BUNDLE_VALUES': lambda: _core.determinism_bundle_values_sha256(bundle_json, profile_sha256, seed, 1.0, threads=0),
     }
     unrun = sorted(name for name in constants if name.startswith('PINNED_') and name.endswith('VALUES') and name not in runs)
     if unrun:

@@ -24,7 +24,7 @@ and validates data with it. [Reproduce a dataset](how-to/reproduce-a-dataset.md)
   where a strict export must accept the whole source.
 - **Data a profile was made from passes its exports.** A test checks each export with the tool
   that reads it, against rows generated from a profile and against rows a profile was made from.
-- **The same profile exports the same bytes.** An export names the profile's digest and holds no
+- **The same profile exports the same bytes.** An export names the profile's SHA-256 and holds no
   time. ODCS `examples` are generated from the profile with a fixed seed, never read from data.
 - **A profile made from data is checked first.** One that fails `profile check` is refused, exit 2,
   as `ProfileFailsCheck` in Python. An export never carries a literal the privacy policy did not pass.
@@ -118,11 +118,11 @@ A file read alone then holds the profile and scenario that made it, beside the s
 provenance keys already name. Every PROFILE argument takes such a file.
 
 - **The key is `doppeldata.profile`, beside the provenance keys.** It holds the whole profile as
-  canonical JSON. Its digest, taken without the generated fields a digest leaves out, is
-  `doppeldata.profile_digest`. It runs to kilobytes.
+  canonical JSON. Its SHA-256, taken without the generated fields the hash leaves out, is
+  `doppeldata.profile_sha256`. It runs to kilobytes.
 - **`doppeldata.scenario` holds the scenario's canonical document**, as the manifest's
   `scenario.document` does. A write under no scenario writes no such key.
-- **A file whose profile or scenario is not the one its digest names is refused**, exit 2, as
+- **A file whose profile or scenario is not the one its SHA-256 names is refused**, exit 2, as
   `SourceError` in Python.
 - **Parquet holds it once, as a plain key-value pair.** The other `doppeldata.*` keys sit in
   `ARROW:schema` as well, and a copy of the profile there would double its bytes. Arrow IPC holds
@@ -147,8 +147,8 @@ provenance keys already name. Every PROFILE argument takes such a file.
   file.** A stream writes thousands of change files, and a copy of the profile can outweigh the
   rows in each one.
 - **The manifest's `profile.embedded` is true.** `regenerate()` refuses such a manifest, because a
-  plan holds the profile's digest but never its JSON. `data generate FILE --embed-profile` writes
-  the same dataset digest again, and the same bytes where the write used the profile's own format
+  plan holds the profile's SHA-256 but never its JSON. `data generate FILE --embed-profile` writes
+  the same `dataset_sha256` again, and the same bytes where the write used the profile's own format
   and layout.
 - **`Profile.from_data_file` reads the footer through the extension**, so it needs no pyarrow. A
   file holding no profile raises `SourceError`, naming `embed_profile=True`.

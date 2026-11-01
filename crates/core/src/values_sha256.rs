@@ -15,19 +15,19 @@ use crate::samplers::TextCell;
 
 /// The hex SHA-256 over `blocks` in order: each block's batch with the text cells
 /// [`crate::Plan::text_cells`] returned for it.
-pub fn values_digest(blocks: &[(RecordBatch, Vec<Vec<TextCell>>)]) -> String {
-    digest_of(blocks.iter())
+pub fn values_sha256(blocks: &[(RecordBatch, Vec<Vec<TextCell>>)]) -> String {
+    sha256_of_blocks(blocks.iter())
 }
 
 /// One block's batch and the text cells [`crate::Plan::text_cells`] returned for it.
 pub type DrawnBlock = (RecordBatch, Vec<Vec<TextCell>>);
 
-/// [`values_digest`] over every table's blocks, the tables in the order a bundle's plan holds them.
-pub fn bundle_values_digest(tables: &[Vec<DrawnBlock>]) -> String {
-    digest_of(tables.iter().flatten())
+/// [`values_sha256`] over every table's blocks, the tables in the order a bundle's plan holds them.
+pub fn bundle_values_sha256(tables: &[Vec<DrawnBlock>]) -> String {
+    sha256_of_blocks(tables.iter().flatten())
 }
 
-fn digest_of<'a>(blocks: impl Iterator<Item = &'a DrawnBlock>) -> String {
+fn sha256_of_blocks<'a>(blocks: impl Iterator<Item = &'a DrawnBlock>) -> String {
     let mut hash = Sha256::new();
     for (batch, cells) in blocks {
         for (column, cells) in batch.columns().iter().zip(cells) {
@@ -38,18 +38,18 @@ fn digest_of<'a>(blocks: impl Iterator<Item = &'a DrawnBlock>) -> String {
     hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The hash a determinism pin holds over `plan`'s `blocks`: [`values_digest`], and under a `cdc`
+/// The hash a determinism pin holds over `plan`'s `blocks`: [`values_sha256`], and under a `cdc`
 /// its stream too, built on `threads` threads.
-pub fn plan_values_digest(plan: &Plan, blocks: &[(RecordBatch, Vec<Vec<TextCell>>)], threads: usize) -> Result<String, PlanError> {
+pub fn plan_values_sha256(plan: &Plan, blocks: &[(RecordBatch, Vec<Vec<TextCell>>)], threads: usize) -> Result<String, PlanError> {
     Ok(match plan.cdc_stream(threads)? {
-        Some(stream) => stream_values_digest(plan, blocks, &stream),
-        None => values_digest(blocks),
+        Some(stream) => stream_values_sha256(plan, blocks, &stream),
+        None => values_sha256(blocks),
     })
 }
 
-/// As [`values_digest`] over `blocks`, the full load, then every change file of `stream` in path
+/// As [`values_sha256`] over `blocks`, the full load, then every change file of `stream` in path
 /// order and the table a correct merge of it produces. `plan` is the plan `stream` was built from.
-fn stream_values_digest(plan: &Plan, blocks: &[(RecordBatch, Vec<Vec<TextCell>>)], stream: &CdcStream) -> String {
+fn stream_values_sha256(plan: &Plan, blocks: &[(RecordBatch, Vec<Vec<TextCell>>)], stream: &CdcStream) -> String {
     let files = (0..stream.file_count()).map(|file| stream.file(file));
     let whole =
         |parts: Vec<RecordBatch>| concat_batches(&stream.expected_schema(), &parts).expect("every part carries the expected schema");
@@ -62,7 +62,7 @@ fn stream_values_digest(plan: &Plan, blocks: &[(RecordBatch, Vec<Vec<TextCell>>)
         let width = batch.num_columns();
         (batch, vec![Vec::new(); width])
     }));
-    values_digest(&all)
+    values_sha256(&all)
 }
 
 fn hash_data(hash: &mut Sha256, data: &ArrayData) {

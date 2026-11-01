@@ -37,7 +37,7 @@ pub fn bundle_manifest(
         .map(|(name, table)| BundleTable {
             name: name.to_string(),
             manifest: format!("{name}/{MANIFEST_FILE_NAME}"),
-            dataset_digest: table.identity().digest(),
+            dataset_sha256: table.identity().sha256(),
             dataset_rows: table.identity().rows(),
             partial: true,
         })
@@ -45,7 +45,7 @@ pub fn bundle_manifest(
     BundleManifest {
         kind: BundleManifestKind::Bundle,
         tool: format!("doppeldata {}", doppeldata_core::VERSION),
-        dataset_digest: plan.identity().digest(),
+        dataset_sha256: plan.identity().sha256(),
         identity: ManifestIdentity::from(plan.identity()),
         profile,
         scenario,
@@ -129,10 +129,10 @@ pub fn commit_bundle(
         else {
             return Err(WriteError::Settings(format!("{} is not a table of the bundle", manifest.destination)).into());
         };
-        if manifest.dataset_digest != table.dataset_digest {
+        if manifest.dataset_sha256 != table.dataset_sha256 {
             return Err(WriteError::IdentityMismatch {
-                plan: table.dataset_digest.clone(),
-                manifest: manifest.dataset_digest.clone(),
+                plan: table.dataset_sha256.clone(),
+                manifest: manifest.dataset_sha256.clone(),
             }
             .into());
         }

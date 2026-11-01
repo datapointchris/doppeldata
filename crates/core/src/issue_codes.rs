@@ -108,8 +108,8 @@ issue_codes! {
         "a scenario the library validated does not read as the engine's model, as a library and engine of different releases give";
 
     INVALID_SCALE = "E-USAGE-101", exit 2, "a bundle's scale is not a positive finite number";
-    INVALID_PROFILE_DIGEST = "E-USAGE-102", exit 2, "a profile digest is not sha256: and 64 lowercase hex digits";
-    INVALID_SCENARIO_DIGEST = "E-USAGE-103", exit 2, "a scenario digest is not sha256: and 64 lowercase hex digits";
+    INVALID_PROFILE_SHA256 = "E-USAGE-102", exit 2, "a profile's SHA-256 is not sha256: and 64 lowercase hex digits";
+    INVALID_SCENARIO_SHA256 = "E-USAGE-103", exit 2, "a scenario's SHA-256 is not sha256: and 64 lowercase hex digits";
     INVALID_OVERRIDE = "E-USAGE-104", exit 2,
         "overrides are not a mapping of column names to values, or name a column the table lacks, or a value its column cannot hold";
     BLOCKS_OUTSIDE_PLAN = "E-USAGE-105", exit 2, "the blocks asked for are not a run within the plan's blocks";

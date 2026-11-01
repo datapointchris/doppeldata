@@ -127,11 +127,11 @@ def enabled_packs(names: Iterable[str]) -> list[EnabledPack]:
 class SuppliedCodeList:
     """A code list a caller supplied a run: the name detectors read it by, the sha256 of its file, and its lines.
 
-    `generated.code_lists` records the name and the digest, and never the path, which would name a machine.
+    `generated.code_lists` records the name and the SHA-256, and never the path, which would name a machine.
     """
 
     name: str
-    digest: str
+    sha256: str
     codes: tuple[str, ...] = dc.field(compare=False, repr=False)
 
 

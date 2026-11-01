@@ -20,8 +20,8 @@ from doppeldata.scenario_format import Scenario
 # Each value of a plan's identity, by the metadata key a file records it under.
 IDENTITY_KEYS = {
     'dataset_rows': _core.DATASET_ROWS_KEY,
-    'profile_digest': _core.PROFILE_DIGEST_KEY,
-    'scenario_digest': _core.SCENARIO_DIGEST_KEY,
+    'profile_sha256': _core.PROFILE_SHA256_KEY,
+    'scenario_sha256': _core.SCENARIO_SHA256_KEY,
     'seed': _core.SEED_KEY,
     'stream_version': _core.STREAM_VERSION_KEY,
 }
@@ -30,7 +30,7 @@ IDENTITY_KEYS = {
 @dc.dataclass(frozen=True)
 class WrittenDataFile:
     """What a write recorded in one Parquet or Arrow IPC file: the profile and scenario it embedded, each checked against its
-    digest, and the metadata they were read from."""
+    SHA-256, and the metadata they were read from."""
 
     path: str
     profile: Profile
@@ -71,7 +71,7 @@ def data_file_metadata(path: str | os.PathLike[str]) -> dict[str, str] | None:
 def written_data_file(path: str | os.PathLike[str], metadata: dict[str, str] | None = None) -> WrittenDataFile:
     """What `path`'s write recorded in it, given the file's `metadata` where it was already read.
 
-    A file of neither format, one holding no profile, and one whose profile or scenario is not the one its digest names
+    A file of neither format, one holding no profile, and one whose profile or scenario is not the one its SHA-256 names
     raise SourceError. An embedded profile that does not validate raises InvalidProfile, and a scenario InvalidScenario.
     """
     name = os.fspath(path)
@@ -84,14 +84,14 @@ def written_data_file(path: str | os.PathLike[str], metadata: dict[str, str] | N
     issues = profile.validate()
     if issues:
         raise InvalidProfile(name, issues)
-    matching_digest(name, 'profile', profile.digest, metadata.get(_core.PROFILE_DIGEST_KEY))
+    matching_sha256(name, 'profile', profile.sha256, metadata.get(_core.PROFILE_SHA256_KEY))
     scenario = None
     if _core.SCENARIO_KEY in metadata:
         scenario = Scenario(embedded_json(name, metadata, _core.SCENARIO_KEY))
         issues = scenario.validate()
         if issues:
             raise InvalidScenario(f'the scenario {name} holds', issues)
-        matching_digest(name, 'scenario', scenario.digest, metadata.get(_core.SCENARIO_DIGEST_KEY))
+        matching_sha256(name, 'scenario', scenario.sha256, metadata.get(_core.SCENARIO_SHA256_KEY))
     return WrittenDataFile(name, profile, scenario, metadata)
 
 
@@ -110,11 +110,11 @@ def embedded_json(name: str, metadata: dict[str, str], key: str) -> Any:
         raise SourceError(issue_codes.EMBEDDED_PROFILE_UNREADABLE, message, role='profile', value=name) from error
 
 
-def matching_digest(name: str, document: str, digest: str, recorded: str | None) -> None:
-    """Refuse an embedded document whose digest is not the one its write recorded beside it."""
-    if digest != recorded:
-        message = f'{name} holds a {document} whose digest is {digest}, not the {recorded} its write recorded beside it'
-        raise SourceError(issue_codes.EMBEDDED_DIGEST_MISMATCH, message, role='profile', value=digest)
+def matching_sha256(name: str, document: str, sha256: str, recorded: str | None) -> None:
+    """Refuse an embedded document whose SHA-256 is not the one its write recorded beside it."""
+    if sha256 != recorded:
+        message = f'{name} holds a {document} whose SHA-256 is {sha256}, not the {recorded} its write recorded beside it'
+        raise SourceError(issue_codes.EMBEDDED_SHA256_MISMATCH, message, role='profile', value=sha256)
 
 
 def data_file_profile(path: str | os.PathLike[str], metadata: dict[str, str] | None = None) -> Profile:

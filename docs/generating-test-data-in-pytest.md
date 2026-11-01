@@ -17,7 +17,7 @@ failure's report.
 - **A name is looked for in the project's directories before the bundled examples.** So a project's own profile named
   `orders` wins over the example, and a test reads as its project names its tables.
 
-## A test's seed is a digest of its node id, and `--doppeldata-seed` sets every test's
+## A test's seed is taken from the SHA-256 of its node id, and `--doppeldata-seed` sets every test's
 
 - **The seed is the first 8 bytes of the SHA-256 of the test's node id**, such as `tests/test_people.py::test_people`. A
   test gets the same data on every run, and two tests get different data. Python's `hash()` is salted per process, so it
@@ -36,7 +36,7 @@ own. So under the option every test shares one seed, and two tests asking for th
 ## A table generates once per seed, and each request converts it afresh
 
 - **A table from the test's own seed generates once a test, and one from a shared seed once a session.** The cache holds
-  the engine's Arrow table, keyed by the profile's or bundle's digest, the scenario's digest, the rows, the scale, the seed
+  the engine's Arrow table, keyed by the profile's or bundle's SHA-256, the scenario's, the rows, the scale, the seed
   and the overrides. No other test holds the test's own seed, so that table goes with the test's fixture when the test
   ends, and a suite's memory stays flat. Under `--doppeldata-seed`, or with `seed=` in the call, tests asking for the same
   data share one table for the session.

@@ -151,8 +151,8 @@ $ doppeldata data check orders promo/ --scenario promo-week.scenario.yaml
 and runs every perturbation and expectation. The manifest names the composition and each member:
 
 ```text
-$ jq -c '.scenario | {name, path, composed_of: [.composed_of[] | {name, digest}]}' both/_manifest.json
-{"name":"hot-key+late-data","path":null,"composed_of":[{"name":"hot-key","digest":"sha256:…"},{"name":"late-data","digest":"sha256:…"}]}
+$ jq -c '.scenario | {name, path, composed_of: [.composed_of[] | {name, sha256}]}' both/_manifest.json
+{"name":"hot-key+late-data","path":null,"composed_of":[{"name":"hot-key","sha256":"sha256:…"},{"name":"late-data","sha256":"sha256:…"}]}
 ```
 
 `Scenario.example(name, **parameters)` replaces the example's parameters, such as `keys=3`. A

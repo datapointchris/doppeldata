@@ -37,11 +37,11 @@ from doppeldata.issue_codes import Issue
 from doppeldata.profile_format import InvalidProfile
 from doppeldata.profile_format import PointerParts
 from doppeldata.profile_format import Profile
-from doppeldata.profile_format import digest_of
 from doppeldata.profile_format import integer_format_checker
 from doppeldata.profile_format import pointer
 from doppeldata.profile_format import read_document
 from doppeldata.profile_format import schema_error_issues
+from doppeldata.profile_format import sha256_of
 from doppeldata.profile_format import to_plain
 from doppeldata.profile_format import unrepresentable_numbers
 from doppeldata.profile_format import yaml
@@ -333,7 +333,7 @@ class Scenario:
     @classmethod
     def compose(cls, *scenarios: 'Scenario') -> 'Scenario':
         """Several scenarios as one, applied in order: their patches merge left to right, and their perturbations and
-        expectations concatenate. Its name joins theirs with `+`, and its digest is the composed document's."""
+        expectations concatenate. Its name joins theirs with `+`, and its SHA-256 is the composed document's."""
         members = tuple(member for scenario in scenarios for member in (scenario.members or (scenario,)))
         if not members:
             raise InvalidArgument(issue_codes.COMPOSE_NOTHING, 'compose takes one scenario or more', field='scenarios')
@@ -383,7 +383,7 @@ class Scenario:
         return text.getvalue()
 
     def canonical(self) -> bytes:
-        """The RFC 8785 canonical JSON the digest is taken over: each perturbation's id resolved, and no description or
+        """The RFC 8785 canonical JSON the SHA-256 is taken over: each perturbation's id resolved, and no description or
         expectations, which feed no value."""
         plain = {key: value for key, value in self.to_plain().items() if key not in ('description', 'expect')}
         ids, _ = _core.scenario_ids(json.dumps(plain, allow_nan=False))
@@ -391,12 +391,12 @@ class Scenario:
         return rfc8785.dumps(plain)
 
     @property
-    def digest(self) -> str:
+    def sha256(self) -> str:
         """`sha256:<hex>` over the canonical form."""
-        return digest_of(self.canonical())
+        return sha256_of(self.canonical())
 
     def apply(self, profile: Profile) -> Profile:
-        """The profile with the scenario's patch applied: the effective profile the engine generates from, with its own digest.
+        """The profile with the scenario's patch applied: the effective profile the engine generates from, with its own SHA-256.
 
         The engine applies the same patch when it generates. A patched column the profile does not hold is refused, and so is
         a patch leaving the profile invalid, each as InvalidScenario. Without a patch, `profile` itself is returned.
@@ -467,28 +467,28 @@ def refuse_other_scenario(scenario: Scenario | None, written: 'Manifest', data: 
         applied = (recorded.get('document') or {}).get(table)
         if (json.loads(scenario.canonical()) if scenario is not None else None) == applied:
             return
-        digest = digest_of(rfc8785.dumps(applied)) if applied is not None else None
+        recorded_sha256 = sha256_of(rfc8785.dumps(applied)) if applied is not None else None
     else:
-        digest = written.identity.get('scenario_digest')
-        if (scenario.digest if scenario is not None else None) == digest:
+        recorded_sha256 = written.identity.get('scenario_sha256')
+        if (scenario.sha256 if scenario is not None else None) == recorded_sha256:
             return
-    wrote = f'scenario {recorded.get("name")} ({digest})' if digest is not None else 'no scenario'
+    wrote = f'scenario {recorded.get("name")} ({recorded_sha256})' if recorded_sha256 is not None else 'no scenario'
     if scenario is None:
-        issue = Issue(issue_codes.DATA_HAS_SCENARIO, '', f'{data} was written under {wrote}; check it under that scenario', digest)
+        issue = Issue(issue_codes.DATA_HAS_SCENARIO, '', f'{data} was written under {wrote}; check it under that scenario', recorded_sha256)
         raise InvalidScenario(data, [issue], refusal='cannot be checked with no scenario')
-    message = f'{data} was written under {wrote}, and {scenario.name} is {scenario.digest}; check it under the scenario that wrote it'
-    issue = Issue(issue_codes.SCENARIO_DIFFERS_FROM_DATA, '', message, scenario.digest)
+    message = f'{data} was written under {wrote}, and {scenario.name} is {scenario.sha256}; check it under the scenario that wrote it'
+    issue = Issue(issue_codes.SCENARIO_DIFFERS_FROM_DATA, '', message, scenario.sha256)
     raise InvalidScenario(scenario.source, [issue], refusal=f'is not the scenario {data} was written under')
 
 
 def manifest_record(scenario: Scenario) -> dict[str, Any]:
-    """The scenario as a manifest records it: its name, its path, the canonical document its digest covers, and each member's
-    name, path and digest where it composes several."""
+    """The scenario as a manifest records it: its name, its path, the canonical document its SHA-256 covers, and each member's
+    name, path and SHA-256 where it composes several."""
     path = str(scenario.path) if scenario.path is not None else None
     record: dict[str, Any] = {'name': scenario.name, 'path': path, 'document': json.loads(scenario.canonical())}
     if scenario.members:
         record['composed_of'] = [
-            {'name': member.name, 'path': str(member.path) if member.path is not None else None, 'digest': member.digest}
+            {'name': member.name, 'path': str(member.path) if member.path is not None else None, 'sha256': member.sha256}
             for member in scenario.members
         ]
     return record

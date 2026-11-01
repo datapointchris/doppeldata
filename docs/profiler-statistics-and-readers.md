@@ -147,7 +147,7 @@ applies to is then written `fit: null`, `generated.fitter` is left out, and `pro
 `ProfilingWarning` as one line on stderr, unless given `-q`. scipy's newest release can need a later Python than the
 library's floor, so a Glue job on 3.11 resolves an older scipy, which fits the same families.
 
-A fit is profile content, so it is in the profile's digest. Two scipy versions that fit different
+A fit is profile content, so it is in the profile's SHA-256. Two scipy versions that fit different
 parameters write two profiles, and those generate different tails.
 
 ## An earlier profile freezes the edges, or stands unchanged
@@ -262,7 +262,7 @@ file whose size or revision changed, or one that appeared or went away, fails th
 `profile create` exits 1. A revision is the modification time on disk, or the S3 ETag.
 
 `source_fingerprint` hashes the same listing. It tells two listings apart, and never hashes the
-content. It is left out of the profile's digest, so a copy of the data profiles to the same
+content. It is left out of the profile's SHA-256, so a copy of the data profiles to the same
 identity.
 
 ## The library declares no engine, so a job that only generates installs none
@@ -910,7 +910,7 @@ writes the estimate to the same field. A count of a few hundred falls in HyperLo
 counting, and lands within a few values of exact.
 [profiling-with-spark.md](profiling-with-spark.md) gives the errors measured against Polars.
 
-## A profile's numbers are rounded so that profiling again gives the same digest
+## A profile's numbers are rounded so that profiling again gives the same SHA-256
 
 Rates keep `RATE_DIGITS` significant digits, and means and standard deviations keep
 `MOMENT_DIGITS`. Skew and kurtosis are also rounded to `SHAPE_MOMENT_DECIMALS` decimal places. A

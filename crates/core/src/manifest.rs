@@ -98,7 +98,7 @@ pub struct Manifest {
     /// the identity and this version.
     pub tool: String,
     /// `sha256:` and the hex SHA-256 of `identity`'s RFC 8785 canonical JSON.
-    pub dataset_digest: String,
+    pub dataset_sha256: String,
     pub identity: ManifestIdentity,
     pub profile: ManifestProfile,
     /// The scenario applied, or null for none.
@@ -136,7 +136,7 @@ pub struct Manifest {
 }
 
 /// The values a dataset's rows are a pure function of, keyed and written as the identity's canonical
-/// JSON, so a reader rebuilds `dataset_digest` from them with no mapping.
+/// JSON, so a reader rebuilds `dataset_sha256` from them with no mapping.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ManifestIdentity {
     /// The rows generated, in decimal, before any copies a scenario's `duplicates` adds. `files`
@@ -146,7 +146,7 @@ pub struct ManifestIdentity {
     pub dataset_rows: u64,
     /// `sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON, as given, before a
     /// scenario's patch. In a bundle, the bundle's, every table inline.
-    pub profile_digest: String,
+    pub profile_sha256: String,
     /// The scale a bundle was generated at, in decimal, or null for a table generated alone.
     pub scale: Option<String>,
     /// `sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON, or null for none.
@@ -154,7 +154,7 @@ pub struct ManifestIdentity {
     /// `expect` left out. A composition's is its composed document's: the patches merged in order,
     /// the perturbations concatenated, and the names joined with `+`. In a bundle, the map of each
     /// table a scenario names to its composed document.
-    pub scenario_digest: Option<String>,
+    pub scenario_sha256: Option<String>,
     /// The seed, in decimal.
     #[serde(with = "decimal")]
     #[schemars(with = "Decimal")]
@@ -170,9 +170,9 @@ impl From<&DatasetIdentity> for ManifestIdentity {
     fn from(identity: &DatasetIdentity) -> Self {
         Self {
             dataset_rows: identity.rows(),
-            profile_digest: identity.profile_digest().to_string(),
+            profile_sha256: identity.profile_sha256().to_string(),
             scale: identity.scale().map(String::from),
-            scenario_digest: identity.scenario_digest().map(String::from),
+            scenario_sha256: identity.scenario_sha256().map(String::from),
             seed: identity.seed(),
             stream_version: identity.stream_version(),
             table: identity.table().map(String::from),
@@ -189,7 +189,7 @@ pub struct BundleManifest {
     /// The tool that wrote the files, as `doppeldata <version>`.
     pub tool: String,
     /// `sha256:` and the hex SHA-256 of `identity`'s RFC 8785 canonical JSON.
-    pub dataset_digest: String,
+    pub dataset_sha256: String,
     /// The bundle's own identity: no table, and `dataset_rows` every table's rows summed.
     pub identity: ManifestIdentity,
     pub profile: ManifestProfile,
@@ -221,8 +221,8 @@ pub struct BundleTable {
     pub name: String,
     /// The table's manifest under the destination, `/`-separated, such as `orders/_manifest.json`.
     pub manifest: String,
-    /// The table's manifest's `dataset_digest`.
-    pub dataset_digest: String,
+    /// The table's manifest's `dataset_sha256`.
+    pub dataset_sha256: String,
     /// The rows the table's identity names, in decimal.
     #[serde(with = "decimal")]
     #[schemars(with = "Decimal")]
@@ -232,13 +232,13 @@ pub struct BundleTable {
 }
 
 impl Manifest {
-    /// A manifest naming `identity`'s dataset, with no files yet. The identity's values and digest
+    /// A manifest naming `identity`'s dataset, with no files yet. The identity's values and SHA-256
     /// are copied, never recomputed.
     pub fn new(identity: &DatasetIdentity, profile: ManifestProfile, output: Output, layout: LayoutSettings, destination: String) -> Self {
         Self {
             kind: TableManifestKind::Table,
             tool: format!("doppeldata {}", crate::VERSION),
-            dataset_digest: identity.digest(),
+            dataset_sha256: identity.sha256(),
             identity: ManifestIdentity::from(identity),
             profile,
             scenario: None,
@@ -278,7 +278,7 @@ pub struct ManifestScenario {
     /// The scenario's path as the caller gave it, or null when it came from memory or composes
     /// several.
     pub path: Option<String>,
-    /// The canonical document `identity.scenario_digest` is taken over, so the dataset regenerates
+    /// The canonical document `identity.scenario_sha256` is taken over, so the dataset regenerates
     /// with no scenario file.
     pub document: crate::SortedKeys<serde_json::Map<String, serde_json::Value>>,
     /// The scenarios composed, in order, present only for a composition.
@@ -292,8 +292,8 @@ pub struct ScenarioMember {
     pub name: String,
     /// The scenario's path as the caller gave it, or null when it came from memory.
     pub path: Option<String>,
-    /// The scenario's own digest, taken as `identity.scenario_digest` is.
-    pub digest: String,
+    /// The scenario's own SHA-256, taken as `identity.scenario_sha256` is.
+    pub sha256: String,
 }
 
 /// One object the run wrote. A row or byte count is a JSON number, exact to 2^53 rows, which no

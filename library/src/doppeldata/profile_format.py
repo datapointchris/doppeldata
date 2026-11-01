@@ -51,7 +51,7 @@ BUNDLE_INDEX = 'bundle.yaml'
 class GeneratedField:
     """What one `generated` field takes part in.
 
-    `hashed` puts it in the profile's digest, so a field left out lets profiling unchanged data again keep the
+    `hashed` puts it in the profile's SHA-256, so a field left out lets profiling unchanged data again keep the
     profile's identity. `derived_from` makes it one of the values an earlier profile must match to be returned
     unchanged, beside the rows, `k_min` and the sampling.
     """
@@ -72,7 +72,7 @@ GENERATED_FIELDS = {
     'sample': GeneratedField(hashed=True, derived_from=False),
     # It names no directory, so a copy of the schema elsewhere keeps the seed's identity.
     'imported_from': GeneratedField(hashed=True, derived_from=False),
-    # No draw reads it, so the digest leaves it out.
+    # No draw reads it, so the SHA-256 leaves it out.
     'declared': GeneratedField(hashed=False, derived_from=False),
 }
 HASHED_GENERATED_FIELDS = tuple(name for name, field in GENERATED_FIELDS.items() if field.hashed)
@@ -395,7 +395,7 @@ def generated_section(**fields: Any) -> dict[str, Any]:
     """A `generated` section made now: the tool and the time, then each of `fields` that is not None, in
     `GENERATED_FIELDS`' order.
 
-    A field `GENERATED_FIELDS` does not declare raises ValueError, because the digest would not know whether it is hashed.
+    A field `GENERATED_FIELDS` does not declare raises ValueError, because the SHA-256 would not know whether it is hashed.
     """
     undeclared = sorted(set(fields) - set(GENERATED_FIELDS))
     if undeclared:
@@ -412,7 +412,7 @@ def without_unhashed_fields(plain: dict[str, Any]) -> dict[str, Any]:
     return plain | {'generated': kept}
 
 
-def digest_of(canonical: bytes) -> str:
+def sha256_of(canonical: bytes) -> str:
     return 'sha256:' + hashlib.sha256(canonical).hexdigest()
 
 
@@ -421,7 +421,7 @@ def engine_plan(document: dict[str, Any], source: str, rows: int = 1) -> _core.P
     Gaussian copula draws together, and which dependence entries it sets aside. Raises UngenerableProfile where the
     engine refuses the document."""
     canonical = rfc8785.dumps(without_unhashed_fields(document))
-    return _core.Plan(json.dumps(document), digest_of(canonical), 0, rows, source)
+    return _core.Plan(json.dumps(document), sha256_of(canonical), 0, rows, source)
 
 
 def pointer(path: PointerParts) -> str:
@@ -771,13 +771,13 @@ class Profile:
         return json_text(self.document)
 
     def canonical(self) -> bytes:
-        """The RFC 8785 canonical JSON the digest is taken over, without the unhashed generated fields."""
+        """The RFC 8785 canonical JSON the SHA-256 is taken over, without the unhashed generated fields."""
         return rfc8785.dumps(without_unhashed_fields(self.to_plain()))
 
     @property
-    def digest(self) -> str:
+    def sha256(self) -> str:
         """`sha256:<hex>` over the canonical form."""
-        return digest_of(self.canonical())
+        return sha256_of(self.canonical())
 
     def save(self, path: str | Path | None = None) -> None:
         """Write the profile as YAML, or as JSON to a `.json` path, keeping comments and key order."""
@@ -911,5 +911,5 @@ class Bundle:
         return rfc8785.dumps(without_unhashed_fields(plain))
 
     @property
-    def digest(self) -> str:
-        return digest_of(self.canonical())
+    def sha256(self) -> str:
+        return sha256_of(self.canonical())

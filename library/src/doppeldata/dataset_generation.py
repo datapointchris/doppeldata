@@ -114,7 +114,7 @@ class PlannedRange:
 class WritePlan:
     """What `write` would do with the same arguments, known before anything is generated.
 
-    `identity` and `dataset_digest` are what the manifest will record. `rows_written` is the identity's `dataset_rows` and
+    `identity` and `dataset_sha256` are what the manifest will record. `rows_written` is the identity's `dataset_rows` and
     every copy a scenario's `duplicates` adds. `estimated_bytes` comes from the write's first blocks encoded with its own
     settings, and leaves the manifest out. Under a scenario's `cdc`, `ranges` are the full-load files, `cdc` is the stream
     beside them as the manifest's `cdc` will describe it, and `files_at_most` and `estimated_bytes` count the change files
@@ -124,7 +124,7 @@ class WritePlan:
 
     destination: str
     identity: dict[str, Any]
-    dataset_digest: str
+    dataset_sha256: str
     format: str
     writer: dict[str, Any]
     layout: dict[str, Any]
@@ -349,12 +349,12 @@ class GenerationSource:
         """`engine`, refused as SourceError where it plans a dataset other than the one the file it regenerates names."""
         if self.written is None or not self.regenerates:
             return engine
-        recorded = self.written.metadata.get(_core.DATASET_DIGEST_KEY)
-        if engine.dataset_digest == recorded:
+        recorded = self.written.metadata.get(_core.DATASET_SHA256_KEY)
+        if engine.dataset_sha256 == recorded:
             return engine
-        differing = self.written.identity_differences(json.loads(engine.identity_json)) or [_core.DATASET_DIGEST_KEY]
+        differing = self.written.identity_differences(json.loads(engine.identity_json)) or [_core.DATASET_SHA256_KEY]
         message = (
-            f'{self.written.path} names dataset {recorded}, but this release plans {engine.dataset_digest} from it, '
+            f'{self.written.path} names dataset {recorded}, but this release plans {engine.dataset_sha256} from it, '
             f'because its {", ".join(differing)} differs; give a seed, rows or a scenario to generate another dataset from it'
         )
         raise SourceError(issue_codes.DATASET_IDENTITY_CHANGED, message, role='profile', value=recorded)
@@ -394,11 +394,11 @@ class EngineArguments:
     """Everything the engine's plan is built from, so a process holding only these, such as a Spark executor, builds the same plan.
 
     `profile_json` is the profile as given, and the engine applies the scenario's patch to it. `scenario` is the scenario's
-    JSON, digest and source, or None. `overrides` is the JSON of each column `sample` pins and its values, or None.
+    JSON, SHA-256 and source, or None. `overrides` is the JSON of each column `sample` pins and its values, or None.
     """
 
     profile_json: str
-    profile_digest: str
+    profile_sha256: str
     seed: int
     rows: int
     source: str
@@ -408,7 +408,7 @@ class EngineArguments:
     def plan(self) -> '_core.Plan':
         try:
             return _core.Plan(
-                self.profile_json, self.profile_digest, self.seed, self.rows, self.source, scenario=self.scenario, overrides=self.overrides
+                self.profile_json, self.profile_sha256, self.seed, self.rows, self.source, scenario=self.scenario, overrides=self.overrides
             )
         except InvalidScenario as error:
             if self.scenario is None:
@@ -439,7 +439,7 @@ def engine_arguments(
     patch leaves it.
 
     The engine reads the profile with each typed text column that has no format of its own given its type's generator hint.
-    The digest is the profile's as given.
+    The SHA-256 is the profile's as given.
     """
     profile = profile_from(source_profile)
     source = str(profile.path) if profile.path else f'profile {profile.document.get("name")!r}'
@@ -453,9 +453,9 @@ def engine_arguments(
         raise InvalidArgument(issue_codes.INVALID_ROWS, f'rows must be zero or more, not {rows}', field='rows', value=rows)
     if not 0 <= seed <= LARGEST_SEED:
         raise InvalidArgument(issue_codes.INVALID_SEED, f'seed must be between 0 and 2^64 - 1, not {seed}', field='seed', value=seed)
-    applied = (json.dumps(scenario.to_plain(), allow_nan=False), scenario.digest, scenario.source) if scenario is not None else None
+    applied = (json.dumps(scenario.to_plain(), allow_nan=False), scenario.sha256, scenario.source) if scenario is not None else None
     profile_json = json.dumps(with_type_hints(profile.to_plain()), allow_nan=False)
-    return EngineArguments(profile_json, profile.digest, seed, rows, source, applied, overrides_json(overrides))
+    return EngineArguments(profile_json, profile.sha256, seed, rows, source, applied, overrides_json(overrides))
 
 
 def engine_plan(
@@ -560,7 +560,7 @@ def write_plan_of(
     return WritePlan(
         destination=destination,
         identity=json.loads(engine.identity_json),
-        dataset_digest=engine.dataset_digest,
+        dataset_sha256=engine.dataset_sha256,
         format=settings['format'],
         writer=settings['writer'],
         layout=settings['layout'],

@@ -42,7 +42,7 @@ def odcs_contract(document: ContractDocument, examples: dict[str, dict[str, list
         'status': 'draft',
         'description': description,
         'schema': [schema_object(table, examples.get(table.name, {})) for table in document.tables],
-        'customProperties': [{'property': 'doppeldata.profile_sha256', 'value': document.digest}],
+        'customProperties': [{'property': 'doppeldata.profile_sha256', 'value': document.profile_sha256}],
     }
     text = io.StringIO()
     yaml().dump(contract, text)

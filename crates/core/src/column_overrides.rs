@@ -14,7 +14,7 @@ use arrow_schema::Field;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::identity::sha256_digest;
+use crate::identity::sha256_of;
 use crate::physical_type::physical_type_name;
 use crate::plan::PlanError;
 use crate::rng::BLOCK_ROWS;
@@ -83,12 +83,12 @@ pub struct ColumnOverride {
     pub values: OverrideValues,
 }
 
-/// The digest an identity names `overrides` by: the SHA-256 of their JSON sorted by column, so the
+/// The SHA-256 an identity names `overrides` by, taken over their JSON sorted by column, so the
 /// order a caller lists them in moves nothing. Each struct serializes its fields in sorted order.
-pub(crate) fn overrides_digest(overrides: &[ColumnOverride]) -> String {
+pub(crate) fn overrides_sha256(overrides: &[ColumnOverride]) -> String {
     let mut sorted: Vec<&ColumnOverride> = overrides.iter().collect();
     sorted.sort_by(|a, b| a.column.cmp(&b.column));
-    sha256_digest(
+    sha256_of(
         serde_json::to_string(&sorted)
             .expect("strings and lists of them always serialize")
             .as_bytes(),

@@ -11,15 +11,15 @@ jq '.scenario.document' first/_manifest.json > hot-key.scenario.json
 doppeldata data generate orders.profile.yaml --scenario hot-key.scenario.json --rows 50000 --seed 11 --out again/
 
 doppeldata data generate orders --rows 100000 --seed 7 --scenario hot-key --embed-profile --out embedded/
-doppeldata data generate embedded/part-00000-867ecb7a.parquet --embed-profile --out again-embedded/
+doppeldata data generate embedded/part-00000-a3f28bf0.parquet --embed-profile --out again-embedded/
 ```
 
 ```python
 import doppeldata as sd
 
 sd.write('orders', 'embedded/', rows=100_000, seed=7, embed_profile=True)
-profile = sd.Profile.from_data_file('embedded/part-00000-867ecb7a.parquet')
-table = sd.generate('embedded/part-00000-867ecb7a.parquet')   # its seed and rows, as written
+profile = sd.Profile.from_data_file('embedded/part-00000-a3f28bf0.parquet')
+table = sd.generate('embedded/part-00000-a3f28bf0.parquet')   # its seed and rows, as written
 ```
 
 ## The manifest records every input the values depend on
@@ -33,9 +33,9 @@ $ jq '{profile, identity}' first/_manifest.json
   },
   "identity": {
     "dataset_rows": "50000",
-    "profile_digest": "sha256:…",
+    "profile_sha256": "sha256:…",
     "scale": null,
-    "scenario_digest": "sha256:…",
+    "scenario_sha256": "sha256:…",
     "seed": "11",
     "stream_version": <n>,
     "table": null
@@ -43,12 +43,12 @@ $ jq '{profile, identity}' first/_manifest.json
 }
 ```
 
-- **`identity` holds each input, and `dataset_digest` their SHA-256.** Two writes naming the same
+- **`identity` holds each input, and `dataset_sha256` their SHA-256.** Two writes naming the same
   SHA-256 hold the same values.
-- **`profile.path` names the file the write read**, and `identity.profile_digest` says whether a
+- **`profile.path` names the file the write read**, and `identity.profile_sha256` says whether a
   file at that path is still the same profile. Formatting, comments and key order leave its SHA-256
   alone.
-- **`scenario.document` is the scenario as `identity.scenario_digest` covers it**, so the run
+- **`scenario.document` is the scenario as `identity.scenario_sha256` covers it**, so the run
   regenerates with no scenario file. Written to a file, it is a scenario `--scenario` takes.
 - **`format`, `writer` and `layout` record every write setting**, defaults included. Given back to
   `data generate`, they write the same bytes under the same doppeldata release.
@@ -66,8 +66,8 @@ names the one a dataset was made at.
 ## `--embed-profile` makes each file regenerate its own dataset
 
 ```text
-$ doppeldata data generate embedded/part-00000-867ecb7a.parquet --embed-profile --out again-embedded/
-doppeldata: seed 7, 100,000 rows, scenario hot-key, as embedded/part-00000-867ecb7a.parquet was written
+$ doppeldata data generate embedded/part-00000-a3f28bf0.parquet --embed-profile --out again-embedded/
+doppeldata: seed 7, 100,000 rows, scenario hot-key, as embedded/part-00000-a3f28bf0.parquet was written
 wrote 100,000 rows as parquet in 1 file, 2.2 MB, in 0.10 s on 16 threads: 0.99M rows/s
 again-embedded/_manifest.json names dataset sha256:…
 ```
@@ -78,7 +78,7 @@ again-embedded/_manifest.json names dataset sha256:…
 - **`data generate FILE` takes the seed, rows and scenario the file was written with**, and prints
   each one it took. Giving any of them generates the dataset they make instead.
 - **The rewrite holds the same bytes only with `--embed-profile` again.** Without it the
-  `dataset_digest` matches, and each file lacks the profile it held.
+  `dataset_sha256` matches, and each file lacks the profile it held.
 - **Only Parquet and Arrow hold it.** Any other format refuses the flag before writing:
 
   ```text
@@ -92,7 +92,7 @@ again-embedded/_manifest.json names dataset sha256:…
   canonical JSON:
 
   ```text
-  $ doppeldata profile expand embedded/part-00000-867ecb7a.parquet --out expanded.profile.yaml
+  $ doppeldata profile expand embedded/part-00000-a3f28bf0.parquet --out expanded.profile.yaml
   $ head -5 expanded.profile.yaml
   kind: table
   name: orders

@@ -22,14 +22,14 @@ from doppeldata.scenario_format import Scenario
 @dc.dataclass(frozen=True)
 class ScenarioCheck:
     """A scenario checked against a profile: the scenario as named, the profile's name, each issue at its JSON Pointer, and
-    for a scenario that holds, its digest and how many perturbations and expectations it declares."""
+    for a scenario that holds, its SHA-256 and how many perturbations and expectations it declares."""
 
     failure_code: ClassVar[str] = issue_codes.SCENARIO_CHECK_FAILED
 
     scenario: str
     profile: str
     issues: list[Issue]
-    digest: str | None = None
+    sha256: str | None = None
     perturbations: int = 0
     expectations: int = 0
 
@@ -46,7 +46,7 @@ class ScenarioCheck:
         """The check for a person, as GitHub Markdown naming each issue at its JSON Pointer."""
         if self.passed:
             held = f'{counted(self.perturbations, "perturbation")} and {counted(self.expectations, "expectation")}'
-            verdict = f'{self.scenario} holds for profile `{self.profile}`: {held}, scenario {self.digest}.'
+            verdict = f'{self.scenario} holds for profile `{self.profile}`: {held}, scenario {self.sha256}.'
             return f'# doppeldata scenario check passed\n\n{verdict}\n'
         lines = ['# doppeldata scenario check failed', '', f'{self.scenario} does not hold for profile `{self.profile}`.', '']
         return '\n'.join([*lines, *issue_table(self.issues)]).rstrip('\n') + '\n'
@@ -84,4 +84,4 @@ def check_scenario(
     except InvalidScenario as error:
         return ScenarioCheck(error.source, name, list(error.issues))
     plain = applied.to_plain()
-    return ScenarioCheck(named, name, [], applied.digest, len(plain.get('perturbations') or []), len(plain.get('expect') or []))
+    return ScenarioCheck(named, name, [], applied.sha256, len(plain.get('perturbations') or []), len(plain.get('expect') or []))

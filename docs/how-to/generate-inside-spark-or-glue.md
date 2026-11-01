@@ -18,15 +18,15 @@ print(frame.count(), frame.rdd.getNumPartitions())
 frame.groupBy('status').count().orderBy('status').show()
 
 manifest = sd.spark.write(spark, profile, 'orders/', rows=1_000_000, seed=7)
-print(manifest.dataset_digest, len(manifest.files))
+print(manifest.dataset_sha256, len(manifest.files))
 manifest = sd.spark.write(spark, profile, 's3://your-bucket/spark/orders/', rows=1_000_000, seed=7)
-print(manifest.dataset_digest, len(manifest.files))
+print(manifest.dataset_sha256, len(manifest.files))
 
 bundle = sd.Bundle.example('orders-customers')
 frames = sd.spark.generate(spark, bundle, scale=0.1, seed=7)
 print({name: frame.count() for name, frame in frames.items()})
 manifest = sd.spark.write(spark, bundle, 'shop/', scale=0.1, seed=7)
-print(manifest.dataset_digest)
+print(manifest.dataset_sha256)
 
 rows = sd.sample('eight-columns', rows=50, seed=1, overrides={'category': 'A'})
 frame = sd.spark.to_spark(spark, rows, schema=sd.spark.struct_type('eight-columns'))
@@ -119,7 +119,7 @@ with tempfile.NamedTemporaryFile(suffix='.profile.yaml') as local:
     local.flush()
     profile = sd.Profile.load(local.name)
 manifest = sd.spark.write(spark, profile, args['out'], rows=int(args['rows']), seed=int(args['seed']))
-print(manifest.dataset_digest, len(manifest.files))
+print(manifest.dataset_sha256, len(manifest.files))
 ```
 
 The job names the wheel alone, because Glue preinstalls the rest, as

@@ -102,7 +102,7 @@ pub fn layout(plan: &Plan, settings: &LayoutSettings, output: &Output) -> Result
         ranges,
         partition_by: settings.partition_by.clone(),
         partition_style: settings.partition_style,
-        identity8: identity8(&plan.identity().digest()),
+        identity8: identity8(&plan.identity().sha256()),
         extension: output.extension(),
     })
 }
@@ -156,7 +156,7 @@ pub fn layout_from_manifest(plan: &Plan, manifest: &Manifest) -> Result<FileLayo
         ranges,
         partition_by: manifest.layout.partition_by.clone(),
         partition_style: manifest.layout.partition_style,
-        identity8: identity8(&manifest.dataset_digest),
+        identity8: identity8(&manifest.dataset_sha256),
         extension: manifest.output.extension(),
     })
 }
@@ -261,8 +261,8 @@ fn check_scenario(plan: &Plan, partition_by: &[String], ranges: &[FileRange], ou
     Ok(())
 }
 
-pub(crate) fn identity8(digest: &str) -> String {
-    digest.trim_start_matches("sha256:").chars().take(8).collect()
+pub(crate) fn identity8(sha256: &str) -> String {
+    sha256.trim_start_matches("sha256:").chars().take(8).collect()
 }
 
 fn ranges_from_sizes(sizes: Vec<u64>) -> Vec<FileRange> {

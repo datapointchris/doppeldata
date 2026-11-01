@@ -15,7 +15,7 @@ def test_data_plan_names_the_identity_and_ranges_data_generate_writes(tmp_path):
     assert generated.exit_code == 0, generated.output
     manifest = json.loads((tmp_path / 'orders' / '_manifest.json').read_text())
 
-    assert (manifest['identity'], manifest['dataset_digest']) == (plan['identity'], plan['dataset_digest'])
+    assert (manifest['identity'], manifest['dataset_sha256']) == (plan['identity'], plan['dataset_sha256'])
     planned_ranges = [(planned['range'], planned['path'], planned['range_rows']) for planned in plan['ranges']]
     assert [(file['range'], file['path'], file['range_rows']) for file in manifest['files']] == planned_ranges
     assert sorted(path.name for path in (tmp_path / 'orders').iterdir()) == ['_manifest.json', *(path for _, path, _ in planned_ranges)]
@@ -73,7 +73,7 @@ def test_a_part_file_written_under_a_scenario_with_its_profile_embedded_regenera
     again = runner.invoke(app, ['data', 'generate', str(part), '--format', 'parquet', '--out', str(tmp_path / 'again')])
     assert again.exit_code == 0, again.output
     manifests = [json.loads((tmp_path / out / '_manifest.json').read_text()) for out in ('first', 'again')]
-    assert manifests[0]['dataset_digest'] == manifests[1]['dataset_digest']
+    assert manifests[0]['dataset_sha256'] == manifests[1]['dataset_sha256']
     assert manifests[1]['scenario']['name'] == 'hot-key'
     as_csv = runner.invoke(app, ['data', 'generate', 'orders', *written, 'csv', '--out', str(tmp_path / 'csv')])
     assert as_csv.exit_code == 2, as_csv.output

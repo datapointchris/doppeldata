@@ -30,9 +30,9 @@ class Manifest:
         return identity
 
     @property
-    def dataset_digest(self) -> str:
+    def dataset_sha256(self) -> str:
         """`sha256:` and the hex SHA-256 of the identity's canonical JSON, which names the dataset."""
-        return str(self.document['dataset_digest'])
+        return str(self.document['dataset_sha256'])
 
     @property
     def files(self) -> list[dict[str, Any]]:
@@ -82,8 +82,8 @@ class BundleManifest:
         return identity
 
     @property
-    def dataset_digest(self) -> str:
-        return str(self.document['dataset_digest'])
+    def dataset_sha256(self) -> str:
+        return str(self.document['dataset_sha256'])
 
     @property
     def partial(self) -> bool:
@@ -92,7 +92,7 @@ class BundleManifest:
 
     @property
     def listed(self) -> list[dict[str, Any]]:
-        """Every table, parents first: its name, its manifest's path under the destination, its `dataset_digest` and rows,
+        """Every table, parents first: its name, its manifest's path under the destination, its `dataset_sha256` and rows,
         and whether it is partial."""
         listed: list[dict[str, Any]] = self.document['tables']
         return listed

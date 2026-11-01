@@ -11,14 +11,14 @@ use arrow_schema::DataType;
 use doppeldata_core::profile::Profile;
 use rayon::prelude::*;
 
-const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const PROFILE_SHA256: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ROWS: u64 = 100_000;
 const CORRELATION_TOLERANCE: f64 = 0.01;
 const SHARE_TOLERANCE: f64 = 0.01;
 
 fn generated(document: &serde_json::Value) -> Vec<RecordBatch> {
     let profile: Profile = serde_json::from_value(document.clone()).unwrap();
-    let plan = doppeldata_core::plan(&profile, DIGEST, 7, ROWS).unwrap();
+    let plan = doppeldata_core::plan(&profile, PROFILE_SHA256, 7, ROWS).unwrap();
     (0..plan.block_count())
         .into_par_iter()
         .map(|block| plan.generate_block(block).unwrap())

@@ -12,7 +12,7 @@
       "description": "The tool that wrote the files, as `doppeldata <version>`.",
       "type": "string"
     },
-    "dataset_digest": {
+    "dataset_sha256": {
       "description": "`sha256:` and the hex SHA-256 of `identity`'s RFC 8785 canonical JSON.",
       "type": "string"
     },
@@ -85,7 +85,7 @@
   "required": [
     "kind",
     "tool",
-    "dataset_digest",
+    "dataset_sha256",
     "identity",
     "profile",
     "destination",
@@ -105,14 +105,14 @@
       ]
     },
     "ManifestIdentity": {
-      "description": "The values a dataset's rows are a pure function of, keyed and written as the identity's canonical\nJSON, so a reader rebuilds `dataset_digest` from them with no mapping.",
+      "description": "The values a dataset's rows are a pure function of, keyed and written as the identity's canonical\nJSON, so a reader rebuilds `dataset_sha256` from them with no mapping.",
       "type": "object",
       "properties": {
         "dataset_rows": {
           "description": "The rows generated, in decimal, before any copies a scenario's `duplicates` adds. `files`\ngives the rows each file holds.",
           "$ref": "#/$defs/Decimal"
         },
-        "profile_digest": {
+        "profile_sha256": {
           "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON, as given, before a\nscenario's patch. In a bundle, the bundle's, every table inline.",
           "type": "string"
         },
@@ -123,7 +123,7 @@
             "null"
           ]
         },
-        "scenario_digest": {
+        "scenario_sha256": {
           "description": "`sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON, or null for none.\nThe JSON is taken with each perturbation's `id` resolved, and with `description` and\n`expect` left out. A composition's is its composed document's: the patches merged in order,\nthe perturbations concatenated, and the names joined with `+`. In a bundle, the map of each\ntable a scenario names to its composed document.",
           "type": [
             "string",
@@ -150,7 +150,7 @@
       },
       "required": [
         "dataset_rows",
-        "profile_digest",
+        "profile_sha256",
         "seed",
         "stream_version"
       ]
@@ -198,7 +198,7 @@
           ]
         },
         "document": {
-          "description": "The canonical document `identity.scenario_digest` is taken over, so the dataset regenerates\nwith no scenario file.",
+          "description": "The canonical document `identity.scenario_sha256` is taken over, so the dataset regenerates\nwith no scenario file.",
           "type": "object",
           "additionalProperties": true
         },
@@ -232,14 +232,14 @@
             "null"
           ]
         },
-        "digest": {
-          "description": "The scenario's own digest, taken as `identity.scenario_digest` is.",
+        "sha256": {
+          "description": "The scenario's own SHA-256, taken as `identity.scenario_sha256` is.",
           "type": "string"
         }
       },
       "required": [
         "name",
-        "digest"
+        "sha256"
       ]
     },
     "BundleTable": {
@@ -253,8 +253,8 @@
           "description": "The table's manifest under the destination, `/`-separated, such as `orders/_manifest.json`.",
           "type": "string"
         },
-        "dataset_digest": {
-          "description": "The table's manifest's `dataset_digest`.",
+        "dataset_sha256": {
+          "description": "The table's manifest's `dataset_sha256`.",
           "type": "string"
         },
         "dataset_rows": {
@@ -269,7 +269,7 @@
       "required": [
         "name",
         "manifest",
-        "dataset_digest",
+        "dataset_sha256",
         "dataset_rows",
         "partial"
       ]

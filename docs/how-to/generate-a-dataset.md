@@ -48,9 +48,9 @@ ordered_at      timestamp[us, tz=UTC]  between the extremes, weighted by month, 
 customer_email  string                 the email provider, at the profiled distinct ratio, 0.02 null
 ship_zip        string                 a pattern, at the profiled distinct ratio
 
-part-00000-722fe1c2.parquet  rows 0 to 99,999
-part-00001-722fe1c2.parquet  rows 100,000 to 199,999
-part-00002-722fe1c2.parquet  rows 200,000 to 249,999
+part-00000-6f7be39f.parquet  rows 0 to 99,999
+part-00001-6f7be39f.parquet  rows 100,000 to 199,999
+part-00002-6f7be39f.parquet  rows 200,000 to 249,999
 ```
 
 `data plan` reads nothing at `--out`. `data generate` with the same flags then prints the same

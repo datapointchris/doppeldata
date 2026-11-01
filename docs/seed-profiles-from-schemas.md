@@ -143,9 +143,9 @@ generated:
   table is `glue:<region>/<database>/<table>@<version>`, with the catalog's version of it, and never
   its ARN, which holds the account id. A seed is a file people commit. A schema class is its module
   and class, such as `pandera:shop.Orders`.
-- **`imported_from` is part of the profile digest, and `declared` is not.** No draw reads
+- **`imported_from` is part of the profile's SHA-256, and `declared` is not.** No draw reads
   `declared`, so a schema stating a bound the seed would draw by default makes the same dataset. A
-  copy of the schema elsewhere keeps the profile digest. A renamed file, a Glue table at a new
+  copy of the schema elsewhere keeps the profile's SHA-256. A renamed file, a Glue table at a new
   catalog version, or a schema declaring another bound gives a new one.
 - **Data generated from a seed passes `data check` against it**, as any profile's does.
 - **`profile check` fails a seed, exiting 3.** A seed was never written under a privacy policy, so

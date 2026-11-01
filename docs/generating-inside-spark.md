@@ -16,7 +16,7 @@ a task yields are the rows `sd.generate` yields for those blocks, and `partition
 which task makes them.
 
 - **Each executor builds the engine's plan from what the driver resolved**: the profile's JSON, its
-  digest, the scenario, the seed and the row count. It builds it once per Python worker process.
+  SHA-256, the scenario, the seed and the row count. It builds it once per Python worker process.
 - **A scenario's perturbations apply inside each block, so `scenario=` moves no value with the
   partition count either.** `generate` refuses `schema_drift`, `small_files` and `malformed_rows`
   as `E-SCENARIO-014`, because they shape files and a DataFrame has none. `write` applies them.
@@ -193,7 +193,7 @@ One run of a Glue 5.1 job wrote 1B rows of `eight-columns`, seed 42, 1M rows a f
 `write`. [performance.md](performance.md) shows the job's body. It ran 1,000 tasks on nine
 executors. Its manifest records the same path, row count, size and SHA-256 for
 all 1,000 files as a local `doppeldata data generate` with the same arguments. Both record the same
-`dataset_digest`. Ten of its objects, sampled from S3 and hashed, hash as the manifest records.
+`dataset_sha256`. Ten of its objects, sampled from S3 and hashed, hash as the manifest records.
 [performance.md](performance.md) holds the run's throughput and the job's configuration.
 
 ## Over a Glue 5.1 Spark Connect session, both calls match a local run once reattachable execution is off

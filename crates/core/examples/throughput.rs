@@ -69,8 +69,8 @@ fn example_profile(name: &str) -> Result<Profile, String> {
 fn run() -> Result<(), String> {
     let options = options()?;
     let profile = example_profile(&options.example)?;
-    let digest = format!("sha256:{}", "0".repeat(64));
-    let plan = doppeldata_core::plan(&profile, &digest, options.seed, options.rows).map_err(|e| e.to_string())?;
+    let profile_sha256 = format!("sha256:{}", "0".repeat(64));
+    let plan = doppeldata_core::plan(&profile, &profile_sha256, options.seed, options.rows).map_err(|e| e.to_string())?;
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(options.threads)
         .build()

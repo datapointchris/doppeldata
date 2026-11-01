@@ -206,7 +206,7 @@ impl Destination {
             let Some(manifest) = self.record::<Manifest>(objects, name).await? else {
                 continue;
             };
-            let identity8 = identity8(&manifest.dataset_digest);
+            let identity8 = identity8(&manifest.dataset_sha256);
             parts.insert(format!("{identity8}.{}", manifest.output.extension()));
             if let Some(cdc) = &manifest.cdc {
                 streams.push(RecordedStream {

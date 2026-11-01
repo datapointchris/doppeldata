@@ -1,6 +1,6 @@
 """A bundle's tables generated together, each parent before its children, every foreign key drawn from its parent's keys.
 
-Each table's identity holds the bundle's digest, the scale and the table's name, so a table regenerates alone from the bundle
+Each table's identity holds the bundle's SHA-256, the scale and the table's name, so a table regenerates alone from the bundle
 and its manifest. A write puts each table under `<out>/<table>/` with a manifest of its own, and stores at `out` the bundle's
 manifest naming each.
 """
@@ -35,7 +35,7 @@ from doppeldata.manifest import BundleManifest
 from doppeldata.manifest import Manifest
 from doppeldata.name_hinted_types import with_type_hints
 from doppeldata.profile_format import Bundle
-from doppeldata.profile_format import digest_of
+from doppeldata.profile_format import sha256_of
 from doppeldata.profile_sources import ProfileSource
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
@@ -97,13 +97,13 @@ def table_scenarios(scenario: Scenario | Sequence[Scenario] | None, bundle: Bund
 
 
 def scenarios_document(scenarios: dict[str, Scenario]) -> dict[str, Any]:
-    """The map of each table to its scenario's canonical document, which a bundle's scenario digest is taken over."""
+    """The map of each table to its scenario's canonical document, which a bundle's `scenario_sha256` is taken over."""
     return {table: json.loads(applied.canonical()) for table, applied in sorted(scenarios.items())}
 
 
 def scenarios_record(scenarios: dict[str, Scenario]) -> dict[str, Any] | None:
-    """The scenarios as a bundle's manifests record them: their names joined with `+`, the document the digest covers, and
-    each scenario's name, path and digest where several apply. None where none applies."""
+    """The scenarios as a bundle's manifests record them: their names joined with `+`, the document `scenario_sha256` covers,
+    and each scenario's name, path and SHA-256 where several apply. None where none applies."""
     if not scenarios:
         return None
     members = [member for applied in scenarios.values() for member in (applied.members or (applied,))]
@@ -115,7 +115,7 @@ def scenarios_record(scenarios: dict[str, Scenario]) -> dict[str, Any] | None:
     }
     if len(members) > 1:
         record['composed_of'] = [
-            {'name': member.name, 'path': str(member.path) if member.path is not None else None, 'digest': member.digest}
+            {'name': member.name, 'path': str(member.path) if member.path is not None else None, 'sha256': member.sha256}
             for member in members
         ]
     return record
@@ -127,14 +127,14 @@ class BundleArguments:
     the same plan. `bundle_json` holds every table inline, each with the hints the engine reads a typed text column with."""
 
     bundle_json: str
-    bundle_digest: str
+    bundle_sha256: str
     seed: int
     scale: float
     source: str
     scenarios: tuple[tuple[tuple[str, str], ...], str] | None = None
 
     def plan(self) -> '_core.BundlePlan':
-        return _core.BundlePlan(self.bundle_json, self.bundle_digest, self.seed, self.scale, self.source, scenarios=self.scenarios)
+        return _core.BundlePlan(self.bundle_json, self.bundle_sha256, self.seed, self.scale, self.source, scenarios=self.scenarios)
 
 
 def bundle_arguments(bundle: Bundle, seed: int, scale: float, scenarios: dict[str, Scenario]) -> BundleArguments:
@@ -147,8 +147,8 @@ def bundle_arguments(bundle: Bundle, seed: int, scale: float, scenarios: dict[st
     applied = None
     if scenarios:
         listed = tuple((json.dumps(each.to_plain(), allow_nan=False), each.source) for each in scenarios.values())
-        applied = (listed, digest_of(rfc8785.dumps(scenarios_document(scenarios))))
-    return BundleArguments(json.dumps(plain, allow_nan=False), bundle.digest, seed, float(scale), source, applied)
+        applied = (listed, sha256_of(rfc8785.dumps(scenarios_document(scenarios))))
+    return BundleArguments(json.dumps(plain, allow_nan=False), bundle.sha256, seed, float(scale), source, applied)
 
 
 def generate_bundle(run: BundleRun, *, threads: int, scenario: Scenario | Sequence[Scenario] | None) -> dict[str, ArrowStreamExportable]:
@@ -168,7 +168,7 @@ class BundleWritePlan:
 
     destination: str
     identity: dict[str, Any]
-    dataset_digest: str
+    dataset_sha256: str
     tables: dict[str, WritePlan]
     relationships: list[dict[str, Any]]
     set_aside: list[str]
@@ -243,7 +243,7 @@ def plan_bundle(run: BundleRun, out: str | os.PathLike[str], *, choices: WriteCh
     return BundleWritePlan(
         destination=prepared.destination,
         identity=json.loads(prepared.engine.identity_json),
-        dataset_digest=prepared.engine.dataset_digest,
+        dataset_sha256=prepared.engine.dataset_sha256,
         tables={
             name: write_plan_of(table, options, destination, prepared.scenarios.get(name))
             for name, table, options, destination in prepared.tables

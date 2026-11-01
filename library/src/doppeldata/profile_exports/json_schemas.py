@@ -25,7 +25,7 @@ def record_schema(table: ContractTable) -> str:
     schema: dict[str, Any] = {
         '$schema': DIALECT,
         'title': table.name,
-        'description': f'One record of {table.name}, exported from its doppeldata profile sha256:{table.digest}.',
+        'description': f'One record of {table.name}, exported from its doppeldata profile {table.profile_sha256}.',
         'type': 'object',
         'properties': properties,
     }

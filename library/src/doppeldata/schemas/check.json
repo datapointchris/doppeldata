@@ -80,7 +80,7 @@
           "description": "The profile's `name`.",
           "type": "string"
         },
-        "digest": {
+        "sha256": {
           "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON.",
           "type": "string"
         },
@@ -94,7 +94,7 @@
       },
       "required": [
         "name",
-        "digest"
+        "sha256"
       ]
     },
     "ReportedScenario": {
@@ -103,14 +103,14 @@
         "name": {
           "type": "string"
         },
-        "digest": {
-          "description": "The scenario's digest, taken as a manifest's `identity.scenario_digest` is: the SHA-256 of\nits RFC 8785 canonical JSON with each perturbation's `id` resolved, and with `description`\nand `expect` left out.",
+        "sha256": {
+          "description": "The scenario's SHA-256, taken as a manifest's `identity.scenario_sha256` is: the SHA-256 of\nits RFC 8785 canonical JSON with each perturbation's `id` resolved, and with `description`\nand `expect` left out.",
           "type": "string"
         }
       },
       "required": [
         "name",
-        "digest"
+        "sha256"
       ]
     },
     "CheckedData": {

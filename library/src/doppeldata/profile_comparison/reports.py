@@ -152,14 +152,14 @@ class Failures:
 @dc.dataclass(frozen=True)
 class ReportedProfile:
     name: str
-    digest: str
+    sha256: str
     path: str | None
 
 
 @dc.dataclass(frozen=True)
 class ReportedScenario:
     name: str
-    digest: str
+    sha256: str
 
 
 @dc.dataclass(frozen=True)
@@ -241,9 +241,9 @@ class CheckReport:
 
     def markdown_lines(self, heading: str) -> list[str]:
         """The report's lines under `heading`, as a bundle's report holds each table's under its own."""
-        against = f'profile `{self.profile.name}` ({self.profile.digest})'
+        against = f'profile `{self.profile.name}` ({self.profile.sha256})'
         if self.scenario is not None:
-            against += f' under scenario `{self.scenario.name}` ({self.scenario.digest})'
+            against += f' under scenario `{self.scenario.name}` ({self.scenario.sha256})'
         lines = [heading, '', f'`{self.data.path}`, {self.data.rows:,} rows, against {against}.', '']
         if self.against is not None:
             real = self.against
@@ -313,9 +313,9 @@ class BundleCheckReport:
     def to_markdown(self) -> str:
         """The report for a person: the relationships, failures first, then each table's report under its name."""
         verdict = 'passed' if self.passed and self.verified else 'failed'
-        against = f'bundle `{self.profile.name}` ({self.profile.digest})'
+        against = f'bundle `{self.profile.name}` ({self.profile.sha256})'
         if self.scenario is not None:
-            against += f' under scenario `{self.scenario.name}` ({self.scenario.digest})'
+            against += f' under scenario `{self.scenario.name}` ({self.scenario.sha256})'
         rows = f'{self.data.rows:,} rows in {len(self.tables)} tables'
         lines = [f'# doppeldata bundle check {verdict}', '', f'`{self.data.path}`, {rows}, against {against}.', '']
         failed = Failures.of(self.relationships, [])
@@ -366,7 +366,7 @@ class DiffReport:
         lines = [
             f'# doppeldata profiles {verdict}',
             '',
-            f'`{self.b.path or self.b.name}` ({self.b.digest}) against `{self.a.path or self.a.name}` ({self.a.digest}).',
+            f'`{self.b.path or self.b.name}` ({self.b.sha256}) against `{self.a.path or self.a.name}` ({self.a.sha256}).',
             '',
         ]
         return '\n'.join(lines + findings(self.metrics, self.changes, self.failures())) + '\n'

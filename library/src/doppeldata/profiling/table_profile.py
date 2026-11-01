@@ -578,7 +578,7 @@ def derivation(
         'engine': engine,
         'fitter': fitter,
         'detector_packs': {enabled.pack.name: enabled.provided_by for enabled in packs},
-        'code_lists': {name: supplied.digest for name, supplied in sorted(code_lists.items())} or None,
+        'code_lists': {name: supplied.sha256 for name, supplied in sorted(code_lists.items())} or None,
         'readers': readers or None,
         'source_fingerprint': fingerprint,
     }

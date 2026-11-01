@@ -301,7 +301,7 @@ def checked_table(
     else:
         moved = moves(applied)
         metrics, changes = skipped(metrics, moved), attributed(changes, moved)
-        reported_scenario, expectations = ReportedScenario(applied.name, applied.digest), applied.verify(data)
+        reported_scenario, expectations = ReportedScenario(applied.name, applied.sha256), applied.verify(data)
     report = CheckReport(
         profile=reported(profile),
         data=CheckedData(named, (observed.get('dataset') or {}).get('rows') or 0, fingerprint),
@@ -608,7 +608,7 @@ def listed_types(packs: list[EnabledPack]) -> dict[str, str]:
 
 
 def reported(profile: Profile) -> ReportedProfile:
-    return ReportedProfile(profile.document['name'], profile.digest, str(profile.path) if profile.path is not None else None)
+    return ReportedProfile(profile.document['name'], profile.sha256, str(profile.path) if profile.path is not None else None)
 
 
 def data_named(data: Any) -> str:

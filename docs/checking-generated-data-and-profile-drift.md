@@ -256,7 +256,7 @@ tables, by the join the profiler runs. `check()` takes a `Bundle` and returns a
 - **A scenario writing a foreign-key column, or the parent's key column, skips the relationship's
   metrics**, with `skipped_by` naming the perturbation.
 - **A bundle's data written under other scenarios is refused.** The root manifest's
-  `scenario_digest` must equal the digest of the scenarios given.
+  `scenario_sha256` must equal the SHA-256 of the scenarios given.
 - **A root holding `_manifest.partial.json` is refused**, as a table's is, because its write
   stopped or is still running.
 - **One table of a bundle checks on its own, under the scenario naming it.** Its manifest's
@@ -431,7 +431,7 @@ The check report holds `scenario`, null without one, and `expectations`, empty w
 metric and column change. A scenario fills those fields, so a script reading the report reads the
 same shape either way.
 
-- **`scenario` holds the scenario's name and digest.** Several composed are named together, joined
+- **`scenario` holds the scenario's `name` and `sha256`.** Several composed are named together, joined
   by `+`.
 - **`profile` names the profile as given.** The data is measured against it patched, so a null
   rate the scenario's patch sets is the one expected.

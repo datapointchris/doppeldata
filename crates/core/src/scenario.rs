@@ -3,7 +3,7 @@
 //! A merge patch changes what a profile can express as a value. An ordered list of perturbations
 //! applies faults a profile cannot express. `expect` declares what the scenario promises, which a
 //! check certifies. The engine applies the patch and the perturbations, so the stream version
-//! governs both. The library computes the scenario's digest.
+//! governs both. The library computes the scenario's SHA-256.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

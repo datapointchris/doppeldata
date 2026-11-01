@@ -13,18 +13,18 @@ use doppeldata_core::DatasetIdentity;
 use doppeldata_core::Plan;
 use doppeldata_core::STREAM_VERSION;
 use doppeldata_core::TextCell;
-use doppeldata_core::bundle_values_digest;
-use doppeldata_core::plan_values_digest;
+use doppeldata_core::bundle_values_sha256;
+use doppeldata_core::plan_values_sha256;
 use doppeldata_core::profile::Profile;
 use doppeldata_core::scenario::Scenario;
-use doppeldata_core::values_digest;
+use doppeldata_core::values_sha256;
 use rayon::prelude::*;
 
-// `crates/check-pinned-values-through-wheel.py` reads PROFILE_DIGEST, SCENARIO_DIGEST, SEED, ROWS,
+// `crates/check-pinned-values-through-wheel.py` reads PROFILE_SHA256, SCENARIO_SHA256, SEED, ROWS,
 // PINNED_STREAM_VERSION and every PINNED_*VALUES from this file, and generates each fixture through
 // the built wheel, so each stays a literal on one line.
-const PROFILE_DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const SCENARIO_DIGEST: &str = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+const PROFILE_SHA256: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const SCENARIO_SHA256: &str = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 const SEED: u64 = 20_251_025;
 const ROWS: u64 = 135_393;
 const _: () = assert!(
@@ -81,13 +81,13 @@ fn planned(document: &serde_json::Value, scenario: Option<&Scenario>, seed: u64,
     let profile: Profile = serde_json::from_value(patched).unwrap();
     let applied = scenario.map(|scenario| AppliedScenario {
         scenario,
-        digest: SCENARIO_DIGEST,
+        sha256: SCENARIO_SHA256,
     });
     let inputs = doppeldata_core::PlanInputs {
         scenario: applied,
         ..Default::default()
     };
-    doppeldata_core::plan_with(&profile, PROFILE_DIGEST, seed, rows, inputs).unwrap()
+    doppeldata_core::plan_with(&profile, PROFILE_SHA256, seed, rows, inputs).unwrap()
 }
 
 fn blocks(plan: &Plan, threads: usize) -> Vec<Block> {
@@ -102,7 +102,7 @@ fn blocks(plan: &Plan, threads: usize) -> Vec<Block> {
 
 fn pinned_hash(document: &serde_json::Value, scenario: Option<&Scenario>, seed: u64, rows: u64, threads: usize) -> String {
     let plan = planned(document, scenario, seed, rows);
-    plan_values_digest(&plan, &blocks(&plan, threads), threads).unwrap()
+    plan_values_sha256(&plan, &blocks(&plan, threads), threads).unwrap()
 }
 
 fn bundle_fixture() -> serde_json::Value {
@@ -113,7 +113,7 @@ fn bundle_planned(document: &serde_json::Value, seed: u64) -> BundlePlan {
     let Profile::Bundle(bundle) = serde_json::from_value(document.clone()).unwrap() else {
         panic!("the fixture is a bundle")
     };
-    doppeldata_core::plan_bundle(&bundle, PROFILE_DIGEST, None, seed, 1.0).unwrap()
+    doppeldata_core::plan_bundle(&bundle, PROFILE_SHA256, None, seed, 1.0).unwrap()
 }
 
 /// Every table's blocks in block order, drawn last block first where `reversed` asks.
@@ -147,7 +147,7 @@ fn a_bundle_values_depend_on_no_thread_count_and_no_block_order() {
         "drawing the last block first changed a value"
     );
     assert_eq!(
-        (STREAM_VERSION, bundle_values_digest(&one_thread).as_str()),
+        (STREAM_VERSION, bundle_values_sha256(&one_thread).as_str()),
         (PINNED_STREAM_VERSION, PINNED_BUNDLE_VALUES),
         "the bundle's values changed; a change to a released stream version's draws raises STREAM_VERSION"
     );
@@ -178,7 +178,7 @@ fn values_depend_on_no_thread_count_and_no_other_column() {
     }
 
     assert_eq!(
-        (STREAM_VERSION, values_digest(&one_thread).as_str()),
+        (STREAM_VERSION, values_sha256(&one_thread).as_str()),
         (PINNED_STREAM_VERSION, PINNED_VALUES),
         "the values changed; a change to a released stream version's draws raises STREAM_VERSION"
     );
@@ -194,7 +194,7 @@ fn a_scenario_values_depend_on_no_thread_count() {
         "16 threads changed a value"
     );
     assert_eq!(
-        (STREAM_VERSION, values_digest(&one_thread).as_str()),
+        (STREAM_VERSION, values_sha256(&one_thread).as_str()),
         (PINNED_STREAM_VERSION, PINNED_SCENARIO_VALUES),
         "the scenario's values changed; a change to a released stream version's draws raises STREAM_VERSION"
     );
@@ -232,7 +232,7 @@ fn a_released_fixture_generates_the_values_its_release_pinned() {
     let seed = given("DOPPELDATA_RELEASED_SEED").parse().unwrap();
     let rows = given("DOPPELDATA_RELEASED_ROWS").parse().unwrap();
     let values = match profile["kind"].as_str() {
-        Some("bundle") => bundle_values_digest(&bundle_blocks(&bundle_planned(&profile, seed), 4, false)),
+        Some("bundle") => bundle_values_sha256(&bundle_blocks(&bundle_planned(&profile, seed), 4, false)),
         _ => pinned_hash(&profile, scenario.as_ref(), seed, rows, 4),
     };
     assert_eq!(
@@ -253,8 +253,8 @@ fn every_bundled_example_plans() {
     assert!(!paths.is_empty(), "{} holds no examples", examples.display());
     for path in paths {
         let planned = match serde_json::from_value(document(&path)).unwrap() {
-            Profile::Bundle(bundle) => doppeldata_core::plan_bundle(&bundle, PROFILE_DIGEST, None, SEED, 1.0).map(|_| ()),
-            profile => doppeldata_core::plan(&profile, PROFILE_DIGEST, SEED, ROWS).map(|_| ()),
+            Profile::Bundle(bundle) => doppeldata_core::plan_bundle(&bundle, PROFILE_SHA256, None, SEED, 1.0).map(|_| ()),
+            profile => doppeldata_core::plan(&profile, PROFILE_SHA256, SEED, ROWS).map(|_| ()),
         };
         if let Err(error) = planned {
             panic!("{}: {error}", path.display());
@@ -263,42 +263,42 @@ fn every_bundled_example_plans() {
 }
 
 #[test]
-fn a_dataset_identity_digests_to_its_pinned_value() {
-    let identity = DatasetIdentity::new(PROFILE_DIGEST, u64::MAX, 10_000_000);
+fn a_dataset_identity_hashes_to_its_pinned_sha256() {
+    let identity = DatasetIdentity::new(PROFILE_SHA256, u64::MAX, 10_000_000);
     assert_eq!(
         identity.canonical_json(),
         concat!(
             r#"{"dataset_rows":"10000000","#,
-            r#""profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
-            r#""scale":null,"scenario_digest":null,"seed":"18446744073709551615","stream_version":12,"table":null}"#
+            r#""profile_sha256":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
+            r#""scale":null,"scenario_sha256":null,"seed":"18446744073709551615","stream_version":12,"table":null}"#
         )
     );
     assert_eq!(
-        identity.digest(),
-        "sha256:d3b3f98317483d999adaa4c864d7e8079e04cbbe67fc23abe12a8ebc83f7620b"
+        identity.sha256(),
+        "sha256:c68b54678cb42b09aa071f0f72ff3280f3e080258654a13ccba8467dd4938bee"
     );
-    let with_scenario = identity.with_scenario(SCENARIO_DIGEST);
+    let with_scenario = identity.with_scenario(SCENARIO_SHA256);
     assert_eq!(
         with_scenario.canonical_json(),
         concat!(
             r#"{"dataset_rows":"10000000","#,
-            r#""profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
+            r#""profile_sha256":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
             r#""scale":null,"#,
-            r#""scenario_digest":"sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","#,
+            r#""scenario_sha256":"sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","#,
             r#""seed":"18446744073709551615","stream_version":12,"table":null}"#
         )
     );
-    let in_bundle = DatasetIdentity::new(PROFILE_DIGEST, u64::MAX, 10_000_000).in_bundle(0.1, Some("orders"));
+    let in_bundle = DatasetIdentity::new(PROFILE_SHA256, u64::MAX, 10_000_000).in_bundle(0.1, Some("orders"));
     assert_eq!(
         in_bundle.canonical_json(),
         concat!(
             r#"{"dataset_rows":"10000000","#,
-            r#""profile_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
-            r#""scale":"0.1","scenario_digest":null,"seed":"18446744073709551615","stream_version":12,"table":"orders"}"#
+            r#""profile_sha256":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
+            r#""scale":"0.1","scenario_sha256":null,"seed":"18446744073709551615","stream_version":12,"table":"orders"}"#
         )
     );
     assert_eq!(
-        with_scenario.digest(),
-        "sha256:2bf063a65a0087a1458f56144feef0513494738d3c3dc50e47df594822a3bada"
+        with_scenario.sha256(),
+        "sha256:4ff72364ff0bc29defc1a718fb3ce43afb1684e1d0f1d921240a276cff40e8ed"
     );
 }

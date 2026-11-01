@@ -219,7 +219,7 @@ class PanderaOrders(pa.DataFrameModel):
 
 
 written = sd.write(PanderaOrders, 'orders.parquet', rows=1000)
-print(written.dataset_digest)
+print(written.dataset_sha256)
 sd.Profile.expand(PanderaOrders, rows=1000).save('pandera-orders.profile.yaml')
 print(PanderaOrders.validate(pl.read_parquet('orders.parquet').to_pandas()).shape)
 

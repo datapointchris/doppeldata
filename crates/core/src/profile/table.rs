@@ -33,7 +33,7 @@ pub enum TableKind {
 }
 
 /// How and when the profile was made. `GENERATED_FIELDS` in the library's
-/// `doppeldata.profile_format` says which fields the profile's digest leaves out.
+/// `doppeldata.profile_format` says which fields the profile's SHA-256 leaves out.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Generated {

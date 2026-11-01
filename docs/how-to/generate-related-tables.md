@@ -77,15 +77,15 @@ shop
 ├── _manifest.json
 ├── customers
 │   ├── _manifest.json
-│   ├── part-00000-722e78a5.parquet
-│   └── part-00001-722e78a5.parquet
+│   ├── part-00000-0f8d826d.parquet
+│   └── part-00001-0f8d826d.parquet
 └── orders
     ├── _manifest.json
-    ├── part-00000-3c5fcaf0.parquet
-    └── part-00001-3c5fcaf0.parquet
+    ├── part-00000-f23a844c.parquet
+    └── part-00001-f23a844c.parquet
 ```
 
-`sd.write` with the same arguments returns a `BundleManifest` naming the same `dataset_digest`.
+`sd.write` with the same arguments returns a `BundleManifest` naming the same `dataset_sha256`.
 
 ## `data check` measures each relationship, then each table against its own profile
 

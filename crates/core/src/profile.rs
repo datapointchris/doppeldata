@@ -2,7 +2,7 @@
 //!
 //! The generator reads a profile as JSON the library hands it, never as YAML. The JSON Schema the
 //! library validates against is derived from these types, so the two cannot disagree. Every section
-//! refuses a key it does not declare. The library owns a profile's digest and passes it in.
+//! refuses a key it does not declare. The library owns a profile's SHA-256 and passes it in.
 
 mod bundle;
 mod table;
@@ -40,12 +40,12 @@ pub use values::SignedDuration;
 pub mod provenance {
     /// The profile's `name`.
     pub const PROFILE_NAME: &str = "doppeldata.profile_name";
-    /// The profile's digest, which the library computes. An identity key.
-    pub const PROFILE_DIGEST: &str = "doppeldata.profile_digest";
+    /// The profile's SHA-256, which the library computes. An identity key.
+    pub const PROFILE_SHA256: &str = "doppeldata.profile_sha256";
     /// The scenario's name.
     pub const SCENARIO_NAME: &str = "doppeldata.scenario_name";
-    /// The scenario's digest. An identity key.
-    pub const SCENARIO_DIGEST: &str = "doppeldata.scenario_digest";
+    /// The scenario's SHA-256. An identity key.
+    pub const SCENARIO_SHA256: &str = "doppeldata.scenario_sha256";
     /// The seed, in decimal. An identity key.
     pub const SEED: &str = "doppeldata.seed";
     /// The engine's stream version. An identity key.
@@ -58,18 +58,18 @@ pub mod provenance {
     /// What a bundle's every table's row count was multiplied by, in decimal, null outside a bundle.
     /// An identity key.
     pub const SCALE: &str = "doppeldata.scale";
-    /// The digest of the dataset's identity, a quick equality check beside the values it is taken over.
-    pub const DATASET_DIGEST: &str = "doppeldata.dataset_digest";
-    /// The digest of the columns a sample pins and their values, absent where none is pinned. An
+    /// The SHA-256 of the dataset's identity, a quick equality check beside the values it is taken over.
+    pub const DATASET_SHA256: &str = "doppeldata.dataset_sha256";
+    /// The SHA-256 of the columns a sample pins and their values, absent where none is pinned. An
     /// identity key, which an unpinned identity leaves out rather than writing as null.
-    pub const OVERRIDES_DIGEST: &str = "doppeldata.overrides_digest";
-    /// The columns a sample pins, as a sorted JSON list of names, beside `OVERRIDES_DIGEST`.
+    pub const OVERRIDES_SHA256: &str = "doppeldata.overrides_sha256";
+    /// The columns a sample pins, as a sorted JSON list of names, beside `OVERRIDES_SHA256`.
     pub const OVERRIDDEN_COLUMNS: &str = "doppeldata.overridden_columns";
-    /// The whole profile as RFC 8785 canonical JSON. `PROFILE_DIGEST` is taken over it without the
-    /// generated fields the digest leaves out. Only a write that embeds the profile writes it, and
+    /// The whole profile as RFC 8785 canonical JSON. `PROFILE_SHA256` is taken over it without the
+    /// generated fields the hash leaves out. Only a write that embeds the profile writes it, and
     /// only into Parquet and Arrow IPC files.
     pub const PROFILE: &str = "doppeldata.profile";
-    /// The scenario's canonical JSON, the bytes `SCENARIO_DIGEST` is taken over, as the manifest's
+    /// The scenario's canonical JSON, the bytes `SCENARIO_SHA256` is taken over, as the manifest's
     /// `scenario.document` holds it. Only a write that embeds the profile under a scenario writes it.
     pub const SCENARIO: &str = "doppeldata.scenario";
 }

@@ -185,7 +185,7 @@ pack](how-to/write-a-detector-pack.md) builds one and profiles with it.
 - **`semantic.pack` names the pack that typed each column**, so a reviewer sees whose rule assigned
   the type. `generated.detector_packs` names each pack a run enabled, with the distribution and
   version that provided it. An earlier profile stands unchanged only where those match, and they
-  are left out of the digest, as `tool` and `fitter` are.
+  are left out of the profile's SHA-256, as `tool` and `fitter` are.
 
 ## Detection costs little beside the sample it shares with grex
 

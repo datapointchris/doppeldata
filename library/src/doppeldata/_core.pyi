@@ -11,14 +11,14 @@ BLOCK_ROWS: Final[int]
 The rows in each batch the engine generates, every one but the last.
 """
 
-DATASET_DIGEST_KEY: Final[str]
-"""
-The metadata key every Parquet and Arrow IPC file holds its dataset's digest under.
-"""
-
 DATASET_ROWS_KEY: Final[str]
 """
 The metadata key every Parquet and Arrow IPC file holds its dataset's generated rows under.
+"""
+
+DATASET_SHA256_KEY: Final[str]
+"""
+The metadata key every Parquet and Arrow IPC file holds its dataset's SHA-256 under.
 """
 
 DEFAULT_FILE_ROWS: Final[int]
@@ -51,24 +51,24 @@ PARTIAL_MANIFEST_FILE_NAME: Final[str]
 The name of the claim a write holds its destination with, and the record a stopped write leaves.
 """
 
-PROFILE_DIGEST_KEY: Final[str]
-"""
-The metadata key every Parquet and Arrow IPC file holds its profile's digest under.
-"""
-
 PROFILE_KEY: Final[str]
 """
 The metadata key a file holds the whole profile's canonical JSON under, where its write embeds it.
 """
 
-SCENARIO_DIGEST_KEY: Final[str]
+PROFILE_SHA256_KEY: Final[str]
 """
-The metadata key a Parquet or Arrow IPC file written under a scenario holds its digest under.
+The metadata key every Parquet and Arrow IPC file holds its profile's SHA-256 under.
 """
 
 SCENARIO_KEY: Final[str]
 """
 The metadata key a file holds its scenario's canonical document under, where its write embeds the profile.
+"""
+
+SCENARIO_SHA256_KEY: Final[str]
+"""
+The metadata key a Parquet or Arrow IPC file written under a scenario holds its SHA-256 under.
 """
 
 SEED_KEY: Final[str]
@@ -97,9 +97,9 @@ class BundlePlan:
     A bundle resolved for generation: a ``Plan`` for each table, every parent before its children,
     at ``scale`` times each table's row count from ``seed``. ``bundle_json`` holds every table
     inline. ``scenarios``, where given, is each scenario's JSON with its perturbation ids
-    resolved and the source an error names it by, beside the digest of the whole set.
+    resolved and the source an error names it by, beside the SHA-256 of the whole set.
     """
-    def __new__(cls, /, bundle_json: str, bundle_digest: str, seed: SupportsIndex, scale: SupportsFloat |SupportsIndex, source: str, scenarios: tuple[SupportsGetItem[int, tuple[str, str]], str] |None = None) -> BundlePlan: ...
+    def __new__(cls, /, bundle_json: str, bundle_sha256: str, seed: SupportsIndex, scale: SupportsFloat |SupportsIndex, source: str, scenarios: tuple[SupportsGetItem[int, tuple[str, str]], str] |None = None) -> BundlePlan: ...
     @property
     def bundle_json(self, /) -> str:
         """
@@ -121,7 +121,7 @@ class BundlePlan:
         any table used.
         """
     @property
-    def dataset_digest(self, /) -> str: ...
+    def dataset_sha256(self, /) -> str: ...
     @property
     def identity_json(self, /) -> str:
         """
@@ -150,12 +150,12 @@ class Plan:
     """
     A table profile resolved for generation: ``rows`` rows from ``seed``. ``source`` names the
     profile in an error. ``scenario``, where given, is the scenario applied: its JSON with each
-    perturbation's id resolved, its digest, and the name an error gives it. The profile is the
+    perturbation's id resolved, its SHA-256, and the name an error gives it. The profile is the
     one given, and the engine applies the scenario's patch to it. ``overrides``, where given, is
     a JSON list of each pinned column and its values, as ``column_overrides::ColumnOverride``
     reads it, and a value its column cannot hold raises ValueError.
     """
-    def __new__(cls, /, profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, source: str, scenario: tuple[str, str, str] |None = None, overrides: str |None = None) -> Plan: ...
+    def __new__(cls, /, profile_json: str, profile_sha256: str, seed: SupportsIndex, rows: SupportsIndex, source: str, scenario: tuple[str, str, str] |None = None, overrides: str |None = None) -> Plan: ...
     @property
     def block_count(self, /) -> int: ...
     def check_writable(self, /, options: WriteOptions) -> None:
@@ -189,7 +189,7 @@ class Plan:
         The names of the columns each Gaussian copula draws together, each group sorted.
         """
     @property
-    def dataset_digest(self, /) -> str:
+    def dataset_sha256(self, /) -> str:
         """
         ``sha256:`` and the hex SHA-256 of the identity's canonical JSON.
         """
@@ -314,16 +314,16 @@ def destination_scheme(url: str) -> tuple[str, str |None]:
     ``("memory", None)``. Any other scheme raises the library's ``WriteFailed``.
     """
 
-def determinism_bundle_values_digest(bundle_json: str, bundle_digest: str, seed: SupportsIndex, scale: SupportsFloat |SupportsIndex, *, threads: SupportsIndex) -> str:
+def determinism_bundle_values_sha256(bundle_json: str, bundle_sha256: str, seed: SupportsIndex, scale: SupportsFloat |SupportsIndex, *, threads: SupportsIndex) -> str:
     """
     The determinism contract's SHA-256 over every table a bundle generates at ``scale``, each
     table's blocks made on ``threads`` threads, the tables parent first.
     """
 
-def determinism_values_digest(profile_json: str, profile_digest: str, seed: SupportsIndex, rows: SupportsIndex, *, threads: SupportsIndex, scenario: tuple[str, str] |None = None) -> str:
+def determinism_values_sha256(profile_json: str, profile_sha256: str, seed: SupportsIndex, rows: SupportsIndex, *, threads: SupportsIndex, scenario: tuple[str, str] |None = None) -> str:
     """
     The determinism contract's SHA-256 over every value and text cell generated from a profile,
-    with the scenario ``scenario`` gives as its JSON and its digest, made on ``threads`` threads
+    with the scenario ``scenario`` gives as its JSON and its SHA-256, made on ``threads`` threads
     the way ``Plan.generate`` makes its blocks. Under ``cdc`` it also covers every change file
     and the expected table. A wheel's build compares it with the hash the contract pins.
     """

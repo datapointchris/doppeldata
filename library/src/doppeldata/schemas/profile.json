@@ -81,7 +81,7 @@
       ]
     },
     "Generated": {
-      "description": "How and when the profile was made. `GENERATED_FIELDS` in the library's\n`doppeldata.profile_format` says which fields the profile's digest leaves out.",
+      "description": "How and when the profile was made. `GENERATED_FIELDS` in the library's\n`doppeldata.profile_format` says which fields the profile's SHA-256 leaves out.",
       "type": "object",
       "properties": {
         "tool": {

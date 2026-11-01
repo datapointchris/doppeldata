@@ -43,7 +43,7 @@
           "description": "The profile's `name`.",
           "type": "string"
         },
-        "digest": {
+        "sha256": {
           "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON.",
           "type": "string"
         },
@@ -57,7 +57,7 @@
       },
       "required": [
         "name",
-        "digest"
+        "sha256"
       ]
     },
     "MetricResult": {

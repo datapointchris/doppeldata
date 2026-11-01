@@ -118,8 +118,8 @@ def sample(
     of its draws, so the pinned column's correlation with it is not held. A scenario's ops apply after the pins, so an op
     writing a pinned column moves it.
 
-    The identity names the pins by their digest, so the table's `doppeldata.dataset_digest` is its own. Its schema carries
-    that digest under `doppeldata.overrides_digest`, and the pinned columns under `doppeldata.overridden_columns`. Without
+    The identity names the pins by their SHA-256, so the table's `doppeldata.dataset_sha256` is its own. Its schema carries
+    that SHA-256 under `doppeldata.overrides_sha256`, and the pinned columns under `doppeldata.overridden_columns`. Without
     overrides, it is what `generate` returns. `profile`,
     `rows`, `seed`, `threads` and `scenario` are taken as `generate` takes them. A Bundle is refused.
     """

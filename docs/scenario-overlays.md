@@ -19,7 +19,7 @@ the core crate's `scenario` model, which `doppeldata schemas show scenario` prin
 checked, applied and composed. Several compose in order: their patches merge left to right, and
 their perturbations and expectations concatenate.
 
-The manifest records the document the scenario's digest covers, and each composed member's digest.
+The manifest records the document the scenario's SHA-256 covers, and each composed member's SHA-256.
 So a dataset regenerates with no scenario file, and an edited member shows which one moved.
 
 *Rejected:* a patched column the profile does not hold being added, as RFC 7396 would add it. A
@@ -42,7 +42,7 @@ busiest of its 40,000 customers, to within a millionth.
   parent's, at the relationship's agreement. On `orders-customers`, `keys: 5` and `fraction: 0.6` put
   the stated share of orders on 5 customers the parent table holds, to within a thousandth.
   `data check` skips every metric on the key's columns and its inherited columns.
-- **The bundle's scenario digest covers the map of each table to its scenario.**
+- **The bundle's `scenario_sha256` covers the map of each table to its scenario.**
   [determinism-contract.md](determinism-contract.md) says why one table's scenario renames every
   table.
 
@@ -203,8 +203,8 @@ example, a merge in commit order and one in file order, and a headerless CSV str
 - **The stream version governs the patch as it does the samplers.** A change to how a patch merges
   moves generated values, so it raises the stream version. The determinism test pins values
   generated under a scenario fixture that holds a patch.
-- **The identity's `profile_digest` is the profile's as given, not the patched one's.** The
-  scenario's digest covers the patch. So the manifest's profile path names the file whose digest
+- **The identity's `profile_sha256` is the profile's as given, not the patched one's.** The
+  scenario's SHA-256 covers the patch. So the manifest's profile path names the file whose SHA-256
   the identity holds.
 - **A scenario changes no draw a profile alone makes.** A dataset with no scenario draws only from
   the profile's streams, so no scenario code moves its values.
@@ -222,9 +222,9 @@ inserting a perturbation leaves every other one's rows unchanged, compared by Ar
   numbers after the first. An entry that must stay put under any edit names its own `id`.
 - **Two entries sharing an id are refused** as `E-SCENARIO-104`, because they would
   share a stream.
-- **A scenario's digest is the SHA-256 of its RFC 8785 canonical JSON, with every id resolved and
-  no `description` or `expect`.** So naming a default id, rewording the description or moving a
-  bound keeps the identity. A bound is a claim about the data, not an input to it.
+- **`scenario_sha256` is the SHA-256 of the scenario's RFC 8785 canonical JSON, with every id
+  resolved and no `description` or `expect`.** So naming a default id, rewording the description or
+  moving a bound keeps the identity. A bound is a claim about the data, not an input to it.
 
 ## Duplicates change the row count, so each block's count is planned up front
 
@@ -335,7 +335,7 @@ RFC 6901 pointer into the scenario, such as `/perturbations/2/keys`. `doppeldata
 The data is measured against the effective profile, so a patched null rate is the one expected.
 
 - **`data check` refuses a scenario other than the one the data was written under.** Where DATA
-  holds the `_manifest.json` a write left, a `--scenario` of another digest is refused as
+  holds the `_manifest.json` a write left, a `--scenario` of another SHA-256 is refused as
   `E-SCENARIO-016`. No `--scenario` on data whose manifest records one is refused as
   `E-SCENARIO-015`. Both exit 2. A scenario's skips would otherwise pass data it never touched.
 - **A metric a perturbation moves is a row with no value and `skipped_by` naming it.** It passes. A

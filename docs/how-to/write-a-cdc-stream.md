@@ -55,8 +55,8 @@ orders-cdc
 ├── _expected
 │   └── sales
 │       └── orders
-│           ├── part-00000-478e4468.parquet
-│           └── part-00001-478e4468.parquet
+│           ├── part-00000-ca28a520.parquet
+│           └── part-00001-ca28a520.parquet
 ├── _faults.jsonl
 ├── _manifest.json
 └── sales

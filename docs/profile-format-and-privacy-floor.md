@@ -43,7 +43,7 @@ Of the `generated` fields, only those `GENERATED_FIELDS` in `doppeldata.profile_
 hashed are kept, such as `engine`. So `at`, `tool` and `source_fingerprint` are left out, and
 re-profiling unchanged data gives the same identity, wherever the copy that was read sits.
 
-The library alone computes the digest, and the generator takes it as an argument. Every way into
+The library alone computes the profile's SHA-256, and the generator takes it as an argument. Every way into
 the generator passes through the library, so one implementation leaves nothing to disagree with.
 YAML is parsed only in Python, because serde_yaml is deprecated. A YAML timestamp is read as the
 text written, so `low: 2020-01-03` and `low: "2020-01-03"` are one value.
@@ -52,7 +52,7 @@ text written, so `low: 2020-01-03` and `low: "2020-01-03"` are one value.
 
 A bundle holds several table profiles and the relationships between them. It is written as one file
 with `kind: bundle` and every table inline, or as a directory whose `bundle.yaml` names one file per
-table. The directory form lets each table be reviewed and regenerated alone. The digest is taken
+table. The directory form lets each table be reviewed and regenerated alone. The SHA-256 is taken
 with every table inline, so moving between the forms keeps the identity. A table file's `name` must
 match the key the index gives it.
 
@@ -74,7 +74,7 @@ holds. So the next profiler can tell synthetic data from real, and any one file 
 dataset it belongs to.
 
 The keys carry the profile's name and the dataset's whole identity: the values
-`determinism-contract.md` names as that identity, and their digest as a quick equality check. The
+`determinism-contract.md` names as that identity, and their SHA-256 as a quick equality check. The
 row key names the dataset, because every file of it carries the same schema. One part file reading
 `rows: 10000000` would mislead.
 

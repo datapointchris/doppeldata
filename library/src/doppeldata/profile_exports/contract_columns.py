@@ -302,7 +302,7 @@ class ContractTable:
     k_min: int | None
     source_format: str | None
     csv_null: str | None
-    digest: str
+    profile_sha256: str
     primary_key: Key | None = None
     unique_keys: tuple[Key, ...] = ()
     partition_keys: tuple[str, ...] = ()
@@ -343,10 +343,10 @@ class ContractTable:
 
 @dc.dataclass(frozen=True)
 class ContractDocument:
-    """What one export holds: a table's contract, or each of a bundle's, under the name and digest of the profile file."""
+    """What one export holds: a table's contract, or each of a bundle's, under the name and SHA-256 of the profile file."""
 
     name: str
-    digest: str
+    profile_sha256: str
     tables: tuple[ContractTable, ...]
     bundle: bool
 
@@ -356,10 +356,9 @@ def contract_document(profile: Profile | Bundle, type_mix: frozenset[str] | None
     `type_mix` holds the pointers of the columns a table profile generates as text where its bundle's plan decides
     them."""
     plain = profile.to_plain()
-    digest = profile.digest.removeprefix('sha256:')
     if isinstance(profile, Profile):
         pointers = type_mix if type_mix is not None else type_mix_pointers(profile)
-        return ContractDocument(str(plain['name']), digest, (contract_table(profile, pointers),), False)
+        return ContractDocument(str(plain['name']), profile.sha256, (contract_table(profile, pointers),), False)
     relationships = profile.relationships()
     planned = bundle_type_mix_pointers(profile)
     tables = []
@@ -367,7 +366,7 @@ def contract_document(profile: Profile | Bundle, type_mix: frozenset[str] | None
         found = contract_table(table, None if planned is None else planned[name])
         keys = tuple(foreign_key(relationship, found) for relationship in relationships if relationship.child == name)
         tables.append(dc.replace(found, foreign_keys=keys))
-    return ContractDocument(str(plain['name']), digest, tuple(tables), True)
+    return ContractDocument(str(plain['name']), profile.sha256, tuple(tables), True)
 
 
 def type_mix_pointers(profile: Profile) -> frozenset[str] | None:
@@ -426,7 +425,7 @@ def contract_table(profile: Profile, type_mix: frozenset[str] | None) -> Contrac
         k_min=privacy.get('k_min'),
         source_format=source.get('format'),
         csv_null=((source.get('csv') or {}).get('writer') or {}).get('null'),
-        digest=profile.digest.removeprefix('sha256:'),
+        profile_sha256=profile.sha256,
         primary_key=table_key(keys['primary'], facts) if keys.get('primary') else None,
         unique_keys=tuple(table_key(key, facts) for key in keys.get('candidates') or []),
         partition_keys=tuple(key['name'] for key in partitioning.get('keys') or []),

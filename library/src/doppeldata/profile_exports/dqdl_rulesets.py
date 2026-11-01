@@ -42,7 +42,7 @@ def ruleset(table: ContractTable, document: ContractDocument) -> str:
     rules = [*table_rules(table, notes)]
     for column in table.columns:
         rules += column_rules(column, table, notes)
-    lines = [f'# The ruleset of {table.name}, exported from its doppeldata profile sha256:{document.digest}.']
+    lines = [f'# The ruleset of {table.name}, exported from its doppeldata profile {document.profile_sha256}.']
     if table.rows:
         lines.append(f'# Each threshold lies {STANDARD_ERRORS} standard errors below the share the profile states of {table.rows} rows.')
     else:

@@ -265,16 +265,16 @@ select count(*) from read_json_auto('out/part-*.json')
 
 - **`kind` is `table`.** A bundle's root manifest has the same file name and says `bundle`.
 - **`identity` holds every value of the dataset identity, keyed as its canonical JSON.**
-  `dataset_digest` is their SHA-256. The seed, the row count and the scale are decimal strings,
+  `dataset_sha256` is their SHA-256. The seed, the row count and the scale are decimal strings,
   because JSON numbers are exact only to 2^53. A file's row and byte counts are JSON numbers, which
   no single object nears that bound.
 - **`format` and `writer` record every setting**, defaults included, so nothing depends on a later
   default.
 - **`scenario` records the scenario's name, the path it was loaded from, and its `document`.** The
-  document is the canonical JSON the identity's `scenario_digest` covers. So the dataset
+  document is the canonical JSON the identity's `scenario_sha256` covers. So the dataset
   regenerates with no scenario file, including from a parameterized example.
 - **A composition is named with its members' names joined by `+`, and has no path.** `composed_of`
-  lists each member's name, path and digest, so an edited member shows which one moved.
+  lists each member's name, path and `sha256`, so an edited member shows which one moved.
 - **`identity.dataset_rows` counts the rows generated**, before any copies a scenario's
   `duplicates` adds. The files' rows sum to the rows written.
 - **Each file records its path, its range, the range's first row and row count, its own rows, its
@@ -285,7 +285,7 @@ select count(*) from read_json_auto('out/part-*.json')
   one set of writer settings write the same bytes.
 - **`profile.embedded` is true where each file `files` and `cdc.expected` list holds the profile's
   JSON.** A `cdc` change file never does. `regenerate()` refuses such a manifest before writing,
-  because a plan holds the profile's digest and never its JSON. The key is left out of every other
+  because a plan holds the profile's SHA-256 and never its JSON. The key is left out of every other
   manifest.
 - **`faults` counts the faults `_faults.jsonl` lists, by kind.** It is null for a write that lists
   none: one with no `malformed_rows`, and no `cdc` with a fault rate. A partial manifest counts the
@@ -305,7 +305,7 @@ bundle manifest, `doppeldata schemas show bundle-manifest`.
   second table leaves nothing behind for its first.
 - **`kind` is `bundle`.** `threads` and `tasks` are the most any table's write used, and
   `elapsed_ms` runs from the claim to the commit.
-- **The root names each table's manifest by path and `dataset_digest`, never by embedding it.** A
+- **The root names each table's manifest by path and `dataset_sha256`, never by embedding it.** A
   table's manifest lists every file it wrote, so embedding it would hold every file list twice.
 - **`set_aside` names each relationship and `inherited` entry the bundle states and does not
   draw**, by pointer. One whose columns another relationship with more of them draws is the

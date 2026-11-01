@@ -87,21 +87,21 @@ mod _core {
     #[pymodule_export]
     const DATASET_ROWS_KEY: &str = doppeldata_core::profile::provenance::DATASET_ROWS;
 
-    /// The metadata key every Parquet and Arrow IPC file holds its profile's digest under.
+    /// The metadata key every Parquet and Arrow IPC file holds its profile's SHA-256 under.
     #[pymodule_export]
-    const PROFILE_DIGEST_KEY: &str = doppeldata_core::profile::provenance::PROFILE_DIGEST;
+    const PROFILE_SHA256_KEY: &str = doppeldata_core::profile::provenance::PROFILE_SHA256;
 
-    /// The metadata key a Parquet or Arrow IPC file written under a scenario holds its digest under.
+    /// The metadata key a Parquet or Arrow IPC file written under a scenario holds its SHA-256 under.
     #[pymodule_export]
-    const SCENARIO_DIGEST_KEY: &str = doppeldata_core::profile::provenance::SCENARIO_DIGEST;
+    const SCENARIO_SHA256_KEY: &str = doppeldata_core::profile::provenance::SCENARIO_SHA256;
 
     /// The metadata key every Parquet and Arrow IPC file holds the engine's stream version under.
     #[pymodule_export]
     const STREAM_VERSION_KEY: &str = doppeldata_core::profile::provenance::STREAM_VERSION;
 
-    /// The metadata key every Parquet and Arrow IPC file holds its dataset's digest under.
+    /// The metadata key every Parquet and Arrow IPC file holds its dataset's SHA-256 under.
     #[pymodule_export]
-    const DATASET_DIGEST_KEY: &str = doppeldata_core::profile::provenance::DATASET_DIGEST;
+    const DATASET_SHA256_KEY: &str = doppeldata_core::profile::provenance::DATASET_SHA256;
 
     /// The name of the claim a write holds its destination with, and the record a stopped write leaves.
     #[pymodule_export]
@@ -346,24 +346,24 @@ mod _core {
     }
 
     /// The determinism contract's SHA-256 over every value and text cell generated from a profile,
-    /// with the scenario ``scenario`` gives as its JSON and its digest, made on ``threads`` threads
+    /// with the scenario ``scenario`` gives as its JSON and its SHA-256, made on ``threads`` threads
     /// the way ``Plan.generate`` makes its blocks. Under ``cdc`` it also covers every change file
     /// and the expected table. A wheel's build compares it with the hash the contract pins.
     #[pyfunction]
-    #[pyo3(signature = (profile_json, profile_digest, seed, rows, *, threads, scenario=None))]
-    fn determinism_values_digest(
+    #[pyo3(signature = (profile_json, profile_sha256, seed, rows, *, threads, scenario=None))]
+    fn determinism_values_sha256(
         py: Python<'_>,
         profile_json: &str,
-        profile_digest: &str,
+        profile_sha256: &str,
         seed: u64,
         rows: u64,
         threads: usize,
         scenario: Option<(String, String)>,
     ) -> PyResult<String> {
-        let scenario = scenario.map(|(json, digest)| (json, digest, "the scenario".to_string()));
+        let scenario = scenario.map(|(json, sha256)| (json, sha256, "the scenario".to_string()));
         let plan = Plan::new(
             &PyString::new(py, profile_json),
-            profile_digest,
+            profile_sha256,
             seed,
             rows,
             "the profile",
@@ -382,13 +382,13 @@ mod _core {
             return Err(signal);
         }
         let blocks = blocks.expect("only a signal cancels");
-        doppeldata_core::plan_values_digest(plan, &blocks, threads.max(1))
+        doppeldata_core::plan_values_sha256(plan, &blocks, threads.max(1))
             .map_err(|error| scenario_refused(py, "the scenario", error.code(), error.field(), &plan_message(&error)))
     }
 
     /// A table profile resolved for generation: ``rows`` rows from ``seed``. ``source`` names the
     /// profile in an error. ``scenario``, where given, is the scenario applied: its JSON with each
-    /// perturbation's id resolved, its digest, and the name an error gives it. The profile is the
+    /// perturbation's id resolved, its SHA-256, and the name an error gives it. The profile is the
     /// one given, and the engine applies the scenario's patch to it. ``overrides``, where given, is
     /// a JSON list of each pinned column and its values, as ``column_overrides::ColumnOverride``
     /// reads it, and a value its column cannot hold raises ValueError.
@@ -404,10 +404,10 @@ mod _core {
     #[pymethods]
     impl Plan {
         #[new]
-        #[pyo3(signature = (profile_json, profile_digest, seed, rows, source, scenario=None, overrides=None))]
+        #[pyo3(signature = (profile_json, profile_sha256, seed, rows, source, scenario=None, overrides=None))]
         fn new(
             profile_json: &Bound<'_, PyString>,
-            profile_digest: &str,
+            profile_sha256: &str,
             seed: u64,
             rows: u64,
             source: &str,
@@ -426,9 +426,9 @@ mod _core {
                 None => Vec::new(),
             };
             let read: Option<(Scenario, String, String)> = scenario
-                .map(|(json, digest, scenario_source)| {
+                .map(|(json, sha256, scenario_source)| {
                     serde_json::from_str(&json)
-                        .map(|read| (read, digest, scenario_source.clone()))
+                        .map(|read| (read, sha256, scenario_source.clone()))
                         .map_err(|error| not_the_scenario_model(&scenario_source, error))
                 })
                 .transpose()?;
@@ -441,13 +441,13 @@ mod _core {
                 None => document,
             };
             let profile: Profile = serde_json::from_value(document.clone()).map_err(not_the_model)?;
-            let applied = read.as_ref().map(|(scenario, digest, _)| AppliedScenario { scenario, digest });
+            let applied = read.as_ref().map(|(scenario, sha256, _)| AppliedScenario { scenario, sha256 });
             let scenario_source = read.as_ref().map(|(_, _, scenario_source)| scenario_source.clone());
             let inputs = PlanInputs {
                 scenario: applied,
                 overrides: &overrides,
             };
-            match py.detach(|| doppeldata_core::plan_with(&profile, profile_digest, seed, rows, inputs)) {
+            match py.detach(|| doppeldata_core::plan_with(&profile, profile_sha256, seed, rows, inputs)) {
                 Ok(plan) => Ok(Self {
                     profile: Arc::new(profile),
                     document: Arc::new(document),
@@ -474,8 +474,8 @@ mod _core {
 
         /// ``sha256:`` and the hex SHA-256 of the identity's canonical JSON.
         #[getter]
-        fn dataset_digest(&self) -> String {
-            self.plan.identity().digest()
+        fn dataset_sha256(&self) -> String {
+            self.plan.identity().sha256()
         }
 
         #[getter]
@@ -777,7 +777,7 @@ mod _core {
     /// A bundle resolved for generation: a ``Plan`` for each table, every parent before its children,
     /// at ``scale`` times each table's row count from ``seed``. ``bundle_json`` holds every table
     /// inline. ``scenarios``, where given, is each scenario's JSON with its perturbation ids
-    /// resolved and the source an error names it by, beside the digest of the whole set.
+    /// resolved and the source an error names it by, beside the SHA-256 of the whole set.
     #[pyclass(frozen)]
     struct BundlePlan {
         plan: Arc<doppeldata_core::BundlePlan>,
@@ -788,11 +788,11 @@ mod _core {
     #[pymethods]
     impl BundlePlan {
         #[new]
-        #[pyo3(signature = (bundle_json, bundle_digest, seed, scale, source, scenarios=None))]
+        #[pyo3(signature = (bundle_json, bundle_sha256, seed, scale, source, scenarios=None))]
         fn new(
             py: Python<'_>,
             bundle_json: &str,
-            bundle_digest: &str,
+            bundle_sha256: &str,
             seed: u64,
             scale: f64,
             source: &str,
@@ -802,7 +802,7 @@ mod _core {
             let document: serde_json::Value = serde_json::from_str(bundle_json).map_err(not_the_model)?;
             let mut read: BTreeMap<String, Scenario> = BTreeMap::new();
             let mut sources: BTreeMap<String, String> = BTreeMap::new();
-            let digest = scenarios.as_ref().map(|(_, digest)| digest.clone());
+            let scenarios_sha256 = scenarios.as_ref().map(|(_, sha256)| sha256.clone());
             for (json, scenario_source) in scenarios.map(|(listed, _)| listed).unwrap_or_default() {
                 let scenario: Scenario = serde_json::from_str(&json).map_err(|error| not_the_scenario_model(&scenario_source, error))?;
                 let Some(table) = scenario.table.clone() else {
@@ -830,7 +830,7 @@ mod _core {
             }
             let source_of = |error: &PlanError| {
                 let table = match error {
-                    PlanError::Scenario { .. } | PlanError::ScenarioDigest { .. } => read.keys().next(),
+                    PlanError::Scenario { .. } | PlanError::ScenarioSha256 { .. } => read.keys().next(),
                     _ => None,
                 };
                 table
@@ -850,10 +850,10 @@ mod _core {
                     format!("{source} is a table profile, which Plan plans"),
                 ));
             };
-            let applied = digest
+            let applied = scenarios_sha256
                 .as_deref()
-                .map(|digest| doppeldata_core::BundleScenarios { digest, tables: &read });
-            let planned = py.detach(|| doppeldata_core::plan_bundle(&bundle, bundle_digest, applied, seed, scale));
+                .map(|sha256| doppeldata_core::BundleScenarios { sha256, tables: &read });
+            let planned = py.detach(|| doppeldata_core::plan_bundle(&bundle, bundle_sha256, applied, seed, scale));
             let plan = match planned {
                 Ok(plan) => plan,
                 Err(error) if error.in_scenario() => {
@@ -902,8 +902,8 @@ mod _core {
         }
 
         #[getter]
-        fn dataset_digest(&self) -> String {
-            self.plan.identity().digest()
+        fn dataset_sha256(&self) -> String {
+            self.plan.identity().sha256()
         }
 
         /// Each table's name and plan, every parent before its children.
@@ -995,16 +995,16 @@ mod _core {
     /// The determinism contract's SHA-256 over every table a bundle generates at ``scale``, each
     /// table's blocks made on ``threads`` threads, the tables parent first.
     #[pyfunction]
-    #[pyo3(signature = (bundle_json, bundle_digest, seed, scale, *, threads))]
-    fn determinism_bundle_values_digest(
+    #[pyo3(signature = (bundle_json, bundle_sha256, seed, scale, *, threads))]
+    fn determinism_bundle_values_sha256(
         py: Python<'_>,
         bundle_json: &str,
-        bundle_digest: &str,
+        bundle_sha256: &str,
         seed: u64,
         scale: f64,
         threads: usize,
     ) -> PyResult<String> {
-        let bundle = BundlePlan::new(py, bundle_json, bundle_digest, seed, scale, "the bundle", None)?;
+        let bundle = BundlePlan::new(py, bundle_json, bundle_sha256, seed, scale, "the bundle", None)?;
         let cancel = AtomicBool::new(false);
         let mut tables = Vec::new();
         for (_, table) in &bundle.tables {
@@ -1020,7 +1020,7 @@ mod _core {
             }
             tables.push(blocks.expect("only a signal cancels"));
         }
-        Ok(doppeldata_core::bundle_values_digest(&tables))
+        Ok(doppeldata_core::bundle_values_sha256(&tables))
     }
 
     /// The threads ``write_ranges`` writes on. A task scheduler such as Spark already gives each

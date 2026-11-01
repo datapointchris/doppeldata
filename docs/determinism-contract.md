@@ -18,10 +18,10 @@ one, plus a SHA-256 over them. The profile or bundle, the scenario, the seed and
 reproduce a dataset anywhere, and the manifest records each.
 
 The eighth exists only for a sample with a column pinned. An unpinned identity leaves its key out
-rather than writing it as null, so an unpinned dataset's digest is the first seven values'. A pinned
-sample's metadata carries the digest under `doppeldata.overrides_digest`, and the pinned columns,
-sorted, under `doppeldata.overridden_columns`. The digest is the SHA-256 of the overrides' JSON
-sorted by column. Each column reading no pinned column keeps the values the unpinned dataset holds,
+rather than writing it as null, so an unpinned dataset's SHA-256 is the first seven values'. A pinned
+sample's metadata carries the eighth under `doppeldata.overrides_sha256`, and the pinned columns,
+sorted, under `doppeldata.overridden_columns`. It is the SHA-256 of the overrides' JSON sorted by
+column. Each column reading no pinned column keeps the values the unpinned dataset holds,
 because each draws from its own stream. No call writes a pinned sample to files, so no manifest
 records one.
 
@@ -30,12 +30,12 @@ records one.
 The SHA-256 is taken over the RFC 8785 canonical JSON of one object with a key for each value:
 
 ```json
-{"dataset_rows":"10000000","profile_digest":"sha256:…","scale":null,"scenario_digest":null,"seed":"18446744073709551615","stream_version":…,"table":null}
+{"dataset_rows":"10000000","profile_sha256":"sha256:…","scale":null,"scenario_sha256":null,"seed":"18446744073709551615","stream_version":…,"table":null}
 ```
 
-- **The engine builds the canonical JSON and its digest, in `DatasetIdentity`.** The library and its
-  manifest take both from the engine and compute neither. The library owns the profile's canonical
-  form, so it computes the profile and scenario digests and passes them in.
+- **The engine builds the canonical JSON and its SHA-256, in `DatasetIdentity`.** The library and
+  its manifest take both from the engine and compute neither. The library owns the profile's
+  canonical form, so it computes `profile_sha256` and `scenario_sha256` and passes them in.
 - **Each key is a file metadata key without its `doppeldata.` prefix.** Both derive from the
   constants in `profile::provenance`. So a reader holding a file's metadata rebuilds the identity
   with no mapping, and a new value needs no hand ordering, because the map sorts its keys.
@@ -43,28 +43,29 @@ The SHA-256 is taken over the RFC 8785 canonical JSON of one object with a key f
   integers. RFC 8785 writes a number as an IEEE 754 double, which holds every integer only up to
   2^53, so a seed written as a number would lose digits. A string keeps the seed's whole range with
   no cap. The scale is Rust's shortest decimal reading back as the same double, so `0.1` is `"0.1"`.
-- **Each digest is `sha256:` and 64 lowercase hex digits**, the form the library's profile digest
-  takes. The identity's own digest is written the same way.
+- **Each SHA-256 is `sha256:` and 64 lowercase hex digits**, the form the library's
+  `profile_sha256` takes. The identity's own SHA-256 is written the same way.
 - **An absent scenario is `null` in the identity and a missing key in the metadata.** No scenario is
-  the absence of one, so it hashes as an absence rather than as the digest of an empty file.
-- **The profile's digest is the profile's as given, before a scenario patches it.** The scenario's
-  digest covers the patch. A scenario's digest resolves every perturbation's id and leaves out its
-  `description` and `expect`. So rewording it or moving a bound keeps the dataset's identity.
+  the absence of one, so it hashes as an absence rather than as the SHA-256 of an empty file.
+- **`profile_sha256` is the profile's as given, before a scenario patches it.**
+  `scenario_sha256` covers the patch. It resolves every perturbation's id and leaves out the
+  scenario's `description` and `expect`. So rewording it or moving a bound keeps the dataset's
+  identity.
 - **A profile or scenario key renamed moves the identity, and the values stay.** Key names are
-  part of the canonical JSON each digest hashes. So a rename changes the profile digest, the
-  dataset digest and every part name's `identity8`. Each stream is keyed by its table, its column's
+  part of the canonical JSON each SHA-256 hashes. So a rename changes `profile_sha256`,
+  `dataset_sha256` and every part name's `identity8`. Each stream is keyed by its table, its column's
   path and its draw's own name, never by a profile key. So the same profile under the new names
   draws the same bits.
 
-A test pins the digest of one fixed identity, which the library's `rfc8785` package reproduces.
+A test pins the SHA-256 of one fixed identity, which the library's `rfc8785` package reproduces.
 
 ## Every table of a bundle is named by the bundle, so its own manifest regenerates it alone
 
-A bundle's tables share its profile digest, seed, scale and scenario digest. Each table's identity
+A bundle's tables share its `profile_sha256`, seed, scale and `scenario_sha256`. Each table's identity
 adds its own name and its own rows, `round(rows × scale)`. The bundle's own identity names no
 table, and its rows are the sum of its tables'.
 
-- **A bundle's scenario digest is taken over the map of each table to its scenario.** Each entry is
+- **A bundle's `scenario_sha256` is taken over the map of each table to its scenario.** Each entry is
   the scenario's canonical document, sorted by table. So one table's scenario changing renames
   every table, because a child's foreign keys and inherited columns read its parent's values.
 - **A table's own manifest regenerates that table, with its foreign keys.** `regenerate()` takes
@@ -168,7 +169,7 @@ The guarantees, strongest first:
 Any change to a sampler's draw order raises the stream version. So does the engine starting to read
 a profile field it ignored before, because a profile that carries the field then generates
 different values. The library fills a typed column's generator hint where the column has none, and
-the profile's digest is taken before the fill. So a change to the hint a type fills, or to which
+the profile's SHA-256 is taken before the fill. So a change to the hint a type fills, or to which
 columns take one, raises the stream version too. The fill reads the type alone, never the column's
 name, so a name hint added for detection moves no value. The engine never sees the fill, so a library test
 pins a hash over the hints it writes, beside the stream version. The stream version is part of a dataset's identity, so a dataset generated

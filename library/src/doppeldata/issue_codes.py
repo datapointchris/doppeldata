@@ -247,8 +247,8 @@ NO_EMBEDDED_PROFILE = declare(
 EMBEDDED_PROFILE_UNREADABLE = declare(
     'E-PROFILE-024', "a data file's embedded profile, or a count its write recorded beside it, does not read", exit_code=2
 )
-EMBEDDED_DIGEST_MISMATCH = declare(
-    'E-PROFILE-025', "a data file's embedded profile or scenario is not the one its write recorded the digest of", exit_code=2
+EMBEDDED_SHA256_MISMATCH = declare(
+    'E-PROFILE-025', "a data file's embedded profile or scenario is not the one its write recorded the SHA-256 of", exit_code=2
 )
 DATASET_IDENTITY_CHANGED = declare(
     'E-PROFILE-026', "this release plans another dataset from a data file's embedded profile than the one the file names", exit_code=2

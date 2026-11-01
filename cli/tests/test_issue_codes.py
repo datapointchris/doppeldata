@@ -80,7 +80,7 @@ def test_data_generate_in_the_readme_agent_loop_refuses_a_misspelled_format_as_j
 
     written = runner.invoke(app, ['data', 'generate', 'orders', '--rows', '10', '--out', f'{tmp_path}/b/', '--json'])
     assert written.exit_code == 0, written.output
-    assert json.loads(written.stdout)['dataset_digest'] == json.loads((tmp_path / 'b' / '_manifest.json').read_text())['dataset_digest']
+    assert json.loads(written.stdout)['dataset_sha256'] == json.loads((tmp_path / 'b' / '_manifest.json').read_text())['dataset_sha256']
 
 
 def test_a_failing_scenario_check_prints_its_report_on_stdout_and_its_verdict_on_stderr(tmp_path):

@@ -181,7 +181,7 @@ class SyntheticTables:
         sizes one table and `scale` a bundle, and each is refused on the other. `scenario` is a name looked for the same way in
         `doppeldata_scenarios`, then a bundled example's name, a file or a Scenario, or a list of them composed in order.
 
-        `seed`, where given, outranks the test's own: the `--doppeldata-seed` option where given, else its node id's digest.
+        `seed`, where given, outranks the test's own: the `--doppeldata-seed` option where given, else its node id's SHA-256.
         `as_` is `polars`, `arrow` for a pyarrow Table, `pandas`, or `spark`, which builds the DataFrame with
         `doppeldata.spark.to_spark` on the session the project's own `spark` fixture gives. A table generates once for each
         profile, scenario, rows, scale, seed and overrides: once a test from the test's own seed, and once a session from a seed
@@ -222,15 +222,15 @@ class SyntheticTables:
         self.record(seed)
         scenarios = None if scenario is None else [scenario] if isinstance(scenario, str | Scenario) else list(scenario)
         applied = composed([scenario_of(each, config.getini(SCENARIOS_INI)) for each in scenarios] if scenarios else None)
-        scenario_digest = applied.digest if applied is not None else None
+        scenario_sha256 = applied.sha256 if applied is not None else None
         tables = self.request.config.stash.setdefault(GENERATED, {}) if self.shared or seed is not None else self.own_tables
         if isinstance(run, BundleRun):
-            key: tuple[Any, ...] = ('bundle', run.bundle.digest, scenario_digest, run.scale, used)
+            key: tuple[Any, ...] = ('bundle', run.bundle.sha256, scenario_sha256, run.scale, used)
             generated = self.generated(tables, key, lambda: generate(run.bundle, seed=used, scenario=applied, scale=run.scale))
             return {name: self.converted(table, as_) for name, table in generated.items()}
         table_profile = profile_from(profile)
         pinned = materialized(overrides)
-        key = ('table', table_profile.digest, scenario_digest, rows, used, overrides_json(pinned))
+        key = ('table', table_profile.sha256, scenario_sha256, rows, used, overrides_json(pinned))
         table = self.generated(tables, key, lambda: sample(table_profile, rows=rows, seed=used, scenario=applied, overrides=pinned))
         return self.converted(table, as_)
 

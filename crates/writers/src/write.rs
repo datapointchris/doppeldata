@@ -272,11 +272,11 @@ pub fn regenerate(plan: &Plan, manifest: &Manifest, run: &RunOptions, destinatio
             "the manifest's files embed the profile's JSON, which a plan does not hold; write the dataset again with the profile embedded";
         return Err(WriteError::Settings(refusal.into()).into());
     }
-    let identity = plan.identity().digest();
-    if identity != manifest.dataset_digest {
+    let identity = plan.identity().sha256();
+    if identity != manifest.dataset_sha256 {
         return Err(WriteError::IdentityMismatch {
             plan: identity,
-            manifest: manifest.dataset_digest.clone(),
+            manifest: manifest.dataset_sha256.clone(),
         }
         .into());
     }

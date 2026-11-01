@@ -25,15 +25,15 @@ def write_json(path: Path, document: dict) -> Path:
     return path
 
 
-def test_the_digest_ignores_format_comments_key_order_and_when_and_by_what_it_was_profiled(tmp_path):
+def test_the_sha256_ignores_format_comments_key_order_and_when_and_by_what_it_was_profiled(tmp_path):
     original = Profile.load(EXAMPLE)
-    assert re.fullmatch(r'sha256:[0-9a-f]{64}', original.digest)
+    assert re.fullmatch(r'sha256:[0-9a-f]{64}', original.sha256)
     reordered = dict(reversed(list(original.to_plain().items())))
     reordered['generated'] |= {'at': '2030-01-01T00:00:00Z', 'tool': 'doppeldata 9.9.9'}
-    assert Profile.load(write_json(tmp_path / 'orders.json', reordered)).digest == original.digest
+    assert Profile.load(write_json(tmp_path / 'orders.json', reordered)).sha256 == original.sha256
 
     reordered['dataset']['rows'] += 1
-    assert Profile.load(write_json(tmp_path / 'orders.json', reordered)).digest != original.digest
+    assert Profile.load(write_json(tmp_path / 'orders.json', reordered)).sha256 != original.sha256
 
 
 def test_saving_changes_only_the_edited_value(tmp_path):
@@ -82,7 +82,7 @@ def test_each_fault_is_reported_at_the_field_that_holds_it(tmp_path, edit, expec
     assert {(issue.code, issue.field) for issue in raised.value.issues} == expected
 
 
-def test_a_bundle_directory_and_its_single_file_form_share_one_digest(tmp_path):
+def test_a_bundle_directory_and_its_single_file_form_share_one_sha256(tmp_path):
     orders = Profile.load(EXAMPLE).to_plain()
     customers = {'kind': 'table', 'name': 'customers', 'dataset': {'rows': 5000}}
     relationships = [{'from': ['orders.customer_id'], 'to': ['customers.customer_id'], 'cardinality': 'many_to_one'}]
@@ -100,7 +100,7 @@ def test_a_bundle_directory_and_its_single_file_form_share_one_digest(tmp_path):
     (directory / 'bundle.yaml').write_text(json.dumps(index))
     single = write_json(tmp_path / 'shop.json', index | {'tables': {'orders': orders, 'customers': customers}})
 
-    assert Bundle.load(directory).digest == Bundle.load(single).digest
+    assert Bundle.load(directory).sha256 == Bundle.load(single).sha256
     with pytest.raises(ValueError):
         Bundle.load(single).tables['orders'].save()
 
@@ -112,6 +112,6 @@ def test_a_file_written_with_its_profile_embedded_gives_the_profile_back_and_a_p
     sd.write(orders, embedded, rows=100, embed_profile=True)
     sd.write(orders, plain, rows=100)
 
-    assert Profile.from_data_file(embedded).digest == orders.digest
+    assert Profile.from_data_file(embedded).sha256 == orders.sha256
     with pytest.raises(SourceError):
         Profile.from_data_file(plain)

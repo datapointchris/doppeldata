@@ -30,7 +30,7 @@ use serde::Serialize;
 use self::fanout_counts::RankedCounts;
 use self::keyed_permutation::KeyedPermutation;
 use crate::identity::DatasetIdentity;
-use crate::identity::is_sha256_digest;
+use crate::identity::is_sha256;
 use crate::issue_codes;
 use crate::issue_codes::IssueCode;
 use crate::plan::Plan;
@@ -110,11 +110,11 @@ fn refuse(code: RelationshipFault, field: impl Into<String>, message: impl Into<
     }
 }
 
-/// The scenarios a bundle is generated under: each bundle table's, and the digest the library takes
+/// The scenarios a bundle is generated under: each bundle table's, and the SHA-256 the library takes
 /// over the map of table to scenario document.
 #[derive(Debug, Clone, Copy)]
 pub struct BundleScenarios<'a> {
-    pub digest: &'a str,
+    pub sha256: &'a str,
     pub tables: &'a BTreeMap<String, Scenario>,
 }
 
@@ -315,17 +315,17 @@ fn copy_rate(agreement: f64, chance: f64) -> f64 {
 }
 
 /// Resolves `bundle` into a plan for each table at `scale` times its row count, from `seed`. The
-/// library computes the bundle's digest over every table as resolved, and the scenarios' digest.
+/// library computes the bundle's SHA-256 over every table as resolved, and the scenarios'.
 pub fn plan_bundle(
     bundle: &BundleProfile,
-    bundle_digest: &str,
+    bundle_sha256: &str,
     scenarios: Option<BundleScenarios<'_>>,
     seed: u64,
     scale: f64,
 ) -> Result<BundlePlan, PlanError> {
-    if !is_sha256_digest(bundle_digest) {
-        return Err(PlanError::ProfileDigest {
-            digest: bundle_digest.into(),
+    if !is_sha256(bundle_sha256) {
+        return Err(PlanError::ProfileSha256 {
+            sha256: bundle_sha256.into(),
         });
     }
     if !scale.is_finite() || scale <= 0.0 {
@@ -356,9 +356,9 @@ pub fn plan_bundle(
         rows.insert(name.as_str(), (row_count as f64 * scale).round() as u64);
     }
     if let Some(scenarios) = scenarios {
-        if !is_sha256_digest(scenarios.digest) {
-            return Err(PlanError::ScenarioDigest {
-                digest: scenarios.digest.into(),
+        if !is_sha256(scenarios.sha256) {
+            return Err(PlanError::ScenarioSha256 {
+                sha256: scenarios.sha256.into(),
             });
         }
         if let Some(table) = scenarios.tables.keys().find(|table| !tables.contains_key(table.as_str())) {
@@ -479,9 +479,9 @@ pub fn plan_bundle(
         ordinals[index] = Some(column);
     }
     let identity_of = |name: Option<&str>, rows: u64| {
-        let identity = DatasetIdentity::new(bundle_digest, seed, rows).in_bundle(scale, name);
+        let identity = DatasetIdentity::new(bundle_sha256, seed, rows).in_bundle(scale, name);
         match scenarios {
-            Some(scenarios) => identity.with_scenario(scenarios.digest),
+            Some(scenarios) => identity.with_scenario(scenarios.sha256),
             None => identity,
         }
     };

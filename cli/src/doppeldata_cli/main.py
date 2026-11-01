@@ -1126,8 +1126,8 @@ def plan_text(planned: WritePlan) -> str:
             f'{counted(stream["expected_parts"], "part")} under {stream["expected_prefix"]}'
         )
     lines = [
-        f'dataset    {planned.dataset_digest}',
-        f'identity   {int(identity["dataset_rows"]):,} rows from seed {identity["seed"]}, profile {identity["profile_digest"]}, '
+        f'dataset    {planned.dataset_sha256}',
+        f'identity   {int(identity["dataset_rows"]):,} rows from seed {identity["seed"]}, profile {identity["profile_sha256"]}, '
         f'stream version {identity["stream_version"]}',
         f'format     {planned.format} {json.dumps(planned.writer, separators=(",", ":"))}',
         f'files      {files}',
@@ -1136,7 +1136,7 @@ def plan_text(planned: WritePlan) -> str:
         '',
     ]
     if planned.scenario is not None:
-        lines.insert(2, f'scenario   {planned.scenario} {identity["scenario_digest"]}')
+        lines.insert(2, f'scenario   {planned.scenario} {identity["scenario_sha256"]}')
     if planned.rows_written != int(identity['dataset_rows']):
         lines.insert(3, f'rows       {planned.rows_written:,} written, the generated rows and the copies duplicates adds')
     width = max(len(column.name) for column in planned.columns)
@@ -1161,12 +1161,12 @@ def bundle_plan_text(planned: BundleWritePlan) -> str:
     """A bundle's plan: its identity, each table's rows, files and estimate, and each relationship, with what is set aside."""
     identity = planned.identity
     lines = [
-        f'dataset    {planned.dataset_digest}',
+        f'dataset    {planned.dataset_sha256}',
         f'identity   {int(identity["dataset_rows"]):,} rows at scale {identity["scale"]} from seed {identity["seed"]}, bundle '
-        f'{identity["profile_digest"]}, stream version {identity["stream_version"]}',
+        f'{identity["profile_sha256"]}, stream version {identity["stream_version"]}',
     ]
-    if identity.get('scenario_digest') is not None:
-        lines.append(f'scenario   {identity["scenario_digest"]}')
+    if identity.get('scenario_sha256') is not None:
+        lines.append(f'scenario   {identity["scenario_sha256"]}')
     lines.append('')
     width = max(len(name) for name in planned.tables)
     for name, table in planned.tables.items():
@@ -1292,9 +1292,9 @@ def print_written(manifest: Manifest, one_file: Path | None) -> None:
             'the table a merge in commit order reaches'
         )
     if one_file is not None:
-        typer.echo(f'{one_file} holds dataset {manifest.dataset_digest}')
+        typer.echo(f'{one_file} holds dataset {manifest.dataset_sha256}')
     else:
-        typer.echo(f'{beside(document["destination"], MANIFEST_FILE_NAME)} names dataset {manifest.dataset_digest}')
+        typer.echo(f'{beside(document["destination"], MANIFEST_FILE_NAME)} names dataset {manifest.dataset_sha256}')
 
 
 def print_bundle_written(written: BundleManifest) -> None:
@@ -1310,7 +1310,7 @@ def print_bundle_written(written: BundleManifest) -> None:
     seconds = max(document['elapsed_ms'], 1) / 1000
     typer.echo(
         f'in {seconds:.2f} s on {counted(document["threads"], "thread")}; '
-        f'{beside(document["destination"], MANIFEST_FILE_NAME)} names dataset {written.dataset_digest}'
+        f'{beside(document["destination"], MANIFEST_FILE_NAME)} names dataset {written.dataset_sha256}'
     )
 
 

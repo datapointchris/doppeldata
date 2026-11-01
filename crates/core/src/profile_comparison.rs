@@ -40,7 +40,7 @@ pub struct CheckReport {
 pub struct BundleCheckReport {
     /// The bundle the tables were generated from.
     pub profile: ReportedProfile,
-    /// The scenarios applied, named as a bundle's manifest names them, with the digest taken over
+    /// The scenarios applied, named as a bundle's manifest names them, with the SHA-256 taken over
     /// the map of each table to its scenario. Null for none.
     pub scenario: Option<ReportedScenario>,
     /// The data as the caller named it, and the rows of every table together. `fingerprint` is
@@ -84,7 +84,7 @@ pub struct ReportedProfile {
     /// The profile's `name`.
     pub name: String,
     /// `sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON.
-    pub digest: String,
+    pub sha256: String,
     /// The profile's path as the caller gave it, or null when it came from memory.
     pub path: Option<String>,
 }
@@ -92,10 +92,10 @@ pub struct ReportedProfile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReportedScenario {
     pub name: String,
-    /// The scenario's digest, taken as a manifest's `identity.scenario_digest` is: the SHA-256 of
+    /// The scenario's SHA-256, taken as a manifest's `identity.scenario_sha256` is: the SHA-256 of
     /// its RFC 8785 canonical JSON with each perturbation's `id` resolved, and with `description`
     /// and `expect` left out.
-    pub digest: String,
+    pub sha256: String,
 }
 
 /// The data that was profiled and measured.

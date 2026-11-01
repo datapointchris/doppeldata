@@ -119,8 +119,8 @@ later for a table and pyarrow 15 or later for a stream take them with no copy. [
 dataset](how-to/generate-a-dataset.md) reads both.
 
 - **Polars and DuckDB read both in a Python 3.11 environment with no pyarrow and no arro3.** The
-  schema's metadata carries the `doppeldata.*` keys a Parquet file carries, the dataset digest and
-  the seed among them.
+  schema's metadata carries the `doppeldata.*` keys a Parquet file carries,
+  `doppeldata.dataset_sha256` and the seed among them.
 - **The stream holds at most two batches per thread.** Each worker owns a channel one batch deep,
   and the reader takes the workers' blocks in turn. So a billion-row stream runs in the memory of a
   few blocks, and its batches arrive in row order.
@@ -175,11 +175,11 @@ store    0.0          2025-03-01  2025-03-05
 - **A scenario's ops apply after the pins**, so an op writing a pinned column moves it.
 - **Without overrides, `sample` returns what `generate` returns.** A Bundle is refused, because overrides name one table's
   columns.
-- **The identity names the pins by their digest**, so the table's `doppeldata.dataset_digest` is its own. Its schema
-  carries that digest under `doppeldata.overrides_digest`, and the pinned columns under `doppeldata.overridden_columns`.
-  The digest is taken over the overrides sorted by column, so listing them in another order moves nothing.
+- **The identity names the pins by their SHA-256**, so the table's `doppeldata.dataset_sha256` is its own. Its schema
+  carries that SHA-256 under `doppeldata.overrides_sha256`, and the pinned columns under `doppeldata.overridden_columns`.
+  The SHA-256 is taken over the overrides sorted by column, so listing them in another order moves nothing.
 - *Rejected:* `overrides=` on `generate`. Every table `generate` returns is a dataset its manifest regenerates, and a
-  manifest records no overrides, only their digest.
+  manifest records no overrides, only their SHA-256.
 - *Rejected:* replacing a column after the engine returns. A conditional child would keep the values it drew from the
   parent's own draws.
 - *Rejected:* drawing a copula group's other members given the pinned value. They would move although they read no pinned
@@ -265,7 +265,7 @@ the uploads alike.
 `PROFILE` is a profile file, a short YAML or a bundled example's name, and `--columns` stands in for
 it. `--out` is a local directory, a local file named for its format, an `s3://` or `s3a://` URL, or
 `memory://`, which keeps nothing and times a write. `data plan` reads nothing at
-`--out`. It prints the dataset digest and identity, the format with every writer setting, each
+`--out`. It prints the dataset's SHA-256 and identity, the format with every writer setting, each
 column's sampler and null fraction, each row range, and an estimate of the bytes. A test runs both
 commands and requires the manifest's identity and ranges to equal the plan's.
 
@@ -327,7 +327,7 @@ line asks `profile_or_columns` for the `Bundle` a name holds, then passes it on.
 order. The SDK's `scenario=` takes a `Scenario` or a list of them, on `generate`, `stream`, `plan`
 and `write`. [scenario-overlays.md](scenario-overlays.md) holds the format and what it changes.
 
-- **`data plan` prints the scenario's name and digest under the identity.** Under a `duplicates`
+- **`data plan` prints the scenario's name and SHA-256 under the identity.** Under a `duplicates`
   op it also prints the rows written, and `--json` holds them as `rows_written`.
 - **Under `cdc`, `data plan` prints a `stream` line, and `--json` holds it as `cdc`.** It draws
   every change to count them by operation, and counts the change files and `_expected` parts the
@@ -337,7 +337,7 @@ and `write`. [scenario-overlays.md](scenario-overlays.md) holds the format and w
 - **`--rows` counts the rows generated.** A `duplicates` op writes copies beside them, so
   `data generate` then names both counts.
 - **`data check` refuses a `--scenario` other than the one DATA was written under, exit 2.** It
-  reads the scenario's digest from the `_manifest.json` the write left.
+  reads the scenario's SHA-256 from the `_manifest.json` the write left.
 - **`scenario list` prints every op, every metric an expectation names, and every bundled example.**
   `scenario show` prints an op's parameters with their types and meanings, or an example's YAML.
 - **`scenario check SCENARIO PROFILE` plans a write without generating a row.** It takes `data

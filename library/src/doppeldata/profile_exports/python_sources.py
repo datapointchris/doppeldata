@@ -77,7 +77,7 @@ def module_source(document: ContractDocument, kind: str, notes: Iterable[str], t
     lines = [
         f'"""{kind} of {document.name}, exported from its doppeldata profile.',
         '',
-        f'profile_sha256: {document.digest}',
+        f'profile_sha256: {document.profile_sha256}',
         '"""',
         '',
     ]

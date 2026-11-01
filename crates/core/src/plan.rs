@@ -17,7 +17,7 @@ use crate::column_overrides;
 use crate::column_overrides::ColumnOverride;
 use crate::column_overrides::PinnedColumn;
 use crate::identity::DatasetIdentity;
-use crate::identity::is_sha256_digest;
+use crate::identity::is_sha256;
 use crate::issue_codes;
 use crate::issue_codes::IssueCode;
 use crate::perturbations;
@@ -69,8 +69,8 @@ pub enum PlanError {
     NoColumns { name: String },
     #[error("column {column:?} appears twice, and both would draw the same stream")]
     DuplicateColumn { column: String },
-    #[error("profile digest {digest:?} is not `sha256:` and 64 lowercase hex digits")]
-    ProfileDigest { digest: String },
+    #[error("profile SHA-256 {sha256:?} is not `sha256:` and 64 lowercase hex digits")]
+    ProfileSha256 { sha256: String },
     /// A column the engine cannot generate. `field` is an RFC 6901 JSON Pointer into the profile,
     /// as the library's own issues carry.
     #[error("{field}: {message} [{code}]")]
@@ -83,8 +83,8 @@ pub enum PlanError {
         field: String,
         message: String,
     },
-    #[error("scenario digest {digest:?} is not `sha256:` and 64 lowercase hex digits")]
-    ScenarioDigest { digest: String },
+    #[error("scenario SHA-256 {sha256:?} is not `sha256:` and 64 lowercase hex digits")]
+    ScenarioSha256 { sha256: String },
     /// A bundle's relationship the engine cannot draw. `field` is an RFC 6901 JSON Pointer into the
     /// bundle.
     #[error("{field}: {message} [{code}]")]
@@ -153,10 +153,10 @@ impl PlanError {
             Self::Bundle { .. } => &issue_codes::BUNDLE_GIVEN,
             Self::NoColumns { .. } => &issue_codes::NO_COLUMNS,
             Self::DuplicateColumn { .. } => &issue_codes::DUPLICATE_COLUMN,
-            Self::ProfileDigest { .. } => &issue_codes::INVALID_PROFILE_DIGEST,
+            Self::ProfileSha256 { .. } => &issue_codes::INVALID_PROFILE_SHA256,
             Self::Column { code, .. } => code.code(),
             Self::Scenario { code, .. } => code.code(),
-            Self::ScenarioDigest { .. } => &issue_codes::INVALID_SCENARIO_DIGEST,
+            Self::ScenarioSha256 { .. } => &issue_codes::INVALID_SCENARIO_SHA256,
             Self::Relationship { code, .. } => code.code(),
             Self::Override { .. } => &issue_codes::INVALID_OVERRIDE,
         }
@@ -180,7 +180,7 @@ impl PlanError {
         match self {
             Self::Bundle { .. } => "/kind",
             Self::NoColumns { .. } | Self::DuplicateColumn { .. } => "/columns",
-            Self::ProfileDigest { .. } | Self::ScenarioDigest { .. } => "",
+            Self::ProfileSha256 { .. } | Self::ScenarioSha256 { .. } => "",
             Self::Column { field, .. } | Self::Scenario { field, .. } | Self::Relationship { field, .. } | Self::Override { field, .. } => {
                 field
             }
@@ -189,7 +189,7 @@ impl PlanError {
 
     /// Whether the refusal is of the scenario rather than the profile.
     pub fn in_scenario(&self) -> bool {
-        matches!(self, Self::Scenario { .. } | Self::ScenarioDigest { .. })
+        matches!(self, Self::Scenario { .. } | Self::ScenarioSha256 { .. })
     }
 }
 
@@ -298,12 +298,12 @@ struct PlannedStage {
     schema: SchemaRef,
 }
 
-/// A scenario as the engine applies it: the file read, and the digest the library computed over
+/// A scenario as the engine applies it: the file read, and the SHA-256 the library computed over
 /// its resolved document.
 #[derive(Debug, Clone, Copy)]
 pub struct AppliedScenario<'a> {
     pub scenario: &'a Scenario,
-    pub digest: &'a str,
+    pub sha256: &'a str,
 }
 
 /// A block's rows as a file takes them: the batch, the text cells only a text format prints, and
@@ -389,28 +389,29 @@ const _: () = {
     shared_across_threads::<Plan>();
 };
 
-/// What a plan takes beside its profile, digest, seed and rows, each left out by default.
+/// What a plan takes beside its profile, the profile's SHA-256, seed and rows, each left out by
+/// default.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PlanInputs<'a> {
     /// The scenario whose perturbations apply to every block. The profile planned is the one
-    /// [`Scenario::patched_profile`] made, and the profile digest is the one before the patch,
-    /// because the scenario's digest covers the patch.
+    /// [`Scenario::patched_profile`] made, and the profile's SHA-256 is the one before the patch,
+    /// because the scenario's SHA-256 covers the patch.
     pub scenario: Option<AppliedScenario<'a>>,
     /// The columns pinned to given values. A pinned column takes its place in the draw order, so
     /// each column drawn from it reads the pinned values, and every column reading none draws as
     /// it does unpinned. A scenario's perturbations apply after. The identity names the overrides
-    /// by their digest.
+    /// by their SHA-256.
     pub overrides: &'a [ColumnOverride],
 }
 
 /// Resolves a table profile into a plan for `rows` rows from `seed`. The library computes the
-/// profile's digest, `sha256:` and the hex SHA-256 of its RFC 8785 canonical JSON.
-pub fn plan(profile: &Profile, profile_digest: &str, seed: u64, rows: u64) -> Result<Plan, PlanError> {
-    plan_with(profile, profile_digest, seed, rows, PlanInputs::default())
+/// profile's `profile_sha256`, `sha256:` and the hex SHA-256 of its RFC 8785 canonical JSON.
+pub fn plan(profile: &Profile, profile_sha256: &str, seed: u64, rows: u64) -> Result<Plan, PlanError> {
+    plan_with(profile, profile_sha256, seed, rows, PlanInputs::default())
 }
 
 /// As [`plan`], with what `inputs` holds.
-pub fn plan_with(profile: &Profile, profile_digest: &str, seed: u64, rows: u64, inputs: PlanInputs<'_>) -> Result<Plan, PlanError> {
+pub fn plan_with(profile: &Profile, profile_sha256: &str, seed: u64, rows: u64, inputs: PlanInputs<'_>) -> Result<Plan, PlanError> {
     let PlanInputs { scenario, overrides } = inputs;
     let table = match profile {
         Profile::Table(table) => table,
@@ -418,19 +419,19 @@ pub fn plan_with(profile: &Profile, profile_digest: &str, seed: u64, rows: u64, 
             return Err(PlanError::Bundle { name: bundle.name.clone() });
         }
     };
-    if !is_sha256_digest(profile_digest) {
-        return Err(PlanError::ProfileDigest {
-            digest: profile_digest.into(),
+    if !is_sha256(profile_sha256) {
+        return Err(PlanError::ProfileSha256 {
+            sha256: profile_sha256.into(),
         });
     }
-    let mut identity = DatasetIdentity::new(profile_digest, seed, rows);
+    let mut identity = DatasetIdentity::new(profile_sha256, seed, rows);
     if let Some(applied) = scenario {
-        if !is_sha256_digest(applied.digest) {
-            return Err(PlanError::ScenarioDigest {
-                digest: applied.digest.into(),
+        if !is_sha256(applied.sha256) {
+            return Err(PlanError::ScenarioSha256 {
+                sha256: applied.sha256.into(),
             });
         }
-        identity = identity.with_scenario(applied.digest);
+        identity = identity.with_scenario(applied.sha256);
     }
     let inputs = TableInputs {
         scenario: scenario.map(|applied| applied.scenario),
@@ -488,25 +489,25 @@ pub(crate) fn plan_table(table: &TableProfile, identity: DatasetIdentity, inputs
     let identity = if pinned.is_empty() {
         identity
     } else {
-        identity.with_overrides(column_overrides::overrides_digest(overrides))
+        identity.with_overrides(column_overrides::overrides_sha256(overrides))
     };
     let mut metadata = HashMap::from([
         (provenance::PROFILE_NAME.to_string(), table.name.clone()),
-        (provenance::PROFILE_DIGEST.to_string(), identity.profile_digest().to_string()),
+        (provenance::PROFILE_SHA256.to_string(), identity.profile_sha256().to_string()),
         (provenance::SEED.to_string(), seed.to_string()),
         (provenance::STREAM_VERSION.to_string(), identity.stream_version().to_string()),
         (provenance::DATASET_ROWS.to_string(), rows.to_string()),
-        (provenance::DATASET_DIGEST.to_string(), identity.digest()),
+        (provenance::DATASET_SHA256.to_string(), identity.sha256()),
     ]);
-    if let Some(digest) = identity.overrides_digest() {
+    if let Some(sha256) = identity.overrides_sha256() {
         let mut names: Vec<&str> = pinned.iter().map(|pin| planned[pin.index].field.name().as_str()).collect();
         names.sort_unstable();
         let names = serde_json::to_string(&names).expect("a list of strings serializes");
-        metadata.insert(provenance::OVERRIDES_DIGEST.to_string(), digest.to_string());
+        metadata.insert(provenance::OVERRIDES_SHA256.to_string(), sha256.to_string());
         metadata.insert(provenance::OVERRIDDEN_COLUMNS.to_string(), names);
     }
-    if let Some(digest) = identity.scenario_digest() {
-        metadata.insert(provenance::SCENARIO_DIGEST.to_string(), digest.to_string());
+    if let Some(sha256) = identity.scenario_sha256() {
+        metadata.insert(provenance::SCENARIO_SHA256.to_string(), sha256.to_string());
     }
     if let Some(scenario) = scenario {
         metadata.insert(provenance::SCENARIO_NAME.to_string(), scenario.scenario.clone());

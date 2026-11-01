@@ -84,7 +84,7 @@ fn options() -> Result<Options, String> {
     Ok(options)
 }
 
-/// The example profile, and a stand-in digest over its file. The library computes the real one
+/// The example profile, and a stand-in SHA-256 over its file. The library computes the real one
 /// from the profile's canonical JSON.
 fn example_profile(name: &str) -> Result<(Profile, String), String> {
     let path = FilePath::new(env!("CARGO_MANIFEST_DIR"))
@@ -93,11 +93,11 @@ fn example_profile(name: &str) -> Result<(Profile, String), String> {
     let text = fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     let document: serde_json::Value = serde_saphyr::from_str(&text).map_err(|error| error.to_string())?;
     let profile = serde_json::from_value(document).map_err(|error| error.to_string())?;
-    let digest = sha2::Sha256::digest(text.as_bytes())
+    let hex = sha2::Sha256::digest(text.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    Ok((profile, format!("sha256:{digest}")))
+    Ok((profile, format!("sha256:{hex}")))
 }
 
 fn destination(out: &str) -> Result<Destination, String> {
@@ -120,7 +120,7 @@ fn source_format(name: &str) -> Result<SourceFormat, String> {
 
 fn run() -> Result<(), String> {
     let options = options()?;
-    let (profile, digest) = example_profile(&options.example)?;
+    let (profile, profile_sha256) = example_profile(&options.example)?;
     let run = RunOptions {
         threads: options.threads,
         replace: options.replace,
@@ -131,12 +131,12 @@ fn run() -> Result<(), String> {
         Some(path) => {
             let text = fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
             let recorded: Manifest = serde_json::from_str(&text).map_err(|error| format!("{path}: {error}"))?;
-            let plan = doppeldata_core::plan(&profile, &digest, recorded.identity.seed, recorded.identity.dataset_rows)
+            let plan = doppeldata_core::plan(&profile, &profile_sha256, recorded.identity.seed, recorded.identity.dataset_rows)
                 .map_err(|error| error.to_string())?;
             doppeldata_writers::regenerate(&plan, &recorded, &run, &destination)
         }
         None => {
-            let plan = doppeldata_core::plan(&profile, &digest, options.seed, options.rows).map_err(|error| error.to_string())?;
+            let plan = doppeldata_core::plan(&profile, &profile_sha256, options.seed, options.rows).map_err(|error| error.to_string())?;
             let choices = WriteChoices {
                 format: options.format.as_deref().map(source_format).transpose()?,
                 writer: options

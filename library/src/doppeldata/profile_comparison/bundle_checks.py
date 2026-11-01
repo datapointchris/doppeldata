@@ -47,7 +47,7 @@ from doppeldata.profile_comparison.scenario_moves import registered
 from doppeldata.profile_comparison.scenario_moves import skipped
 from doppeldata.profile_comparison.thresholds import Thresholds
 from doppeldata.profile_format import Bundle
-from doppeldata.profile_format import digest_of
+from doppeldata.profile_format import sha256_of
 from doppeldata.profiling import relationship_counts
 from doppeldata.profiling.backend import CsvDialect
 from doppeldata.scenario_format import InvalidScenario
@@ -64,13 +64,13 @@ def check_bundle(
     """`check` of a bundle, which documents it."""
     scenarios = table_scenarios(scenario, bundle)
     record = scenarios_record(scenarios)
-    digest = digest_of(rfc8785.dumps(scenarios_document(scenarios))) if scenarios else None
+    scenarios_sha256 = sha256_of(rfc8785.dumps(scenarios_document(scenarios))) if scenarios else None
     named, held = bundle_data(bundle, data)
     if not isinstance(data, Mapping) and holds_unfinished_write(data):
         raise SourceError(issue_codes.DATA_UNFINISHED, unfinished(named), value=named)
     written = written_bundle_manifest(data) if not isinstance(data, Mapping) else None
     if written is not None:
-        refuse_other_scenarios(record, digest, written, named)
+        refuse_other_scenarios(record, scenarios_sha256, written, named)
     thresholds = thresholds or Thresholds()
     thresholds.check_columns([table.to_plain() for table in bundle.tables.values()])
     plan = bundle_arguments(bundle, 0, 1.0, scenarios).plan()
@@ -98,10 +98,10 @@ def check_bundle(
         dialect = written_dialect(table_written, profile, applied) if table_written is not None else None
         if dialect is not None:
             dialects[name] = dialect
-    reported = ReportedScenario(record['name'], digest) if record is not None and digest is not None else None
+    reported = ReportedScenario(record['name'], scenarios_sha256) if record is not None and scenarios_sha256 is not None else None
     scale = written.identity.get('scale') if written is not None else None
     return BundleCheckReport(
-        profile=ReportedProfile(bundle.name, bundle.digest, str(bundle.path) if bundle.path is not None else None),
+        profile=ReportedProfile(bundle.name, bundle.sha256, str(bundle.path) if bundle.path is not None else None),
         data=CheckedData(named, sum(table.report.data.rows for table in checked), None),
         tables=checked,
         relationships=relationship_rows(plan, relationships, scenarios, held, dialects, thresholds, scale),
@@ -125,18 +125,18 @@ def bundle_data(bundle: Bundle, data: Any) -> tuple[str, dict[str, Any]]:
     return data_named(data), {name: table_destination(root, name) for name in bundle.tables}
 
 
-def refuse_other_scenarios(record: dict[str, Any] | None, digest: str | None, written: BundleManifest, data: str) -> None:
+def refuse_other_scenarios(record: dict[str, Any] | None, scenarios_sha256: str | None, written: BundleManifest, data: str) -> None:
     """Raise InvalidScenario where the scenarios given are not those the bundle's manifest records it was written under."""
-    recorded = written.identity.get('scenario_digest')
-    if digest == recorded:
+    recorded = written.identity.get('scenario_sha256')
+    if scenarios_sha256 == recorded:
         return
     held = written.document.get('scenario') or {}
     wrote = f'scenario {held.get("name")} ({recorded})' if recorded is not None else 'no scenario'
     if record is None:
         issue = Issue(issue_codes.DATA_HAS_SCENARIO, None, f'{data} was written under {wrote}; check it under that scenario', recorded)
         raise InvalidScenario(data, [issue], refusal='cannot be checked with no scenario')
-    message = f'{data} was written under {wrote}, and {record["name"]} is {digest}; check it under the scenarios that wrote it'
-    issue = Issue(issue_codes.SCENARIO_DIFFERS_FROM_DATA, None, message, digest)
+    message = f'{data} was written under {wrote}, and {record["name"]} is {scenarios_sha256}; check it under the scenarios that wrote it'
+    issue = Issue(issue_codes.SCENARIO_DIFFERS_FROM_DATA, None, message, scenarios_sha256)
     raise InvalidScenario(record.get('path') or record['name'], [issue], refusal=f'is not the scenario {data} was written under')
 
 

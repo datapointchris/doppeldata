@@ -77,8 +77,8 @@ $ doppeldata data generate orders --seed 7 --scenario decimal-drift.scenario.yam
 wrote 100,000 rows as parquet in 4 files, 2.8 MB, in 0.07 s on 16 threads: 1.35M rows/s
 drift/_manifest.json names dataset sha256:…
 $ cat drift/_faults.jsonl
-{"file":"part-00001-77d587a1.parquet","line":null,"row":null,"kind":"parquet_decimal_scale_drift","column":null,"detail":{"columns":{"amount":"decimal128(13, 3)"}}}
-{"file":"part-00002-77d587a1.parquet","line":null,"row":null,"kind":"parquet_decimal_scale_drift","column":null,"detail":{"columns":{"amount":"decimal128(13, 3)"}}}
+{"file":"part-00001-43a01b7e.parquet","line":null,"row":null,"kind":"parquet_decimal_scale_drift","column":null,"detail":{"columns":{"amount":"decimal128(13, 3)"}}}
+{"file":"part-00002-43a01b7e.parquet","line":null,"row":null,"kind":"parquet_decimal_scale_drift","column":null,"detail":{"columns":{"amount":"decimal128(13, 3)"}}}
 ```
 
 `decimal-drift.scenario.yaml` holds one op: `{op: malformed_rows, kinds: [parquet_decimal_scale_drift], files_fraction: 0.5}`.
@@ -94,8 +94,8 @@ $ jq -r .kind orders-bad/_faults.jsonl | sort | uniq -c
     325 type_invalid
     337 unescaped_quote
 $ head -2 orders-bad/_faults.jsonl
-{"file":"part-00000-f337b5bc.csv","line":3,"row":1,"kind":"embedded_newline","column":"ship_zip","detail":{}}
-{"file":"part-00000-f337b5bc.csv","line":132,"row":129,"kind":"unescaped_quote","column":"status","detail":{}}
+{"file":"part-00000-0c2b4585.csv","line":3,"row":1,"kind":"embedded_newline","column":"ship_zip","detail":{}}
+{"file":"part-00000-0c2b4585.csv","line":132,"row":129,"kind":"unescaped_quote","column":"status","detail":{}}
 ```
 
 - **`line` is the line a broken record starts on, from 1 with the header counted.** `row` is the
