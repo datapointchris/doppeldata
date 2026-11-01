@@ -157,6 +157,16 @@ table, naming its columns in `column` and `paired_with`.
   a row does not list count as one more value. The other profile's shares are smoothed by
   `KL_SMOOTHING`, so a value it holds no row of costs a bounded amount. `worst_given_value` names
   the given value adding most.
+- **A check counts each cell of PROFILE's tables, whatever its rows.** The check's profile writes
+  its tables under PROFILE's floor. That floor leaves out a cell under `k_min` rows. It also drops
+  a child value whose rows outside the kept cells number 1 to `k_min - 1`. So a few generated rows
+  of a value under another given value cost the table cells the draw matched. The smoothing then
+  reads a close draw as a divergence. The check instead counts each table PROFILE states over
+  every row, cell for cell. The metric reads those shares. They stay out of the check's profile,
+  which remains one PROFILE could hold. Only the divergence and a given value PROFILE already
+  lists leave the check. So no cell's count is written or reported. A frozen value list
+  keeps its floor, because a column's `overflow` change reports the share of values outside it.
+  `profile diff` reads B's tables as B states them, since B is a file that keeps the floor.
 
 300,000 rows generated from the committed fixture pass both:
 

@@ -282,7 +282,7 @@ def checked_table(
         warnings.simplefilter('ignore', PoorFits)
         warnings.simplefilter('ignore', ColumnsNotFrozen)
         # A check measures the data, so it profiles it even where the profile was made from these very files.
-        checked = profile_in_dialect(
+        checked, unfloored = profile_in_dialect(
             data,
             dialect,
             policy=policy,
@@ -291,11 +291,14 @@ def checked_table(
             packs=[each.pack.name for each in packs],
             type_mix_columns=type_mix_column_names(source, planned if planned is not None else source_plan(source)),
             reuse_unchanged=False,
+            count_frozen_conditionals_without_floor=True,
         )
     observed = checked.to_plain()
     fingerprint = (observed.get('generated') or {}).get('source_fingerprint')
     # A check vouches for the data, so a statistic the profile states and the data cannot supply fails.
-    metrics = uncompared_malformed_rates(measured(source, observed, thresholds, unmeasured_passes=False), applied)
+    metrics = uncompared_malformed_rates(
+        measured(source, with_conditionals(observed, unfloored), thresholds, unmeasured_passes=False), applied
+    )
     against_scored = None
     if real is not None:
         against_scored = scored(real, data, named, fingerprint, columns, thresholds, data_named(against), sample_rows)
@@ -326,6 +329,12 @@ def checked_table(
     if html is not None and against_scored is not None:
         side_by_side_html.write_side_by_side(against_scored.real_frame, against_scored.checked_frame, html)
     return report
+
+
+def with_conditionals(observed: Document, conditionals: list[dict[str, Any]]) -> Document:
+    """`observed` holding `conditionals` as its conditional tables, for the metrics alone. They are counted without a
+    floor, and the report carries only the divergence they give and a given value the source already lists."""
+    return observed | {'dataset': (observed.get('dataset') or {}) | {'conditionals': conditionals}}
 
 
 def one_file_layout(results: list[MetricResult], written: Manifest | None) -> list[MetricResult]:

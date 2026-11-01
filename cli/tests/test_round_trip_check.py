@@ -37,6 +37,14 @@ def failures(report: sd.CheckReport) -> list[tuple[str, str | None]]:
     return [(result.metric, result.column) for result in report.metrics if not result.passed]
 
 
+def tiered_regions(express: dict[str, int]) -> pa.Table:
+    """600 rows of a tier and a region: the standard tier's regions fixed, and the express tier's as `express` counts them."""
+    standard = {'north': 150, 'south': 90, 'east': 60}
+    rows = [('standard', region) for region, count in standard.items() for _ in range(count)]
+    rows += [('express', region) for region, count in express.items() for _ in range(count)]
+    return pa.table({'tier': [tier for tier, _ in rows], 'region': [region for _, region in rows]})
+
+
 def test_data_generated_at_fewer_rows_than_its_source_passes_its_check_and_a_raised_null_rate_fails_it_by_name():
     profile = sd.profile(source_table())
     generated = pa.table(sd.generate(profile, rows=GENERATED_ROWS, seed=1))
@@ -54,6 +62,19 @@ def test_data_generated_at_fewer_rows_than_its_source_passes_its_check_and_a_rai
     report = sd.check(profile, patched)
     schema.validate(report.to_plain())
     assert failures(report) == [('null_fraction_delta', 'amount')]
+
+
+def test_a_few_rows_outside_a_conditional_tables_cells_pass_conditional_kl_and_a_shifted_row_fails_it():
+    """Three express rows of east lie outside every cell the table keeps. A profile under k_min would drop east from the
+    standard row as well, so the check counts the table's own cells without a floor."""
+    profile = sd.profile(tiered_regions({'north': 60, 'south': 90, 'west': 150}))
+    assert [(entry['given'], entry['column']) for entry in profile.to_plain()['dataset']['conditionals']] == [('tier', 'region')]
+
+    report = sd.check(profile, tiered_regions({'north': 60, 'south': 90, 'west': 147, 'east': 3}))
+    assert report.passed, failures(report)
+
+    report = sd.check(profile, tiered_regions({'north': 150, 'south': 90, 'west': 60}))
+    assert ('conditional_kl', 'region') in failures(report)
 
 
 def test_the_orders_example_generated_at_a_tenth_of_its_rows_keeps_every_quantity_and_passes_its_check():

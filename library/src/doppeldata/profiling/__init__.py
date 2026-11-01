@@ -174,7 +174,7 @@ def profile(
     refuse_spark_aws_profile(engine, aws_profile)
     earlier = earlier_profile(edges_from)
     with aws_profile_chosen(aws_profile):
-        return profile_in_dialect(
+        profiled, _ = profile_in_dialect(
             data,
             None,
             engine=engine,
@@ -186,6 +186,7 @@ def profile(
             packs=packs,
             code_lists=code_lists,
         )
+    return profiled
 
 
 def refuse_spark_aws_profile(engine: str, aws_profile: str | None) -> None:
@@ -220,11 +221,16 @@ def profile_in_dialect(
     code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
     type_mix_columns: Collection[str] = (),
     reuse_unchanged: bool = True,
-) -> Profile:
+    count_frozen_conditionals_without_floor: bool = False,
+) -> tuple[Profile, list[dict[str, Any]]]:
     """`profile`, reading delimited `data` in `dialect` where one is given rather than in the dialect its files are
     sniffed in, as a check reads files whose manifest records how they were written. Each string column `type_mix_columns`
     names is typed by its text, as a check reads a column the engine generates as text in any format. A check sets
-    `reuse_unchanged` False, because it measures the data, even data `edges_from` was made from."""
+    `reuse_unchanged` False, because it measures the data, even data `edges_from` was made from.
+
+    Beside the profile, each conditional table `edges_from` states, counted cell for cell whatever its rows where
+    `count_frozen_conditionals_without_floor`. No floor holds those cells, so they never enter the profile. A check
+    sets it, and reports only the divergence they give."""
     settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
     started = time.monotonic()
     listed, reading = listed_source(data, engine)
@@ -248,10 +254,15 @@ def profile_in_dialect(
         if changed is None:
             named = edges_from.path or edges_from.document.get('name')
             log.warning(f'{named} was made from these files with these settings, so it is returned unchanged')
-            return edges_from
+            return edges_from, []
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=3)
-    frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
-    only = profiled_tables(backend, [(source, readers)], settings, frozen, type_mix_columns=frozenset(type_mix_columns))[0][source.name]
+    frozen = (
+        table_profile.FrozenLayout.of(edges_from.to_plain(), count_conditionals_without_floor=count_frozen_conditionals_without_floor)
+        if edges_from is not None
+        else None
+    )
+    profiles, _, unfloored = profiled_tables(backend, [(source, readers)], settings, frozen, type_mix_columns=frozenset(type_mix_columns))
+    only = profiles[source.name]
     sources.check_unchanged(listed)
     issues = only.validate()
     if issues:
@@ -266,7 +277,7 @@ def profile_in_dialect(
         relisted = table_profile.relisted_columns(edges_from.to_plain(), only.to_plain())
         if undescribed or missing or relisted:
             warnings.warn(ColumnsNotFrozen(undescribed, missing, relisted), stacklevel=3)
-    return only
+    return only, unfloored[source.name]
 
 
 def profile_tables(
@@ -329,7 +340,7 @@ def profiled_bundle(
         raise SourceError(issue_codes.TABLES_ALIKE, message, value=alike)
     backend = engine_backend(engine, named[0], spark)
     tables = [(source, session_readers(backend, reading)) for source, reading in grouped]
-    profiled, relationships = profiled_tables(backend, tables, settings, None, related=True)
+    profiled, relationships, _ = profiled_tables(backend, tables, settings, None, related=True)
     for listed, _ in listings:
         sources.check_unchanged(listed)
     bundle = Bundle.of(bundle_name([listed for listed, _ in listings]), profiled, relationships)
@@ -406,10 +417,11 @@ def profiled_tables(
     *,
     related: bool = False,
     type_mix_columns: frozenset[str] = frozenset(),
-) -> tuple[dict[str, Profile], list[dict[str, Any]]]:
+) -> tuple[dict[str, Profile], list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     """Each table's profile by its name, each source beside the readers that read it, and where `related`, the foreign
     keys between them, counted in the same session, which holds every table's rows until it ends. Each string column
-    `type_mix_columns` names is typed by its text."""
+    `type_mix_columns` names is typed by its text. Last, each table's conditional tables `frozen` asks to count without
+    a floor."""
     profiled: dict[str, table_profile.ProfiledTable] = {}
     # `none` holds no floor, so every statistic is computed over every row.
     k_min = settings.k_min or 1
@@ -429,7 +441,8 @@ def profiled_tables(
             )
         members = [foreign_keys.BundleMember(name, table.table, table.specs, table.document) for name, table in profiled.items()]
         relationships = foreign_keys.relationships(backend, members, k_min) if related else []
-    return {name: Profile(table.document) for name, table in profiled.items()}, relationships
+    profiles = {name: Profile(table.document) for name, table in profiled.items()}
+    return profiles, relationships, {name: table.conditionals_without_floor for name, table in profiled.items()}
 
 
 def available_engine(engine: str) -> Engine:

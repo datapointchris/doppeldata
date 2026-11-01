@@ -47,8 +47,10 @@ from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import Table
 from doppeldata.profiling.backend import is_hidden
 from doppeldata.profiling.column_dependence import DependenceColumn
+from doppeldata.profiling.column_dependence import FrozenConditional
 from doppeldata.profiling.column_dependence import FrozenPairs
 from doppeldata.profiling.column_dependence import column_dependence
+from doppeldata.profiling.column_dependence import conditionals_without_floor
 from doppeldata.profiling.derived_columns import derived_columns
 from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import SuppliedCodeList
@@ -164,9 +166,11 @@ class FrozenLayout:
     histograms: dict[str, tuple[str, tuple[float, ...]]] = dc.field(default_factory=dict)
     values: dict[str, 'FrozenValues'] = dc.field(default_factory=dict)
     pairs: FrozenPairs = dc.field(default_factory=FrozenPairs)
+    # The conditional tables a check counts cell for cell without a floor, and no other re-profile.
+    conditionals: tuple[FrozenConditional, ...] = ()
 
     @classmethod
-    def of(cls, document: dict[str, Any]) -> 'FrozenLayout':
+    def of(cls, document: dict[str, Any], *, count_conditionals_without_floor: bool = False) -> 'FrozenLayout':
         histograms, values = {}, {}
         described = described_rows(document)
         for column in document.get('columns') or []:
@@ -182,7 +186,8 @@ class FrozenLayout:
                 held = described * (1 - (column.get('null_fraction') or 0.0)) if described else 0
                 baseline = max(0.0, other - drifted / held) if held else other
                 values[column['name']] = FrozenValues(tuple(entry['value'] for entry in section['top_values']), baseline, section_name)
-        return cls(histograms, values, FrozenPairs.of(document))
+        conditionals = FrozenConditional.all_in(document) if count_conditionals_without_floor else ()
+        return cls(histograms, values, FrozenPairs.of(document), conditionals)
 
 
 def relisted_columns(earlier: dict[str, Any], now: dict[str, Any]) -> list[str]:
@@ -224,11 +229,13 @@ def answered(backend: Backend, table: Table, requests: list[Request]) -> Answers
 
 @dc.dataclass(frozen=True)
 class ProfiledTable:
-    """A table's profile document, its every row at the types the profile gives its columns, and those columns."""
+    """A table's profile document, its every row at the types the profile gives its columns, and those columns. Beside
+    the document, each conditional table the frozen layout asked for, counted without a floor."""
 
     document: dict[str, Any]
     table: Table
     specs: list[ColumnSpec]
+    conditionals_without_floor: list[dict[str, Any]] = dc.field(default_factory=list)
 
 
 def profile_table(
@@ -287,7 +294,8 @@ def profile_table(
         document['source'] = file_traits.source_section(backend, source, read, profiled, rows, k_min)
     document['dataset'] = dataset
     document['columns'] = profiled.columns
-    return ProfiledTable(withheld(document, policy, k_min, cell_floors), full, profiled.specs)
+    unfloored = conditionals_without_floor(backend, profiled.table, settings.frozen.conditionals, {spec.name for spec in profiled.specs})
+    return ProfiledTable(withheld(document, policy, k_min, cell_floors), full, profiled.specs, unfloored)
 
 
 def dataset_sections(

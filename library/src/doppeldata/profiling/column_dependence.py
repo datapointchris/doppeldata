@@ -114,6 +114,23 @@ class FrozenPairs:
 
 
 @dc.dataclass(frozen=True)
+class FrozenConditional:
+    """A conditional table an earlier profile states, as its given and child columns and the child values each given
+    value's row states."""
+
+    given: str
+    child: str
+    rows: dict[str, tuple[str, ...]]
+
+    @classmethod
+    def all_in(cls, document: dict[str, Any]) -> tuple['FrozenConditional', ...]:
+        stated = (document.get('dataset') or {}).get('conditionals') or []
+        return tuple(
+            cls(entry['given'], entry['column'], {value: tuple(row) for value, row in entry['fractions'].items()}) for entry in stated
+        )
+
+
+@dc.dataclass(frozen=True)
 class Dependence:
     """The dataset's `correlations`, `correlation_ratios`, `conditionals`, `conditional_quantiles`, `conditional_fractions`
     and `dependencies`, and the fewest rows a literal of each entry naming a parent or a lookup table rests on, which
@@ -491,6 +508,30 @@ def conditional_table(
     if kept[None]:
         written['other_fractions'] = shares(None, kept[None])
     return written, min(count for counts in kept.values() for count in counts.values())
+
+
+def conditionals_without_floor(
+    backend: Backend, described: Table, frozen: tuple[FrozenConditional, ...], columns: set[str]
+) -> list[dict[str, Any]]:
+    """Each table `frozen` holds whose two columns `columns` names, counted over `described` cell for cell: each child
+    value an earlier row states, as its share of the given value's rows holding a child value, whatever its rows. A given
+    value no such row holds has no row. No floor holds a cell, so no profile may hold these tables."""
+    held = [entry for entry in frozen if {entry.given, entry.child} <= columns]
+    if not held:
+        return []
+    tables = []
+    for entry, cells in zip(held, backend.cross_counts(described, [(entry.given, entry.child) for entry in held]), strict=True):
+        by_given: dict[str, collections.Counter[str]] = collections.defaultdict(collections.Counter)
+        for given_value, child_value, count in cells:
+            if given_value is not None and child_value is not None:
+                by_given[given_value][child_value] += count
+        fractions = {
+            value: {child_value: rate(by_given[value][child_value], by_given[value].total()) for child_value in row}
+            for value, row in entry.rows.items()
+            if value in by_given
+        }
+        tables.append({'given': entry.given, 'column': entry.child, 'fractions': fractions})
+    return tables
 
 
 def conditional_quantiles(
