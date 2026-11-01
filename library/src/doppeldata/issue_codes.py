@@ -413,6 +413,12 @@ REGENERATES_A_DIRECTORY = declare(
     'E-WRITE-014', 'a regeneration names one file as its destination, and a regeneration writes a directory of parts', exit_code=2
 )
 MANIFEST_NOT_FOUND = declare('E-WRITE-015', 'a manifest named to regenerate from is not at the path or URL given', exit_code=2)
+REGENERATES_OVER_ITS_MANIFEST = declare(
+    'E-WRITE-016',
+    'a regeneration names as its destination the directory holding the manifest it compares with, which replace would overwrite',
+    exit_code=2,
+    hint='regenerate into another directory',
+)
 IDENTITY_MISMATCH = engine('IDENTITY_MISMATCH')
 PARTIAL_MANIFEST = engine('PARTIAL_MANIFEST')
 REGENERATED_FILES_DIFFER = engine('REGENERATED_FILES_DIFFER')
@@ -510,6 +516,6 @@ AWS_PROFILE_WITH_SPARK = declare(
 PROFILE_OR_COLUMNS = declare('E-USAGE-025', 'a call was given both a profile and column names, or neither', exit_code=2)
 SETTLED_BY_MANIFEST = declare(
     'E-USAGE-026',
-    'a regeneration was given a value its manifest settles: the seed, rows, scale, scenario, format, writer settings or layout',
+    'a regeneration was given a value its manifest settles, and the manifest settles every input but the profile',
     exit_code=2,
 )

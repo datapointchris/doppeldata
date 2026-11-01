@@ -438,29 +438,33 @@ def regenerate(
     """Write the dataset `manifest` records again to `out` from `profile`, compare every file with its record, and return the
     fresh manifest.
 
-    `manifest` is a `_manifest.json` as a local path or an `s3://` URL, or a Manifest or BundleManifest as `write` returns
-    it. It settles the seed, rows, scale, scenario, format, writer settings and layout, so `profile` is the one input given,
-    taken as `generate` takes it. A profile whose plan has another dataset identity is refused as WriteFailed, naming both
-    SHA-256s and the identity keys that differ.
+    `manifest` is a `_manifest.json` as a local path or an `s3://` or `s3a://` URL, or a Manifest or BundleManifest as
+    `write` returns it. The manifest settles every input but the profile, so `profile` is the one input given, taken as
+    `generate` takes it. A profile whose SHA-256 is not the one the manifest records is refused as WriteFailed, naming both.
+    So is a plan whose dataset identity differs for another reason, such as a release that moved the stream version, naming
+    the identity keys that differ.
 
-    `out` is a directory, an `s3://` or `s3a://` URL, or `memory://`, and a local path naming one file is refused. `replace`,
-    `threads` and `aws_profile` are taken as `write` takes them. A partial manifest is refused, and so are one whose files
-    embed the profile and one recording a write to one file.
+    `out` takes any destination `write` writes to except one file. It is refused where it holds the manifest file named,
+    because a run there with replace would store the fresh manifest over the record it compares with. `replace`, `threads`
+    and `aws_profile` are taken as `write` takes them. A partial manifest is refused, and so are one whose files embed the
+    profile and one recording a write to one file.
 
-    A file whose path, range, rows, bytes, SHA-256 or partition differ from its record raises WriteFailed once the fresh
-    manifest is stored. Its issues name each such file at its path, saying what differed. A bundle's manifest regenerates
-    each table under `out/<table>/`, parents first, with `profile` the Bundle. A manifest of one table of a bundle
-    regenerates that table alone from the Bundle.
+    A file whose record differs from the manifest's in any field raises WriteFailed once the fresh manifest is stored. Each
+    issue sits at the pointer to that file's record, such as `/files/3`, holds its path as `value`, and says what differed.
+    A bundle's manifest regenerates each table under `out/<table>/`, parents first, with `profile` the Bundle. Every table's
+    manifest is checked before any table is written. A manifest of one table of a bundle regenerates that table alone from
+    the Bundle.
     """
     with aws_profile_chosen(aws_profile):
+        location = None if isinstance(manifest, Manifest | BundleManifest) else os.fspath(manifest)
         recorded = manifest if isinstance(manifest, Manifest | BundleManifest) else manifest_at(manifest)
         started = time.monotonic()
         if isinstance(recorded, BundleManifest):
             if not isinstance(profile, Bundle):
                 message = "the manifest is a bundle's, and the profile is one table; give the bundle"
                 raise WriteFailed(issue_codes.IDENTITY_MISMATCH, message)
-            return regenerate_bundle(profile, recorded, out, threads=threads, replace=replace)
-        written = regenerate_table(profile, recorded, out, threads=threads, replace=replace)
+            return regenerate_bundle(profile, recorded, out, manifest_location=location, threads=threads, replace=replace)
+        written = regenerate_table(profile, recorded, out, manifest_location=location, threads=threads, replace=replace)
     elapsed = time.monotonic() - started
     files = counted(len(written.files), f'{written.format} file')
     log.info(f'{written.document["destination"]}: wrote {files} again, each matching its record, in {elapsed:.2f} s')

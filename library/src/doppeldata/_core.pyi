@@ -106,6 +106,14 @@ class BundlePlan:
         The bundle as the plan draws it, as JSON: every table inline, each scenario's patch
         applied to its table and to the relationships drawing that table's columns.
         """
+    def check_regenerable(self, /, manifest_json: str, tables: dict[str, str]) -> None:
+        """
+        Refuses the bundle manifest ``manifest_json`` where its tables cannot be written again
+        from this plan, before any is: a partial one, one with another identity, one listing a
+        table's manifest anywhere but ``<table>/_manifest.json``, and one whose table manifest
+        in ``tables``, each table's JSON by name, ``Plan.regenerate`` refuses. A table
+        ``tables`` lacks is the caller's to refuse.
+        """
     def claim(self, /, destination: str, profile_json: str, scenario_json: str |None, *, replace: bool, s3_store: dict |None = None) -> str:
         """
         Claims ``destination`` for the bundle and returns the claim as JSON, which ``commit``
@@ -230,8 +238,9 @@ class Plan:
         Writes every file the whole manifest ``manifest_json`` records again, to ``destination``,
         in the format, settings and layout it records, and returns the fresh manifest as JSON.
         The plan must have the manifest's identity. A file whose record differs raises
-        ``WriteFailed`` once the fresh manifest is stored, with an issue at each such file's path
-        saying what differed.
+        ``WriteFailed`` once the fresh manifest is stored, with an issue for each such file at
+        the pointer to its record, such as ``/files/3``, holding its path and saying what
+        differed.
         """
     @property
     def rows_written(self, /) -> int:

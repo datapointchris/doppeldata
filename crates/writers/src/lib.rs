@@ -27,6 +27,7 @@ use doppeldata_core::BlockOutOfRange;
 use doppeldata_core::issue_codes::IssueCode;
 
 pub use bundle::bundle_manifest;
+pub use bundle::check_bundle_regenerable;
 pub use bundle::claim_bundle;
 pub use bundle::commit_bundle;
 pub use byte_sink::ByteSink;
@@ -56,6 +57,7 @@ pub use write::RangesWritten;
 pub use write::RunOptions;
 pub use write::SplitRun;
 pub use write::WriteFailure;
+pub use write::check_regenerable;
 pub use write::check_writable;
 pub use write::claim;
 pub use write::commit;
@@ -113,6 +115,8 @@ pub enum WriteError {
     EmbeddedProfileManifest,
     #[error("the manifest records the one file {file}, and a regeneration writes a directory of parts")]
     OneFileManifest { file: String },
+    #[error("the bundle manifest lists table {table}'s manifest as {manifest}, and a bundle's write stores it as {table}/_manifest.json")]
+    TableManifestElsewhere { table: String, manifest: String },
     #[error("{} regenerated objects differ from the manifest's record: {}", files.len(), listed(files))]
     RegeneratedFilesDiffer { files: Vec<FileDifference> },
     #[error("the write was cancelled")]
@@ -156,6 +160,7 @@ impl WriteError {
             Self::PartialManifest => &issue_codes::PARTIAL_MANIFEST,
             Self::EmbeddedProfileManifest => &issue_codes::EMBEDDED_PROFILE_MANIFEST,
             Self::OneFileManifest { .. } => &issue_codes::ONE_FILE_MANIFEST,
+            Self::TableManifestElsewhere { .. } => &issue_codes::MANIFEST_UNREADABLE,
             Self::RegeneratedFilesDiffer { .. } => &issue_codes::REGENERATED_FILES_DIFFER,
             Self::Cancelled => &issue_codes::CANCELLED,
             Self::RangeOutOfLayout { .. } => &issue_codes::RANGE_OUT_OF_LAYOUT,

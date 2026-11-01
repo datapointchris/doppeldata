@@ -1231,9 +1231,9 @@ def data_generate(
         typer.Option(
             '--manifest',
             metavar='FILE',
-            help='Write again the dataset the _manifest.json FILE records, a local path or an s3:// URL, from PROFILE, and '
-            'compare every file with its record. FILE settles the seed, rows, scale, scenario, format, writer settings and '
-            'layout, so a flag giving one is refused beside it.',
+            help='Write again the dataset the _manifest.json FILE records, a local path or an S3 URL, from PROFILE, and '
+            'compare every file with its record. FILE settles every input but the profile, so a flag giving one is refused '
+            'beside it.',
         ),
     ] = None,
     scale: ScaleOption = None,
@@ -1255,10 +1255,10 @@ def data_generate(
     A bundle PROFILE writes each table under `--out/<table>/` with its own manifest, parents first, each foreign key drawn
     from its parent's keys, and a _manifest.json at --out naming each. Each --scenario bends the table it names.
 
-    --manifest FILE writes the dataset FILE records again to a directory or S3 --out, and exits 1 naming each file whose
-    rows, bytes or SHA-256 differ from its record. A PROFILE whose dataset is not the one FILE names is refused, and so is a
-    FILE that is partial, records files embedding the profile, or records a write to one file. A bundle's FILE regenerates
-    every table, with the bundle as PROFILE.
+    --manifest FILE writes the dataset FILE records again to --out, and exits 1 naming each file whose record differs from
+    FILE's in any field. An --out naming one file or holding FILE is refused. A PROFILE whose dataset is not the one FILE
+    names is refused, and so is a FILE that is partial, records files embedding the profile, or records a write to one
+    file. A bundle's FILE regenerates every table, with the bundle as PROFILE.
     """
     logged_at(verbose, quiet)
     source = profile_or_columns(profile_name, column_names(columns))

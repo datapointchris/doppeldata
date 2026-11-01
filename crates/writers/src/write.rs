@@ -17,6 +17,7 @@ use std::time::Instant;
 use std::time::SystemTime;
 
 use doppeldata_core::BLOCK_ROWS;
+use doppeldata_core::DatasetIdentity;
 use doppeldata_core::Plan;
 use doppeldata_core::ScenarioFault;
 use doppeldata_core::format_settings::Output;
@@ -263,30 +264,41 @@ fn check_encodable(plan: &Plan, layout: &FileLayout, output: &Output) -> Result<
     Ok(())
 }
 
-/// Writes every file a whole `manifest` names again, from `plan`, which must have the manifest's
-/// identity, then compares each object's record with the manifest's: its path, range, rows, bytes,
-/// SHA-256 and partition. The fresh manifest records the manifest's profile and scenario. A
-/// partial manifest is refused, and so is one whose files embed the profile, whose JSON a plan
-/// never holds, and one recording a write to one file, whose name no part takes.
-pub fn regenerate(plan: &Plan, manifest: &Manifest, run: &RunOptions, destination: &Destination) -> Result<Manifest, WriteFailure> {
+/// Refuses a `manifest` that [`regenerate`] cannot write again from `plan`: a partial one, one
+/// whose files embed the profile, whose JSON a plan never holds, one recording a write to one
+/// file, whose name no part takes, and one whose identity is not the plan's.
+pub fn check_regenerable(plan: &Plan, manifest: &Manifest) -> Result<(), WriteError> {
     if manifest.partial {
-        return Err(WriteError::PartialManifest.into());
+        return Err(WriteError::PartialManifest);
     }
     if manifest.profile.embedded {
-        return Err(WriteError::EmbeddedProfileManifest.into());
+        return Err(WriteError::EmbeddedProfileManifest);
     }
     if let Some(file) = &manifest.one_file {
-        return Err(WriteError::OneFileManifest { file: file.clone() }.into());
+        return Err(WriteError::OneFileManifest { file: file.clone() });
     }
+    check_identity(plan.identity(), &manifest.dataset_sha256, &manifest.identity)
+}
+
+/// Refuses a plan's `identity` where it is not the one a manifest records as `recorded`, whose
+/// SHA-256 is `recorded_sha256`, naming each key the two hold differently.
+pub(crate) fn check_identity(identity: &DatasetIdentity, recorded_sha256: &str, recorded: &ManifestIdentity) -> Result<(), WriteError> {
+    if identity.sha256() == recorded_sha256 {
+        return Ok(());
+    }
+    Err(WriteError::IdentityMismatch {
+        plan: identity.sha256(),
+        manifest: recorded_sha256.to_string(),
+        differing: identity_differences(&ManifestIdentity::from(identity), recorded),
+    })
+}
+
+/// Writes every file a whole `manifest` names again, from `plan`, once [`check_regenerable`]
+/// passes, then compares every field of each object's record with the manifest's. The fresh
+/// manifest records the manifest's profile and scenario.
+pub fn regenerate(plan: &Plan, manifest: &Manifest, run: &RunOptions, destination: &Destination) -> Result<Manifest, WriteFailure> {
+    check_regenerable(plan, manifest)?;
     let identity = plan.identity();
-    if identity.sha256() != manifest.dataset_sha256 {
-        return Err(WriteError::IdentityMismatch {
-            plan: identity.sha256(),
-            manifest: manifest.dataset_sha256.clone(),
-            differing: identity_differences(&ManifestIdentity::from(identity), &manifest.identity),
-        }
-        .into());
-    }
     let layout = layout_from_manifest(plan, manifest).map_err(WriteError::from)?;
     let mut fresh = Manifest::new(
         identity,

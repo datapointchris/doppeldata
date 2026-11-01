@@ -58,7 +58,23 @@ def test_data_generate_manifest_writes_the_dataset_again_and_names_a_file_whose_
     moved = runner.invoke(app, ['data', 'generate', 'orders', '--manifest', str(edited), '--out', f'{tmp_path}/moved/', '--json'])
     assert moved.exit_code == 1, moved.output
     issues = [json.loads(line)['error'] for line in moved.stderr.splitlines()]
-    assert [(issue['code'], issue['field']) for issue in issues] == [('E-WRITE-212', recorded['files'][1]['path'])]
+    assert [(issue['code'], issue['field'], issue['value']) for issue in issues] == [
+        ('E-WRITE-212', '/files/1', recorded['files'][1]['path'])
+    ]
+
+
+def test_a_ci_job_regenerating_in_place_with_replace_is_refused_so_a_failed_check_cannot_pass_on_its_second_run(tmp_path):
+    """`data generate PROFILE --manifest out/_manifest.json --out out --replace` would store the fresh manifest over the record
+    it compares with."""
+    runner = CliRunner()
+    out = tmp_path / 'out'
+    written = runner.invoke(app, ['data', 'generate', 'orders', '--rows', '1000', '--out', str(out)])
+    assert written.exit_code == 0, written.output
+    recorded = (out / '_manifest.json').read_bytes()
+    in_place = runner.invoke(app, ['data', 'generate', 'orders', '--manifest', str(out / '_manifest.json'), '--out', str(out), '--replace'])
+    assert in_place.exit_code == 2, in_place.output
+    assert 'E-WRITE-016' in in_place.stderr
+    assert (out / '_manifest.json').read_bytes() == recorded
 
 
 def test_a_write_refused_for_a_fault_its_format_cannot_hold_leaves_no_directory(tmp_path):

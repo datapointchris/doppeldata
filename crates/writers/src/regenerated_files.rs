@@ -8,12 +8,18 @@ use std::fmt;
 use doppeldata_core::manifest::ManifestCdc;
 use doppeldata_core::manifest::ManifestFile;
 use doppeldata_core::manifest::StreamFile;
+use serde::Serialize;
+use serde_json::Map;
+use serde_json::Value;
 
 /// An object whose record in the manifest and record as regenerated disagree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileDifference {
     /// The object's path under the destination, `/`-separated.
     pub path: String,
+    /// The RFC 6901 pointer to the manifest's record of the object, such as `/files/3`, or to the
+    /// list that would hold it where the manifest records none.
+    pub pointer: String,
     pub kind: DifferenceKind,
 }
 
@@ -30,8 +36,10 @@ pub enum DifferenceKind {
 /// One field of an object's record, as the manifest records it and as the regeneration wrote it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldDifference {
-    /// The field's key in the manifest, such as `sha256`.
-    pub field: &'static str,
+    /// The field's key in the record, such as `sha256`.
+    pub field: String,
+    /// The value as text: a string as it is, anything else as JSON, and `none` where the record
+    /// lacks the field.
     pub recorded: String,
     pub written: String,
 }
@@ -57,29 +65,14 @@ impl fmt::Display for FileDifference {
     }
 }
 
-/// An object's record, as the fields a regeneration compares.
-trait ObjectRecord {
+/// An object's record, compared over every field it serializes but its path.
+trait ObjectRecord: Serialize {
     fn path(&self) -> &str;
-    /// Every field but the path, keyed as the manifest keys it, with its value as text.
-    fn fields(&self) -> Vec<(&'static str, String)>;
 }
 
 impl ObjectRecord for ManifestFile {
     fn path(&self) -> &str {
         &self.path
-    }
-
-    fn fields(&self) -> Vec<(&'static str, String)> {
-        let partition = serde_json::to_string(&self.partition).expect("a partition always serializes");
-        vec![
-            ("range", self.range.to_string()),
-            ("first_row", self.first_row.to_string()),
-            ("range_rows", self.range_rows.to_string()),
-            ("rows", self.rows.to_string()),
-            ("bytes", self.bytes.to_string()),
-            ("sha256", self.sha256.clone()),
-            ("partition", partition),
-        ]
     }
 }
 
@@ -87,64 +80,90 @@ impl ObjectRecord for StreamFile {
     fn path(&self) -> &str {
         &self.path
     }
+}
 
-    fn fields(&self) -> Vec<(&'static str, String)> {
-        vec![
-            ("rows", self.rows.to_string()),
-            ("bytes", self.bytes.to_string()),
-            ("sha256", self.sha256.clone()),
-        ]
+/// Every field of `record`, keyed as the manifest keys it.
+fn fields(record: &impl Serialize) -> Map<String, Value> {
+    match serde_json::to_value(record).expect("a manifest record always serializes") {
+        Value::Object(fields) => fields,
+        _ => unreachable!("a manifest record serializes as an object"),
     }
 }
 
-/// Every object whose record differs between `recorded` and `written`, or that only one lists, by path.
-fn differences<'a, R: ObjectRecord + 'a>(
-    recorded: impl IntoIterator<Item = &'a R>,
-    written: impl IntoIterator<Item = &'a R>,
-) -> Vec<FileDifference> {
-    let recorded: BTreeMap<&str, &R> = recorded.into_iter().map(|file| (file.path(), file)).collect();
-    let written: BTreeMap<&str, &R> = written.into_iter().map(|file| (file.path(), file)).collect();
+fn as_text(value: Option<&Value>) -> String {
+    match value {
+        None => "none".into(),
+        Some(Value::String(text)) => text.clone(),
+        Some(value) => value.to_string(),
+    }
+}
+
+/// Each field but the path whose value differs between two records of one object, in the order
+/// the recorded one holds them.
+fn field_differences(recorded: &impl Serialize, written: &impl Serialize) -> Vec<FieldDifference> {
+    let (recorded, written) = (fields(recorded), fields(written));
+    let mut keys: Vec<&String> = recorded.keys().collect();
+    keys.extend(written.keys().filter(|key| !recorded.contains_key(*key)));
+    keys.into_iter()
+        .filter(|key| key.as_str() != "path" && recorded.get(*key) != written.get(*key))
+        .map(|key| FieldDifference {
+            field: key.clone(),
+            recorded: as_text(recorded.get(key)),
+            written: as_text(written.get(key)),
+        })
+        .collect()
+}
+
+/// Every object whose record differs between `recorded` and `written`, or that only one lists, by
+/// path. `list` is the pointer to the records' list in the manifest, such as `/files`.
+fn differences<R: ObjectRecord>(list: &str, recorded: &[R], written: &[R]) -> Vec<FileDifference> {
+    let recorded: BTreeMap<&str, (usize, &R)> = recorded
+        .iter()
+        .enumerate()
+        .map(|(index, file)| (file.path(), (index, file)))
+        .collect();
+    let written: BTreeMap<&str, &R> = written.iter().map(|file| (file.path(), file)).collect();
     let paths: BTreeSet<&str> = recorded.keys().chain(written.keys()).copied().collect();
     paths
         .into_iter()
         .filter_map(|path| {
-            let kind = match (recorded.get(path), written.get(path)) {
-                (Some(recorded), Some(written)) => {
-                    let fields: Vec<FieldDifference> = recorded
-                        .fields()
-                        .into_iter()
-                        .zip(written.fields())
-                        .filter(|((_, recorded), (_, written))| recorded != written)
-                        .map(|((field, recorded), (_, written))| FieldDifference { field, recorded, written })
-                        .collect();
+            let (pointer, kind) = match (recorded.get(path), written.get(path)) {
+                (Some((index, recorded)), Some(written)) => {
+                    let fields = field_differences(*recorded, *written);
                     if fields.is_empty() {
                         return None;
                     }
-                    DifferenceKind::Fields(fields)
+                    (format!("{list}/{index}"), DifferenceKind::Fields(fields))
                 }
-                (Some(_), None) => DifferenceKind::NotWritten,
-                (None, _) => DifferenceKind::NotRecorded,
+                (Some((index, _)), None) => (format!("{list}/{index}"), DifferenceKind::NotWritten),
+                (None, _) => (list.to_string(), DifferenceKind::NotRecorded),
             };
-            Some(FileDifference { path: path.into(), kind })
+            Some(FileDifference {
+                path: path.into(),
+                pointer,
+                kind,
+            })
         })
         .collect()
 }
 
 /// Every object of `files` whose record differs between the two manifests, or that only one lists.
 pub(crate) fn differing_files(recorded: &[ManifestFile], written: &[ManifestFile]) -> Vec<FileDifference> {
-    differences(recorded, written)
+    differences("/files", recorded, written)
 }
 
 /// Every change file and expected part whose record differs between two manifests' `cdc`
 /// sections, or that only one lists.
 pub(crate) fn differing_stream_files(recorded: Option<&ManifestCdc>, written: Option<&ManifestCdc>) -> Vec<FileDifference> {
-    let listed = |section: Option<&ManifestCdc>| -> Vec<StreamFile> {
-        section
-            .into_iter()
-            .flat_map(|section| section.files.iter().chain(&section.expected))
-            .cloned()
-            .collect()
-    };
-    let (recorded, written) = (listed(recorded), listed(written));
-    differences(&recorded, &written)
+    let mut differ = differences("/cdc/files", change_files(recorded), change_files(written));
+    differ.extend(differences("/cdc/expected", expected_parts(recorded), expected_parts(written)));
+    differ
+}
+
+fn change_files(section: Option<&ManifestCdc>) -> &[StreamFile] {
+    section.map_or(&[], |section| &section.files)
+}
+
+fn expected_parts(section: Option<&ManifestCdc>) -> &[StreamFile] {
+    section.map_or(&[], |section| &section.expected)
 }
