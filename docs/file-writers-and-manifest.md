@@ -279,14 +279,40 @@ select count(*) from read_json_auto('out/part-*.json')
   `duplicates` adds. The files' rows sum to the rows written.
 - **Each file records its path, its range, the range's first row and row count, its own rows, its
   bytes and its SHA-256.** `regenerate()` rebuilds the ranges from them. It refuses a partial
-  manifest, a plan whose identity differs, and ranges that leave a gap.
-- **`regenerate()` compares every file it writes with the record.** A file whose rows, bytes or
-  SHA-256 differ fails the call with `RegeneratedFilesDiffer`, which names it. One tool version and
-  one set of writer settings write the same bytes.
+  manifest as `E-WRITE-211`, and ranges that leave a gap.
+- **`regenerate()` refuses a plan whose identity differs as `E-WRITE-210`, naming both SHA-256s
+  and each identity key that differs.** `stream_version` differs for a release that moved the
+  values. The library compares the profile's SHA-256 with `identity.profile_sha256` first, before
+  the manifest's scenario is applied. So an edited profile is refused as `E-WRITE-210` even where
+  the edit dropped a column the scenario bends.
+- **`regenerate()` compares every field of each file's record, and every file it writes.** A file
+  whose record differs in any field, or that only one of the two lists, fails the call with
+  `RegeneratedFilesDiffer`, `E-WRITE-212`, exit 1. Each issue sits at the pointer to the file's
+  record, such as `/files/3` or `/cdc/expected/0`, holds the path as `value`, and gives each
+  field's recorded and written value. The fresh manifest is stored first, so the two can be
+  diffed. One tool version and one set of writer settings write the same bytes.
+- **The fresh manifest records the profile and scenario the manifest does.** So a dataset
+  regenerated from a regeneration's manifest takes the same scenario.
 - **`profile.embedded` is true where each file `files` and `cdc.expected` list holds the profile's
-  JSON.** A `cdc` change file never does. `regenerate()` refuses such a manifest before writing,
-  because a plan holds the profile's SHA-256 and never its JSON. The key is left out of every other
-  manifest.
+  JSON.** A `cdc` change file never does. `regenerate()` refuses such a manifest before writing, as
+  `E-WRITE-223`, because a plan holds the profile's SHA-256 and never its JSON. One of its files
+  given as the profile, with the profile embedded again, writes the same bytes. The key is left
+  out of every other manifest.
+- **`one_file` names the file a write to one local file wrote, and is null for any other write.**
+  `files` lists it under that name, which no part of the layout takes. So `regenerate()` refuses
+  such a manifest as `E-WRITE-224`.
+- **The library's `regenerate` takes a bundle's manifest too.** It plans the bundle from the
+  profile and the manifest's seed, scale and scenarios. It reads each table's manifest from
+  `<table>/_manifest.json` beside the bundle's. `check_bundle_regenerable()` then refuses the
+  whole bundle before any table is written. It refuses a partial bundle manifest, another
+  identity, a table manifest listed at any other path, and any table manifest
+  `check_regenerable()` refuses, the four refusals `regenerate()` makes. The library claims the
+  destination as a bundle's write does, and calls `regenerate()` for each table against its own
+  manifest, parents first. A table whose files differ is still written whole, and the error
+  naming every differing file of every table is raised once the bundle's manifest is stored.
+- **A regeneration refuses an `--out` holding the manifest file it reads, as `E-WRITE-016`.**
+  With replace, the fresh manifest would be stored over the record it compares with. A check
+  that found a file differing would then pass when run again.
 - **`faults` counts the faults `_faults.jsonl` lists, by kind.** It is null for a write that lists
   none: one with no `malformed_rows`, and no `cdc` with a fault rate. A partial manifest counts the
   faults in the objects it lists.

@@ -3,7 +3,6 @@
 //! in turn, and every job's bytes come from the stream alone, so any number of threads writes the
 //! same objects.
 
-use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -249,25 +248,6 @@ pub(crate) fn write(
         let faults = cdc.places_faults().then_some(written.faults);
         finish(runtime, destination, layout, manifest, faults, written.error)
     })
-}
-
-/// The paths whose record differs between two manifests' `cdc` sections, or that only one lists.
-pub(crate) fn differing_stream_files(recorded: Option<&ManifestCdc>, written: Option<&ManifestCdc>) -> Vec<String> {
-    let listed = |section: Option<&ManifestCdc>| -> BTreeMap<String, StreamFile> {
-        let files = section
-            .into_iter()
-            .flat_map(|section| section.files.iter().chain(&section.expected));
-        files.map(|file| (file.path.clone(), file.clone())).collect()
-    };
-    let (recorded, written) = (listed(recorded), listed(written));
-    let mut paths: Vec<&String> = recorded.keys().chain(written.keys()).collect();
-    paths.sort();
-    paths.dedup();
-    paths
-        .into_iter()
-        .filter(|path| recorded.get(*path) != written.get(*path))
-        .cloned()
-        .collect()
 }
 
 /// One object the write makes.

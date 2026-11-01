@@ -22,6 +22,8 @@ use crate::WriteError;
 use crate::destination::Destination;
 use crate::write::RunOptions;
 use crate::write::WriteFailure;
+use crate::write::check_identity;
+use crate::write::check_regenerable;
 use crate::write::now_rfc3339;
 use crate::write::on_upload_runtime;
 
@@ -133,6 +135,7 @@ pub fn commit_bundle(
             return Err(WriteError::IdentityMismatch {
                 plan: table.dataset_sha256.clone(),
                 manifest: manifest.dataset_sha256.clone(),
+                differing: Vec::new(),
             }
             .into());
         }
@@ -157,4 +160,34 @@ pub fn commit_bundle(
         }
         Ok(claim)
     })
+}
+
+/// Refuses a bundle's `manifest` that cannot be written again table by table from `plan`, before
+/// any table is: a partial one, one whose identity is not the plan's, one listing a table's
+/// manifest anywhere but `<table>/_manifest.json`, and one whose table manifest in `tables`
+/// [`check_regenerable`] refuses. `tables` holds each table manifest the caller found, by table.
+/// A table it lacks is the caller's to refuse, because only the caller knows where it looked.
+pub fn check_bundle_regenerable(
+    plan: &BundlePlan,
+    manifest: &BundleManifest,
+    tables: &BTreeMap<String, Manifest>,
+) -> Result<(), WriteError> {
+    if manifest.partial {
+        return Err(WriteError::PartialManifest);
+    }
+    check_identity(plan.identity(), &manifest.dataset_sha256, &manifest.identity)?;
+    for listed in &manifest.tables {
+        if listed.manifest != format!("{}/{MANIFEST_FILE_NAME}", listed.name) {
+            return Err(WriteError::TableManifestElsewhere {
+                table: listed.name.clone(),
+                manifest: listed.manifest.clone(),
+            });
+        }
+    }
+    for (name, table) in plan.tables() {
+        if let Some(recorded) = tables.get(name) {
+            check_regenerable(table, recorded)?;
+        }
+    }
+    Ok(())
 }

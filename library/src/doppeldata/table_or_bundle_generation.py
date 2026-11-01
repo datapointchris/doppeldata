@@ -1,5 +1,5 @@
-"""The public `generate`, `sample`, `stream`, `plan` and `write`, each taking one table's profile or a Bundle, above the modules
-that generate each."""
+"""The public `generate`, `sample`, `stream`, `plan`, `write` and `regenerate`, each taking one table's profile or a Bundle,
+above the modules that generate each."""
 
 import logging
 import os
@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from typing import Any
 from typing import overload
 
+from doppeldata import issue_codes
 from doppeldata.aws_sessions import aws_profile_chosen
 from doppeldata.bundle_generation import BundleRun
 from doppeldata.bundle_generation import BundleWritePlan
@@ -27,10 +28,15 @@ from doppeldata.dataset_generation import write_one_file
 from doppeldata.dataset_generation import write_plan_of
 from doppeldata.errors import InvalidArgument
 from doppeldata.errors import UnsupportedArgument
+from doppeldata.errors import WriteFailed
 from doppeldata.issue_codes import BUNDLE_GIVEN
 from doppeldata.issue_codes import MANIFEST_ON_BUNDLE
 from doppeldata.manifest import BundleManifest
 from doppeldata.manifest import Manifest
+from doppeldata.manifest_regeneration import manifest_at
+from doppeldata.manifest_regeneration import recorded_location
+from doppeldata.manifest_regeneration import regenerate_bundle
+from doppeldata.manifest_regeneration import regenerate_table
 from doppeldata.profile_format import Bundle
 from doppeldata.profile_sources import ProfileSource
 from doppeldata.scenario_format import Scenario
@@ -256,7 +262,7 @@ def write(
     threads: int = 0,
     replace: bool = False,
     scenario: Scenario | Sequence[Scenario] | None = None,
-    manifest: bool = False,
+    manifest_beside: bool = False,
     embed_profile: bool = False,
     scale: float | None = None,
     aws_profile: str | None = None,
@@ -278,7 +284,7 @@ def write(
     threads: int = 0,
     replace: bool = False,
     scenario: Scenario | Sequence[Scenario] | None = None,
-    manifest: bool = False,
+    manifest_beside: bool = False,
     embed_profile: bool = False,
     scale: None = None,
     aws_profile: str | None = None,
@@ -300,7 +306,7 @@ def write(
     threads: int = 0,
     replace: bool = False,
     scenario: Scenario | Sequence[Scenario] | None = None,
-    manifest: bool = False,
+    manifest_beside: bool = False,
     embed_profile: bool = False,
     scale: float | None = None,
     aws_profile: str | None = None,
@@ -321,7 +327,7 @@ def write(
     threads: int = 0,
     replace: bool = False,
     scenario: Scenario | Sequence[Scenario] | None = None,
-    manifest: bool = False,
+    manifest_beside: bool = False,
     embed_profile: bool = False,
     scale: float | None = None,
     aws_profile: str | None = None,
@@ -336,7 +342,7 @@ def write(
     else from the AWS environment, and an `aws_profile` the AWS config lacks is refused before anything is written.
 
     A local path ending in a format's suffix, such as `people.csv`, is written as that one file in that format, and one
-    ending in `/` as a directory. It gets `_manifest.json` beside it only where `manifest` is set, and `replace` writes over
+    ending in `/` as a directory. It gets `_manifest.json` beside it only where `manifest_beside` is set, and `replace` writes over
     either. A directory holding another dataset's manifest refuses it.
 
     A write that fails raises WriteFailed, and one a signal stops, such as Ctrl-C, raises WriteInterrupted. Both are a
@@ -357,20 +363,20 @@ def write(
     A Bundle writes each table under `out/<table>/` with its manifest, and at `out` the bundle's manifest naming each,
     returned as a BundleManifest. `scale` and `scenario` are taken as `generate` takes them for a bundle. Each table is
     partitioned as its profile records, so `partition_by` and `partition_style` are refused, and so are `embed_profile`, a
-    one-file `out` and `manifest`, which a bundle always writes.
+    one-file `out` and `manifest_beside`, because a bundle always writes its manifests.
     """
     choices = WriteChoices(format, file_rows, partition_by, partition_style, writer, embed_profile)
     with aws_profile_chosen(aws_profile):
         run = run_of(profile, rows, seed, scale)
         if isinstance(run, BundleRun):
-            if manifest:
-                message = 'a bundle always writes its manifests, and manifest asks for one beside a single file'
-                raise InvalidArgument(MANIFEST_ON_BUNDLE, message, field='manifest', value=manifest)
+            if manifest_beside:
+                message = 'a bundle always writes its manifests, and manifest_beside asks for one beside a single file'
+                raise InvalidArgument(MANIFEST_ON_BUNDLE, message, field='manifest_beside', value=manifest_beside)
             return write_bundle(run, out, choices=choices, threads=threads, replace=replace, scenario=scenario)
         prepared = prepared_write(run.profile, out, run.rows, run.seed, choices, scenario)
         started = time.monotonic()
         if prepared.one_file is not None:
-            written = write_one_file(prepared, prepared.one_file, threads=threads, replace=replace, manifest=manifest)
+            written = write_one_file(prepared, prepared.one_file, threads=threads, replace=replace, manifest_beside=manifest_beside)
         else:
             s3_store = s3_store_of(prepared.destination, prepared.bucket)
             store = prepared.engine.write(prepared.options, prepared.destination, threads=threads, replace=replace, s3_store=s3_store)
@@ -382,4 +388,86 @@ def write(
     log.info(f'{target}: wrote {files} holding {counted(rows_written, "row")} in {elapsed:.2f} s')
     for file in written.files:
         log.debug(f'{file["path"]}: {counted(file["rows"], "row")}, {counted(file["bytes"], "byte")}')
+    return written
+
+
+@overload
+def regenerate(
+    profile: Bundle,
+    manifest: str | os.PathLike[str] | BundleManifest,
+    out: str | os.PathLike[str],
+    *,
+    threads: int = 0,
+    replace: bool = False,
+    aws_profile: str | None = None,
+) -> BundleManifest: ...
+
+
+@overload
+def regenerate(
+    profile: ProfileSource,
+    manifest: str | os.PathLike[str] | Manifest,
+    out: str | os.PathLike[str],
+    *,
+    threads: int = 0,
+    replace: bool = False,
+    aws_profile: str | None = None,
+) -> Manifest: ...
+
+
+@overload
+def regenerate(
+    profile: ProfileSource | Bundle,
+    manifest: str | os.PathLike[str] | Manifest | BundleManifest,
+    out: str | os.PathLike[str],
+    *,
+    threads: int = 0,
+    replace: bool = False,
+    aws_profile: str | None = None,
+) -> Manifest | BundleManifest: ...
+
+
+def regenerate(
+    profile: ProfileSource | Bundle,
+    manifest: str | os.PathLike[str] | Manifest | BundleManifest,
+    out: str | os.PathLike[str],
+    *,
+    threads: int = 0,
+    replace: bool = False,
+    aws_profile: str | None = None,
+) -> Manifest | BundleManifest:
+    """Write the dataset `manifest` records again to `out` from `profile`, compare every file with its record, and return the
+    fresh manifest.
+
+    `manifest` is a `_manifest.json` as a local path or an `s3://` or `s3a://` URL, or a Manifest or BundleManifest as
+    `write` returns it. The manifest settles every input but the profile, so `profile` is the one input given, taken as
+    `generate` takes it. A profile whose SHA-256 is not the one the manifest records is refused as WriteFailed, naming both.
+    So is a plan whose dataset identity differs for another reason, such as a release that moved the stream version, naming
+    the identity keys that differ.
+
+    `out` takes any destination `write` writes to except one file. It is refused where it holds the manifest file named, or
+    for a Manifest or BundleManifest the one at the destination it records. A run there with replace would store the fresh
+    manifest over the record it compares with. `replace`, `threads`
+    and `aws_profile` are taken as `write` takes them. A partial manifest is refused, and so are one whose files embed the
+    profile and one recording a write to one file.
+
+    A file whose record differs from the manifest's in any field raises WriteFailed once the fresh manifest is stored. Each
+    issue sits at the pointer to that file's record, such as `/files/3`, holds its path as `value`, and says what differed.
+    A bundle's manifest regenerates each table under `out/<table>/`, parents first, with `profile` the Bundle. Every table's
+    manifest is checked before any table is written. A manifest of one table of a bundle regenerates that table alone from
+    the Bundle.
+    """
+    with aws_profile_chosen(aws_profile):
+        recorded = manifest if isinstance(manifest, Manifest | BundleManifest) else manifest_at(manifest)
+        location = recorded_location(recorded) if isinstance(manifest, Manifest | BundleManifest) else os.fspath(manifest)
+        started = time.monotonic()
+        if isinstance(recorded, BundleManifest):
+            if not isinstance(profile, Bundle):
+                message = "the manifest is a bundle's, and the profile is one table; give the bundle"
+                raise WriteFailed(issue_codes.IDENTITY_MISMATCH, message)
+            return regenerate_bundle(profile, recorded, out, manifest_location=location, threads=threads, replace=replace)
+        written = regenerate_table(profile, recorded, out, manifest_location=location, threads=threads, replace=replace)
+    elapsed = time.monotonic() - started
+    files = counted(len(written.files), f'{written.format} file')
+    log.info(f'{written.document["destination"]}: wrote {files} again, each matching its record, in {elapsed:.2f} s')
     return written

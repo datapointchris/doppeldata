@@ -278,24 +278,46 @@ def bundle_written(
     """Claims `root` for the bundle, writes each table to `<root>/<table>` through `write_table`, parents first, and stores
     the bundle's manifest, returning it with each table's. A table whose write raises one of `stops` leaves the root's
     partial manifest, naming each table already whole, and the error is raised."""
+    options = {name: table_options for name, _, table_options, _ in prepared.tables}
+
+    def write_with_options(name: str, table: '_core.Plan', destination: str) -> str:
+        return write_table(name, table, options[name], destination)
+
     bundle = prepared.bundle
     profile_record = {'name': bundle.name, 'path': str(bundle.path) if bundle.path is not None else None}
-    record = scenarios_record(prepared.scenarios)
-    scenario_json = json.dumps(record) if record is not None else None
-    claim = prepared.engine.claim(root, json.dumps(profile_record), scenario_json, replace=replace, s3_store=store)
+    records = (profile_record, scenarios_record(prepared.scenarios))
+    tables = [(name, table) for name, table, *_ in prepared.tables]
+    return bundle_written_table_by_table(prepared.engine, records, tables, root, replace, store, write_with_options, stops)
+
+
+def bundle_written_table_by_table(
+    engine: '_core.BundlePlan',
+    records: tuple[dict[str, Any], dict[str, Any] | None],
+    tables: list[tuple[str, '_core.Plan']],
+    root: str,
+    replace: bool,
+    store: dict[str, Any] | None,
+    write_table: Callable[[str, '_core.Plan', str], str],
+    stops: tuple[type[BaseException], ...],
+) -> BundleManifest:
+    """`bundle_written` from the bundle's plan, the `profile` and `scenario` records its manifest carries, and each table's
+    plan, parents first, with `write_table` returning the manifest JSON of the table it writes to the destination it is given."""
+    profile_record, scenario_record = records
+    scenario_json = json.dumps(scenario_record) if scenario_record is not None else None
+    claim = engine.claim(root, json.dumps(profile_record), scenario_json, replace=replace, s3_store=store)
     started = time.monotonic()
     written: list[str] = []
 
     def committed() -> str:
         elapsed_ms = round((time.monotonic() - started) * 1000)
-        stored: str = prepared.engine.commit(root, claim, written, elapsed_ms=elapsed_ms, s3_store=store)
+        stored: str = engine.commit(root, claim, written, elapsed_ms=elapsed_ms, s3_store=store)
         return stored
 
     try:
-        for name, table, options, _ in prepared.tables:
-            written.append(write_table(name, table, options, table_destination(root, name)))
+        for name, table in tables:
+            written.append(write_table(name, table, table_destination(root, name)))
     except stops:
         committed()
         raise
-    tables = {name: Manifest.from_json(each) for (name, *_), each in zip(prepared.tables, written, strict=True)}
-    return BundleManifest(json.loads(committed()), tables)
+    manifests = {name: Manifest.from_json(each) for (name, _), each in zip(tables, written, strict=True)}
+    return BundleManifest(json.loads(committed()), manifests)

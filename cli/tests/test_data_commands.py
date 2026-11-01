@@ -22,11 +22,12 @@ def test_data_plan_names_the_identity_and_ranges_data_generate_writes(tmp_path):
 
 
 def test_data_generate_to_one_file_with_manifest_then_with_replace_alone_leaves_the_file_and_no_stale_manifest(tmp_path):
-    """`--out h.csv --manifest --seed 5`, then `--out h.csv --replace --seed 9`: the first manifest names rows h.csv no longer holds."""
+    """`--out h.csv --manifest-beside --seed 5`, then `--out h.csv --replace --seed 9`: the first manifest names rows h.csv no
+    longer holds."""
     out = tmp_path / 'people.csv'
     flags = ['data', 'generate', '--columns', 'name,street,zip', '--rows', '1000', '--out', str(out)]
     runner = CliRunner()
-    first = runner.invoke(app, [*flags, '--manifest', '--seed', '5'])
+    first = runner.invoke(app, [*flags, '--manifest-beside', '--seed', '5'])
     assert first.exit_code == 0, first.output
     assert sorted(path.name for path in tmp_path.iterdir()) == ['_manifest.json', 'people.csv']
 
@@ -34,6 +35,46 @@ def test_data_generate_to_one_file_with_manifest_then_with_replace_alone_leaves_
     assert second.exit_code == 0, second.output
     assert list(tmp_path.iterdir()) == [out]
     assert out.read_text().splitlines()[0] == 'name,street,zip'
+
+
+def test_data_generate_manifest_writes_the_dataset_again_and_names_a_file_whose_record_differs(tmp_path):
+    """`--manifest` regenerates a dataset written under a scenario with every file matching. A record edited after the write
+    exits 1, naming that file."""
+    runner = CliRunner()
+    first = tmp_path / 'first'
+    write = ['data', 'generate', 'orders', '--scenario', 'hot-key', '--rows', '3000', '--file-rows', '1000', '--out', f'{first}/']
+    written = runner.invoke(app, write)
+    assert written.exit_code == 0, written.output
+    again = runner.invoke(app, ['data', 'generate', 'orders', '--manifest', str(first / '_manifest.json'), '--out', f'{tmp_path}/again/'])
+    assert again.exit_code == 0, again.output
+    recorded = json.loads((first / '_manifest.json').read_text())
+    regenerated = json.loads((tmp_path / 'again' / '_manifest.json').read_text())
+    assert [file['sha256'] for file in regenerated['files']] == [file['sha256'] for file in recorded['files']]
+    assert regenerated['scenario'] == recorded['scenario']
+
+    recorded['files'][1]['sha256'] = 'sha256:' + '0' * 64
+    edited = tmp_path / 'edited.json'
+    edited.write_text(json.dumps(recorded))
+    moved = runner.invoke(app, ['data', 'generate', 'orders', '--manifest', str(edited), '--out', f'{tmp_path}/moved/', '--json'])
+    assert moved.exit_code == 1, moved.output
+    issues = [json.loads(line)['error'] for line in moved.stderr.splitlines()]
+    assert [(issue['code'], issue['field'], issue['value']) for issue in issues] == [
+        ('E-WRITE-212', '/files/1', recorded['files'][1]['path'])
+    ]
+
+
+def test_a_ci_job_regenerating_in_place_with_replace_is_refused_so_a_failed_check_cannot_pass_on_its_second_run(tmp_path):
+    """`data generate PROFILE --manifest out/_manifest.json --out out --replace` would store the fresh manifest over the record
+    it compares with."""
+    runner = CliRunner()
+    out = tmp_path / 'out'
+    written = runner.invoke(app, ['data', 'generate', 'orders', '--rows', '1000', '--out', str(out)])
+    assert written.exit_code == 0, written.output
+    recorded = (out / '_manifest.json').read_bytes()
+    in_place = runner.invoke(app, ['data', 'generate', 'orders', '--manifest', str(out / '_manifest.json'), '--out', str(out), '--replace'])
+    assert in_place.exit_code == 2, in_place.output
+    assert 'E-WRITE-016' in in_place.stderr
+    assert (out / '_manifest.json').read_bytes() == recorded
 
 
 def test_a_write_refused_for_a_fault_its_format_cannot_hold_leaves_no_directory(tmp_path):

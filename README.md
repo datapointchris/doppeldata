@@ -341,7 +341,8 @@ $ doppeldata data check orders.profile.yaml synthetic/orders/
 ```
 
 - **The plan and the write name the same dataset.** `_manifest.json` records it with the profile's
-  SHA-256, the seed, the row count and the stream version, which regenerate it.
+  SHA-256, the seed, the row count and the stream version. `data generate PROFILE --manifest FILE`
+  writes it again from them, and exits 1 naming any file whose bytes moved.
 - **The profile's `source` section records how the files were written**, and `data generate` writes
   it back: a CSV's dialect and encoding, a Parquet footer's codec and row groups, the rows per file.
 - **`profile check` and `data check` exit 0 when clean and 3 on a finding**, so CI can run either.

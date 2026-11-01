@@ -670,6 +670,35 @@ mod _core {
             Ok(serde_json::to_string(&manifest).expect("a manifest always serializes"))
         }
 
+        /// Writes every file the whole manifest ``manifest_json`` records again, to ``destination``,
+        /// in the format, settings and layout it records, and returns the fresh manifest as JSON.
+        /// The plan must have the manifest's identity. A file whose record differs raises
+        /// ``WriteFailed`` once the fresh manifest is stored, with an issue for each such file at
+        /// the pointer to its record, such as ``/files/3``, holding its path and saying what
+        /// differed.
+        #[pyo3(signature = (manifest_json, destination, *, threads, replace, s3_store=None))]
+        fn regenerate(
+            &self,
+            py: Python<'_>,
+            manifest_json: &str,
+            destination: &str,
+            threads: usize,
+            replace: bool,
+            s3_store: Option<Bound<'_, PyDict>>,
+        ) -> PyResult<String> {
+            let recorded: doppeldata_core::manifest::Manifest = serde_json::from_str(manifest_json).map_err(|error| {
+                invalid_argument(
+                    &doppeldata_writers::issue_codes::MANIFEST_UNREADABLE,
+                    format!("not a manifest regenerate takes: {error}"),
+                )
+            })?;
+            let destination = destination_at(py, destination, s3_store)?;
+            let (run, cancel) = run_options(threads, replace);
+            let plan = &*self.plan;
+            let manifest = self.settled(py, &cancel, || doppeldata_writers::regenerate(plan, &recorded, &run, &destination))?;
+            Ok(serde_json::to_string(&manifest).expect("a manifest always serializes"))
+        }
+
         /// Claims ``destination`` for the dataset ``write`` would write there, as ``write`` does
         /// before its first object. Any process then writes ranges with ``write_ranges``, and one
         /// calls ``commit``.
@@ -990,6 +1019,27 @@ mod _core {
                 (Err(failure), signal) => Err(write_failed(py, failure, signal.is_some(), None)),
             }
         }
+
+        /// Refuses the bundle manifest ``manifest_json`` where its tables cannot be written again
+        /// from this plan, before any is: a partial one, one with another identity, one listing a
+        /// table's manifest anywhere but ``<table>/_manifest.json``, and one whose table manifest
+        /// in ``tables``, each table's JSON by name, ``Plan.regenerate`` refuses. A table
+        /// ``tables`` lacks is the caller's to refuse.
+        fn check_regenerable(&self, py: Python<'_>, manifest_json: &str, tables: BTreeMap<String, String>) -> PyResult<()> {
+            let unreadable = |error: serde_json::Error| {
+                invalid_argument(
+                    &doppeldata_writers::issue_codes::MANIFEST_UNREADABLE,
+                    format!("not a manifest regenerate takes: {error}"),
+                )
+            };
+            let manifest: doppeldata_core::manifest::BundleManifest = serde_json::from_str(manifest_json).map_err(unreadable)?;
+            let tables: BTreeMap<String, doppeldata_core::manifest::Manifest> = tables
+                .iter()
+                .map(|(name, json)| Ok((name.clone(), serde_json::from_str(json)?)))
+                .collect::<Result<_, serde_json::Error>>()
+                .map_err(unreadable)?;
+            doppeldata_writers::check_bundle_regenerable(&self.plan, &manifest, &tables).map_err(|error| refused(py, error))
+        }
     }
 
     /// The determinism contract's SHA-256 over every table a bundle generates at ``scale``, each
@@ -1285,8 +1335,21 @@ mod _core {
             true => &doppeldata_writers::issue_codes::NO_ANSWER,
             false => failure.error.code(),
         };
+        // Each file a regeneration found differing is an issue at the pointer to its record, its
+        // path the value, under one headline.
+        let differing: Vec<(String, String, String)> = match &failure.error {
+            WriteError::RegeneratedFilesDiffer { files } => files
+                .iter()
+                .map(|file| (file.pointer.clone(), file.to_string(), file.path.clone()))
+                .collect(),
+            _ => Vec::new(),
+        };
         let mut message = match failure.error {
             WriteError::Cancelled if interrupted => "interrupted, so the write stopped before every file was written".to_string(),
+            WriteError::RegeneratedFilesDiffer { files } if files.len() == 1 => {
+                "1 regenerated file differs from the manifest's record".to_string()
+            }
+            WriteError::RegeneratedFilesDiffer { files } => format!("{} regenerated files differ from the manifest's record", files.len()),
             _ => failure.error.to_string(),
         };
         if let Some(error) = &failure.manifest_error {
@@ -1299,6 +1362,14 @@ mod _core {
             let kwargs = PyDict::new(py);
             kwargs.set_item("manifest_json", manifest)?;
             kwargs.set_item("manifest_stored", failure.manifest_stored)?;
+            if !differing.is_empty() {
+                let issue = py.import("doppeldata.issue_codes")?.getattr("Issue")?;
+                let issues = differing
+                    .iter()
+                    .map(|(pointer, message, path)| issue.call1((code.code, pointer, message, path)))
+                    .collect::<PyResult<Vec<_>>>()?;
+                kwargs.set_item("issues", issues)?;
+            }
             let class = match interrupted {
                 true => "WriteInterrupted",
                 false => "WriteFailed",

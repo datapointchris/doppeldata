@@ -30,6 +30,9 @@ doppeldata_core::issue_codes! {
         hint "delete _manifest.partial.json at the destination";
     MANIFEST_UNREADABLE = "E-WRITE-221", exit 2, "a manifest given to commit or regenerate from does not read as one";
     UNRETURNED_RANGE = "E-WRITE-222", exit 2, "a commit was given a range record write_ranges did not return";
+    EMBEDDED_PROFILE_MANIFEST = "E-WRITE-223", exit 2, "a manifest given to regenerate from records files that embed the profile, which a plan does not hold",
+        hint "generate from one of its files as the profile, with --embed-profile or embed_profile=True, which writes the same bytes";
+    ONE_FILE_MANIFEST = "E-WRITE-224", exit 2, "a manifest given to regenerate from records a write to one file, and a regeneration writes a directory of parts";
 
     NO_CREDENTIALS = "E-IO-201", exit 1, "no credentials were found to sign a request to the store, or another AWS service, with",
         hint "configure AWS credentials, such as with aws configure sso or AWS_PROFILE";

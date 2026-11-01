@@ -120,6 +120,11 @@ pub struct Manifest {
     /// `files` lists. Null for any other write.
     #[serde(default)]
     pub cdc: Option<ManifestCdc>,
+    /// The name of the one file a write to a local file wrote every row to, beside this manifest,
+    /// which `files` lists under that name. Null for a write to a directory or a store. A
+    /// regeneration writes a directory of parts, so it refuses such a manifest.
+    #[serde(default)]
+    pub one_file: Option<String>,
     /// True when the run stopped early, so `files` lists only the objects that completed. Such a
     /// manifest is stored as `_manifest.partial.json`, and regenerates nothing.
     pub partial: bool,
@@ -248,6 +253,7 @@ impl Manifest {
             files: Vec::new(),
             faults: None,
             cdc: None,
+            one_file: None,
             partial: false,
             threads: 0,
             tasks: None,

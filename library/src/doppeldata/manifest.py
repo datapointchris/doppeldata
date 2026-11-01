@@ -65,6 +65,13 @@ class Manifest:
         cdc: dict[str, Any] | None = self.document.get('cdc')
         return cdc
 
+    @property
+    def one_file(self) -> str | None:
+        """The name of the one file a write to a local file wrote every row to, beside this manifest, or None for a write to
+        a directory or a store."""
+        one_file: str | None = self.document.get('one_file')
+        return one_file
+
 
 @dc.dataclass(frozen=True)
 class BundleManifest:
@@ -117,13 +124,32 @@ def written_bundle_manifest(data: Any) -> BundleManifest | None:
     document = written_document(data)
     if document is None or not is_bundle_manifest(document):
         return None
-    root = os.fspath(data).rstrip('/')
+    return with_table_manifests(document, os.fspath(data).rstrip('/'))
+
+
+def with_table_manifests(document: dict[str, Any], root: str) -> BundleManifest:
+    """The bundle manifest `document`, with the manifest of each table it lists as `<root>/<table>/` holds it. A table whose
+    directory holds none is left out, and so is one whose name is not one path segment, which no bundle's write makes."""
     tables = {}
     for listed in document['tables']:
-        table = written_document(f'{root}/{listed["name"]}')
+        name = listed['name']
+        if name in ('', '.', '..') or '/' in name or '\\' in name:
+            continue
+        table = written_document(f'{root}/{name}')
         if table is not None:
-            tables[listed['name']] = Manifest(table)
+            tables[name] = Manifest(table)
     return BundleManifest(document, tables)
+
+
+def in_s3(location: str) -> bool:
+    """Whether `location` is an `s3://` or `s3a://` URL, as the engine reads a destination. A URL of a scheme the engine
+    writes no file to is not."""
+    from doppeldata.errors import WriteFailed
+
+    try:
+        return _core.destination_scheme(location)[0] == 's3'
+    except WriteFailed:
+        return False
 
 
 def unfinished(root: str) -> str:
@@ -138,7 +164,7 @@ def holds_unfinished_write(data: Any) -> bool:
     if not isinstance(data, str | os.PathLike):
         return False
     item = os.fspath(data)
-    if not item.startswith('s3://'):
+    if not in_s3(item):
         return (Path(item) / PARTIAL_MANIFEST_FILE_NAME).is_file()
     from doppeldata.aws_sessions import require_boto3
 
@@ -153,7 +179,7 @@ def written_document(data: Any) -> dict[str, Any] | None:
     if not isinstance(data, str | os.PathLike):
         return None
     item = os.fspath(data)
-    if not item.startswith('s3://'):
+    if not in_s3(item):
         local = Path(item)
         if local.is_file():
             beside = local.parent / MANIFEST_FILE_NAME

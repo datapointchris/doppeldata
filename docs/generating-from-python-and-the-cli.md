@@ -47,8 +47,8 @@ dataset](how-to/generate-a-dataset.md) run each form.
 ## A write to one local file writes that file alone
 
 `--out people.csv` writes `people.csv` and nothing beside it. The suffix is the name of a format
-`doppeldata schemas show manifest` lists, such as `.csv` or `.parquet`. `--manifest`, or
-`manifest=True` on `sd.write`, writes `_manifest.json` beside the file. A directory or S3
+`doppeldata schemas show manifest` lists, such as `.csv` or `.parquet`. `--manifest-beside`, or
+`manifest_beside=True` on `sd.write`, writes `_manifest.json` beside the file. A directory or S3
 destination always holds one.
 
 - **The path alone decides.** A suffixed path with no trailing `/` is one file, and
@@ -61,8 +61,11 @@ destination always holds one.
   removes it.
 - **`--replace` writes over the file**, whether or not doppeldata made it.
 - **A manifest recording only the file goes when the file is replaced**, with or without
-  `--manifest`. So no manifest is left naming rows the file no longer holds. It goes before the
-  file moves.
+  `--manifest-beside`. So no manifest is left naming rows the file no longer holds. It goes before
+  the file moves.
+- **The manifest names the file under `one_file` as well as `files`.** A directory or S3 write
+  records `one_file` as null. `data generate --manifest` refuses a manifest naming one, as
+  `E-WRITE-224`, because a regeneration writes a directory of `part-*` files.
 - **A directory whose manifest records other files refuses the write, exit 2, even with
   `--replace`.** That directory is their dataset, and a reader of it would count the file's rows
   among theirs. Write the file to another directory.
@@ -312,7 +315,7 @@ line asks `profile_or_columns` for the `Bundle` a name holds, then passes it on.
   `round(rows × scale)` rows, so the fan-out's shape holds at any scale. Each `top_fractions`
   holds over the same fraction of the parents, so `top10` of 40,000 is the busiest one of 4,000
   at scale 0.1.
-- **`--rows`, `--columns`, `--manifest` and any partition flag are refused with a bundle.** `--rows`
+- **`--rows`, `--columns`, `--manifest-beside` and any partition flag are refused with a bundle.** `--rows`
   sizes one table, and each table is partitioned as its own profile records.
 - **`generate()` returns a dict of each table's name to its table, parents first.** `write()`
   returns a `BundleManifest`, and `plan()` a `BundleWritePlan`. `stream()` refuses a bundle,

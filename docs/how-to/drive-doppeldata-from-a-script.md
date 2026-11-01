@@ -49,7 +49,7 @@ $ doppeldata capabilities show --json | jq -c '.ops[] | select(.op == "cdc")'
 $ doppeldata capabilities show --json | jq -c '.issue_codes[] | select(.code == "E-PROFILE-028")'
 {"code":"E-PROFILE-028","area":"PROFILE","raised_when":"a profile named is neither a file nor an example doppeldata ships","exit_code":2,"hint":"doppeldata profile list names every example"}
 $ doppeldata capabilities show --json | jq -c '.commands[] | select(.path == ["data", "generate"]) | [.flags[].name]'
-["--out","--columns","--rows","--seed","--format","--file-rows","--partition-by","--no-partitions","--partition-style","--writer","--embed-profile","--replace","--threads","--scenario","--manifest","--scale","--aws-profile","--verbose","--quiet","--json"]
+["--out","--columns","--rows","--seed","--format","--file-rows","--partition-by","--no-partitions","--partition-style","--writer","--embed-profile","--replace","--threads","--scenario","--manifest-beside","--manifest","--scale","--aws-profile","--verbose","--quiet","--json"]
 ```
 
 - **`jq -r 'keys[]'` names every list**, and `jq .exit_codes` says what each exit status means.

@@ -1,14 +1,13 @@
 # Reproduce a dataset
 
 A dataset is a pure function of its profile, scenario, seed and row count, and the engine's stream
-version. Its `_manifest.json` records each of them, so the same inputs write the same values
-anywhere, and the same files under one release. `--embed-profile` puts the profile in every Parquet
-or Arrow file, so one file alone regenerates the dataset it came from.
+version. Its `_manifest.json` records each of them. `--manifest` writes the dataset again from the
+manifest and the profile, then compares every file with its record. `--embed-profile` puts the
+profile in every Parquet or Arrow file, so one file alone regenerates the dataset it came from.
 
 ```bash
 doppeldata data generate orders.profile.yaml --scenario hot-key --rows 50000 --seed 11 --out first/
-jq '.scenario.document' first/_manifest.json > hot-key.scenario.json
-doppeldata data generate orders.profile.yaml --scenario hot-key.scenario.json --rows 50000 --seed 11 --out again/
+doppeldata data generate orders.profile.yaml --manifest first/_manifest.json --out again/
 
 doppeldata data generate orders --rows 100000 --seed 7 --scenario hot-key --embed-profile --out embedded/
 doppeldata data generate embedded/part-00000-a3f28bf0.parquet --embed-profile --out again-embedded/
@@ -17,10 +16,75 @@ doppeldata data generate embedded/part-00000-a3f28bf0.parquet --embed-profile --
 ```python
 import doppeldata as sd
 
+sd.write('orders.profile.yaml', 'first/', rows=50_000, seed=11, scenario=sd.Scenario.example('hot-key'))
+manifest = sd.regenerate('orders.profile.yaml', 'first/_manifest.json', 'again/')   # the fresh manifest
+
 sd.write('orders', 'embedded/', rows=100_000, seed=7, embed_profile=True)
 profile = sd.Profile.from_data_file('embedded/part-00000-a3f28bf0.parquet')
 table = sd.generate('embedded/part-00000-a3f28bf0.parquet')   # its seed and rows, as written
 ```
+
+## `--manifest` writes the dataset again and compares every file with its record
+
+```text
+$ doppeldata data generate orders.profile.yaml --manifest first/_manifest.json --out again/
+wrote 50,000 rows as parquet in 1 file, 1.2 MB, in 0.04 s on 16 threads: 1.11M rows/s
+again/_manifest.json names dataset sha256:798bab73…
+every file matches its record in first/_manifest.json
+```
+
+`sd.regenerate` returns the fresh manifest, and raises `WriteFailed` where the command exits
+non-zero.
+
+- **The manifest settles every input but the profile.** PROFILE is the one input given. A flag
+  giving any other is refused, exit 2:
+
+  ```text
+  $ doppeldata data generate orders.profile.yaml --manifest first/_manifest.json --seed 12 --out other/
+  doppeldata: E-USAGE-026: first/_manifest.json settles --seed, and a regeneration takes each value it settles from it; drop it
+  ```
+
+- **A profile other than the one the manifest records is refused before anything is written**,
+  exit 1. The refusal names both profile SHA-256s. It comes before the manifest's scenario is
+  applied, so an edit dropping a column the scenario bends is refused the same way.
+
+  ```text
+  $ doppeldata data generate edited.profile.yaml --manifest first/_manifest.json --out other/
+  doppeldata: E-WRITE-210: the profile's SHA-256 sha256:4936cbcf… is not the manifest's sha256:95abee1d…, so the two identities differ in profile_sha256; give the profile that wrote the dataset
+  ```
+
+  A plan whose identity differs for another reason is refused as `E-WRITE-210` too, naming each
+  identity key that differs. `stream_version` differs where a release moved the values.
+
+- **A file whose bytes moved fails the command, exit 1, naming the file and what differed.** The
+  fresh `_manifest.json` is stored first, so the two can be diffed. A manifest committed beside a
+  test catches an encoder upgrade or a changed writer default this way. Here one file's record
+  was edited:
+
+  ```text
+  $ doppeldata data generate orders.profile.yaml --manifest moved.json --out moved/
+  doppeldata: E-WRITE-212: 1 regenerated file differs from the manifest's record:
+    /files/0: part-00000-798bab73.parquet: bytes 1198500 recorded, 1198499 written; sha256 sha256:0000…0000 recorded, sha256:a0bbec53… written [E-WRITE-212]
+  ```
+
+- **`--json` prints one line per differing file on stderr.** Each line's `field` is the pointer
+  to the file's record, such as `/files/0`, and its `value` is the file's path. The fresh manifest
+  goes to stdout once every file matches.
+- **A partial manifest is refused as `E-WRITE-211`, exit 1.** So is one whose files embed the
+  profile, as `E-WRITE-223`, exit 2, and one recording a write to one file, as `E-WRITE-224`,
+  exit 2. A dataset written with `--embed-profile` regenerates from one of its files, as below.
+- **`--out` takes any destination `data generate` writes to except one file**, which is refused
+  as `E-WRITE-014`. `--replace` and `--threads` work as on any write.
+- **An `--out` holding the manifest file is refused as `E-WRITE-016`, exit 2.** With `--replace`,
+  a run there would store the fresh manifest over the record it compares with. A check that
+  found a file differing would then pass when run again.
+- **S3 takes `--aws-profile`, or `aws_profile=`, for the manifest and the destination alike**, as
+  in `--manifest s3://bucket/orders/_manifest.json --out s3://bucket/again/`.
+- **A bundle's manifest regenerates every table, with the bundle as PROFILE.** Every table's
+  manifest is checked before any table is written. Each table is then written under
+  `--out/<table>/` against its own manifest, parents first. A table whose files differ is still
+  written, and the error names every differing file as `<table>/<path>`. One table's own manifest
+  regenerates that table alone from the bundle.
 
 ## The manifest records every input the values depend on
 
@@ -47,18 +111,12 @@ $ jq '{profile, identity}' first/_manifest.json
   SHA-256 hold the same values.
 - **`profile.path` names the file the write read**, and `identity.profile_sha256` says whether a
   file at that path is still the same profile. Formatting, comments and key order leave its SHA-256
-  alone.
+  alone. A regeneration's manifest keeps the `profile` and `scenario` its manifest recorded.
 - **`scenario.document` is the scenario as `identity.scenario_sha256` covers it**, so the run
   regenerates with no scenario file. Written to a file, it is a scenario `--scenario` takes.
-- **`format`, `writer` and `layout` record every write setting**, defaults included. Given back to
-  `data generate`, they write the same bytes under the same doppeldata release.
-- **Each file's `sha256` is how a rerun is compared.** The rerun above wrote every file again
-  identical:
-
-```text
-$ diff <(jq -r '.files[] | .path + " " + .sha256' first/_manifest.json) <(jq -r '.files[] | .path + " " + .sha256' again/_manifest.json) && echo "every file identical"
-every file identical
-```
+- **`format`, `writer` and `layout` record every write setting**, defaults included. `--manifest`
+  writes with them, so it writes the same bytes under the same doppeldata release.
+- **`--manifest` compares every field of each file's record.**
 
 A release that raises the stream version moves the values, and the manifest's `stream_version`
 names the one a dataset was made at.
