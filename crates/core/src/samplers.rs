@@ -334,8 +334,8 @@ impl ValueSampler {
         }
     }
 
-    /// Each row drawn as the column draws a value it lists none of: the branch its listed draw takes on a miss.
-    /// `None` for a column listing no values.
+    /// Each row drawn as the column draws a value its profile lists none of: one beyond its trimmed extremes, or the
+    /// branch its listed draw takes on a miss. `None` for a column listing no values.
     fn rest(&self, at: &BlockPosition, keys: &StreamKeys, rows: usize, nulls: Option<NullBuffer>) -> Option<ArrayRef> {
         let keys = keys.for_rest();
         match self {

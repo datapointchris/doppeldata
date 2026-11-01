@@ -29,6 +29,9 @@ pub(crate) struct ListedNumbers {
     pub(crate) beyond_extremes: usize,
     /// The inverse CDF the `other` share draws through, where any level lies outside the list.
     pub(crate) outside: Option<InverseCdf>,
+    /// The values beyond the trimmed extremes by their rates, beside the share `outside` draws, so a value the
+    /// profile lists none of is drawn from both. `None` where no value lies beyond them.
+    pub(crate) unlisted: Option<ListedValues<f64>>,
 }
 
 impl ListedNumbers {
@@ -67,11 +70,17 @@ impl ListedNumbers {
             None => 0.0,
         };
         let beyond_extremes = hidden.len();
+        let unlisted = if hidden.is_empty() {
+            None
+        } else {
+            Some(ListedValues::new(hidden.clone(), outside_rate)?)
+        };
         listed.extend(hidden);
         Ok(Some(Self {
             listed: ListedValues::new(listed, outside_rate)?,
             beyond_extremes,
             outside,
+            unlisted,
         }))
     }
 }

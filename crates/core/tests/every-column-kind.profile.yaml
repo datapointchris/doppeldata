@@ -444,6 +444,12 @@ dataset:
       fractions:
         '1.0': {paid: 0.6, owed: 0.3}
         '-1.0': {void: 0.5}
+    # Each row's rest draws the value beyond the child's extremes too.
+    - given: listed_float_given
+      column: top_values_with_one_beyond_the_extremes
+      fractions:
+        '1.0': {'1': 0.7778, '2': 0.1333}
+        '-1.0': {'1': 0.417, '2': 0.147}
   conditional_quantiles:
     - given: channel
       column: paid_amount

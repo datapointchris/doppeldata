@@ -203,7 +203,7 @@ enum ChildValues {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Slot<T> {
     Value(T),
-    /// A value the child lists none of, drawn as the child's listed draw draws one on a miss.
+    /// A value the child's profile lists none of, drawn as the child's own draw draws one.
     Rest,
     Own,
 }

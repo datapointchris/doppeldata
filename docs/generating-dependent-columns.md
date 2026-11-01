@@ -144,10 +144,12 @@ holds. Minimax only moves that pair nearer its value at the cap, a few thousandt
   that share as no row states of it, each row weighted by its given value's share. That is one step
   of iterative proportional fitting toward the child's own shares, so its marginal holds.
 - **The share of values the column lists none of draws only such values.** It draws as the
-  column's own draw does when its listed draw misses. A string comes from the source below its
-  `top_values`, and a number from the CDF with its listed values cut out. That draw has its own
-  streams. The value at a distinct index is the one the column's own draw holds there, so the two
-  share their distinct values.
+  column's own draw does outside its listed values. A string comes from the source below its
+  `top_values`. A number is one of the values beyond its trimmed extremes at its rate, or else
+  comes from the CDF with its listed values cut out. So `payment_type` drawn given
+  `improvement_surcharge` draws the 5 its distinct count puts beyond its extremes. That draw has
+  its own streams. The value at a distinct index is the one the column's own draw holds there, so
+  the two share their distinct values.
 - **Without `other_fractions`, a given value with no row draws what the rows leave of the child's
   own shares.** Each child value, and the share it lists none of, takes its own share less what
   every row draws of it, each row weighted by its given value's share. A row's draw is its cells and

@@ -140,15 +140,28 @@ fn generated_rows_hold_each_stated_correlation_and_each_conditional_share() {
                 .iter()
                 .find(|entry| entry["name"] == column)
                 .unwrap();
-            let listed: Vec<(&str, f64)> = entry["string"]["top_values"]
+            let section = if entry["string"].is_object() {
+                &entry["string"]
+            } else {
+                &entry["numeric"]
+            };
+            // A number is written as Arrow casts it to text, as the counts' keys are.
+            let listed: Vec<(String, f64)> = section["top_values"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|top| (top["value"].as_str().unwrap(), top["fraction"].as_f64().unwrap()))
+                .map(|top| {
+                    let value = top["value"].as_str().map_or_else(|| top["value"].to_string(), str::to_owned);
+                    (value, top["fraction"].as_f64().unwrap())
+                })
                 .collect();
             let rest = 1.0 - listed.iter().map(|(_, share)| share).sum::<f64>();
             let rows = totals.values().sum::<f64>();
-            for (child, share) in listed.iter().map(|&(value, share)| (Some(value), share)).chain([(None, rest)]) {
+            for (child, share) in listed
+                .iter()
+                .map(|(value, share)| (Some(value.as_str()), *share))
+                .chain([(None, rest)])
+            {
                 let held = counts
                     .iter()
                     .filter(|((_, value), _)| child.map_or(listed.iter().all(|(top, _)| value != top), |child| value == child))
