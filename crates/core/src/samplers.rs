@@ -312,6 +312,10 @@ pub(crate) struct ColumnPlan {
     pub(crate) field: FieldRef,
     /// What draws the values, as a plan reports it: `sequence from 1 by 1`.
     pub(crate) sampler: String,
+    /// The sampler's kind, such as `numeric`.
+    pub(crate) kind: &'static str,
+    /// Each profile field the sampler reads, as a parameter's name and the field's pointer.
+    pub(crate) read_fields: Vec<(&'static str, String)>,
     /// The share of rows the null mask draws as null.
     pub(crate) null_share: f64,
     keys: StreamKeys,
@@ -659,9 +663,15 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
     }
     let nulls = Some(Bernoulli::new(null_share)).filter(|null| !null.never());
     let mut sampler = describe(column, &values);
+    let (kind, mut fields) = read_fields(column, &values);
     if column.missing_token_fractions.as_ref().is_some_and(|tokens| !tokens.is_empty()) {
         sampler.push_str(", with missing-value tokens as text");
+        fields.push(("missing_token_fractions", "/missing_token_fractions"));
     }
+    let read_fields = fields
+        .into_iter()
+        .map(|(name, below)| (name, format!("{}{below}", site.pointer)))
+        .collect();
     let field = match &type_mix {
         Some(mix) => text_field(&column.name, may_be_null, mix),
         None => Arc::new(Field::new(&column.name, values.data_type(), may_be_null)),
@@ -669,6 +679,8 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
     Ok(ColumnPlan {
         field,
         sampler,
+        kind,
+        read_fields,
         null_share: nulls.map_or(0.0, |_| null_share),
         keys,
         values,
@@ -755,6 +767,95 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
         }
         ValueSampler::List(list) => format!("list of {}", list.element.description()),
         ValueSampler::Struct(structure) => format!("struct of {} fields", structure.fields.len()),
+    }
+}
+
+/// The kind of sampler `values` is, and each field of `column` it reads as a parameter's name and
+/// the field's pointer below the column. A field the profile leaves out is read as its default.
+fn read_fields(column: &Column, values: &ValueSampler) -> (&'static str, Vec<(&'static str, &'static str)>) {
+    let (kind, mut fields) = match values {
+        ValueSampler::Sequence(_) => (
+            "sequence",
+            vec![("start", "/numeric/sequence/start"), ("step", "/numeric/sequence/step")],
+        ),
+        ValueSampler::Numeric(numeric) => {
+            let mut fields = vec![
+                ("family", "/numeric/fit/family"),
+                ("family_params", "/numeric/fit/params"),
+                ("extremes", "/numeric/extremes"),
+                ("quantiles", "/numeric/quantiles"),
+                ("histogram", "/numeric/histogram"),
+                ("listed_values", "/numeric/top_values"),
+                ("rest_fraction", "/numeric/other_fraction"),
+                ("integral", "/numeric/integral"),
+                ("scale", "/numeric/scale"),
+            ];
+            if numeric.index.is_some() {
+                fields.push(("distinct_ratio", "/distinct/ratio"));
+            }
+            ("numeric", fields)
+        }
+        ValueSampler::Categorical(categorical) => {
+            let mut fields = match listed_values(column.string.as_ref()) {
+                Some(_) => vec![("listed_values", "/string/top_values"), ("rest_fraction", "/string/other_fraction")],
+                None => vec![("listed_prefixes", "/string/prefixes")],
+            };
+            fields.extend(source_fields(column, &categorical.other));
+            ("categorical", fields)
+        }
+        ValueSampler::Temporal(_) => (
+            "temporal",
+            vec![
+                ("extremes", "/temporal/extremes"),
+                ("month_fractions", "/temporal/month_fractions"),
+                ("weekday_fractions", "/temporal/weekday_fractions"),
+                ("hour_fractions", "/temporal/hour_fractions"),
+                ("gap_fraction", "/temporal/gap_fraction"),
+            ],
+        ),
+        ValueSampler::Boolean(_) => ("boolean", vec![("true_fraction", "/boolean/true_fraction")]),
+        ValueSampler::Text(text) => {
+            let mut fields = source_fields(column, &text.source);
+            if text.index.is_some() {
+                fields.push(("distinct_ratio", "/distinct/ratio"));
+            }
+            if text.check_digit.is_some() {
+                fields.push(("check_digit", "/semantic/generator_hint/check_digit"));
+            }
+            ("text", fields)
+        }
+        ValueSampler::List(_) => (
+            "list",
+            vec![
+                ("element", "/list/element"),
+                ("length", "/list/length"),
+                ("empty_fraction", "/list/empty_fraction"),
+            ],
+        ),
+        ValueSampler::Struct(_) => ("struct", vec![("fields", "/struct/fields")]),
+    };
+    fields.push(("null_fraction", "/null_fraction"));
+    (kind, fields)
+}
+
+/// The fields of `column` that chose `source`, as [`text_source`] reads them.
+fn source_fields(column: &Column, source: &TextSource) -> Vec<(&'static str, &'static str)> {
+    match source {
+        TextSource::Provider(_) => vec![("provider", "/semantic/generator_hint/provider")],
+        TextSource::Icd10cm { .. } => vec![("provider", "/semantic/generator_hint/provider"), ("shapes", "/string/shapes")],
+        TextSource::Pattern(_) => {
+            let hinted = column
+                .semantic
+                .as_ref()
+                .and_then(|s| s.generator_hint.as_ref())
+                .is_some_and(|hint| hint.pattern.is_some());
+            match hinted {
+                true => vec![("pattern", "/semantic/generator_hint/pattern")],
+                false => vec![("pattern", "/string/pattern")],
+            }
+        }
+        TextSource::Shapes { .. } => vec![("shapes", "/string/shapes")],
+        TextSource::Characters { .. } => vec![("length", "/string/length"), ("charset", "/string/charset")],
     }
 }
 

@@ -232,8 +232,9 @@ member file that is a bundle, names itself other than its key, or cannot be read
 `/tables/<name>`, and the other tables are still checked.
 
 It exits 0 when clean and 3 on a violation, because a violation needs a person. A file it cannot
-read is a usage error, exit 2. Each violation prints as the field it is at, what was found and what
-was expected. `--json` prints `passed` and each violation as `{code, field, rule, treatment,
-detail}`. `field` is an RFC 6901 pointer, `rule` is the audit rule the field is held to, and
-`treatment` is the column's suppression reason, each null where none applies. So a CI job can run
-it on every committed profile.
+read is a usage error, exit 2. It prints GitHub Markdown, a table per profile table of each issue
+at its field, what was found, and the hint. `--json` prints `passed` and each table's `issues`, each
+an issue as [issue-codes.md](issue-codes.md) describes one, with `rule` and `treatment` beside it.
+`field` is an RFC 6901 pointer, `rule` is the audit rule the field is held to, and `treatment` is
+the column's suppression reason, each null where none applies. So a CI job can run it on every
+committed profile.

@@ -18,6 +18,7 @@ from doppeldata.embedded_profiles import embedded_document
 from doppeldata.errors import CheckFailed
 from doppeldata.issue_codes import PROFILE_DOCUMENT
 from doppeldata.issue_codes import Issue
+from doppeldata.issue_codes import issue_table
 from doppeldata.privacy_policy.column_treatment import CHECKED_POLICIES
 from doppeldata.privacy_policy.column_treatment import ColumnFacts
 from doppeldata.privacy_policy.column_treatment import Policy
@@ -106,6 +107,23 @@ class ProfileFileCheck:
             for check in self.tables
         ]
         return json.dumps({'profile': self.profile, 'passed': self.passed, 'tables': tables}, indent=2, ensure_ascii=False) + '\n'
+
+    def to_markdown(self) -> str:
+        """The check for a person: each table's policy and literal fields, then its issues."""
+        verdict = 'passed' if self.passed else 'failed'
+        tables = f'{len(self.tables)} table{"" if len(self.tables) == 1 else "s"}'
+        lines = [f'# doppeldata profile check {verdict}', '', f'`{self.profile}`, {tables}.', '']
+        for table in self.tables:
+            count = len(table.violations)
+            found = f'{count} issue{"" if count == 1 else "s"}'
+            if table.policy is None:
+                held = f'{found} against the schema.'
+            else:
+                floor = f', `k_min` {table.k_min}' if table.k_min is not None else ''
+                literals = f'{table.literal_fields} literal field{"" if table.literal_fields == 1 else "s"}'
+                held = f'{literals} under policy `{table.policy}`{floor}, and {found}.'
+            lines += [f'## {table.table}', '', held, '', *issue_table(table.violations)]
+        return '\n'.join(lines).rstrip('\n') + '\n'
 
     def failure_message(self) -> str:
         """What `CheckFailed` says of a profile file that breaks its schema or policy."""

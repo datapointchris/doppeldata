@@ -7,8 +7,10 @@ from typing import TYPE_CHECKING
 from doppeldata import fakes
 from doppeldata import issue_codes
 from doppeldata.bundle_generation import BundleWritePlan
-from doppeldata.dataset_generation import ColumnSampler
+from doppeldata.capabilities import capabilities
+from doppeldata.dataset_generation import ColumnTrace
 from doppeldata.dataset_generation import PlannedRange
+from doppeldata.dataset_generation import SamplerParameter
 from doppeldata.dataset_generation import WritePlan
 from doppeldata.errors import CheckFailed
 from doppeldata.errors import ColumnsNotFrozen
@@ -69,7 +71,7 @@ __all__ = [
     'BundleWritePlan',
     'CheckFailed',
     'CheckReport',
-    'ColumnSampler',
+    'ColumnTrace',
     'ColumnsNotFrozen',
     'DetectorPackError',
     'DiffReport',
@@ -95,6 +97,7 @@ __all__ = [
     'ProfilesDrifted',
     'ProfilingEnginesMissing',
     'ProfilingWarning',
+    'SamplerParameter',
     'Scenario',
     'SourceError',
     'StoppedWrite',
@@ -104,6 +107,7 @@ __all__ = [
     'WriteFailed',
     'WriteInterrupted',
     'WritePlan',
+    'capabilities',
     'check',
     'choice',
     'dates',

@@ -170,7 +170,7 @@ def test_a_profile_states_correlations_a_dependency_floored_conditional_cells_an
     # The lookup draws tier from plan, so a table of plan given tier would close a cycle, and is left out.
     assert ('region', 'channel') in conditionals
     assert ('tier', 'plan') not in conditionals
-    samplers = {column.name: column.sampler for column in plan(written, tmp_path / 'orders.parquet', rows=10).columns}
+    samplers = {column.name: column.summary for column in plan(written, tmp_path / 'orders.parquet', rows=10).columns}
     assert samplers['tier'].startswith('looked up from plan')
     assert table_check(profiled, ()).table == profiled['name']
     for (given, child), entry in conditionals.items():

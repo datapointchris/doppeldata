@@ -44,6 +44,24 @@ impl Output {
         }
     }
 
+    /// Every format under its default settings, in the order `format` lists them.
+    pub fn every_format() -> [Self; 6] {
+        [
+            Self::Parquet(ParquetSettings::default()),
+            Self::Arrow(ArrowSettings::default()),
+            Self::Csv(DelimitedSettings::default()),
+            Self::Tsv(DelimitedSettings::default()),
+            Self::Json(JsonSettings::default()),
+            Self::Ndjson(JsonSettings::default()),
+        ]
+    }
+
+    /// Whether files of the format read as one table only while every file holds one schema, as a
+    /// CSV's header and an Arrow file's schema must.
+    pub fn reads_under_one_schema(&self) -> bool {
+        matches!(self, Self::Csv(_) | Self::Tsv(_) | Self::Arrow(_))
+    }
+
     /// The file name's extension, with the text codec's suffix: `parquet`, `arrows`, `csv.gz`.
     pub fn extension(&self) -> String {
         match self {

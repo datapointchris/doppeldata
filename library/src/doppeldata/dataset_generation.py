@@ -6,6 +6,7 @@ stop between blocks on Ctrl-C.
 """
 
 import dataclasses as dc
+import difflib
 import json
 import os
 import re
@@ -41,6 +42,7 @@ from doppeldata.profile_format import UngenerableProfile
 from doppeldata.profile_sources import ProfileSource
 from doppeldata.profile_sources import profile_from
 from doppeldata.published_schemas import output_formats
+from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
 from doppeldata.scenario_format import manifest_record
@@ -56,13 +58,39 @@ class ArrowStreamExportable(Protocol):
 
 
 @dc.dataclass(frozen=True)
-class ColumnSampler:
-    """How one top-level column is drawn. `physical_type` is spelled as a profile spells it, as pyarrow writes types."""
+class SamplerParameter:
+    """One profile field a column's sampler reads: the parameter it sets, the field's JSON pointer, and its value."""
+
+    name: str
+    field: str
+    value: Any
+
+
+@dc.dataclass(frozen=True)
+class ColumnTrace:
+    """How one top-level column is drawn, and what in the profile and the scenario decides it.
+
+    `physical_type` is spelled as a profile spells it. `sampler` is the kind, such as `numeric`, and `summary` says what
+    draws the values in a few words. `parameters` holds each field the sampler reads that the profile holds. `origin` is
+    `profiled`, `derived` from other columns, `overlaid` by the scenario, or `pinned` by an override. `reads` names the
+    columns a derived column follows, `ops` the id of each scenario op writing it, and `patched_fields` each field the
+    scenario's patch sets for it.
+    """
 
     name: str
     physical_type: str
     sampler: str
-    null_share: float
+    summary: str
+    parameters: list[SamplerParameter]
+    null_fraction: float
+    origin: str
+    reads: list[str]
+    ops: list[str]
+    patched_fields: list[str]
+
+    @classmethod
+    def from_json(cls, plain: dict[str, Any]) -> 'ColumnTrace':
+        return cls(**plain | {'parameters': [SamplerParameter(**parameter) for parameter in plain['parameters']]})
 
 
 @dc.dataclass(frozen=True)
@@ -97,7 +125,7 @@ class WritePlan:
     format: str
     writer: dict[str, Any]
     layout: dict[str, Any]
-    columns: list[ColumnSampler]
+    columns: list[ColumnTrace]
     ranges: list[PlannedRange]
     files_at_most: int
     rows_written: int
@@ -354,9 +382,29 @@ class EngineArguments:
     overrides: str | None = None
 
     def plan(self) -> '_core.Plan':
-        return _core.Plan(
-            self.profile_json, self.profile_digest, self.seed, self.rows, self.source, scenario=self.scenario, overrides=self.overrides
-        )
+        try:
+            return _core.Plan(
+                self.profile_json, self.profile_digest, self.seed, self.rows, self.source, scenario=self.scenario, overrides=self.overrides
+            )
+        except InvalidScenario as error:
+            if self.scenario is None:
+                raise
+            columns = [column['name'] for column in json.loads(self.profile_json).get('columns') or []]
+            issues = [named_columns(issue, json.loads(self.scenario[0]), columns) for issue in error.issues]
+            raise InvalidScenario(error.source, issues) from None
+
+
+def named_columns(issue: Issue, scenario: Any, columns: list[str]) -> Issue:
+    """`issue` naming the column the scenario gave at its field, and the profile's nearest, where it names an unknown column."""
+    if issue.code != issue_codes.UNKNOWN_SCENARIO_COLUMN or not issue.field:
+        return issue
+    given: Any = scenario
+    for part in issue.field.split('/')[1:]:
+        part = part.replace('~1', '/').replace('~0', '~')
+        given = given[int(part)] if isinstance(given, list) else given.get(part)
+    if not isinstance(given, str):
+        return issue
+    return dc.replace(issue, value=given, valid=tuple(columns), closest=tuple(difflib.get_close_matches(given, columns, n=3)))
 
 
 def engine_arguments(
@@ -486,7 +534,7 @@ def write_plan_of(engine: '_core.Plan', options: '_core.WriteOptions', destinati
         format=settings['format'],
         writer=settings['writer'],
         layout=settings['layout'],
-        columns=[ColumnSampler(*column) for column in engine.column_samplers()],
+        columns=[ColumnTrace.from_json(column) for column in json.loads(engine.column_traces_json())],
         ranges=ranges,
         files_at_most=sum(planned.objects_at_most for planned in ranges) + stream_files,
         rows_written=engine.rows_written,

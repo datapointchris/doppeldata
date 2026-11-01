@@ -9,7 +9,6 @@ use std::sync::Arc;
 use arrow_array::BooleanArray;
 use arrow_array::RecordBatch;
 use arrow_array::RecordBatchOptions;
-use arrow_schema::DataType;
 use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
 use arrow_select::filter::filter_record_batch;
@@ -34,6 +33,8 @@ use crate::perturbations::ScenarioFault;
 use crate::perturbations::SchemaDriftPlan;
 use crate::perturbations::StreamOutline;
 use crate::perturbations::plan_perturbation;
+use crate::physical_type::physical_type_name;
+use crate::profile::Column;
 use crate::profile::DEFAULT_K_MIN;
 use crate::profile::Profile;
 use crate::profile::Quantiles;
@@ -57,6 +58,8 @@ use crate::samplers::column_plan;
 use crate::scenario::OPERATION_COLUMN;
 use crate::scenario::Perturbation;
 use crate::scenario::Scenario;
+use serde::Serialize;
+use serde_json::Value;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlanError {
@@ -202,15 +205,53 @@ impl std::fmt::Display for ColumnFault {
     }
 }
 
-/// How one top-level column is drawn, as a plan reports it before generating anything.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ColumnSampler {
+/// How one top-level column is drawn, and what in the profile and the scenario decides it, as a
+/// plan reports it before generating anything.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ColumnTrace {
     pub name: String,
-    pub data_type: DataType,
+    /// The column's type, as a profile's `physical_type` spells it.
+    pub physical_type: String,
+    /// The sampler's kind: `sequence`, `numeric`, `categorical`, `temporal`, `boolean`, `text`,
+    /// `list` or `struct`.
+    pub sampler: &'static str,
     /// What draws the values, such as `sequence from 1 by 1` or `50 top values`.
-    pub sampler: String,
-    /// The share of rows drawn null.
-    pub null_share: f64,
+    pub summary: String,
+    /// Each profile field the sampler reads that the profile holds. A field left out reads as its
+    /// default.
+    pub parameters: Vec<SamplerParameter>,
+    pub null_fraction: f64,
+    pub origin: ColumnOrigin,
+    /// The columns whose values a derived column's follow.
+    pub reads: Vec<String>,
+    /// The id of each scenario op writing the column, in the scenario's order.
+    pub ops: Vec<String>,
+    /// The pointer of each profile field the scenario's patch sets for the column.
+    pub patched_fields: Vec<String>,
+}
+
+/// One profile field a column's sampler reads: the parameter it sets, the field's JSON pointer,
+/// and its value.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SamplerParameter {
+    pub name: &'static str,
+    pub field: String,
+    pub value: Value,
+}
+
+/// What decides a column's values. A column the scenario changes is `overlaid` though it also
+/// follows others, and `reads` still names what it follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColumnOrigin {
+    /// Drawn from the profile's statistics.
+    Profiled,
+    /// Computed from other columns: a lookup, a lag or an expression.
+    Derived,
+    /// Changed by the scenario: its patch sets the column's fields, or an op writes it.
+    Overlaid,
+    /// Taken from the values a caller pinned.
+    Pinned,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -246,6 +287,8 @@ pub struct Plan {
     related: Option<RelatedColumns>,
     /// Each column a caller pinned, which takes its pinned values in place of its draw.
     pinned: Vec<PinnedColumn>,
+    /// The pointer of each field the scenario's patch sets, by the column it sets it for.
+    patched_fields: BTreeMap<String, Vec<String>>,
 }
 
 /// One perturbation applied to every block, and the schema its rows carry after it.
@@ -489,11 +532,40 @@ pub(crate) fn plan_table(table: &TableProfile, identity: DatasetIdentity, inputs
         writes: Vec::new(),
         related,
         pinned,
+        patched_fields: scenario.map(|scenario| patched_fields(scenario, columns)).unwrap_or_default(),
     };
     if let Some(scenario) = scenario {
         plan.apply_scenario(table, scenario)?;
     }
     Ok(plan)
+}
+
+/// The pointer of each field `scenario`'s patch sets, by the column of `columns` it sets it for.
+fn patched_fields(scenario: &Scenario, columns: &[Column]) -> BTreeMap<String, Vec<String>> {
+    let Some(Value::Object(patched)) = scenario.patch.as_ref().and_then(|patch| patch.0.get("columns")) else {
+        return BTreeMap::new();
+    };
+    columns
+        .iter()
+        .enumerate()
+        .filter_map(|(index, column)| {
+            let mut pointers = Vec::new();
+            leaf_pointers(patched.get(&column.name)?, &format!("/columns/{index}"), &mut pointers);
+            Some((column.name.clone(), pointers))
+        })
+        .collect()
+}
+
+/// The pointer below `at` of each value `patch` sets, as RFC 6901 escapes a key.
+fn leaf_pointers(patch: &Value, at: &str, pointers: &mut Vec<String>) {
+    match patch {
+        Value::Object(fields) if !fields.is_empty() => {
+            for (key, inner) in fields {
+                leaf_pointers(inner, &format!("{at}/{}", key.replace('~', "~0").replace('/', "~1")), pointers);
+            }
+        }
+        _ => pointers.push(at.to_string()),
+    }
 }
 
 /// What `table`'s column samplers are planned against for `rows` rows from `seed`, with streams
@@ -770,15 +842,58 @@ impl Plan {
         self.block_count
     }
 
-    /// How each top-level column is drawn, in schema order.
-    pub fn column_samplers(&self) -> Vec<ColumnSampler> {
+    /// How each top-level column is drawn, in schema order. Each parameter's value is read from
+    /// `document`, the profile the plan was made from with any scenario's patch applied.
+    pub fn column_traces(&self, document: &Value) -> Vec<ColumnTrace> {
+        let following = self.dependent.following();
+        let reads: BTreeMap<usize, Vec<usize>> = following.reads().collect();
         self.columns
             .iter()
-            .map(|column| ColumnSampler {
-                name: column.field.name().clone(),
-                data_type: column.field.data_type().clone(),
-                sampler: column.description(),
-                null_share: column.null_share,
+            .enumerate()
+            .map(|(index, column)| {
+                let name = column.field.name().clone();
+                let ops: Vec<String> = self
+                    .writes
+                    .iter()
+                    .filter(|(_, written)| written.contains(&name))
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                let patched_fields = self.patched_fields.get(&name).cloned().unwrap_or_default();
+                let origin = if self.pinned.iter().any(|pin| pin.index == index) {
+                    ColumnOrigin::Pinned
+                } else if !ops.is_empty() || !patched_fields.is_empty() {
+                    ColumnOrigin::Overlaid
+                } else if following.follows(index) {
+                    ColumnOrigin::Derived
+                } else {
+                    ColumnOrigin::Profiled
+                };
+                let parameters = column
+                    .read_fields
+                    .iter()
+                    .chain(self.dependent.sources(index))
+                    .filter_map(|(parameter, field)| {
+                        let value = document.pointer(field)?.clone();
+                        Some(SamplerParameter {
+                            name: parameter,
+                            field: field.clone(),
+                            value,
+                        })
+                    })
+                    .collect();
+                let read_names = reads.get(&index).into_iter().flatten();
+                ColumnTrace {
+                    physical_type: physical_type_name(column.field.data_type()),
+                    sampler: column.kind,
+                    summary: column.description(),
+                    parameters,
+                    null_fraction: column.null_share,
+                    origin,
+                    reads: read_names.map(|&read| self.columns[read].field.name().clone()).collect(),
+                    ops,
+                    patched_fields,
+                    name,
+                }
             })
             .collect()
     }

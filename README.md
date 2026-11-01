@@ -274,6 +274,35 @@ zip -r doppeldata-<version>.gluewheels.zip wheels/
 Upload the zip, pass its `s3://` path to `--additional-python-modules`, and pass `--no-index` to
 `--python-modules-installer-option`. Glue then resolves every dependency from the zip.
 
+## Driving doppeldata from an agent
+
+A program or a coding agent drives doppeldata through `--json` and the exit status alone. This
+loop profiles a table, bends it with a scenario, and verifies the result. A table generated from
+the `orders` example stands in for real data:
+
+```bash
+doppeldata capabilities show --json            # every command and flag, format, op, fake, policy and issue code
+doppeldata data generate orders --rows 20000 --seed 1 --out real/
+doppeldata profile create real/ --out orders.profile.yaml
+doppeldata profile check orders.profile.yaml --json                       # "passed": true, or each issue at its field
+doppeldata scenario check hot-key orders.profile.yaml --json              # "passed": true
+doppeldata data plan orders.profile.yaml --scenario hot-key --seed 7 --out out/ --json
+doppeldata data generate orders.profile.yaml --scenario hot-key --seed 7 --out out/
+doppeldata data check orders.profile.yaml out/ --scenario hot-key --json  # "passed": true, "verified": true
+```
+
+- **`capabilities show --json` is read from the installed doppeldata**, so it matches that version
+  exactly. Each op lists the formats a write takes it in, and each issue code its exit status and
+  hint.
+- **Every refusal names a registered `E-<AREA>-<NNN>` code.** Under `--json` each issue prints on
+  stderr as one line, with the field refused, the value given, every valid value, the closest of
+  them and a hint. [Issue codes](docs/issue-codes.md) says what each exit status means.
+- **`data plan --json` traces each column.** It names the sampler, each profile field the sampler
+  reads with its pointer and value, and the id of each op writing the column. `origin` says whether
+  the column is profiled, derived from others, overlaid by the scenario or pinned.
+- **Without `--json`, `profile check`, `scenario check`, `data check` and `profile diff` print
+  GitHub Markdown**, so a report pastes into a pull request as it is.
+
 ## Layout
 
 | Directory | Holds |

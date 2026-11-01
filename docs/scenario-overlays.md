@@ -491,11 +491,13 @@ RFC 6901 pointer into the scenario, such as `/perturbations/2/keys`. `doppeldata
   `E-SCENARIO-105` for a kind the format cannot hold. `E-SCENARIO-103` says least: a parameter out
   of range, or one the files cannot hold, such as a drift no file reaches. The format's own faults
   carry the profile's codes.
-- **An unknown op or metric lists every one doppeldata knows**, and its issue's `closest` holds the
-  nearest names.
+- **An unknown op, metric or column lists every one doppeldata knows** in its issue's `valid`, and
+  `closest` holds the nearest names. The engine refuses an unknown column, and the library fills in
+  the name given and the profile's columns.
 - **`doppeldata scenario check FILE PROFILE` exits 3 on a refusal.** It validates the scenario,
   applies its patch, and plans each perturbation and the file layout as `data generate` would with
-  the same layout flags.
+  the same layout flags. It prints GitHub Markdown, and `--json` prints `passed`, the scenario, the
+  profile and each issue.
 - **A data verb exits 2 on one**, as it does on an invalid profile.
 
 ## `data check --scenario` skips what a perturbation moves, and `verified` covers the expectations

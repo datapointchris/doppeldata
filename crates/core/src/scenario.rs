@@ -402,6 +402,8 @@ pub enum FaultFormats {
 }
 
 impl FaultFormats {
+    pub const ALL: [Self; 4] = [Self::Delimited, Self::Text, Self::Json, Self::Parquet];
+
     /// Whether a file `output` writes can hold the fault.
     pub fn hold(self, output: &Output) -> bool {
         match output {
@@ -771,6 +773,27 @@ impl ExpectedMetric {
             Self::MalformedFraction => false,
         }
     }
+}
+
+/// Whether a write making `output`'s files takes the op named `op`. `cdc` writes the CSV or Parquet
+/// files DMS writes. `schema_drift` needs a format that reads as one table under several schemas.
+/// `malformed_rows` needs a format one of its kinds can be held in. Every other op takes every format.
+pub fn op_takes_format(op: &str, output: &Output) -> bool {
+    match op {
+        "cdc" => matches!(output, Output::Csv(_) | Output::Parquet(_)),
+        "schema_drift" => !output.reads_under_one_schema(),
+        "malformed_rows" => FaultFormats::ALL.iter().any(|formats| formats.hold(output)),
+        _ => true,
+    }
+}
+
+/// The names of the formats a write takes the op named `op` in, in the order `format` lists them.
+pub fn op_formats(op: &str) -> Vec<&'static str> {
+    Output::every_format()
+        .iter()
+        .filter(|output| op_takes_format(op, output))
+        .map(Output::format_name)
+        .collect()
 }
 
 impl Perturbation {

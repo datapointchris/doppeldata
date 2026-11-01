@@ -102,6 +102,8 @@ pub(crate) struct DrawnColumns {
 struct ColumnDraw {
     values: Option<ValueDraw>,
     nulls: Option<ParentTrials>,
+    /// Each profile entry the draw reads, by its kind and pointer.
+    sources: Vec<(&'static str, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -636,6 +638,7 @@ impl DependentColumns {
                 }
             };
             draws[index].values = Some(draw);
+            draws[index].sources.push(("derived", format!("/columns/{index}/derived")));
             described[index] = Some(note);
         }
         let looped = |parent: usize| format!("{} is drawn from it", profile[parent].name);
@@ -670,6 +673,7 @@ impl DependentColumns {
                 values: child,
                 violation,
             })));
+            draws[rhs].sources.push(("lookup", field));
             drawn_by[rhs] = Some(format!("its lookup from {lhs}"));
             described[rhs] = Some(format!("looked up from {lhs}, else {}", planner.columns[rhs].sampler));
         }
@@ -711,6 +715,7 @@ impl DependentColumns {
                 other,
                 values: child_values,
             })));
+            draws[child].sources.push(("conditional_table", field));
             let own = &planner.columns[child].sampler;
             described[child] = Some(format!("its conditional table given {}, else {own}", conditional.given));
             drawn_by[child] = Some(format!("its {what}"));
@@ -741,7 +746,7 @@ impl DependentColumns {
         let same_copula = |a: usize, b: usize| component[a].is_some() && component[a] == component[b];
         let mut curves: Vec<Option<ParentCurves>> = vec![None; profile.len()];
         // The pointer of each entry warping a column's level, which is set aside with the warp.
-        let mut warp_entries: Vec<Vec<String>> = vec![Vec::new(); profile.len()];
+        let mut warp_entries: Vec<Vec<(&'static str, String)>> = vec![Vec::new(); profile.len()];
         // Why a warp of `child`'s level given `parent` cannot be drawn, where it cannot, `held` naming the parent of
         // the warp of that kind the child already takes.
         let unwarped = |planner: &Planner, draws: &[ColumnDraw], child: usize, parent: usize, held: Option<(&str, usize)>| {
@@ -821,7 +826,7 @@ impl DependentColumns {
                 curves: by_given,
                 other,
             });
-            warp_entries[child].push(field);
+            warp_entries[child].push(("conditional_quantiles", field));
         }
         let mut zeros: Vec<Option<ParentShares>> = vec![None; profile.len()];
         for (at, rates) in dataset
@@ -847,7 +852,7 @@ impl DependentColumns {
                         shares: zero_fraction.values().map(|rate| rate.0).collect(),
                         other: other.and_then(|other| other.zero_fraction).map(|rate| rate.0),
                     });
-                    warp_entries[child].push(pointer);
+                    warp_entries[child].push(("conditional_zero_fraction", pointer));
                 }
             }
             if let Some(null_fraction) = &rates.null_fraction {
@@ -876,6 +881,9 @@ impl DependentColumns {
                     trials: null_fraction.values().map(|rate| Bernoulli::new(rate.0)).collect(),
                     other: other.and_then(|other| other.null_fraction).map(|rate| Bernoulli::new(rate.0)),
                 });
+                draws[child]
+                    .sources
+                    .push(("conditional_null_fraction", format!("{field}/null_fraction")));
                 notes[child].push(format!("its null rate given {}", rates.given));
             }
         }
@@ -926,7 +934,7 @@ impl DependentColumns {
                 given(curves.as_ref(), zeros.as_ref()),
                 partners.join(", ")
             );
-            set_aside.pointers.append(&mut warp_entries[index]);
+            set_aside.pointers.extend(warp_entries[index].drain(..).map(|(_, pointer)| pointer));
             set_aside.notes.push((index, note));
         }
         for (child, note) in set_aside.notes {
@@ -980,6 +988,7 @@ impl DependentColumns {
                 zeros,
                 output: sampler.output,
             })));
+            draws[index].sources.append(&mut warp_entries[index]);
         }
         let order = topological_order(&planner.children);
         drop(planner);
@@ -1012,6 +1021,11 @@ impl DependentColumns {
     /// The JSON pointer of each dependence entry the plan does not draw.
     pub(crate) fn set_aside(&self) -> &[String] {
         &self.set_aside
+    }
+
+    /// Each dependence entry drawing the `index`th column, by its kind and pointer.
+    pub(crate) fn sources(&self, index: usize) -> &[(&'static str, String)] {
+        self.draws.get(index).map_or(&[], |draw| draw.sources.as_slice())
     }
 
     /// The columns derived or looked up from others, in the order that computes each after what it reads.

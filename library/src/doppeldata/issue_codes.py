@@ -8,6 +8,7 @@ acts on, and 4 when no answer came.
 
 import dataclasses as dc
 import re
+from collections.abc import Sequence
 from typing import Any
 
 from doppeldata import _core
@@ -101,6 +102,19 @@ class Issue:
             'value': value,
             'closest': list(self.closest),
         }
+
+
+def issue_table(issues: Sequence[Issue]) -> list[str]:
+    """`issues` as the rows of a GitHub Markdown table, in the order given, each with its hint where it has one."""
+    if not issues:
+        return []
+    lines = ['| Field | Code | Issue | Hint |', '| --- | --- | --- | --- |']
+    for issue in issues:
+        field = f'`{issue.field}`' if issue.field else ''
+        closest = f' Closest: {", ".join(issue.closest)}.' if issue.closest else ''
+        cells = (field, issue.code, issue.message + closest, issue.hint or '')
+        lines.append('| ' + ' | '.join(cell.replace('|', '\\|').replace('\n', ' ') for cell in cells) + ' |')
+    return [*lines, '']
 
 
 @dc.dataclass(frozen=True)

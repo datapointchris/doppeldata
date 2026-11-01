@@ -325,8 +325,18 @@ doppeldata data generate orders --rows 250000 --seed 7 --file-rows 100000 --out 
 it. `--out` is a local directory, a local file named for its format, an `s3://` or `s3a://` URL, or
 `memory://`, which keeps nothing and times a write. `data plan` reads nothing at
 `--out`. It prints the dataset digest and identity, the format with every writer setting, each
-column's sampler and null share, each row range, and an estimate of the bytes. A test runs both
+column's sampler and null fraction, each row range, and an estimate of the bytes. A test runs both
 commands and requires the manifest's identity and ranges to equal the plan's.
+
+- **`--json` traces each column as the engine planned it.** Each holds its sampler's kind, a
+  summary, and every profile field the sampler reads as `{name, field, value}`. `field` is the
+  field's JSON pointer, and `value` is read from the profile with the scenario's patch applied. A
+  derived, lookup or conditional column adds the dependence entries it reads. `ops` names the id
+  of each op writing the column, and `patched_fields` each field the patch sets.
+- **`origin` is `pinned`, `overlaid`, `derived` or `profiled`, the first that holds.** A pinned
+  column takes the values a caller gave. An overlaid one is changed by the scenario's patch or ops.
+  A derived one is computed from the columns `reads` names. So a derived column the scenario
+  patches is `overlaid`, and `reads` still names what it follows.
 
 - **A partitioned range becomes one file per partition value it holds.** So the plan gives each
   range a path with `*` for each partition directory, such as `status=*/part-00000-1f2e3d4c.parquet`,
@@ -416,7 +426,7 @@ and `write`. [scenario-overlays.md](scenario-overlays.md) holds the format and w
 - **`scenario check SCENARIO PROFILE` plans a write without generating a row.** It takes `data
   plan`'s `--rows`, `--seed`, `--format`, `--file-rows`, `--partition-by` and `--no-partitions`,
   so it refuses what `data generate` would with the same flags. A refusal exits 3, and `--json`
-  prints each issue's `code`, `field`, message and `closest` names.
+  prints `passed` and each issue as [issue-codes.md](issue-codes.md) describes one.
 
 ## A stopped write's code decides its exit status
 

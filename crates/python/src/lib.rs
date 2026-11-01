@@ -284,6 +284,13 @@ mod _core {
         Ok((fault.is_file_kind(), fault.formats().hold(&output), fault.check_reads_back(&output)))
     }
 
+    /// The formats a write takes the op ``op`` in, as ``format`` names them. An op the engine does
+    /// not single out takes every format.
+    #[pyfunction]
+    fn op_formats(op: &str) -> Vec<&'static str> {
+        doppeldata_core::scenario::op_formats(op)
+    }
+
     /// ``profile_json`` with the scenario's patch applied as the engine applies it, and each column
     /// the patch names that the profile does not hold.
     #[pyfunction]
@@ -383,6 +390,8 @@ mod _core {
     #[pyclass(frozen)]
     struct Plan {
         profile: Arc<Profile>,
+        /// The profile's document with the scenario's patch applied, which a trace reads values from.
+        document: Arc<serde_json::Value>,
         plan: Arc<doppeldata_core::Plan>,
         scenario_source: Option<String>,
     }
@@ -426,7 +435,7 @@ mod _core {
                     .map_err(|error| scenario_refused(py, scenario_source, error.code(), error.field(), &plan_message(&error)))?,
                 None => document,
             };
-            let profile: Profile = serde_json::from_value(document).map_err(not_the_model)?;
+            let profile: Profile = serde_json::from_value(document.clone()).map_err(not_the_model)?;
             let applied = read.as_ref().map(|(scenario, digest, _)| AppliedScenario { scenario, digest });
             let scenario_source = read.as_ref().map(|(_, _, scenario_source)| scenario_source.clone());
             let inputs = PlanInputs {
@@ -436,6 +445,7 @@ mod _core {
             match py.detach(|| doppeldata_core::plan_with(&profile, profile_digest, seed, rows, inputs)) {
                 Ok(plan) => Ok(Self {
                     profile: Arc::new(profile),
+                    document: Arc::new(document),
                     plan: Arc::new(plan),
                     scenario_source,
                 }),
@@ -474,17 +484,10 @@ mod _core {
             self.plan.rows_written()
         }
 
-        /// Each top-level column's name, type as a profile's ``physical_type`` spells it, what draws
-        /// its values, and the share of rows drawn null, in schema order.
-        fn column_samplers(&self) -> Vec<(String, String, String, f64)> {
-            self.plan
-                .column_samplers()
-                .into_iter()
-                .map(|column| {
-                    let physical_type = doppeldata_core::physical_type_name(&column.data_type);
-                    (column.name, physical_type, column.sampler, column.null_share)
-                })
-                .collect()
+        /// A JSON list of how each top-level column is drawn, in schema order, as
+        /// ``doppeldata_core::ColumnTrace`` serializes one.
+        fn column_traces_json(&self) -> String {
+            serde_json::to_string(&self.plan.column_traces(&self.document)).expect("a trace serializes")
         }
 
         /// The names of the columns each Gaussian copula draws together, each group sorted.
@@ -828,6 +831,7 @@ mod _core {
                 scenario_refused(py, &scenario_source, error.code(), error.field(), &plan_message(&error))
             })?;
             let patched_json = patched.to_string();
+            let table_documents = patched.get("tables").cloned().unwrap_or_default();
             let Profile::Bundle(bundle) = serde_json::from_value(patched).map_err(not_the_model)? else {
                 return Err(invalid_argument(
                     &engine_codes::TABLE_NOT_BUNDLE,
@@ -859,6 +863,7 @@ mod _core {
                 };
                 let held = Plan {
                     profile: Arc::new(Profile::Table(table.clone())),
+                    document: Arc::new(table_documents.get(name).cloned().unwrap_or_default()),
                     plan: table_plan.clone(),
                     scenario_source: sources.get(name).cloned(),
                 };

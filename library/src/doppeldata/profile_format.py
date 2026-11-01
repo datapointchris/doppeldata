@@ -327,8 +327,8 @@ def schema_error_issues(error: jsonschema.exceptions.ValidationError, at: Pointe
 
     Inside an `anyOf` or `oneOf`, only the branch the value was meant for is read. A branch is not meant where the value
     is not its type, such as the `null` every optional field has, or where a field does not hold its tag, such as
-    `derived`'s other `kind`. A value holding no branch's tag is that one fault. A key its section does not declare is an
-    `unknown-field` at the key's own pointer, naming the closest field the section takes.
+    `derived`'s other `kind`. A value holding no branch's tag is that one fault. A key its section does not declare is
+    `codes.unknown_field` at the key's own pointer, listing the fields the section takes and the closest of them.
     """
     if error.context:
         branches: dict[Any, list[jsonschema.exceptions.ValidationError]] = {}
@@ -376,18 +376,14 @@ def tag_of(schema: Any) -> tuple[Any, ...]:
 
 def unknown_field(key: str, known: list[str], at: PointerParts, codes: DocumentCodes = PROFILE_DOCUMENT) -> Issue:
     closest = tuple(difflib.get_close_matches(key, known, n=3))
-    hint = f'the closest is {closest[0]}, and ' if closest else ''
-    message = f'{key!r} is not a field here; {hint}this section takes {", ".join(known)}'
-    return Issue(codes.unknown_field, pointer(at), message, key, tuple(known), closest)
+    return Issue(codes.unknown_field, pointer(at), f'{key!r} is not a field here', key, tuple(known), closest)
 
 
 def tag_issue(value: Any, tags: list[Any], at: PointerParts, codes: DocumentCodes) -> Issue:
     """A tag field holding none of the tags its branches take, naming the closest."""
     names = [str(tag) for tag in tags]
     closest = tuple(difflib.get_close_matches(value, names, n=1)) if isinstance(value, str) else ()
-    hint = f'the closest is {closest[0]}, and ' if closest else ''
-    message = f'{value!r} is not a {at[-1]} here; {hint}this field takes {", ".join(names)}'
-    return Issue(codes.not_one_of, pointer(at), message, value, tuple(names), closest)
+    return Issue(codes.not_one_of, pointer(at), f'{value!r} is not a {at[-1]} here', value, tuple(names), closest)
 
 
 def unrepresentable_numbers(value: Any, at: PointerParts, codes: DocumentCodes) -> Iterator[Issue]:

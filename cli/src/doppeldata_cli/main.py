@@ -37,6 +37,7 @@ from doppeldata import SourceError
 from doppeldata import StoppedWrite
 from doppeldata import Thresholds
 from doppeldata import _core
+from doppeldata import capabilities
 from doppeldata import check
 from doppeldata import diff
 from doppeldata import example_scenarios
@@ -55,12 +56,12 @@ from doppeldata.example_profiles import bundle_example_text
 from doppeldata.example_profiles import example_names
 from doppeldata.example_profiles import example_resource
 from doppeldata.example_profiles import example_text
+from doppeldata.issue_codes import issue_table
 from doppeldata.manifest import MANIFEST_FILE_NAME
 from doppeldata.manifest import PARTIAL_MANIFEST_FILE_NAME
 from doppeldata.privacy_policy import APPLIED_POLICIES
 from doppeldata.privacy_policy import DEFAULT_K_MIN
 from doppeldata.privacy_policy import ProfileFileCheck
-from doppeldata.privacy_policy import TableCheck
 from doppeldata.privacy_policy import file_checks
 from doppeldata.profile_comparison import NOTHING_SCORED
 from doppeldata.profile_comparison.metrics import METRICS
@@ -92,6 +93,8 @@ from typer._click.exceptions import NoArgsIsHelpError
 from typer._click.exceptions import NoSuchOption
 from typer._click.exceptions import UsageError
 from typer.core import TyperGroup
+
+from doppeldata_cli.command_surface import command_surface
 
 
 def beside(destination: str, name: str) -> str:
@@ -230,8 +233,14 @@ scenario_app = typer.Typer(no_args_is_help=True, help='Scenarios: layers over a 
 app.add_typer(scenario_app, name='scenario')
 schemas_app = typer.Typer(no_args_is_help=True, help='The JSON Schemas of the files doppeldata reads and writes.')
 app.add_typer(schemas_app, name='schemas')
+capabilities_app = typer.Typer(
+    no_args_is_help=True, help='What a program or an agent can name: every command, format, op, fake, semantic type, policy and issue code.'
+)
+app.add_typer(capabilities_app, name='capabilities')
 
 JsonOption = Annotated[bool, typer.Option('--json', help='Print JSON instead of a table.')]
+# capabilities show wraps each list at this width, and never inside an item.
+LISTED_WIDTH = 120
 PROFILE_HELP = (
     'A profile file, a short YAML of rows and columns, a Parquet or Arrow file written with --embed-profile, '
     'a bundle of related tables as a directory holding bundle.yaml or a kind: bundle file, or an example name as profile '
@@ -1058,8 +1067,8 @@ def profile_show(name: Annotated[str, typer.Argument(metavar='NAME', help='An ex
 def profile_check(profile_name: ProfileArgument, as_json: JsonOption = False) -> None:
     """Check a profile against its schema and privacy policy, from the file alone: doppeldata profile check orders.profile.yaml
 
-    Each violation prints as the field it is at, what was found and what was expected, and the command exits 3. Every
-    literal must be listed in privacy.audit and meet its rule, counted as a rate of the rows the profile describes.
+    It prints GitHub Markdown, a table of each issue at its field with what was found, and exits 3 on any. Every literal
+    must be listed in privacy.audit and meet its rule, counted as a rate of the rows the profile describes.
     """
     path = Path(profile_name)
     try:
@@ -1076,24 +1085,9 @@ def profile_check(profile_name: ProfileArgument, as_json: JsonOption = False) ->
     except OSError as error:
         message = f'{profile_name} cannot be read: {error.strerror}'
         raise refused(issue_codes.FILE_UNREADABLE, message, 'PROFILE', value=profile_name) from error
-    if as_json:
-        typer.echo(report.to_json(), nl=False)
-    else:
-        for check in report.tables:
-            typer.echo(checked_table_line(check))
-            for violation in check.violations:
-                typer.echo(f'  {violation.field}: {violation.message} [{violation.code}]')
+    typer.echo(report.to_json() if as_json else report.to_markdown(), nl=False)
     if report.violations:
         raise CheckFailed(report)
-
-
-def checked_table_line(check: TableCheck) -> str:
-    """One table's line in profile check: its name, policy and literal fields, and how many violations follow."""
-    if check.policy is None:
-        return f'{check.table}: {counted(len(check.violations), "schema violation")}'
-    floor = f', k_min {check.k_min}' if check.k_min is not None else ''
-    audited = f'{counted(check.literal_fields, "literal field")} under {check.policy}{floor}'
-    return f'{check.table}: {audited}, {counted(len(check.violations), "violation")}'
 
 
 @dc.dataclass(frozen=True)
@@ -1277,8 +1271,12 @@ def data_plan(
     width = max(len(column.name) for column in planned.columns)
     type_width = max(len(column.physical_type) for column in planned.columns)
     for column in planned.columns:
-        nulls = f', {column.null_share:.3g} null' if column.null_share else ''
-        lines.append(f'{column.name:<{width}}  {column.physical_type:<{type_width}}  {column.sampler}{nulls}')
+        notes = [f'{column.null_fraction:.3g} null'] if column.null_fraction else []
+        if column.patched_fields:
+            notes.append(f'{counted(len(column.patched_fields), "field")} patched')
+        if column.ops:
+            notes.append(f'written by {", ".join(column.ops)}')
+        lines.append(f'{column.name:<{width}}  {column.physical_type:<{type_width}}  {", ".join([column.summary, *notes])}')
     lines.append('')
     path_width = max((len(planned_range.path) for planned_range in planned.ranges), default=0)
     for planned_range in planned.ranges:
@@ -1493,7 +1491,7 @@ def scenario_show(name: Annotated[str, typer.Argument(metavar='NAME', help='An o
         return
     if name not in op_schemas():
         known = [*op_schemas(), *example_scenarios.example_names()]
-        issue = unknown_name(issue_codes.UNKNOWN_OP, name, known, (), 'an op or an example scenario', 'both')
+        issue = unknown_name(issue_codes.UNKNOWN_OP, name, known, (), 'an op or an example scenario')
         raise InvalidArgument(issue.code, issue.message, field='NAME', value=name, valid=issue.valid, closest=issue.closest)
     branch = op_schemas()[name]
     parameters = {key: value for key, value in branch['properties'].items() if key != 'op'}
@@ -1533,18 +1531,24 @@ def scenario_check(
             prepared = prepared_write(profile_name, 'memory://', rows, seed, write, scenario)
         prepared.engine.ranges_json(prepared.options)
     except InvalidScenario as error:
-        if as_json:
-            issues = [dc.asdict(issue) for issue in error.issues]
-            typer.echo(json.dumps({'valid': False, 'source': error.source, 'issues': issues}, indent=2))
-        else:
-            typer.echo(f'doppeldata: {error}', err=True)
+        echo_scenario_check(error.source, source.document['name'], as_json, issues=error.issues)
         raise typer.Exit(3) from error
-    if as_json:
-        typer.echo(json.dumps({'valid': True, 'source': scenario.source, 'issues': []}, indent=2))
-        return
     plain = scenario.to_plain()
     held = f'{counted(len(plain.get("perturbations") or []), "perturbation")} and {counted(len(plain.get("expect") or []), "expectation")}'
-    typer.echo(f'{scenario.source} holds for profile {source.document["name"]}: {held}, scenario {scenario.digest}')
+    echo_scenario_check(scenario.source, source.document['name'], as_json, held=f'{held}, scenario {scenario.digest}')
+
+
+def echo_scenario_check(scenario: str, profile: str, as_json: bool, *, issues: Sequence[Issue] = (), held: str = '') -> None:
+    """Print scenario check's report: JSON, or GitHub Markdown naming each issue at its JSON Pointer."""
+    if as_json:
+        plain = {'passed': not issues, 'scenario': scenario, 'profile': profile, 'issues': [issue.to_json() for issue in issues]}
+        typer.echo(json.dumps(plain, indent=2, ensure_ascii=False))
+        return
+    if not issues:
+        typer.echo(f'# doppeldata scenario check passed\n\n{scenario} holds for profile `{profile}`: {held}.')
+        return
+    lines = ['# doppeldata scenario check failed', '', f'{scenario} does not hold for profile `{profile}`.', '', *issue_table(issues)]
+    typer.echo('\n'.join(lines).rstrip('\n'))
 
 
 @schemas_app.command('list')
@@ -1565,6 +1569,50 @@ def schemas_show(name: Annotated[str, typer.Argument(metavar='NAME', help='A sch
     if name not in schema_names():
         raise refused(issue_codes.COMMAND_LINE, f'{name!r} is not a schema doppeldata ships', 'NAME', value=name, valid=schema_names())
     typer.echo(schema_text(name), nl=False)
+
+
+@capabilities_app.command('show')
+def capabilities_show(ctx: typer.Context, as_json: JsonOption = False) -> None:
+    """List every command, format, op, fake, semantic type, policy and issue code this install takes.
+
+    It is read from the installed doppeldata, so it matches this version exactly. --json adds each command's flags, each
+    op's fields and each issue code's exit status and hint.
+    """
+    held = capabilities(command_surface(ctx))
+    if as_json:
+        typer.echo(json.dumps(held, indent=2))
+        return
+    width = max(len(' '.join(command['path'])) for command in held['commands'])
+    for command in held['commands']:
+        typer.echo(f'doppeldata {" ".join(command["path"]):<{width}}  {command["summary"] or ""}')
+
+    def only_in(row: dict[str, Any], key: str) -> str:
+        return row[key] if len(row['formats']) == len(held['formats']) else f'{row[key]} ({", ".join(row["formats"])})'
+
+    sections = {
+        'formats': held['formats'],
+        'export formats': held['export_formats'],
+        'engines': [row['engine'] for row in held['engines']],
+        'policies': [*held['policies'], f'k_min {held["default_k_min"]} unless given'],
+        'families': [row['family'] for row in held['families']],
+        'fakes': held['fakes'],
+        'semantic types': [f'{row["type"]} ({row["pack"]})' for row in held['semantic_types']],
+        'ops': [only_in(row, 'op') for row in held['ops']],
+        'fault kinds': [only_in(row, 'kind') for row in held['fault_kinds']],
+        'schemas': held['schemas'],
+    }
+    label = max(map(len, sections)) + 2
+    for name, values in sections.items():
+        lines = [f'{name:<{label}}']
+        for at, value in enumerate(values):
+            item = value + (',' if at < len(values) - 1 else '')
+            if len(lines[-1]) > label and len(lines[-1]) + 1 + len(item) > LISTED_WIDTH:
+                lines.append(' ' * label)
+            lines[-1] += item if len(lines[-1]) == label else f' {item}'
+        typer.echo('\n'.join(lines))
+    typer.echo(
+        f'{counted(len(held["issue_codes"]), "issue code")}, each with its exit status and hint: doppeldata capabilities show --json'
+    )
 
 
 def installed_commit() -> str | None:

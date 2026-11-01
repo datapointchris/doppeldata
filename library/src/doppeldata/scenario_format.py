@@ -120,14 +120,14 @@ def check(plain: Any) -> list[Issue]:
     for index, entry in enumerate(entries if isinstance(entries, list) else []):
         op = entry.get('op') if isinstance(entry, dict) else None
         if isinstance(op, str) and op not in op_schemas():
-            issues.append(unknown_name(issue_codes.UNKNOWN_OP, op, list(op_schemas()), ('perturbations', index), 'an op', 'the ops'))
+            issues.append(unknown_name(issue_codes.UNKNOWN_OP, op, list(op_schemas()), ('perturbations', index), 'an op'))
         else:
             issues += schema_issues(validators()[op if isinstance(op, str) else 'perturbation'], entry, ('perturbations', index))
     for index, expectation in enumerate(expectations if isinstance(expectations, list) else []):
         metric = expectation.get('metric') if isinstance(expectation, dict) else None
         if isinstance(metric, str) and metric not in expected_metrics():
             at = ('expect', index, 'metric')
-            issues.append(unknown_name(issue_codes.UNKNOWN_METRIC, metric, expected_metrics(), at, 'a metric', 'the metrics'))
+            issues.append(unknown_name(issue_codes.UNKNOWN_METRIC, metric, expected_metrics(), at, 'a metric'))
         else:
             issues += schema_issues(validators()['expectation'], expectation, ('expect', index))
     if issues:
@@ -140,12 +140,10 @@ def check(plain: Any) -> list[Issue]:
     return issues + list(expectation_issues(plain))
 
 
-def unknown_name(code: str, name: str, known: list[str], at: PointerParts, noun: str, listing: str) -> Issue:
-    """A name doppeldata does not know, naming the closest it does and every one, as `doppeldata scenario list` lists them."""
+def unknown_name(code: str, name: str, known: list[str], at: PointerParts, noun: str) -> Issue:
+    """A name doppeldata does not know, with every one it knows and the closest of them."""
     closest = tuple(difflib.get_close_matches(name, known, n=3))
-    hint = f'the closest is {closest[0]}, and ' if closest else ''
-    message = f'{name!r} is not {noun} doppeldata knows; {hint}`doppeldata scenario list` lists {listing}: {", ".join(known)}'
-    return Issue(code, pointer(at), message, name, tuple(known), closest)
+    return Issue(code, pointer(at), f'{name!r} is not {noun} doppeldata knows', name, tuple(known), closest)
 
 
 @dc.dataclass(frozen=True)
