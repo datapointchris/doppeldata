@@ -119,6 +119,22 @@ adds a three-value `tier`, drawn given each of the 50 categories. It printed:
   from the column's own, so the row adds a lookup of the parent's value.
 - **The runs shared the machine with other work**, at the load averages each row records.
 
+## A 40-column copula group no valid matrix holds plans in under 3 seconds
+
+`benchmarks/dependent_columns.py` also plans and draws 10 rows of a 40-column group. Each of its
+780 pairs is stated at a Spearman value drawn from ±0.8, and half its members tie most rows at one
+value. No valid matrix holds such pairs, so each plan repairs the group. It printed:
+
+| Arm | Threads | Work | Per second, range of 5 runs | Output | Load average, before and after |
+| --- | --- | --- | --- | --- | --- |
+| engine, `sd.generate` | 1 | plan and draw 10 rows of a 40-column copula group, its 780 stated pairs held by no valid matrix | 0.372 to 0.377 | — | 7.6 to 6.7 |
+
+- **The fit's work has a fixed budget, so a larger group takes fewer fitted steps rather than more
+  time.** Each system the fit solves counts as the cube of the stated pairs. This group's fit
+  stops after one step, in about 0.26 s.
+- **The rest of the plan is the projection**, whose eigendecompositions grow as the cube of the
+  members.
+
 ## Drawing its foreign keys holds a narrow table to a third to a half of its rate alone, and a wide one loses less
 
 `benchmarks/related_tables.py`, which `task bench` runs, generates one table of a bundle three ways

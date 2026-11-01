@@ -42,6 +42,7 @@ use self::copula::CurveScores;
 use self::copula::LatentGrid;
 use self::copula::PairSeries;
 use self::copula::RankScores;
+use self::copula::Repair;
 use self::copula::TIE_SHARE;
 use self::copula::calibrated;
 use self::formula::Formula;
@@ -1011,10 +1012,11 @@ impl DependentColumns {
                     .filter(|name| **name != profile[member].name)
                     .map(String::as_str)
                     .collect();
-                let repaired = match (group.independent, group.repaired) {
-                    (true, _) => ", each member drawn alone, since no valid matrix lies near its correlations",
-                    (false, true) => ", its correlations repaired to the nearest valid matrix",
-                    (false, false) => "",
+                let repaired = match group.repair {
+                    Repair::Unneeded => "",
+                    Repair::Fitted => ", its correlations repaired to a valid matrix fitted toward the stated Spearman values",
+                    Repair::Projected => ", its correlations repaired to a valid matrix by projection, which no fitted step improved",
+                    Repair::Abandoned => ", each member drawn alone, since no valid matrix lies near its correlations",
                 };
                 let name = profile[member].name.as_str();
                 let beyond: Vec<&str> = group
@@ -1287,7 +1289,7 @@ fn copula_groups(
                 let (a, b) = (names[a], names[b]);
                 stored.get(&(a.min(b), a.max(b))).copied()
             },
-            |a, b, rho| calibrated(rho, &pair_series(by_index[&a], by_index[&b], &grid)),
+            |a, b| pair_series(by_index[&a], by_index[&b], &grid),
         ));
     }
     (groups, set_aside)

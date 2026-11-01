@@ -11,7 +11,7 @@ from doppeldata import _core
 from doppeldata.name_hinted_types import GENERAL
 from doppeldata.name_hinted_types import with_type_hints
 
-PINNED_STREAM_VERSION = 13
+PINNED_STREAM_VERSION = 14
 PINNED_TYPE_HINTS = 'fd356e89a3704105bd6ea2848c1c9f68ceed6a6a887744298f3c7e27ca97e632'
 
 
