@@ -188,8 +188,24 @@ JSON_REQUESTED = 'doppeldata.json'
 INVOKED_COMMAND = 'doppeldata.command'
 
 
+def folded(help_text: str | None) -> str | None:
+    """`help_text` with each paragraph on one line, so the terminal wraps it. Typer folds an epilog's line breaks, but
+    prints a help body's as they are."""
+    if help_text is None:
+        return None
+    paragraphs = help_text.split('\n\n')
+    return '\n\n'.join(' '.join(line.strip() for line in paragraph.splitlines()) for paragraph in paragraphs)
+
+
 class CommandGroup(TyperGroup):
-    """A group recording the command it resolves in the meta every context of one invocation shares."""
+    """A group recording the command it resolves in the meta every context of one invocation shares, and folding each of
+    its commands' help into paragraphs the terminal wraps."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        for command in self.commands.values():
+            if not isinstance(command, TyperGroup):
+                command.help = folded(command.help)
 
     def resolve_command(self, ctx: Any, args: list[str]) -> Any:
         name, command, rest = super().resolve_command(ctx, args)
