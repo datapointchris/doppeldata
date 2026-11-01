@@ -96,7 +96,7 @@ pub(super) fn plan(op: &OutOfRange, planning: &Planning<'_>) -> Result<Planned, 
     let op = OutOfRangeRows {
         column,
         written,
-        rate: op.rate.0,
+        rate: op.fraction.0,
         rows_key: planning.key("rows"),
         values_key: planning.key("values"),
     };

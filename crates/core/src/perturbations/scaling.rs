@@ -16,7 +16,7 @@ struct Scale {
 }
 
 pub(super) fn plan(op: &Scaling, planning: &Planning<'_>) -> Result<Planned, PlanError> {
-    let edit = NumericEdit::plan(planning, &op.column, op.rate.0, "scaling")?;
+    let edit = NumericEdit::plan(planning, &op.column, op.fraction.0, "scaling")?;
     Ok(planning.rows(Scale { edit, factor: op.factor }))
 }
 

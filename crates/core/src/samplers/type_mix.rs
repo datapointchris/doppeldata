@@ -139,7 +139,7 @@ impl TypeMix {
     /// the table's format is not read, and a scenario changing it changes no column's type. None
     /// for any other column. `keyed` makes each foreign value one no other row holds.
     pub(crate) fn planned(column: &Column, data_type: &DataType, keyed: bool, pointer: &str) -> Result<Option<Self>, Refusal> {
-        let (Some(own), Some(mix)) = (own_raw_type(data_type), column.type_mix.as_ref()) else {
+        let (Some(own), Some(mix)) = (own_raw_type(data_type), column.type_mix_fractions.as_ref()) else {
             return Ok(None);
         };
         let total: f64 = mix.values().map(|share| share.0.max(0.0)).sum();

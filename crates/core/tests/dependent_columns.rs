@@ -115,7 +115,7 @@ fn generated_rows_hold_each_stated_correlation_and_each_conditional_share() {
                 *counts.entry((parent, child)).or_default() += 1.0;
             }
         }
-        for (parent, shares) in conditional["table"].as_object().unwrap() {
+        for (parent, shares) in conditional["fractions"].as_object().unwrap() {
             for (child, share) in shares.as_object().unwrap() {
                 let measured = counts.get(&(parent.clone(), child.clone())).copied().unwrap_or(0.0) / totals[parent];
                 let share = share.as_f64().unwrap();

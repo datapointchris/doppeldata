@@ -21,7 +21,7 @@ struct PlaceOutliers {
 }
 
 pub(super) fn plan(op: &Outliers, planning: &Planning<'_>) -> Result<Planned, PlanError> {
-    let edit = NumericEdit::plan(planning, &op.column, op.rate.0, "outliers")?;
+    let edit = NumericEdit::plan(planning, &op.column, op.fraction.0, "outliers")?;
     let (low, high) = planning.numeric_extremes(&op.column);
     let span = match high > low {
         true => high - low,

@@ -11,52 +11,51 @@ privacy:
     - {column: user_id, reason: identifier, semantic: customer_id}
   # Every field holding a literal, the rule that admits it, and the fewest rows any of its values or cells rests on.
   audit:
-    - {column: event_id, field: /string/shapes, values: 1, rule: "count >= k_min", min_count: 240000}
-    - {column: event_type, field: /string/top_values, values: 4, rule: "count >= k_min", min_count: 7200}
-    - {column: occurred_at, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_count: 11}
-    - {column: event_date, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_count: 11}
-    - {column: context.page, field: /string/top_values, values: 4, rule: "count >= k_min", min_count: 24000}
-    - {column: context.referrer, field: /string/top_values, values: 3, rule: "count >= k_min", min_count: 9000}
-    - {column: context.device.os, field: /string/top_values, values: 4, rule: "count >= k_min", min_count: 24000}
-    - {column: context.device.mobile, field: /boolean, values: 2, rule: "cell >= k_min", min_count: 67200}
+    - {column: event_id, field: /string/shapes, values: 1, rule: "count >= k_min", min_rows: 240000}
+    - {column: event_type, field: /string/top_values, values: 4, rule: "count >= k_min", min_rows: 7200}
+    - {column: occurred_at, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_rows: 11}
+    - {column: event_date, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_rows: 11}
+    - {column: context.page, field: /string/top_values, values: 4, rule: "count >= k_min", min_rows: 24000}
+    - {column: context.referrer, field: /string/top_values, values: 3, rule: "count >= k_min", min_rows: 9000}
+    - {column: context.device.os, field: /string/top_values, values: 4, rule: "count >= k_min", min_rows: 24000}
+    - {column: context.device.mobile, field: /boolean, values: 2, rule: "cell >= k_min", min_rows: 67200}
 source:
   format: ndjson
   compression: gzip
   layout:
-    files:
-      count: 24
-      size_bytes: {min: 2100000, p50: 2400000, max: 2900000, total: 57600000}
+    files: 24
+    file_size_bytes: {min: 2100000, p50: 2400000, max: 2900000, total: 57600000}
     rows_per_file: {p05: 9000, p50: 10000, p95: 11200}
     partitioning:
       style: hive
       keys:
         - name: event_date
           type: date32[day]
-          values: {count: 24}
+          values: 24
   json:
     writer: {explicit_nulls: false, compression: gzip}
     max_depth: 3
 dataset:
-  row_count: 240000
-  duplicate_row_rate: 0.0
+  rows: 240000
+  duplicate_row_fraction: 0.0
 columns:
   - name: event_id
     physical_type: string
     logical_type: string
     nullable: false
-    null_rate: 0.0
-    distinct: {approx: 240000, ratio: 1.0}
+    null_fraction: 0.0
+    distinct: {approx_values: 240000, ratio: 1.0}
     string:
       length: {min: 36, max: 36, mean: 36}
-      shapes: [{shape: "99a99a99-9999-9a99-a999-a99a9999a9a9", rate: 1.0}]
+      shapes: [{shape: "99a99a99-9999-9a99-a999-a99a9999a9a9", fraction: 1.0}]
     semantic: {type: uuid, confidence: 0.99, detectors: [pattern], sensitivity: identifier, generator_hint: {provider: uuid}}
   - name: user_id
     physical_type: int64
     logical_type: integer
     nullable: false
-    null_rate: 0.0
-    type_mix: {integer: 0.75, string: 0.25}
-    distinct: {approx: 25000, ratio: 0.1042}
+    null_fraction: 0.0
+    type_mix_fractions: {integer: 0.75, string: 0.25}
+    distinct: {approx_values: 25000, ratio: 0.1042}
     # An integer identifier's extremes are the bounds of its digit counts, so it holds no literal at all.
     numeric:
       integral: true
@@ -67,20 +66,20 @@ columns:
     physical_type: string
     logical_type: string
     nullable: false
-    null_rate: 0.0
-    distinct: {approx: 4, ratio: 0.00002}
+    null_fraction: 0.0
+    distinct: {approx_values: 4, ratio: 0.00002}
     string:
       top_values:
-        - {value: page_view, rate: 0.62}
-        - {value: click, rate: 0.27}
-        - {value: add_to_cart, rate: 0.08}
-        - {value: purchase, rate: 0.03}
-      other_rate: 0.0
+        - {value: page_view, fraction: 0.62}
+        - {value: click, fraction: 0.27}
+        - {value: add_to_cart, fraction: 0.08}
+        - {value: purchase, fraction: 0.03}
+      other_fraction: 0.0
   - name: occurred_at
     physical_type: "timestamp[us, tz=UTC]"
     logical_type: timestamp
     nullable: false
-    null_rate: 0.0
+    null_fraction: 0.0
     temporal:
       timezone: UTC
       extremes: {low: "2025-06-01T00:00:00Z", high: "2025-06-24T23:59:59Z", granularity: second}
@@ -88,80 +87,80 @@ columns:
     physical_type: date32[day]
     logical_type: date
     nullable: false
-    null_rate: 0.0
-    distinct: {approx: 24, ratio: 0.0001}
+    null_fraction: 0.0
+    distinct: {approx_values: 24, ratio: 0.0001}
     temporal:
       extremes: {low: "2025-06-01", high: "2025-06-24", granularity: day}
   - name: context
     physical_type: "struct<page: string, referrer: string, device: struct<os: string, mobile: bool>>"
     logical_type: object
     nullable: false
-    null_rate: 0.0
+    null_fraction: 0.0
     struct:
-      presence: {page: 1.0, referrer: 0.25, device: 1.0}
+      presence_fractions: {page: 1.0, referrer: 0.25, device: 1.0}
       fields:
         - name: page
           path: context.page
           physical_type: string
           logical_type: string
           nullable: false
-          null_rate: 0.0
+          null_fraction: 0.0
           string:
             top_values:
-              - {value: /, rate: 0.35}
-              - {value: /search, rate: 0.25}
-              - {value: /product, rate: 0.3}
-              - {value: /cart, rate: 0.1}
-            other_rate: 0.0
+              - {value: /, fraction: 0.35}
+              - {value: /search, fraction: 0.25}
+              - {value: /product, fraction: 0.3}
+              - {value: /cart, fraction: 0.1}
+            other_fraction: 0.0
         - name: referrer
           path: context.referrer
           physical_type: string
           logical_type: string
           nullable: true
-          null_rate: 0.0
+          null_fraction: 0.0
           string:
             top_values:
-              - {value: "https://www.google.com/", rate: 0.6}
-              - {value: "https://www.bing.com/", rate: 0.15}
-              - {value: "https://t.co/", rate: 0.25}
-            other_rate: 0.0
+              - {value: "https://www.google.com/", fraction: 0.6}
+              - {value: "https://www.bing.com/", fraction: 0.15}
+              - {value: "https://t.co/", fraction: 0.25}
+            other_fraction: 0.0
         - name: device
           path: context.device
           physical_type: "struct<os: string, mobile: bool>"
           logical_type: object
           nullable: false
-          null_rate: 0.0
+          null_fraction: 0.0
           struct:
-            presence: {os: 1.0, mobile: 1.0}
+            presence_fractions: {os: 1.0, mobile: 1.0}
             fields:
               - name: os
                 path: context.device.os
                 physical_type: string
                 logical_type: string
                 nullable: false
-                null_rate: 0.0
+                null_fraction: 0.0
                 string:
                   top_values:
-                    - {value: ios, rate: 0.38}
-                    - {value: android, rate: 0.34}
-                    - {value: windows, rate: 0.18}
-                    - {value: macos, rate: 0.1}
-                  other_rate: 0.0
+                    - {value: ios, fraction: 0.38}
+                    - {value: android, fraction: 0.34}
+                    - {value: windows, fraction: 0.18}
+                    - {value: macos, fraction: 0.1}
+                  other_fraction: 0.0
               - name: mobile
                 path: context.device.mobile
                 physical_type: bool
                 logical_type: boolean
                 nullable: false
-                null_rate: 0.0
-                boolean: {true_rate: 0.72}
+                null_fraction: 0.0
+                boolean: {true_fraction: 0.72}
   - name: tags
     physical_type: "list<item: string>"
     logical_type: array
     nullable: true
-    null_rate: 0.1
+    null_fraction: 0.1
     list:
       length: {p05: 0, p50: 1, p95: 3}
-      empty_rate: 0.4
+      empty_fraction: 0.4
       # An element is counted by element rather than by row, so the floor withholds its values.
       element:
         name: element
@@ -169,6 +168,6 @@ columns:
         physical_type: string
         logical_type: string
         nullable: false
-        null_rate: 0.0
+        null_fraction: 0.0
         string:
           length: {min: 4, max: 9, mean: 6}

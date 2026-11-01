@@ -65,28 +65,28 @@ TIMESTAMP_UNIT = re.compile(r'^timestamp\[(s|ms|us|ns)')
 # script until one of them reads it, so no field goes uncompared.
 READ_FIELDS = {
     'Dataset': {
-        'row_count',
-        'duplicate_row_rate',
+        'rows',
+        'duplicate_row_fraction',
         'keys',
         'correlations',
         'correlation_ratios',
         'conditionals',
         'conditional_quantiles',
-        'conditional_rates',
+        'conditional_fractions',
         'dependencies',
     },
     'Keys': {'primary', 'candidates'},
     'Key': {'columns', 'uniqueness'},
     'Correlation': {'a', 'b', 'method', 'value'},
     'CorrelationRatio': {'a', 'b', 'value'},
-    'Conditional': {'given', 'column', 'table', 'other'},
+    'Conditional': {'given', 'column', 'fractions', 'other_fractions'},
     'ConditionalQuantiles': {'given', 'column', 'quantiles', 'other'},
-    'ConditionalRates': {'given', 'column', 'zero_rate', 'null_rate', 'other'},
-    'OtherRates': {'zero_rate', 'null_rate'},
-    'Dependency': {'kind', 'lhs', 'rhs', 'violation_rate', 'table'},
-    'Relationship': {'from', 'to', 'containment', 'orphan_rate', 'cardinality', 'fanout', 'inherited', 'ordinal'},
-    'Fanout': {'quantiles', 'top_share', 'zipf_s'},
-    'Inherited': {'child', 'parent', 'agreement'},
+    'ConditionalFractions': {'given', 'column', 'zero_fraction', 'null_fraction', 'other'},
+    'OtherFractions': {'zero_fraction', 'null_fraction'},
+    'Dependency': {'kind', 'lhs', 'rhs', 'violation_fraction', 'table'},
+    'Relationship': {'from', 'to', 'containment', 'orphan_fraction', 'cardinality', 'fanout', 'inherited', 'ordinal'},
+    'Fanout': {'quantiles', 'top_fractions', 'zipf_s'},
+    'Inherited': {'child', 'parent', 'agreement_fraction'},
 }
 for definition, read in READ_FIELDS.items():
     unread = sorted(set(published_fields(definition)) - read)
@@ -138,8 +138,8 @@ def rank_error(values: pl.Series, value: float, level: float) -> float:
 
 def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
     """Each value the dataset section states, as the field, what the value describes, and the value."""
-    yield 'row_count', '', dataset.get('row_count')
-    yield 'duplicate_row_rate', '', dataset.get('duplicate_row_rate')
+    yield 'rows', '', dataset.get('rows')
+    yield 'duplicate_row_fraction', '', dataset.get('duplicate_row_fraction')
     keys = dataset.get('keys') or {}
     for role, key in [('primary', keys.get('primary')), *(('candidate', key) for key in keys.get('candidates') or [])]:
         if key:
@@ -150,8 +150,8 @@ def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
         yield 'correlation_ratios', f'{ratio["a"]} x {ratio["b"]}', ratio['value']
     for conditional in dataset.get('conditionals') or []:
         rows = {
-            **{f'{conditional["given"]}={given}': row for given, row in conditional['table'].items()},
-            '(other)': conditional.get('other') or {},
+            **{f'{conditional["given"]}={given}': row for given, row in conditional['fractions'].items()},
+            '(other)': conditional.get('other_fractions') or {},
         }
         for given, row in rows.items():
             for value, rate in row.items():
@@ -161,14 +161,14 @@ def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
         for given, quantiles in groups.items():
             for level in quantiles:
                 yield 'conditional_quantiles', f'{conditional_name(stated)}: {level} | {given}', None
-    for stated in dataset.get('conditional_rates') or []:
-        for rate in ('zero_rate', 'null_rate'):
+    for stated in dataset.get('conditional_fractions') or []:
+        for rate in ('zero_fraction', 'null_fraction'):
             for given, value in (stated.get(rate) or {}).items():
-                yield 'conditional_rates', f'{conditional_name(stated)}: {rate} | {stated["given"]}={given}', value
-            yield 'conditional_rates', f'{conditional_name(stated)}: {rate} | (other)', (stated.get('other') or {}).get(rate)
+                yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | {stated["given"]}={given}', value
+            yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | (other)', (stated.get('other') or {}).get(rate)
     for dependency in dataset.get('dependencies') or []:
         described = f'{dependency["kind"]} {"+".join(dependency["lhs"])} -> {dependency["rhs"]}'
-        yield 'dependencies', described, dependency.get('violation_rate')
+        yield 'dependencies', described, dependency.get('violation_fraction')
         for value, determined in (dependency.get('table') or {}).items():
             yield 'dependencies table', f'{described}: {value}', determined
 
@@ -177,15 +177,15 @@ def relationship_entries(relationships: list[dict[str, Any]]) -> Iterator[tuple[
     """Each value a bundle's relationships state, as the field, the relationship and part, and the value."""
     for relationship in relationships:
         named = f'{", ".join(relationship["from"])} -> {", ".join(relationship["to"])}'
-        for field in ('containment', 'orphan_rate', 'cardinality', 'ordinal'):
+        for field in ('containment', 'orphan_fraction', 'cardinality', 'ordinal'):
             yield f'relationships {field}', named, relationship.get(field)
         fanout = relationship.get('fanout') or {}
-        for part in ('quantiles', 'top_share'):
+        for part in ('quantiles', 'top_fractions'):
             for level, value in (fanout.get(part) or {}).items():
                 yield f'relationships fanout {part}', f'{named} {level}', value
         yield 'relationships fanout zipf_s', named, fanout.get('zipf_s')
         for entry in relationship.get('inherited') or []:
-            yield 'relationships inherited agreement', f'{named} {entry["child"]} from {entry["parent"]}', entry['agreement']
+            yield 'relationships inherited agreement', f'{named} {entry["child"]} from {entry["parent"]}', entry['agreement_fraction']
 
 
 def conditional_name(conditional: dict[str, Any]) -> str:
@@ -227,7 +227,7 @@ def compared(polars: dict[str, Any], spark: dict[str, Any], frame: pl.LazyFrame)
     shared = {
         field: {conditional_name(entry) for entry in polars['dataset'].get(field) or []}
         & {conditional_name(entry) for entry in spark['dataset'].get(field) or []}
-        for field in ('conditionals', 'conditional_quantiles', 'conditional_rates')
+        for field in ('conditionals', 'conditional_quantiles', 'conditional_fractions')
     }
 
     nominated = {
@@ -256,14 +256,14 @@ def compared(polars: dict[str, Any], spark: dict[str, Any], frame: pl.LazyFrame)
             continue
         if as_spark_holds(expected.get('physical_type')) != found.get('physical_type'):
             failures.append(f'{name}: physical_type {expected.get("physical_type")!r} against {found.get("physical_type")!r}')
-        for field in ('logical_type', 'null_rate', 'nullable'):
+        for field in ('logical_type', 'null_fraction', 'nullable'):
             if expected.get(field) != found.get(field):
                 failures.append(f'{name}: {field} {expected.get(field)!r} against {found.get(field)!r}')
         for section in ('numeric', 'temporal'):
             want, got = (expected.get(section) or {}).get('extremes'), (found.get(section) or {}).get('extremes')
             if want != got:
                 failures.append(f'{name}: {section} extremes {want} against {got}')
-        exact, estimated = (expected.get('distinct') or {}).get('approx'), (found.get('distinct') or {}).get('approx')
+        exact, estimated = (expected.get('distinct') or {}).get('approx_values'), (found.get('distinct') or {}).get('approx_values')
         if exact and estimated is not None and abs(estimated - exact) / exact > worst_distinct[0]:
             worst_distinct = (abs(estimated - exact) / exact, f'{name}: {estimated} against {exact}')
         quantiles = (found.get('numeric') or {}).get('quantiles') or {}

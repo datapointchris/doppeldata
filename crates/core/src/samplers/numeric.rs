@@ -3,7 +3,7 @@
 //!
 //! The knots are the stored quantiles, with the extremes at levels 0 and 1. A histogram's edges at
 //! their cumulative shares of every row, its overflow included, fill the body between the
-//! outermost quantiles, and `zero_rate` adds a flat run at zero, clamped between the knots beside
+//! outermost quantiles, and `zero_fraction` adds a flat run at zero, clamped between the knots beside
 //! it. Beyond the outermost quantile, a fitted family's conditional tail, truncated at the
 //! extremes, is tabulated into dense knots; without a usable fit the tail is linear.
 
@@ -81,14 +81,14 @@ fn histogram_knots(histogram: Option<&Histogram>) -> Vec<(f64, f64)> {
     let (outside_below, outside_above) = histogram
         .overflow
         .as_ref()
-        .map_or((0, 0), |overflow| (overflow.below, overflow.above));
-    let total = outside_below + histogram.counts.iter().sum::<u64>() + outside_above;
-    if total == 0 || histogram.edges.len() != histogram.counts.len() + 1 {
+        .map_or((0, 0), |overflow| (overflow.rows_below, overflow.rows_above));
+    let total = outside_below + histogram.bin_rows.iter().sum::<u64>() + outside_above;
+    if total == 0 || histogram.edges.len() != histogram.bin_rows.len() + 1 {
         return Vec::new();
     }
     let mut below = outside_below;
     let mut knots = vec![(below as f64 / total as f64, histogram.edges[0])];
-    for (&count, &edge) in histogram.counts.iter().zip(&histogram.edges[1..]) {
+    for (&count, &edge) in histogram.bin_rows.iter().zip(&histogram.edges[1..]) {
         below += count;
         knots.push((below as f64 / total as f64, edge));
     }
@@ -187,7 +187,7 @@ pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> R
         // Where the body starts at or above zero, the stated negative rate is the share a fitted tail
         // below zero may hold, and the levels from it up to the body draw between zero and the body.
         let below_zero = stats
-            .negative_rate
+            .negative_fraction
             .map(|r| r.0)
             .filter(|&share| 0.0 < share && share < level && value >= 0.0 && low.is_some_and(|low| low < 0.0));
         let (top_level, top_value) = below_zero.map_or((level, value), |share| (share, 0.0));
@@ -219,13 +219,13 @@ pub(crate) fn numeric_cdf(stats: &NumericStats, fit: Option<&FittedFamily>) -> R
             _ = knots.insert(level, value);
         }
     }
-    if let Some(zero_rate) = stats.zero_rate.map(|r| r.0).filter(|&r| r > 0.0) {
-        let below_zero = stats.negative_rate.map(|r| r.0).or_else(|| {
+    if let Some(zero_fraction) = stats.zero_fraction.map(|r| r.0).filter(|&r| r > 0.0) {
+        let below_zero = stats.negative_fraction.map(|r| r.0).or_else(|| {
             let lowest = knots.first().map_or(0.0, |(_, value)| value);
             (lowest >= 0.0).then_some(0.0)
         });
         if let Some(below_zero) = below_zero {
-            knots.insert_run(below_zero, (below_zero + zero_rate).min(1.0), 0.0);
+            knots.insert_run(below_zero, (below_zero + zero_fraction).min(1.0), 0.0);
         }
     }
     Ok((InverseCdf::new(knots), shape))

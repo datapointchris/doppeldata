@@ -144,7 +144,7 @@ impl PlanContext<'_> {
         let ratio = distinct.ratio?.0;
         let held = ratio * self.rows;
         let source_rows = distinct
-            .approx
+            .approx_values
             .map(|count| count as f64)
             .filter(|&count| count > 0.0 && ratio > 0.0)
             .map(|count| (count, self.source_rows.unwrap_or(count / ratio)));
@@ -294,9 +294,9 @@ impl ValueSampler {
             Self::Numeric(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::Categorical(sampler) => sampler.generate(at, keys, rows, nulls),
             Self::Temporal(sampler) => sampler.generate(&mut values(), rows, nulls),
-            Self::Boolean(true_rate) => {
+            Self::Boolean(true_fraction) => {
                 let mut rng = values();
-                let values = BooleanBuffer::collect_bool(rows, |_| true_rate.draw(&mut rng));
+                let values = BooleanBuffer::collect_bool(rows, |_| true_fraction.draw(&mut rng));
                 Arc::new(BooleanArray::new(values, nulls))
             }
             Self::Text(sampler) => sampler.generate(at, keys, rows, nulls),
@@ -634,9 +634,9 @@ pub(crate) fn column_plan(context: &PlanContext, column: &Column, site: &ColumnS
 fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite, presence: f64) -> Result<ColumnPlan, PlanError> {
     let keys = StreamKeys::new(context.table, &site.path);
     let may_be_null = column.nullable != Some(false);
-    let null_rate = column.null_rate.map_or(0.0, |r| r.0);
+    let null_fraction = column.null_fraction.map_or(0.0, |r| r.0);
     let null_share = if may_be_null {
-        null_rate + (1.0 - presence) * (1.0 - null_rate)
+        null_fraction + (1.0 - presence) * (1.0 - null_fraction)
     } else {
         0.0
     };
@@ -651,14 +651,15 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
     // the own draw holds every one of them in its share of the rows.
     let own_share = type_mix.as_ref().map_or(1.0, TypeMix::own_share);
     let values = value_sampler(context, column, site, &keys, context.rows * (1.0 - null_share) * own_share)?;
-    let text_only = TextOnlyValues::new(column.missing_tokens.as_ref(), null_share).map_err(site.refuse("/missing_tokens"))?;
+    let text_only =
+        TextOnlyValues::new(column.missing_token_fractions.as_ref(), null_share).map_err(site.refuse("/missing_token_fractions"))?;
     if site.nested && text_only.is_some() {
         let message = "a text cell names no nested field, so a nested field's missing-value tokens are not generated yet".to_string();
-        return Err(site.refuse_as(ColumnFault::NotGeneratedYet, "/missing_tokens")(message));
+        return Err(site.refuse_as(ColumnFault::NotGeneratedYet, "/missing_token_fractions")(message));
     }
     let nulls = Some(Bernoulli::new(null_share)).filter(|null| !null.never());
     let mut sampler = describe(column, &values);
-    if column.missing_tokens.as_ref().is_some_and(|tokens| !tokens.is_empty()) {
+    if column.missing_token_fractions.as_ref().is_some_and(|tokens| !tokens.is_empty()) {
         sampler.push_str(", with missing-value tokens as text");
     }
     let field = match &type_mix {
@@ -708,17 +709,17 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
         }
         ValueSampler::Categorical(categorical) => {
             let string = column.string.as_ref();
-            let (top, other_rate) = match (listed_values(string), listed_prefixes(string)) {
+            let (top, other_fraction) = match (listed_values(string), listed_prefixes(string)) {
                 (None, Some(prefixes)) => (
                     format!("{} top prefixes, each followed by {}", categorical.listed.len(), prefixes.suffix),
-                    prefixes.other_rate,
+                    prefixes.other_fraction,
                 ),
                 _ => (
                     format!("{} top values", categorical.listed.len()),
-                    string.and_then(|s| s.other_rate),
+                    string.and_then(|s| s.other_fraction),
                 ),
             };
-            match other_rate.is_some_and(|r| r.0 > 0.0) {
+            match other_fraction.is_some_and(|r| r.0 > 0.0) {
                 true => format!("{top}, the rest from {}", describe_source(&categorical.other)),
                 false => top,
             }
@@ -726,9 +727,9 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
         ValueSampler::Temporal(_) => {
             let temporal = column.temporal.as_ref();
             let weights: Vec<&str> = [
-                ("month", temporal.and_then(|t| t.by_month.as_ref()).is_some()),
-                ("weekday", temporal.and_then(|t| t.by_dow.as_ref()).is_some()),
-                ("hour", temporal.and_then(|t| t.by_hour.as_ref()).is_some()),
+                ("month", temporal.and_then(|t| t.month_fractions.as_ref()).is_some()),
+                ("weekday", temporal.and_then(|t| t.weekday_fractions.as_ref()).is_some()),
+                ("hour", temporal.and_then(|t| t.hour_fractions.as_ref()).is_some()),
             ]
             .into_iter()
             .filter_map(|(name, weighted)| weighted.then_some(name))
@@ -739,8 +740,8 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
             }
         }
         ValueSampler::Boolean(_) => {
-            let true_rate = column.boolean.as_ref().and_then(|b| b.true_rate).map_or(0.5, |r| r.0);
-            format!("true in {true_rate} of rows")
+            let true_fraction = column.boolean.as_ref().and_then(|b| b.true_fraction).map_or(0.5, |r| r.0);
+            format!("true in {true_fraction} of rows")
         }
         ValueSampler::Text(text) => {
             let mut description = describe_source(&text.source);
@@ -837,12 +838,12 @@ fn value_sampler(
         let stats = numeric.cloned().unwrap_or_else(empty_numeric_stats);
         let target = context.distinct_target(column.distinct.as_ref(), filled_rows);
         let source = column.distinct.as_ref().and_then(|d| {
-            let (distinct, ratio) = (d.approx?, d.ratio?.0);
+            let (distinct, ratio) = (d.approx_values?, d.ratio?.0);
             let described = context.described_rows.or((ratio > 0.0).then(|| distinct as f64 / ratio))?;
-            let null_rate = column.null_rate.map_or(0.0, |r| r.0);
+            let null_fraction = column.null_fraction.map_or(0.0, |r| r.0);
             Some(SourceCounts {
                 distinct,
-                values: described * (1.0 - null_rate),
+                values: described * (1.0 - null_fraction),
                 k_min: context.k_min,
             })
         });
@@ -857,8 +858,8 @@ fn value_sampler(
         return Ok(ValueSampler::Temporal(sampler));
     }
     if scalar == DataType::Boolean {
-        let true_rate = column.boolean.as_ref().and_then(|b| b.true_rate).map_or(0.5, |r| r.0);
-        return Ok(ValueSampler::Boolean(Bernoulli::new(true_rate)));
+        let true_fraction = column.boolean.as_ref().and_then(|b| b.true_fraction).map_or(0.5, |r| r.0);
+        return Ok(ValueSampler::Boolean(Bernoulli::new(true_fraction)));
     }
     let Some(output) = StringOutput::from_type(&scalar) else {
         let message = format!("{scalar} is not a type this engine generates");
@@ -875,7 +876,7 @@ fn value_sampler(
     let categories = match (listed_values(string), listed_prefixes(string)) {
         (Some(top_values), _) => Some((
             top_values,
-            string.and_then(|s| s.other_rate),
+            string.and_then(|s| s.other_fraction),
             None,
             "/string/top_values",
             source.variety(),
@@ -893,7 +894,7 @@ fn value_sampler(
             let variety = source.leading_variety(prefix_chars);
             Some((
                 &prefixes.values,
-                prefixes.other_rate,
+                prefixes.other_fraction,
                 Some(suffix),
                 "/string/prefixes/values",
                 variety,
@@ -901,10 +902,10 @@ fn value_sampler(
         }
         (None, None) => None,
     };
-    if let Some((listed, other_rate, suffix, field, other_variety)) = categories {
-        let values: Vec<_> = listed.iter().map(|top| (top.value.clone(), top.rate.0)).collect();
-        let other_rate = other_rate.map_or(0.0, |r| r.0);
-        let listed = ListedValues::new(values, other_rate).map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
+    if let Some((listed, other_fraction, suffix, field, other_variety)) = categories {
+        let values: Vec<_> = listed.iter().map(|top| (top.value.clone(), top.fraction.0)).collect();
+        let other_fraction = other_fraction.map_or(0.0, |r| r.0);
+        let listed = ListedValues::new(values, other_fraction).map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
         let other_index = target.and_then(|target| ValueIndex::for_distinct(listed.outside(target), &other_variety));
         return Ok(ValueSampler::Categorical(CategoricalSampler {
             listed,
@@ -915,10 +916,10 @@ fn value_sampler(
         }));
     }
     let check_digit = hint.and_then(|hint| hint.check_digit).map(|kind| {
-        let invalid_rate = column.quality.as_ref().and_then(|q| q.invalid_rate).map_or(0.0, |r| r.0);
+        let invalid_fraction = column.quality.as_ref().and_then(|q| q.invalid_fraction).map_or(0.0, |r| r.0);
         CheckDigitDraw {
             kind,
-            invalid: Bernoulli::new(invalid_rate),
+            invalid: Bernoulli::new(invalid_fraction),
         }
     });
     Ok(ValueSampler::Text(TextSampler {
@@ -966,13 +967,16 @@ fn text_source(string: Option<&StringStats>, hint: Option<&GeneratorHint>, site:
     }
     let shapes = string.and_then(|s| s.shapes.as_ref()).filter(|shapes| !shapes.is_empty());
     if let Some(shapes) = shapes {
-        let choice = WeightedAliasIndex::new(shapes.iter().map(|shape| shape.rate.0).collect())
+        let choice = WeightedAliasIndex::new(shapes.iter().map(|shape| shape.fraction.0).collect())
             .map_err(|error| format!("shape rates are unusable: {error}"))
             .map_err(site.refuse_as(ColumnFault::UnusableRates, "/string/shapes"))?;
-        let total: f64 = shapes.iter().map(|shape| shape.rate.0).sum();
+        let total: f64 = shapes.iter().map(|shape| shape.fraction.0).sum();
         return Ok(TextSource::Shapes {
             choice,
-            shapes: shapes.iter().map(|shape| Shape::new(&shape.shape, shape.rate.0 / total)).collect(),
+            shapes: shapes
+                .iter()
+                .map(|shape| Shape::new(&shape.shape, shape.fraction.0 / total))
+                .collect(),
         });
     }
     let length = string.and_then(|s| s.length.as_ref());
@@ -994,7 +998,7 @@ fn dominant_shape_is_dotted(string: Option<&StringStats>) -> bool {
     let shapes = string.and_then(|s| s.shapes.as_deref()).unwrap_or_default();
     shapes
         .iter()
-        .max_by(|a, b| a.rate.0.total_cmp(&b.rate.0))
+        .max_by(|a, b| a.fraction.0.total_cmp(&b.fraction.0))
         .is_some_and(|shape| shape.shape.contains('.'))
 }
 
@@ -1007,8 +1011,8 @@ fn list_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, large
     };
     let length = numeric::bounded_cdf(list.and_then(|l| l.length.as_ref()), None, None, DEFAULT_LIST_LENGTH)
         .map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/list/length"))?;
-    let empty_rate = list.and_then(|l| l.empty_rate).map(|r| r.0);
-    let per_row = (1.0 - empty_rate.unwrap_or(0.0)) * nested::mean_length(&length);
+    let empty_fraction = list.and_then(|l| l.empty_fraction).map(|r| r.0);
+    let per_row = (1.0 - empty_fraction.unwrap_or(0.0)) * nested::mean_length(&length);
     let elements = PlanContext {
         rows: context.rows * per_row,
         source_rows: context.source_rows.map(|rows| rows * per_row),
@@ -1018,14 +1022,14 @@ fn list_sampler(context: &PlanContext, column: &Column, site: &ColumnSite, large
     Ok(ValueSampler::List(Box::new(ListSampler {
         element: column_plan(&elements, &element, &site.child(&element, "/list/element"))?,
         length,
-        empty: empty_rate.map(Bernoulli::new),
+        empty: empty_fraction.map(Bernoulli::new),
         large,
     })))
 }
 
 fn struct_sampler(context: &PlanContext, column: &Column, site: &ColumnSite) -> Result<ValueSampler, PlanError> {
     let stats = column.struct_fields.as_ref();
-    let presence = stats.and_then(|s| s.presence.as_ref());
+    let presence = stats.and_then(|s| s.presence_fractions.as_ref());
     let mut fields = Vec::new();
     for (index, field) in stats.and_then(|s| s.fields.as_ref()).into_iter().flatten().enumerate() {
         let present = presence.and_then(|p| p.get(&field.name)).map_or(1.0, |r| r.0);

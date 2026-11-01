@@ -380,17 +380,17 @@ fn listed_shares(column: &Column) -> Option<(Vec<(String, f64)>, f64)> {
         && let Some(top) = &string.top_values
     {
         return Some((
-            top.iter().map(|listed| (listed.value.clone(), listed.rate.0)).collect(),
-            other(string.other_rate),
+            top.iter().map(|listed| (listed.value.clone(), listed.fraction.0)).collect(),
+            other(string.other_fraction),
         ));
     }
     if let Some(numeric) = &column.numeric
         && let Some(top) = &numeric.top_values
     {
-        let listed = top.iter().map(|listed| (format!("{}", listed.value), listed.rate.0)).collect();
-        return Some((listed, other(numeric.other_rate)));
+        let listed = top.iter().map(|listed| (format!("{}", listed.value), listed.fraction.0)).collect();
+        return Some((listed, other(numeric.other_fraction)));
     }
-    let yes = column.boolean.as_ref()?.true_rate?.0;
+    let yes = column.boolean.as_ref()?.true_fraction?.0;
     Some((vec![("true".to_string(), yes), ("false".to_string(), 1.0 - yes)], 0.0))
 }
 
@@ -413,12 +413,12 @@ impl RestShares {
         let other_share = given_other
             + given_listed
                 .iter()
-                .filter(|(value, _)| !conditional.table.contains_key(value))
+                .filter(|(value, _)| !conditional.fractions.contains_key(value))
                 .map(|(_, rate)| rate)
                 .sum::<f64>();
-        let rows = conditional.table.iter().map(|(given, cells)| (share_of(given), cells));
+        let rows = conditional.fractions.iter().map(|(given, cells)| (share_of(given), cells));
         let mut stated: HashMap<&str, f64> = HashMap::new();
-        for (weight, cells) in rows.chain(conditional.other.iter().map(|cells| (other_share, cells))) {
+        for (weight, cells) in rows.chain(conditional.other_fractions.iter().map(|cells| (other_share, cells))) {
             for (value, rate) in cells {
                 *stated.entry(value.as_str()).or_default() += weight * rate.0;
             }
@@ -621,7 +621,7 @@ impl DependentColumns {
                         None => Rounding::for_column(column.numeric.as_ref(), &output),
                     };
                     let violation = expression
-                        .violation_rate
+                        .violation_fraction
                         .map(|rate| Bernoulli::new(rate.0))
                         .filter(|trial| !trial.never());
                     let draw = FormulaDraw {
@@ -661,7 +661,7 @@ impl DependentColumns {
             let child = planner.child_values(rhs, &values, &format!("{field}/table"))?;
             planner.depend(lhs_index, rhs, &format!("{field}/lhs/0"))?;
             let violation = dependency
-                .violation_rate
+                .violation_fraction
                 .map(|rate| Bernoulli::new(rate.0))
                 .filter(|trial| !trial.never());
             draws[rhs].values = Some(ValueDraw::Lookup(Box::new(LookupDraw {
@@ -688,8 +688,8 @@ impl DependentColumns {
             }
             let rest = RestShares::of(conditional, &planner.profile[parent], &planner.profile[child]);
             let mut values = Vec::new();
-            let mut rows = Vec::with_capacity(conditional.table.len());
-            for (given, cells) in &conditional.table {
+            let mut rows = Vec::with_capacity(conditional.fractions.len());
+            for (given, cells) in &conditional.fractions {
                 rows.push(table_row(
                     cells,
                     rest.as_ref(),
@@ -698,7 +698,7 @@ impl DependentColumns {
                 )?);
             }
             let other = conditional
-                .other
+                .other_fractions
                 .as_ref()
                 .map(|cells| table_row(cells, rest.as_ref(), &mut values, &format!("{field}/other")))
                 .transpose()?;
@@ -706,7 +706,7 @@ impl DependentColumns {
             planner.depend(parent, child, &format!("{field}/given"))?;
             draws[child].values = Some(ValueDraw::Table(Box::new(TableDraw {
                 parent,
-                keys: planner.keys(conditional.table.keys()),
+                keys: planner.keys(conditional.fractions.keys()),
                 rows,
                 other,
                 values: child_values,
@@ -778,18 +778,18 @@ impl DependentColumns {
             };
             let own = RankedMarginal::of(sampler);
             let rates = dataset
-                .and_then(|d| d.conditional_rates.as_ref())
+                .and_then(|d| d.conditional_fractions.as_ref())
                 .into_iter()
                 .flatten()
                 .find(|rates| rates.given == conditional.given && rates.column == conditional.column);
-            let other_zeros = rates.and_then(|rates| rates.other.as_ref()).and_then(|other| other.zero_rate);
+            let other_zeros = rates.and_then(|rates| rates.other.as_ref()).and_then(|other| other.zero_fraction);
             let zeros_of = |given: Option<&String>| {
-                let rates = rates.filter(|rates| rates.zero_rate.is_some())?;
+                let rates = rates.filter(|rates| rates.zero_fraction.is_some())?;
                 given
-                    .and_then(|value| rates.zero_rate.as_ref().and_then(|by| by.get(value)).copied())
+                    .and_then(|value| rates.zero_fraction.as_ref().and_then(|by| by.get(value)).copied())
                     .or(other_zeros)
             };
-            let curve = |quantiles: &Quantiles, zero_rate: Option<Rate>, field: String| {
+            let curve = |quantiles: &Quantiles, zero_fraction: Option<Rate>, field: String| {
                 let refused = |message: String| PlanError::Column {
                     code: ColumnFault::InvalidQuantiles,
                     field: field.clone(),
@@ -799,7 +799,7 @@ impl DependentColumns {
                 if stated.iter().any(|(_, value)| !value.is_finite()) || stated.windows(2).any(|pair| pair[1].1 < pair[0].1) {
                     return Err(refused("the quantiles fall, or one is not finite".into()));
                 }
-                Ok(own.warp(&stated, zero_rate.map(|rate| rate.0)))
+                Ok(own.warp(&stated, zero_fraction.map(|rate| rate.0)))
             };
             let mut by_given = Vec::with_capacity(conditional.quantiles.len());
             for (given, quantiles) in &conditional.quantiles {
@@ -824,13 +824,18 @@ impl DependentColumns {
             warp_entries[child].push(field);
         }
         let mut zeros: Vec<Option<ParentShares>> = vec![None; profile.len()];
-        for (at, rates) in dataset.and_then(|d| d.conditional_rates.as_ref()).into_iter().flatten().enumerate() {
-            let field = format!("/dataset/conditional_rates/{at}");
+        for (at, rates) in dataset
+            .and_then(|d| d.conditional_fractions.as_ref())
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let field = format!("/dataset/conditional_fractions/{at}");
             let child = planner.column(&rates.column, &format!("{field}/column"))?;
             let parent = planner.column(&rates.given, &format!("{field}/given"))?;
             let other = rates.other.as_ref();
-            if let Some(zero_rate) = &rates.zero_rate {
-                let pointer = format!("{field}/zero_rate");
+            if let Some(zero_fraction) = &rates.zero_fraction {
+                let pointer = format!("{field}/zero_fraction");
                 let held = zeros[child].as_ref().map(|zeros| ("zero rate", zeros.parent));
                 if let Some(why) = unwarped(&planner, &draws, child, parent, held) {
                     set_aside.entry(pointer, child, format!("zero rate given {}", rates.given), why);
@@ -838,14 +843,14 @@ impl DependentColumns {
                     planner.depend(parent, child, &format!("{field}/given"))?;
                     zeros[child] = Some(ParentShares {
                         parent,
-                        keys: planner.keys(zero_rate.keys()),
-                        shares: zero_rate.values().map(|rate| rate.0).collect(),
-                        other: other.and_then(|other| other.zero_rate).map(|rate| rate.0),
+                        keys: planner.keys(zero_fraction.keys()),
+                        shares: zero_fraction.values().map(|rate| rate.0).collect(),
+                        other: other.and_then(|other| other.zero_fraction).map(|rate| rate.0),
                     });
                     warp_entries[child].push(pointer);
                 }
             }
-            if let Some(null_rate) = &rates.null_rate {
+            if let Some(null_fraction) = &rates.null_fraction {
                 let why = if let Some(why) = fixed.get(&child) {
                     Some(why.clone())
                 } else if !planner.columns[child].field.is_nullable() {
@@ -856,15 +861,20 @@ impl DependentColumns {
                     planner.draws_from(parent, child).then(|| looped(parent))
                 };
                 if let Some(why) = why {
-                    set_aside.entry(format!("{field}/null_rate"), child, format!("null rate given {}", rates.given), why);
+                    set_aside.entry(
+                        format!("{field}/null_fraction"),
+                        child,
+                        format!("null rate given {}", rates.given),
+                        why,
+                    );
                     continue;
                 }
                 planner.depend(parent, child, &format!("{field}/given"))?;
                 draws[child].nulls = Some(ParentTrials {
                     parent,
-                    keys: planner.keys(null_rate.keys()),
-                    trials: null_rate.values().map(|rate| Bernoulli::new(rate.0)).collect(),
-                    other: other.and_then(|other| other.null_rate).map(|rate| Bernoulli::new(rate.0)),
+                    keys: planner.keys(null_fraction.keys()),
+                    trials: null_fraction.values().map(|rate| Bernoulli::new(rate.0)).collect(),
+                    other: other.and_then(|other| other.null_fraction).map(|rate| Bernoulli::new(rate.0)),
                 });
                 notes[child].push(format!("its null rate given {}", rates.given));
             }

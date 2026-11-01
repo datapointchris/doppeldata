@@ -134,7 +134,7 @@ class DeclaredColumn(InlineColumn):
     """One column as a schema declares it. `logical_type` is one of the profile's, and `physical_type` an Arrow type.
 
     `low` and `high` bound a number, a date or a timestamp, each excluded where its `_exclusive` flag is set. `key`
-    marks a column whose values a schema declares distinct, such as a sole primary key. `null_rate` is a declared share
+    marks a column whose values a schema declares distinct, such as a sole primary key. `null_fraction` is a declared share
     of nulls, where a schema states one. `semantic` is a whole `semantic` section, as Glue's findings give one.
     """
 
@@ -154,7 +154,7 @@ class DeclaredColumn(InlineColumn):
     format: str | None = None
     semantic: Mapping[str, Any] | None = None
     sensitivity: str | None = None
-    null_rate: float | None = None
+    null_fraction: float | None = None
     key: bool = False
     timezone: str | None = None
     fields: tuple['DeclaredColumn', ...] = ()
@@ -184,12 +184,12 @@ class DeclaredColumn(InlineColumn):
         return [fact for fact in DECLARED_FACTS if held[fact] and fact not in self.undeclared]
 
     def column(self, name: str) -> dict[str, Any]:
-        null_rate = 0.0 if self.required else self.null_rate if self.null_rate is not None else NULL_RATE
+        null_fraction = 0.0 if self.required else self.null_fraction if self.null_fraction is not None else NULL_RATE
         column: dict[str, Any] = {'name': name}
         if self.path is not None:
             column['path'] = self.path
         column |= {'physical_type': self.arrow_type(), 'logical_type': self.logical_type, 'nullable': not self.required}
-        column['null_rate'] = null_rate
+        column['null_fraction'] = null_fraction
         try:
             drawn = self.drawn(name)
         except DoppeldataError:

@@ -61,18 +61,18 @@ def malformed_rate(data: Any) -> float | None:
         warnings.simplefilter('ignore', ProfilingWarning)
         document = profile(data, policy=Policy.NONE).to_plain()
     csv = (document.get('source') or {}).get('csv')
-    return None if csv is None else float((csv.get('malformed') or {}).get('rate') or 0.0)
+    return None if csv is None else float((csv.get('malformed') or {}).get('fraction') or 0.0)
 
 
 # Each statistic of one column as the rows it counts, which the rows read divide.
 MEASURES: dict[str, Callable[[pl.LazyFrame, str, dict[str, Any]], int]] = {
-    'hot_keys.share': hot_keys_share,
-    'duplicates.rate': duplicates_rate,
-    'late_arrival.rate': late_arrival_rate,
-    'missingness.rate': missingness_rate,
+    'hot_keys.fraction': hot_keys_share,
+    'duplicates.fraction': duplicates_rate,
+    'late_arrival.fraction': late_arrival_rate,
+    'missingness.fraction': missingness_rate,
 }
 # Each statistic of the whole table, as its share, or None where the data cannot hold it.
-TABLE_MEASURES: dict[str, Callable[[Any], float | None]] = {'malformed.rate': malformed_rate}
+TABLE_MEASURES: dict[str, Callable[[Any], float | None]] = {'malformed.fraction': malformed_rate}
 # A metric the schema names that nothing here measures, or measures over the column where the engine says the table, would
 # fail inside `verified`, so it fails on import instead.
 BY_COLUMN = {metric for metric in expected_metrics() if _core.expected_metric_takes_column(metric)}

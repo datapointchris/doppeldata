@@ -377,7 +377,7 @@ and `Bundle.example` from an example's name. So a string or path given to `gener
 takes a `Profile` or a `Bundle`.
 
 - **`--scale` multiplies every table's row count**, 1 where left out. Each table generates
-  `round(row_count × scale)` rows, so the fan-out's shape holds at any scale. Each `top_share`
+  `round(rows × scale)` rows, so the fan-out's shape holds at any scale. Each `top_fractions`
   holds over the same fraction of the parents, so `top10` of 40,000 is the busiest one of 4,000
   at scale 0.1.
 - **`--rows`, `--columns`, `--manifest` and any partition flag are refused with a bundle.** `--rows`

@@ -18,12 +18,12 @@ pub(crate) struct ListedValues<T> {
 }
 
 impl<T> ListedValues<T> {
-    /// The values by their rates, and `other_rate` beside them. It fails only on unusable rates.
-    pub(crate) fn new(listed: Vec<(T, f64)>, other_rate: f64) -> Result<Self, String> {
+    /// The values by their rates, and `other_fraction` beside them. It fails only on unusable rates.
+    pub(crate) fn new(listed: Vec<(T, f64)>, other_fraction: f64) -> Result<Self, String> {
         let mut weights: Vec<f64> = listed.iter().map(|&(_, rate)| rate).collect();
-        let other_rate = other_rate.max(0.0);
-        if other_rate > 0.0 {
-            weights.push(other_rate);
+        let other_fraction = other_fraction.max(0.0);
+        if other_fraction > 0.0 {
+            weights.push(other_fraction);
         }
         let total: f64 = weights.iter().sum();
         let shares = listed.iter().map(|&(_, rate)| rate / total).collect();
@@ -32,7 +32,7 @@ impl<T> ListedValues<T> {
             values: listed.into_iter().map(|(value, _)| value).collect(),
             choice,
             shares,
-            other_share: other_rate / total,
+            other_share: other_fraction / total,
         })
     }
 

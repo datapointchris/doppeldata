@@ -84,7 +84,7 @@ pub fn planned_stream(plan: &Plan, options: &WriteOptions) -> Result<Option<Plan
         expected_prefix: cdc.expected_prefix(),
         changes: outline.changes,
         change_files_at_most: outline.change_files_at_most,
-        expected_parts: layout.ranges.len() as u64 + u64::from(outline.changes.insert > 0),
+        expected_parts: layout.ranges.len() as u64 + u64::from(outline.changes.inserts > 0),
     }))
 }
 

@@ -232,11 +232,10 @@ fn key_values(table: &TableProfile, key: &str) -> u64 {
         .and_then(|source| source.layout.as_ref())
         .and_then(|layout| layout.partitioning.as_ref())
         .and_then(|partitioning| partitioning.keys.iter().flatten().find(|recorded| recorded.name == key))
-        .and_then(|recorded| recorded.values.as_ref())
-        .and_then(|values| values.count);
+        .and_then(|recorded| recorded.values);
     let distinct = column(table, key)
         .and_then(|column| column.distinct.as_ref())
-        .and_then(|distinct| distinct.approx);
+        .and_then(|distinct| distinct.approx_values);
     recorded.or(distinct).unwrap_or(1).max(1)
 }
 

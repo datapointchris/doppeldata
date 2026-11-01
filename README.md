@@ -144,7 +144,7 @@ A string column is given a semantic type where enough of its values pass a type'
 need to pass where its name hints the type. An integer column is typed only where its name hints
 the type and a validator agrees. The general pack covers common identifiers, such as emails, card
 numbers and US SSNs, and `doppeldata.profiling.detector_packs.general` lists its types. The type
-names what the generator draws for it, and the failing share becomes `quality.invalid_rate`.
+names what the generator draws for it, and the failing share becomes `quality.invalid_fraction`.
 `--pack NAME` adds an installed detector pack's types to these. The healthcare pack ships with the
 library, and types NPIs, MBIs, NDC, ICD-10-CM, HCPCS and CPT codes, DEA numbers, and member, medical
 record and claim numbers. It ships no code set, so an ICD-10-CM or HCPCS code is typed and generated

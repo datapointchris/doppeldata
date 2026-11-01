@@ -69,7 +69,7 @@ def contract_table(entry: Mapping[str, Any], named: str) -> DeclaredTable:
         unique_keys=tuple(unique),
         partition_keys=tuple(PartitionKey(column.name, column.arrow_type()) for _, column in partitioned),
         row_count=row_count(quality.get('rowCount')),
-        duplicate_row_rate=share(quality.get('duplicateValues')),
+        duplicate_row_fraction=share(quality.get('duplicateValues')),
     )
 
 
@@ -97,7 +97,7 @@ def contract_column(prop: Mapping[str, Any], name: str | None = None) -> Declare
     values = tuple(entry.get('value') if isinstance(entry, Mapping) else entry for entry in prop.get('enum') or [])
     nulls = share(metrics(prop.get('quality')).get('nullValues'))
     if nulls is not None:
-        column = dc.replace(column, null_rate=nulls)
+        column = dc.replace(column, null_fraction=nulls)
     if column.logical_type == 'string':
         return dc.replace(
             column,

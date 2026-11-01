@@ -86,8 +86,8 @@ COLUMN_STATISTICS = (
     Statistic('std', NUMERIC),
     Statistic('skew', NUMERIC),
     Statistic('kurtosis', NUMERIC),
-    Statistic('zero_rate', NUMERIC),
-    Statistic('negative_rate', NUMERIC),
+    Statistic('zero_fraction', NUMERIC),
+    Statistic('negative_fraction', NUMERIC),
     Statistic('quantiles', NUMERIC),
     # The fewest decimal places every value is written at, up to the argument, or None.
     Statistic('decimal_places', frozenset({ColumnKind.FLOAT})),
@@ -98,8 +98,8 @@ COLUMN_STATISTICS = (
     Statistic('length_trimmed_low', frozenset({ColumnKind.STRING})),
     Statistic('length_trimmed_high', frozenset({ColumnKind.STRING})),
     Statistic('length_quantiles', frozenset({ColumnKind.STRING})),
-    Statistic('whitespace_edge_rate', frozenset({ColumnKind.STRING})),
-    Statistic('true_rate', frozenset({ColumnKind.BOOLEAN})),
+    Statistic('whitespace_edge_fraction', frozenset({ColumnKind.STRING})),
+    Statistic('true_fraction', frozenset({ColumnKind.BOOLEAN})),
     # Rows in each month from January, each weekday from Monday, each hour from 00, as one list.
     Statistic('month_counts', TEMPORAL),
     Statistic('weekday_counts', TEMPORAL),

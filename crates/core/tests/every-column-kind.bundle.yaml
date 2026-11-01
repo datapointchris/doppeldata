@@ -10,39 +10,39 @@ tables:
   customers:
     kind: table
     name: customers
-    dataset: {row_count: 3000, keys: {primary: {columns: [customer_id], uniqueness: 1.0}}}
+    dataset: {rows: 3000, keys: {primary: {columns: [customer_id], uniqueness: 1.0}}}
     columns:
       - name: customer_id
         physical_type: int64
         numeric: {sequence: {start: 1, step: 1}}
       - name: region
-        string: {top_values: [{value: north, rate: 0.4}, {value: south, rate: 0.35}, {value: east, rate: 0.25}]}
+        string: {top_values: [{value: north, fraction: 0.4}, {value: south, fraction: 0.35}, {value: east, fraction: 0.25}]}
       - name: credit_limit
         physical_type: double
         numeric: {quantiles: {p05: 500.0, p50: 2000.0, p95: 9000.0}, extremes: {low: 100.0, high: 20000.0}}
   products:
     kind: table
     name: products
-    dataset: {row_count: 400, keys: {primary: {columns: [product_code], uniqueness: 1.0}}}
+    dataset: {rows: 400, keys: {primary: {columns: [product_code], uniqueness: 1.0}}}
     columns:
       - name: product_code
         string: {pattern: '^P-\d{6}$'}
       - name: category
-        string: {top_values: [{value: tools, rate: 0.5}, {value: garden, rate: 0.3}, {value: paint, rate: 0.2}]}
+        string: {top_values: [{value: tools, fraction: 0.5}, {value: garden, fraction: 0.3}, {value: paint, fraction: 0.2}]}
   suppliers:
     kind: table
     name: suppliers
-    dataset: {row_count: 60, keys: {primary: {columns: [supplier_id], uniqueness: 1.0}}}
+    dataset: {rows: 60, keys: {primary: {columns: [supplier_id], uniqueness: 1.0}}}
     columns:
       - name: supplier_id
         physical_type: int32
         numeric: {integral: true, quantiles: {p05: 120.0, p50: 3000.0, p95: 5800.0}, extremes: {low: 100.0, high: 6000.0}}
       - name: country
-        string: {top_values: [{value: DE, rate: 0.5}, {value: US, rate: 0.5}]}
+        string: {top_values: [{value: DE, fraction: 0.5}, {value: US, fraction: 0.5}]}
   product_suppliers:
     kind: table
     name: product_suppliers
-    dataset: {row_count: 1600, keys: {primary: {columns: [product_code, supplier_id], uniqueness: 1.0}}}
+    dataset: {rows: 1600, keys: {primary: {columns: [product_code, supplier_id], uniqueness: 1.0}}}
     columns:
       - name: product_code
         string: {pattern: '^P-\d{6}$'}
@@ -55,23 +55,23 @@ tables:
   orders:
     kind: table
     name: orders
-    dataset: {row_count: 70000, keys: {primary: {columns: [order_id], uniqueness: 1.0}}}
+    dataset: {rows: 70000, keys: {primary: {columns: [order_id], uniqueness: 1.0}}}
     columns:
       - name: order_id
         semantic: {generator_hint: {provider: uuid}}
       - name: customer_id
         physical_type: int64
-        null_rate: 0.002
+        null_fraction: 0.002
         numeric: {integral: true, quantiles: {p50: 1500.0}, extremes: {low: 1.0, high: 3000.0}}
       - name: region
-        string: {top_values: [{value: north, rate: 0.34}, {value: south, rate: 0.33}, {value: east, rate: 0.33}]}
+        string: {top_values: [{value: north, fraction: 0.34}, {value: south, fraction: 0.33}, {value: east, fraction: 0.33}]}
       - name: total
         physical_type: double
         numeric: {quantiles: {p05: 5.0, p50: 60.0, p95: 400.0}, extremes: {low: 1.0, high: 2000.0}}
   order_lines:
     kind: table
     name: order_lines
-    dataset: {row_count: 140000, keys: {primary: {columns: [order_id, line_number], uniqueness: 1.0}}}
+    dataset: {rows: 140000, keys: {primary: {columns: [order_id, line_number], uniqueness: 1.0}}}
     columns:
       - name: order_id
         semantic: {generator_hint: {provider: uuid}}
@@ -90,49 +90,49 @@ tables:
     kind: table
     name: stores
     source: {format: csv}
-    dataset: {row_count: 500, keys: {primary: {columns: [store_id], uniqueness: 1.0}}}
+    dataset: {rows: 500, keys: {primary: {columns: [store_id], uniqueness: 1.0}}}
     columns:
       - name: store_id
         physical_type: int64
-        type_mix: {integer: 0.95, string: 0.03, decimal: 0.02}
+        type_mix_fractions: {integer: 0.95, string: 0.03, decimal: 0.02}
         numeric: {sequence: {start: 1, step: 1}}
       - name: size_code
         physical_type: int32
-        type_mix: {integer: 0.9, string: 0.1}
+        type_mix_fractions: {integer: 0.9, string: 0.1}
         numeric: {integral: true, quantiles: {p50: 3.0}, extremes: {low: 1.0, high: 5.0}}
   visits:
     kind: table
     name: visits
     source: {format: csv}
-    dataset: {row_count: 8000, keys: {primary: {columns: [store_id, visit_number], uniqueness: 1.0}}}
+    dataset: {rows: 8000, keys: {primary: {columns: [store_id, visit_number], uniqueness: 1.0}}}
     columns:
       - name: store_id
         physical_type: int64
-        type_mix: {integer: 0.97, string: 0.03}
+        type_mix_fractions: {integer: 0.97, string: 0.03}
         numeric: {integral: true, quantiles: {p50: 250.0}, extremes: {low: 1.0, high: 500.0}}
       - name: visit_number
         physical_type: int32
-        type_mix: {integer: 0.99, string: 0.01}
+        type_mix_fractions: {integer: 0.99, string: 0.01}
         numeric: {integral: true, quantiles: {p50: 8.0}, extremes: {low: 1.0, high: 60.0}}
       - name: size_code
         physical_type: int32
         numeric: {integral: true, quantiles: {p50: 3.0}, extremes: {low: 1.0, high: 5.0}}
       - name: spend
         physical_type: double
-        type_mix: {decimal: 0.98, string: 0.02}
+        type_mix_fractions: {decimal: 0.98, string: 0.02}
         numeric: {scale: 2, quantiles: {p50: 20.0}, extremes: {low: 0.0, high: 400.0}}
 relationships:
   - from: [orders.customer_id]
     to: [customers.customer_id]
     containment: 0.99
-    orphan_rate: 0.01
+    orphan_fraction: 0.01
     cardinality: many_to_one
     fanout:
       quantiles: {p05: 0.0, p25: 5.0, p50: 18.0, p75: 30.0, p95: 70.0, p99: 160.0}
-      top_share: {top1: 0.006, top10: 0.04, top100: 0.2}
+      top_fractions: {top1: 0.006, top10: 0.04, top100: 0.2}
       zipf_s: 0.8
     inherited:
-      - {child: region, parent: region, agreement: 0.98}
+      - {child: region, parent: region, agreement_fraction: 0.98}
   - from: [product_suppliers.product_code]
     to: [products.product_code]
     fanout: {quantiles: {p50: 4.0}}
@@ -145,7 +145,7 @@ relationships:
     ordinal: line_number
   - from: [order_lines.product_code, order_lines.supplier_id]
     to: [product_suppliers.product_code, product_suppliers.supplier_id]
-    orphan_rate: 0.003
+    orphan_fraction: 0.003
     containment: 0.99
     fanout: {quantiles: {p25: 40.0, p50: 80.0, p75: 120.0}, zipf_s: 1.2}
   - from: [order_lines.product_code]
@@ -153,8 +153,8 @@ relationships:
   - from: [visits.store_id]
     to: [stores.store_id]
     containment: 0.98
-    orphan_rate: 0.01
+    orphan_fraction: 0.01
     fanout: {quantiles: {p05: 4.0, p50: 16.0, p95: 30.0}}
     ordinal: visit_number
     inherited:
-      - {child: size_code, parent: size_code, agreement: 0.97}
+      - {child: size_code, parent: size_code, agreement_fraction: 0.97}

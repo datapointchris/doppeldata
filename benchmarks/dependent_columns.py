@@ -38,7 +38,7 @@ DISCOUNT = {
     'physical_type': 'float64',
     'logical_type': 'number',
     'nullable': False,
-    'null_rate': 0.0,
+    'null_fraction': 0.0,
     'numeric': {
         'integral': False,
         'extremes': {'low': 2.0, 'high': 18.0, 'method': 'trimmed_k'},
@@ -54,9 +54,11 @@ TIER = {
     'physical_type': 'string',
     'logical_type': 'string',
     'nullable': False,
-    'null_rate': 0.0,
-    'distinct': {'approx': 3, 'ratio': 0.0000003},
-    'string': {'top_values': [{'value': 'bronze', 'rate': 0.6}, {'value': 'silver', 'rate': 0.3}, {'value': 'gold', 'rate': 0.1}]},
+    'null_fraction': 0.0,
+    'distinct': {'approx_values': 3, 'ratio': 0.0000003},
+    'string': {
+        'top_values': [{'value': 'bronze', 'fraction': 0.6}, {'value': 'silver', 'fraction': 0.3}, {'value': 'gold', 'fraction': 0.1}]
+    },
 }
 
 
@@ -87,11 +89,11 @@ def conditional_arms() -> tuple[sd.Profile, sd.Profile]:
     document = with_column(TIER)
     conditioned = copy.deepcopy(document)
     categories = [entry['value'] for entry in document['columns'][3]['string']['top_values']]
-    table = {}
+    fractions = {}
     for at, category in enumerate(categories):
         gold = round(0.02 + 0.3 * at / len(categories), 4)
-        table[category] = {'bronze': round(0.8 - gold, 4), 'silver': 0.2, 'gold': gold}
-    conditioned['dataset']['conditionals'] = [{'given': 'category', 'column': 'tier', 'table': table}]
+        fractions[category] = {'bronze': round(0.8 - gold, 4), 'silver': 0.2, 'gold': gold}
+    conditioned['dataset']['conditionals'] = [{'given': 'category', 'column': 'tier', 'fractions': fractions}]
     return sd.Profile(document), sd.Profile(conditioned)
 
 

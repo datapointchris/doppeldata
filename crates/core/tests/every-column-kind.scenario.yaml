@@ -3,27 +3,27 @@
 # nested field and sets a field the profile lacks, so the pin covers how a patch merges.
 scenario: every-row-op
 patch:
-  dataset: {row_count: 1000000}
+  dataset: {rows: 1000000}
   columns:
     provider_job_title: null
-    flag: {boolean: {true_rate: 0.6}}
-    status: {null_rate: 0.2}
+    flag: {boolean: {true_fraction: 0.6}}
+    status: {null_fraction: 0.2}
 perturbations:
-  - {op: hot_keys, column: fit_randint, keys: 3, share: 0.3}
-  - {op: categorical_shift, column: status, to: {pending: 0.5, cancelled: 0.1}}
-  - {op: duplicates, rate: 0.05, scope: within_file}
-  - {op: duplicates, rate: 0.02, scope: across_files, exact: false}
-  - {op: late_arrival, column: timestamp_uniform, rate: 0.1, lag: {family: lognormal, median: 2d, p99: 30d}, ingest: ingested_at}
-  - {op: late_arrival, column: date_with_gaps, rate: 0.1, lag: {family: lognormal, median: 3d}}
-  - {op: missingness, column: decimal_amount, mechanism: MAR, depends_on: fit_randint, rate: 0.2}
-  - {op: missingness, column: integer_with_foreign_text, mechanism: MNAR, rate: 0.1}
-  - {op: missingness, column: single_float, mechanism: MCAR, rate: 0.05}
-  - {op: out_of_range, column: narrow_int8, rate: 0.01, values: [-1, 0, 127]}
-  - {op: out_of_range, column: integral_histogram, rate: 0.01, beyond: high}
-  - {op: swapped_values, columns: [quantiles_only, histogram_body], rate: 0.02}
-  - {op: noise, column: single_float, rate: 0.5, sigma: 2.5}
-  - {op: scaling, column: decimal_amount, rate: 0.01, factor: 100}
-  - {op: broken_characters, column: characters, rate: 0.05}
-  - {op: broken_characters, column: provider_city, rate: 0.05}
-  - {op: outliers, column: zero_inflated, rate: 0.01, multiplier: 3}
-  - {op: partition_skew, column: top_values_with_indexed_other, shares: {shipped: 0.7}}
+  - {op: hot_keys, column: fit_randint, keys: 3, fraction: 0.3}
+  - {op: categorical_shift, column: status, to_fractions: {pending: 0.5, cancelled: 0.1}}
+  - {op: duplicates, fraction: 0.05, scope: within_file}
+  - {op: duplicates, fraction: 0.02, scope: across_files, exact: false}
+  - {op: late_arrival, column: timestamp_uniform, fraction: 0.1, lag: {family: lognormal, median: 2d, p99: 30d}, ingest: ingested_at}
+  - {op: late_arrival, column: date_with_gaps, fraction: 0.1, lag: {family: lognormal, median: 3d}}
+  - {op: missingness, column: decimal_amount, mechanism: MAR, depends_on: fit_randint, fraction: 0.2}
+  - {op: missingness, column: integer_with_foreign_text, mechanism: MNAR, fraction: 0.1}
+  - {op: missingness, column: single_float, mechanism: MCAR, fraction: 0.05}
+  - {op: out_of_range, column: narrow_int8, fraction: 0.01, values: [-1, 0, 127]}
+  - {op: out_of_range, column: integral_histogram, fraction: 0.01, beyond: high}
+  - {op: swapped_values, columns: [quantiles_only, histogram_body], fraction: 0.02}
+  - {op: noise, column: single_float, fraction: 0.5, sigma: 2.5}
+  - {op: scaling, column: decimal_amount, fraction: 0.01, factor: 100}
+  - {op: broken_characters, column: characters, fraction: 0.05}
+  - {op: broken_characters, column: provider_city, fraction: 0.05}
+  - {op: outliers, column: zero_inflated, fraction: 0.01, multiplier: 3}
+  - {op: partition_skew, column: top_values_with_indexed_other, value_fractions: {shipped: 0.7}}

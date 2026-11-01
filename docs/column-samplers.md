@@ -7,14 +7,15 @@ extremes at levels 0 and 1. A histogram's edges, at their cumulative shares, fil
 the outermost quantiles. A knot that would put a value out of order is dropped, so the quantiles
 win where sources disagree.
 
-`zero_rate` adds a flat run at zero, from `negative_rate` to `negative_rate + zero_rate`. The run
+`zero_fraction` adds a flat run at zero, from `negative_fraction` to `negative_fraction + zero_fraction`. The run
 is clamped between the last knot below zero and the first above it, so it stays in order and is
 always kept. The rates are stored rounded, so their sum can land just past the share at the next
 edge. Clamping there keeps the zeros a column holds, short of the rounding.
 
 An edge's share counts every row, the histogram's `overflow` included. Edge `i` sits at level
-`(below + counts[0] + … + counts[i - 1]) / (below + sum(counts) + above)`, so edge 0 sits at
-`below`'s share. A profile without `overflow` has `below` and `above` at 0, and its edges run from
+`(rows_below + bin_rows[0] + … + bin_rows[i - 1]) / (rows_below + sum(bin_rows) + rows_above)`, so
+edge 0 sits at `rows_below`'s share. A profile without `overflow` has `rows_below` and `rows_above`
+at 0, and its edges run from
 level 0 to 1. A profile whose edges were frozen from an earlier one still places them at the shares
 its own rows give.
 
@@ -60,7 +61,7 @@ cargo run --release -p doppeldata-core --example throughput -- eight-columns --r
   whose `loc` sits just below zero draws nothing below `loc`, so toward a low extreme far under it
   the tail would put every value between them on one segment. The line from the quantile to the
   extreme draws there.
-- **Where the body starts at or above zero and the low extreme sits below it, `negative_rate`
+- **Where the body starts at or above zero and the low extreme sits below it, `negative_fraction`
   bounds the lower tail's share below zero.** The levels from it to the body's first knot draw
   between zero and that knot, so a tail fitted to the body cannot carry p001's whole share below
   zero.
@@ -69,11 +70,11 @@ cargo run --release -p doppeldata-core --example throughput -- eight-columns --r
 
 ## A numeric column with few values draws each listed value by its rate
 
-The profiler lists a numeric column's values as `numeric.top_values`, beside an `other_rate`, where
+The profiler lists a numeric column's values as `numeric.top_values`, beside an `other_fraction`, where
 it holds at most `NUMERIC_TOP_VALUES_THRESHOLD` distinct values. An alias table draws a listed value
-by its rate, or the `other` share. A value drawn from the `other` share comes from the column's
-inverse CDF with every level rounding to a listed value cut out, and the levels left keep their
-widths. Where no level is left, the `other` share is drawn as the listed values are.
+by its `fraction`, or the `other_fraction`. A value drawn from the `other_fraction` comes from the
+column's inverse CDF with every level rounding to a listed value cut out, and the levels left keep
+their widths. Where no level is left, the `other_fraction` is drawn as the listed values are.
 
 *Rejected:* scaling the levels left by the rows each histogram bin holds outside the list. It moved
 no `data check` metric past its threshold on the taxi round trip below. The floor merges each bin
@@ -81,15 +82,15 @@ holding 1 to `k_min − 1` rows outside the list, which left one bin in the two 
 
 - **A lattice column's distinct count can show values beyond its trimmed extremes.** On an integer
   column, a decimal, or a float with a `scale`, the values the extremes leave room for are the points
-  between them that no listed value takes. Where `distinct.approx` holds more than the listed
+  between them that no listed value takes. Where `distinct.approx_values` holds more than the listed
   values and that room, the rest lie beyond the extremes.
 - **At most one value hides for each row the extremes' method leaves beyond them.** `trimmed_k`
   leaves `k_min − 1` rows beyond each extreme, and `exact` none. The values on one side share half
   that side's rows. A profile stating no `privacy.k_min` is read at `DEFAULT_K_MIN`, the floor the
   profiler applies by default.
-- **They are drawn on the side the histogram's overflow names**: above where only `above` counts
-  rows, below where only `below` does, and otherwise above and below in turn. Their rows come out of
-  the `other` share, never on top of it.
+- **They are drawn on the side the histogram's overflow names**: above where only `rows_above`
+  counts rows, below where only `rows_below` does, and otherwise above and below in turn. Their rows
+  come out of the `other_fraction`, never on top of it.
 - **A continuous column never draws past its extremes.** Its room between them is unbounded.
 
 `data plan` describes the curve from what `numeric_cdf` built, so each tail reads as fitted or
@@ -112,7 +113,7 @@ doppeldata data check taxi.profile.yaml taxi-generated/
 
 ## A string column takes the most specific source its profile holds
 
-1. **`top_values`**, or else **`prefixes`**: an alias table over the rates. A draw of `other_rate`
+1. **`top_values`**, or else **`prefixes`**: an alias table over the rates. A draw of `other_fraction`
    generates a value from the next source down. A drawn prefix is followed by a value of the
    `suffix` pattern. A ZIP column under `healthcare` keeps three-digit prefixes, so `\d{2}` makes
    each a ZIP code again.
@@ -134,7 +135,7 @@ addresses, not characters. The profiler writes no hint where grex stored a patte
 column keeps its own format.
 
 `generator_hint.check_digit: luhn` writes the Luhn digit over a value's last digit, wrong on a
-`quality.invalid_rate` share of values. `npi` is the Luhn digit over `80840` and the first nine
+`quality.invalid_fraction` share of values. `npi` is the Luhn digit over `80840` and the first nine
 digits, as the NPI standard prefixes them. `dea` is the last digit of the sum of the first, third
 and fifth digits plus twice the sum of the second, fourth and sixth. *Rejected:* the `luhn` crate. Its `checksum` allocates on
 every call, and it panics on lower-case input and on a `u8` overflow past about 28 digits.
@@ -156,7 +157,7 @@ function of its index, no pool of values is held, and any block still generates 
   instead. One profile cannot show which, so the ratio holds.
 - **Below the source's rows, the target is what a random sample of them holds.** With `N` source
   rows holding `D` distinct values, `n` rows hold `D · (1 − (1 − n/N)^(N/D))`, the sampled end of
-  the range `data check` accepts. `N` is `dataset.row_count`, or `D` over the ratio where the
+  the range `data check` accepts. `N` is `dataset.rows`, or `D` over the ratio where the
   profile states none. So a short run of a ten-value column still draws all ten, where the ratio
   would ask for one.
 - **K is chosen so the expected count of distinct indices meets the target.** `n` uniform draws
@@ -172,10 +173,10 @@ function of its index, no pool of values is held, and any block still generates 
 - **Where fresh draws reach no more than the target, the column draws fresh**, with no index. A
   ratio of 1 is always that case. So is a source whose variety sits below the target, which caps
   the column's distinct count.
-- **With `top_values` or `prefixes`, the index covers only the `other` share.** Its target is the
+- **With `top_values` or `prefixes`, the index covers only the `other_fraction`.** Its target is the
   column's less the listed values' count, over the rows the share draws, for strings and numbers
   alike.
-- **With `prefixes`, the distinct ratio is of prefixes**, so the `other` share's strings are
+- **With `prefixes`, the distinct ratio is of prefixes**, so the `other_fraction`'s strings are
   counted by their first characters, as many as a prefix holds. A shape counts them per
   character; any other source counts its whole strings.
 - **A check digit draws from the value's stream, after the value**, so whether a value's digit is
@@ -236,10 +237,11 @@ them.
 
 ## A temporal column is uniform over its range unless the profile weights it
 
-With no `by_month`, `by_dow` or `by_hour` and no `gap_rate`, a value is uniform over the extremes at
-the column's granularity, from one draw. Otherwise a day is drawn with weight `by_month` times
-`by_dow`, each spread over the days holding it, with `gap_rate`'s share of days left empty. Then an
-hour is drawn by `by_hour`, and an offset within it.
+With no `month_fractions`, `weekday_fractions` or `hour_fractions` and no `gap_fraction`, a value
+is uniform over the extremes at the column's granularity, from one draw. Otherwise a day is drawn
+with weight `month_fractions` times `weekday_fractions`, each spread over the days holding it, with
+`gap_fraction`'s share of days left empty. Then an hour is drawn by `hour_fractions`, and an offset
+within it.
 
 The extremes are the observed minimum and maximum, so they rarely fall on midnight. The first and
 last day hold only their granules inside the extremes, and count in a month's or weekday's share
@@ -248,26 +250,26 @@ an extreme.
 
 ## A missing-value token is a separate cell, and null in Arrow
 
-A `missing_tokens` token such as `N/A` in an integer column cannot be an Arrow value. The batch
+A `missing_token_fractions` token such as `N/A` in an integer column cannot be an Arrow value. The batch
 holds a null there, and `Plan::text_cells` returns the token a CSV or JSON writer prints in its
 place.
 
-- **Each `missing_tokens` rate is a share of all rows.** A null row prints a token by those rates,
-  and prints nothing in the share of rows the tokens leave uncovered. Tokens whose rates sum above
-  the null rate are refused.
-- **A nested field's `missing_tokens` are refused.** A text cell names a row of a top-level column,
-  so it has nowhere to put a value inside a list or struct.
+- **Each token's fraction in `missing_token_fractions` is a share of all rows.** A null row prints a
+  token by those fractions, and prints nothing in the share of rows the tokens leave uncovered.
+  Tokens whose fractions sum above the `null_fraction` are refused.
+- **A nested field's `missing_token_fractions` are refused.** A text cell names a row of a
+  top-level column, so it has nowhere to put a value inside a list or struct.
 
 ## A text source's column holding values of other types generates as text
 
 A column generates as a string column where its `physical_type` is an integer, float, decimal,
-boolean, date or timestamp, and its `type_mix` share of that type is under 1. Only a source read as
+boolean, date or timestamp, and its `type_mix_fractions` share of that type is under 1. Only a source read as
 text records such a share. A reader of the profile's type turns the other values into nulls, so the
 generated column holds text, as its source did, and the exports type it as a string. The rule reads
 the column alone, so a scenario changing `source.format` changes no column's type. Every other
 column keeps its type, and a nested field follows the same rule.
 
-- **Each row draws one `type_mix` share.** The draw is one word a row from the column's
+- **Each row draws one `type_mix_fractions` share.** The draw is one word a row from the column's
   `type_mix` stream, taken on null rows too, so the shares never move with the null mask.
 - **The column's own share is its sampler's draw, written in the source's layout.** A date or
   timestamp takes its `temporal.format`. A whole float keeps its `.0`, so a reader counts it as the

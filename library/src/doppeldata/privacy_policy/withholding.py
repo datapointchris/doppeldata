@@ -20,7 +20,7 @@ from doppeldata.privacy_policy.literal_fields import FieldKind
 from doppeldata.privacy_policy.literal_fields import column_literals
 from doppeldata.privacy_policy.literal_fields import dataset_literals
 from doppeldata.privacy_policy.literal_fields import faults
-from doppeldata.privacy_policy.literal_fields import min_count
+from doppeldata.privacy_policy.literal_fields import min_rows
 from doppeldata.privacy_policy.treatment_rules import amend
 from doppeldata.privacy_policy.treatment_rules import capped_age_quantiles
 from doppeldata.privacy_policy.treatment_rules import conditional_faults
@@ -93,16 +93,16 @@ def withheld(
         if lookup_faults(document, index, policy):
             del dependency['table']
     left_out = []
-    if dataset.get('keys') and (dataset.get('row_count') or 0) < k_min:
+    if dataset.get('keys') and (dataset.get('rows') or 0) < k_min:
         del dataset['keys']
         left_out.append({'field': '/dataset/keys', 'rule': ROWS_AT_LEAST_K_MIN})
     audit = []
     for column in column_literals(document):
         for field in column.fields:
             entry = {'column': column.name, 'field': column.within(field), 'values': field.values, 'rule': field.kind.rule}
-            least = min_count(field, k_min)
+            least = min_rows(field, k_min)
             if least is not None:
-                entry['min_count'] = least
+                entry['min_rows'] = least
             audit.append(entry)
     floors = cell_floors or {}
     dataset_audit = []
@@ -114,8 +114,8 @@ def withheld(
         elif entry.get('table'):
             fewest = floors[(name, entry['lhs'][0], entry['rhs'])]
         else:
-            fewest = min_count(field, k_min) or k_min
-        dataset_audit.append({'field': field.pointer, 'values': field.values, 'rule': field.kind.rule, 'min_count': fewest})
+            fewest = min_rows(field, k_min) or k_min
+        dataset_audit.append({'field': field.pointer, 'values': field.values, 'rule': field.kind.rule, 'min_rows': fewest})
     privacy: dict[str, Any] = {'policy': policy.value, 'k_min': k_min}
     if suppressed:
         privacy['suppressed'] = suppressed
@@ -148,5 +148,5 @@ def drop(document: dict[str, Any], path: PointerParts, kind: FieldKind, failing:
             return
     del parent[path[-1]]
     if kind is FieldKind.TOP_VALUES:
-        parent.pop('other_rate', None)
+        parent.pop('other_fraction', None)
         parent.pop('overflow', None)

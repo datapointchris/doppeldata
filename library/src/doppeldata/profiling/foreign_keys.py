@@ -123,7 +123,7 @@ def inherited_columns(
     """The child's columns equal to a column of the parent row they join on at least `AGREEMENT_FLOOR` of the joined rows,
     each with the parent column it agrees with most. A pair is of one kind, neither column is a key the join is taken on,
     and the parent column holds more than one value. Fewer than k_min disagreeing rows are written as none."""
-    distinct = {column['name']: (column.get('distinct') or {}).get('approx') or 0 for column in parent.document.get('columns') or []}
+    distinct = {column['name']: (column.get('distinct') or {}).get('approx_values') or 0 for column in parent.document.get('columns') or []}
     candidates = [spec for spec in parent.specs if spec.name not in keys and distinct.get(spec.name, 0) >= 2]
     pairs = [(spec.name, held.name) for spec in child.specs if spec.name not in columns for held in candidates if held.kind is spec.kind]
     if not pairs:
@@ -136,7 +136,7 @@ def inherited_columns(
         if agreeing >= AGREEMENT_FLOOR * joined and agreeing > best.get(column, (-1, ''))[0]:
             best[column] = (agreeing, held)
     return [
-        {'child': column, 'parent': held, 'agreement': 1.0 if joined - agreeing < k_min else rate(agreeing, joined)}
+        {'child': column, 'parent': held, 'agreement_fraction': 1.0 if joined - agreeing < k_min else rate(agreeing, joined)}
         for column, (agreeing, held) in best.items()
     ]
 
@@ -149,7 +149,7 @@ def ordinal_column(backend: Backend, child: BundleMember, columns: tuple[str, ..
     def eligible(spec: ColumnSpec) -> bool:
         profile = profiled.get(spec.name) or {}
         low = ((profile.get('numeric') or {}).get('extremes') or {}).get('low')
-        distinct = (profile.get('distinct') or {}).get('approx') or 0
+        distinct = (profile.get('distinct') or {}).get('approx_values') or 0
         return spec.kind is ColumnKind.INTEGER and (child.name, spec.name) not in drawn and low == 1 and distinct >= 2
 
     candidates = [spec.name for spec in child.specs if spec.name not in columns and eligible(spec)]
@@ -251,7 +251,7 @@ def written_relationship(
         'from': child,
         'to': parent,
         'containment': 1.0 if floored else rate(contained, child_values),
-        'orphan_rate': 0.0 if floored else rate(orphan_rows, child_rows),
+        'orphan_fraction': 0.0 if floored else rate(orphan_rows, child_rows),
         'cardinality': 'one_to_one' if all(rows <= 1 for _, rows, values in counts if values) else 'many_to_one',
     }
     fanout = fanout_of(sorted((rows, values) for held, rows, values in counts if held), k_min)
@@ -280,7 +280,7 @@ def fanout_of(parents: list[tuple[int, int]], k_min: int) -> dict[str, Any]:
         if count <= held and matched and rank_value(busiest, count - 1) >= k_min:
             shares[name] = rate(sum_of_busiest(busiest, count), matched)
     if shares:
-        fanout['top_share'] = shares
+        fanout['top_fractions'] = shares
     exponent = zipf_exponent([(rows, values) for rows, values in busiest if rows])
     if exponent is not None:
         fanout['zipf_s'] = significant(exponent, RATE_DIGITS) + 0.0

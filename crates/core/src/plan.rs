@@ -497,7 +497,7 @@ pub(crate) fn plan_table(table: &TableProfile, identity: DatasetIdentity, inputs
 /// What `table`'s column samplers are planned against for `rows` rows from `seed`, with streams
 /// named for `name`.
 pub(crate) fn plan_context<'a>(table: &'a TableProfile, name: &'a str, seed: u64, rows: u64) -> PlanContext<'a> {
-    let source_rows = table.dataset.as_ref().and_then(|dataset| dataset.row_count);
+    let source_rows = table.dataset.as_ref().and_then(|dataset| dataset.rows);
     let rows_read = table
         .generated
         .as_ref()
@@ -532,7 +532,7 @@ fn refuse_beside_cdc(scenario: &Scenario, cdc: &CdcPlan) -> Result<(), PlanError
             }
             Perturbation::MalformedRows(_) => {
                 return Err(refuse(
-                    "malformed_rows breaks records, and cdc's faults are its duplicate_delivery_rate and out_of_order_rate".into(),
+                    "malformed_rows breaks records, and cdc's faults are its duplicate_delivery_fraction and out_of_order_fraction".into(),
                 ));
             }
             Perturbation::HotKeys(_)

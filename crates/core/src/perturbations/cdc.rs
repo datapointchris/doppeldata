@@ -93,7 +93,7 @@ pub struct CdcPlan {
     partition: Option<DatePartition>,
     timestamp_unit: Option<CdcTimestampUnit>,
     duplicate_rate: f64,
-    out_of_order_rate: f64,
+    out_of_order_fraction: f64,
     changes_key: u64,
     times_key: u64,
     columns_key: u64,
@@ -173,7 +173,7 @@ pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan], fo
         }
     }
     let rate = |rate: Option<Rate>| rate.map_or(0.0, |rate| rate.0);
-    let (inserts, updates, deletes) = (rate(op.inserts), rate(op.updates), rate(op.deletes));
+    let (inserts, updates, deletes) = (rate(op.insert_fraction), rate(op.update_fraction), rate(op.delete_fraction));
     if inserts == 0.0 && updates == 0.0 && deletes == 0.0 {
         return Err(invalid(
             "",
@@ -206,11 +206,11 @@ pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan], fo
             format!("{mean_updates} is not a count's mean, 1 or more"),
         ));
     }
-    let (duplicate_rate, out_of_order_rate) = (rate(op.duplicate_delivery_rate), rate(op.out_of_order_rate));
-    if duplicate_rate + out_of_order_rate > 1.0 {
+    let (duplicate_rate, out_of_order_fraction) = (rate(op.duplicate_delivery_fraction), rate(op.out_of_order_fraction));
+    if duplicate_rate + out_of_order_fraction > 1.0 {
         return Err(invalid(
-            "/out_of_order_rate",
-            "a change takes one fault at most, so duplicate_delivery_rate and out_of_order_rate sum to 1 at most".into(),
+            "/out_of_order_fraction",
+            "a change takes one fault at most, so duplicate_delivery_fraction and out_of_order_fraction sum to 1 at most".into(),
         ));
     }
     Ok(CdcPlan {
@@ -239,7 +239,7 @@ pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan], fo
         partition: op.date_partition.clone().filter(|partition| partition.enabled),
         timestamp_unit: op.timestamp_unit,
         duplicate_rate,
-        out_of_order_rate,
+        out_of_order_fraction,
         changes_key: planning.key("changes"),
         times_key: planning.key("times"),
         columns_key: planning.key("columns"),
@@ -282,7 +282,7 @@ impl CdcPlan {
 
     /// Whether the op places faults, so the write lists them in `_faults.jsonl`.
     pub fn places_faults(&self) -> bool {
-        self.duplicate_rate > 0.0 || self.out_of_order_rate > 0.0
+        self.duplicate_rate > 0.0 || self.out_of_order_fraction > 0.0
     }
 
     /// Whether `column` is one every update holds.
@@ -721,9 +721,9 @@ pub struct StreamOutline {
 
 fn counted(counts: &mut ChangeCounts, operation: Operation) {
     match operation {
-        Operation::Insert => counts.insert += 1,
-        Operation::Update => counts.update += 1,
-        Operation::Delete => counts.delete += 1,
+        Operation::Insert => counts.inserts += 1,
+        Operation::Update => counts.updates += 1,
+        Operation::Delete => counts.deletes += 1,
     }
 }
 
@@ -766,9 +766,9 @@ pub(crate) fn outline(plan: &Plan, cdc: &CdcPlan, threads: usize) -> Result<Stre
     let mut changes = ChangeCounts::default();
     let mut pieces = BTreeSet::new();
     for (counts, unit_pieces) in per_unit {
-        changes.insert += counts.insert;
-        changes.update += counts.update;
-        changes.delete += counts.delete;
+        changes.inserts += counts.inserts;
+        changes.updates += counts.updates;
+        changes.deletes += counts.deletes;
         pieces.extend(unit_pieces);
     }
     refuse_cut_past_changes(plan, cut, pieces.last().copied())?;
@@ -900,7 +900,7 @@ pub(crate) fn stream(plan: &Plan, cdc: &CdcPlan, threads: usize) -> Result<CdcSt
 /// change, so a rate moves no other change's. It takes one only where a merge in file order would
 /// end on a different image, and where a file after its key's last change exists to hold it.
 fn place_faults(cdc: &CdcPlan, seed: u64, block: u64, images: &RecordBatch, changes: &mut [Change], has_later_file: impl Fn(i64) -> bool) {
-    if cdc.duplicate_rate == 0.0 && cdc.out_of_order_rate == 0.0 {
+    if cdc.duplicate_rate == 0.0 && cdc.out_of_order_fraction == 0.0 {
         return;
     }
     let mut faults = rng_for(seed, cdc.faults_key, block);
@@ -911,8 +911,8 @@ fn place_faults(cdc: &CdcPlan, seed: u64, block: u64, images: &RecordBatch, chan
         }
         let draw = unit(&mut faults);
         let kind = match draw {
-            draw if draw < cdc.out_of_order_rate => StreamFault::OutOfOrder,
-            draw if draw < cdc.out_of_order_rate + cdc.duplicate_rate => StreamFault::DuplicateDelivery,
+            draw if draw < cdc.out_of_order_fraction => StreamFault::OutOfOrder,
+            draw if draw < cdc.out_of_order_fraction + cdc.duplicate_rate => StreamFault::DuplicateDelivery,
             _ => continue,
         };
         let differs = changes[last].operation == Operation::Delete || !same_image(images, at, last);

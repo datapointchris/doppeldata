@@ -55,7 +55,7 @@ pub struct Relationship {
     /// The share of `from`'s distinct values that `to` holds.
     pub containment: Option<Rate>,
     /// The share of `from`'s rows holding a value that `to` does not hold, of those holding a value.
-    pub orphan_rate: Option<Rate>,
+    pub orphan_fraction: Option<Rate>,
     pub cardinality: Option<Cardinality>,
     pub fanout: Option<Fanout>,
     /// The child columns holding their parent row's value on nearly every joined row, such as the
@@ -131,7 +131,7 @@ pub struct Inherited {
     /// The column of `to`'s table it copies.
     pub parent: String,
     /// The share of joined child rows whose value equals their parent row's, a null equal to a null.
-    pub agreement: Rate,
+    pub agreement_fraction: Rate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -149,7 +149,7 @@ pub enum Cardinality {
 pub struct Fanout {
     /// The child rows each of `to`'s values is held by, counting the values no child row holds.
     pub quantiles: Option<Quantiles>,
-    pub top_share: Option<TopShare>,
+    pub top_fractions: Option<TopFractions>,
     /// The exponent of a Zipf law fitted by maximum likelihood to the parents' child counts, busiest first.
     pub zipf_s: Option<f64>,
 }
@@ -157,7 +157,7 @@ pub struct Fanout {
 /// The share of matched child rows the busiest parents hold together, at the rank each field names.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct TopShare {
+pub struct TopFractions {
     /// The busiest parent's.
     pub top1: Option<Rate>,
     /// The busiest 10 parents'.
@@ -166,7 +166,7 @@ pub struct TopShare {
     pub top100: Option<Rate>,
 }
 
-impl TopShare {
+impl TopFractions {
     /// Each field's name and the rank, at scale 1, that the share is held at.
     pub const PINS: [(&'static str, u64); 3] = [("top1", 1), ("top10", 10), ("top100", 100)];
 

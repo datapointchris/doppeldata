@@ -31,9 +31,11 @@ def test_profile_check_passes_the_claims_example_and_points_at_a_three_row_top_v
     passed = runner.invoke(app, ['profile', 'check', 'claims'])
     assert passed.exit_code == 0, passed.output
 
-    pending = '- {value: pending, rate: 0.05}\n'
+    pending = '- {value: pending, fraction: 0.05}\n'
     edited = tmp_path / 'claims.profile.yaml'
-    edited.write_text(example_resource('claims').read_text().replace(pending, pending + '        - {value: appealed, rate: 0.000012}\n'))
+    edited.write_text(
+        example_resource('claims').read_text().replace(pending, pending + '        - {value: appealed, fraction: 0.000012}\n')
+    )
     failed = runner.invoke(app, ['profile', 'check', str(edited), '--json'])
 
     assert failed.exit_code == 3, failed.output

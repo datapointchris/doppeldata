@@ -4,9 +4,9 @@ description: CSV a pipeline must quarantine rows of, with ragged, badly quoted a
 patch: {source: {format: csv, compression: null}}
 perturbations:
   - op: malformed_rows
-    rate: 0.02
+    fraction: 0.02
     kinds: [ragged_short, ragged_long, unescaped_quote, embedded_newline, type_invalid, invalid_utf8, truncated_line, bom]
-    files_share: 0.5
+    files_fraction: 0.5
 expect:
   # A strict reader rejects or cannot cast every row kind but embedded_newline, which CSV allows inside quotes.
-  - {metric: malformed.rate, at_least: 0.013, at_most: 0.019}
+  - {metric: malformed.fraction, at_least: 0.013, at_most: 0.019}

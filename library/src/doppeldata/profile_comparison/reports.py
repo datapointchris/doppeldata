@@ -69,7 +69,7 @@ class MetricResult:
         return f' on {self.column}' if self.column else ''
 
     def named(self) -> str:
-        """`null_rate_delta on status (0.01 to 0.05)`, or `ks on amount (unmeasured)`."""
+        """`null_fraction_delta on status (0.01 to 0.05)`, or `ks on amount (unmeasured)`."""
         if self.unmeasured is not None:
             return f'{self.metric}{self.where()} (unmeasured)'
         moved = f' ({self.expected:g} to {self.observed:g})' if self.expected is not None and self.observed is not None else ''
@@ -104,7 +104,7 @@ class ExpectationResult:
         return f'{self.value:g}' if self.value is not None else (self.unmeasured or 'unmeasured')
 
     def named(self) -> str:
-        """`hot_keys.share on customer_id (0.41, expected ≥ 0.55)`, or `malformed.rate (0.01, expected ≥ 0.02)`."""
+        """`hot_keys.fraction on customer_id (0.41, expected ≥ 0.55)`, or `malformed.fraction (0.01, expected ≥ 0.02)`."""
         where = f' on {self.column}' if self.column is not None else ''
         return f'{self.metric}{where} ({self.measured()}, expected {self.bounds()})'
 
@@ -135,7 +135,7 @@ class Failures:
         return bool(self.metrics or self.changes or self.expectations)
 
     def summary(self) -> str:
-        """`2 of 15 metrics and 1 of 1 field changes: ks on amount, null_rate_delta on status (0.01 to 0.05), column_added fee`."""
+        """`2 of 15 metrics and 1 of 1 field changes: ks on amount, null_fraction_delta on status (0.01 to 0.05), column_added fee`."""
         counts = f'{len(self.metrics)} of {self.of_metrics} metrics and {len(self.changes)} of {self.of_changes} field changes'
         if self.of_expectations:
             counts += f' and {len(self.expectations)} of {self.of_expectations} expectations'
@@ -261,7 +261,7 @@ class CheckedTable:
 @dc.dataclass(frozen=True)
 class BundleCheckReport:
     """Related tables generated from a bundle, measured against it: each table's check, every parent before its children,
-    and each relationship's `fanout_ks`, `orphan_rate_delta` and `top_share_delta`.
+    and each relationship's `fanout_ks`, `orphan_fraction_delta` and `top_fraction_delta`.
 
     `passed` covers every table's check and every relationship metric that decides, and `verified` every table's
     expectations. `data.rows` is every table's rows together.

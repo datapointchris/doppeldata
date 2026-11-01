@@ -273,7 +273,7 @@ def profile_list(as_json: JsonOption = False) -> None:
     """List the hand-written example profiles and bundles doppeldata ships, by the name profile show takes."""
     examples = [Profile.example(name).document for name in example_names()]
     rows: list[dict[str, Any]] = [
-        {'name': doc['name'], 'kind': 'table', 'row_count': doc['dataset']['row_count'], 'columns': len(doc['columns'])} for doc in examples
+        {'name': doc['name'], 'kind': 'table', 'rows': doc['dataset']['rows'], 'columns': len(doc['columns'])} for doc in examples
     ]
     for name in bundle_example_names():
         bundle = Bundle.example(name)
@@ -281,7 +281,7 @@ def profile_list(as_json: JsonOption = False) -> None:
             {
                 'name': name,
                 'kind': 'bundle',
-                'row_count': sum(table.document['dataset']['row_count'] for table in bundle.tables.values()),
+                'rows': sum(table.document['dataset']['rows'] for table in bundle.tables.values()),
                 'tables': len(bundle.tables),
                 'relationships': len(bundle.document.get('relationships') or []),
             }
@@ -295,7 +295,7 @@ def profile_list(as_json: JsonOption = False) -> None:
             held = f'bundle of {counted(row["tables"], "table")} and {counted(row["relationships"], "relationship")}'
         else:
             held = f'{row["columns"]} columns'
-        typer.echo(f'{row["name"]:<{width}}  {held}, {row["row_count"]:,} rows')
+        typer.echo(f'{row["name"]:<{width}}  {held}, {row["rows"]:,} rows')
 
 
 @profile_app.command('create', no_args_is_help=True)

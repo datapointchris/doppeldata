@@ -36,7 +36,7 @@ narrows its patients to a few people.
 The statistics pass counts each value's first three characters, and keeps a prefix only where it is
 three digits. A prefix on the restricted list is counted as `000`, and the counts are then held to
 `k_min` as any top value is. The column writes them as `string.prefixes`: `values`, the
-`other_rate` of rows whose prefix holds fewer than `k_min` rows, and the `suffix` drawn after each
+`other_fraction` of rows whose prefix holds fewer than `k_min` rows, and the `suffix` drawn after each
 prefix. The suffix is `\d{2}`, or `\d{2}-\d{4}` where the dominant shape is a ZIP+4. The column
 keeps no `top_values` and no `pattern`, because a whole ZIP code or a pattern's literals could name
 a place a prefix does not.

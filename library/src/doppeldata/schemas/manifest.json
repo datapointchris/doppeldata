@@ -234,26 +234,26 @@
     "ChangeCounts": {
       "type": "object",
       "properties": {
-        "delete": {
+        "deletes": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
-        "insert": {
+        "inserts": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
-        "update": {
+        "updates": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         }
       },
       "required": [
-        "insert",
-        "update",
-        "delete"
+        "inserts",
+        "updates",
+        "deletes"
       ]
     },
     "Decimal": {

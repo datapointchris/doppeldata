@@ -70,7 +70,7 @@ def main() -> None:
     version = importlib.metadata.version('doppeldata')
     bundle = sd.Bundle.load(args.bundle) if os.path.exists(args.bundle) else sd.Bundle.example(args.bundle)
     alone = bundle.tables[args.table]
-    rows = round(alone.document['dataset']['row_count'] * args.scale)
+    rows = round(alone.document['dataset']['rows'] * args.scale)
     related, copying = drawn_from(bundle, args.table, inherited=False), drawn_from(bundle, args.table, inherited=True)
     copied = sum(len(relationship.get('inherited') or []) for relationship in copying.document.get('relationships') or [])
     parents = ', '.join(name for name in related.tables if name != args.table)

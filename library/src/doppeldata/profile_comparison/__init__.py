@@ -119,7 +119,7 @@ def check(
     Where `data` names a directory or prefix a doppeldata write left `_manifest.json` in, or one file a manifest beside it
     records alone, InvalidScenario refuses a `scenario` other than the one it records, and no `scenario` where it records one.
     InvalidScenario also refuses data holding a fault a check cannot read back in its format, before any row is read.
-    `malformed_rate_delta` decides nothing on data that no malformed_rows asked for malformed rows in. Where the manifest
+    `malformed_fraction_delta` decides nothing on data that no malformed_rows asked for malformed rows in. Where the manifest
     records a `cdc` write, the check reads its full load alone, and a ProfilingWarning says the change files and the
     expected table went unmeasured. Delimited files a manifest records are read in the dialect it records, never one
     sniffed from them, and files with no header take their column names from the plan it records.
@@ -227,7 +227,7 @@ def checked_table(
         reported_scenario, expectations = ReportedScenario(applied.name, applied.digest), applied.verify(data)
     report = CheckReport(
         profile=reported(profile),
-        data=CheckedData(named, (observed.get('dataset') or {}).get('row_count') or 0, fingerprint),
+        data=CheckedData(named, (observed.get('dataset') or {}).get('rows') or 0, fingerprint),
         metrics=metrics,
         changes=changes,
         scenario=reported_scenario,

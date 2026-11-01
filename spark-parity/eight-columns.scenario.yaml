@@ -3,22 +3,22 @@
 scenario: parity-on-eight-columns
 patch:
   columns:
-    flag: {null_rate: 0.1}
+    flag: {null_fraction: 0.1}
 perturbations:
-  - {op: hot_keys, column: qty, keys: 3, share: 0.2}
-  - {op: duplicates, rate: 0.03, scope: within_file}
-  - {op: duplicates, rate: 0.01, scope: across_files, exact: false}
-  - {op: late_arrival, column: ts, rate: 0.05, lag: {family: lognormal, median: 2d, p99: 30d}, ingest: ingested_at}
-  - {op: missingness, column: amount, mechanism: MAR, depends_on: category, rate: 0.1}
-  - {op: missingness, column: score, mechanism: MNAR, rate: 0.05}
-  - {op: out_of_range, column: qty, rate: 0.001, values: [-1, 0]}
-  - {op: swapped_values, columns: [amount, score], rate: 0.01}
-  - {op: noise, column: score, rate: 0.2, sigma: 1.5}
-  - {op: scaling, column: amount, rate: 0.01, factor: 100}
-  - {op: outliers, column: score, rate: 0.001, multiplier: 3}
-  - {op: broken_characters, column: code, rate: 0.01}
-  - {op: categorical_shift, column: category, to: {category_00: 0.3}}
-  - {op: partition_skew, column: category, shares: {category_01: 0.2}}
+  - {op: hot_keys, column: qty, keys: 3, fraction: 0.2}
+  - {op: duplicates, fraction: 0.03, scope: within_file}
+  - {op: duplicates, fraction: 0.01, scope: across_files, exact: false}
+  - {op: late_arrival, column: ts, fraction: 0.05, lag: {family: lognormal, median: 2d, p99: 30d}, ingest: ingested_at}
+  - {op: missingness, column: amount, mechanism: MAR, depends_on: category, fraction: 0.1}
+  - {op: missingness, column: score, mechanism: MNAR, fraction: 0.05}
+  - {op: out_of_range, column: qty, fraction: 0.001, values: [-1, 0]}
+  - {op: swapped_values, columns: [amount, score], fraction: 0.01}
+  - {op: noise, column: score, fraction: 0.2, sigma: 1.5}
+  - {op: scaling, column: amount, fraction: 0.01, factor: 100}
+  - {op: outliers, column: score, fraction: 0.001, multiplier: 3}
+  - {op: broken_characters, column: code, fraction: 0.01}
+  - {op: categorical_shift, column: category, to_fractions: {category_00: 0.3}}
+  - {op: partition_skew, column: category, value_fractions: {category_01: 0.2}}
   - op: schema_drift
     after_fraction: 0.5
     add: [{name: channel, type: string}]
@@ -26,5 +26,5 @@ perturbations:
     rename: {amount: amount_usd}
     reorder: [ts]
 expect:
-  - {metric: hot_keys.share, column: qty, at_least: 0.19}
-  - {metric: late_arrival.rate, column: ts, at_least: 0.045, at_most: 0.055}
+  - {metric: hot_keys.fraction, column: qty, at_least: 0.19}
+  - {metric: late_arrival.fraction, column: ts, at_least: 0.045, at_most: 0.055}

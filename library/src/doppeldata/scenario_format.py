@@ -196,7 +196,7 @@ def expectation_issues(plain: dict[str, Any]) -> Iterator[Issue]:
             yield Issue('invalid-parameter', at, f'{metric} measures one column, so it takes column')
             continue
         measured = expected_perturbation(metric, column, perturbations)
-        if metric == 'missingness.rate' and measured is None and (patched.get(column) or {}).get('null_rate') is not None:
+        if metric == 'missingness.fraction' and measured is None and (patched.get(column) or {}).get('null_fraction') is not None:
             continue
         op = _core.expected_metric_op(metric)
         if measured is None:
@@ -206,10 +206,10 @@ def expectation_issues(plain: dict[str, Any]) -> Iterator[Issue]:
                 at,
                 f'no {op} perturbation applies{on}, so the scenario changes nothing {metric} measures',
             )
-        elif metric == 'late_arrival.rate' and perturbations[measured].get('ingest') is None:
-            message = f'late_arrival.rate is measured against the ingest column of the late_arrival on {column}, which names none'
+        elif metric == 'late_arrival.fraction' and perturbations[measured].get('ingest') is None:
+            message = f'late_arrival.fraction is measured against the ingest column of the late_arrival on {column}, which names none'
             yield Issue('invalid-parameter', at, message)
-        elif metric == 'duplicates.rate':
+        elif metric == 'duplicates.fraction':
             rewriting = next(
                 (later for position, later in enumerate(facts) if column in later.writes and (position > measured or later.shapes_files)),
                 None,
@@ -217,7 +217,7 @@ def expectation_issues(plain: dict[str, Any]) -> Iterator[Issue]:
             if rewriting is not None:
                 message = (
                     f'{rewriting.id} writes {column} after {facts[measured].id} copies rows, so a copy would no longer share its '
-                    f"source's {column}; measure duplicates.rate on a key no later perturbation writes"
+                    f"source's {column}; measure duplicates.fraction on a key no later perturbation writes"
                 )
                 yield Issue('invalid-parameter', pointer(('expect', index, 'column')), message)
 
@@ -245,7 +245,7 @@ def patched_profile(profile: dict[str, Any], scenario: dict[str, Any]) -> tuple[
 
 
 def repointed(issue: Issue, patched: dict[str, Any]) -> Issue:
-    """An issue the patched profile fails, pointed into the patch: `/columns/3/null_rate` as `/patch/columns/discount/null_rate`."""
+    """An issue the patched profile fails, pointed into the patch: `/columns/3/null_fraction` as `/patch/columns/discount/null_fraction`."""
     parts = issue.field.split('/')
     if len(parts) > 2 and parts[1] == 'columns' and parts[2].isdigit():
         name = patched['columns'][int(parts[2])]['name']

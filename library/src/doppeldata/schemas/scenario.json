@@ -198,7 +198,7 @@
           "format": "double"
         },
         "column": {
-          "description": "The column measured. A metric of the whole table, such as `malformed.rate`, takes none.",
+          "description": "The column measured. A metric of the whole table, such as `malformed.fraction`, takes none.",
           "type": [
             "string",
             "null"
@@ -219,27 +219,27 @@
         {
           "description": "The share of rows holding the `keys` most frequent values of `column`, with `keys` from the\ncolumn's `hot_keys` perturbation.",
           "type": "string",
-          "const": "hot_keys.share"
+          "const": "hot_keys.fraction"
         },
         {
           "description": "The share of rows whose `column`, a key each copy shares with its source, repeats an earlier\nrow's. A later perturbation writing that column is refused, because a copy's key would then\ndiffer from its source's.",
           "type": "string",
-          "const": "duplicates.rate"
+          "const": "duplicates.fraction"
         },
         {
           "description": "The share of rows whose `column` is earlier than the `ingest` column of its `late_arrival`\nperturbation.",
           "type": "string",
-          "const": "late_arrival.rate"
+          "const": "late_arrival.fraction"
         },
         {
           "description": "The share of rows whose `column` is null, the profile's own nulls included.",
           "type": "string",
-          "const": "missingness.rate"
+          "const": "missingness.fraction"
         },
         {
-          "description": "The share of a CSV or TSV dataset's data rows a reader rejects, as a profile's\n`source.csv.malformed.rate` records it. It takes no column.",
+          "description": "The share of a CSV or TSV dataset's data rows a reader rejects, as a profile's\n`source.csv.malformed.fraction` records it. It takes no column.",
           "type": "string",
-          "const": "malformed.rate"
+          "const": "malformed.fraction"
         }
       ]
     },
@@ -412,11 +412,14 @@
       "description": "One fault, named by `op`. `id` keys its random stream, and defaults to\n`<op>:<column or \"table\">:<n>`, where n counts earlier entries of the same op and column.",
       "oneOf": [
         {
-          "description": "`share` of rows take one of `keys` values: the column's most frequent ones, or values its own\nsampler draws where it lists none.",
+          "description": "`fraction` of rows take one of `keys` values: the column's most frequent ones, or values its own\nsampler draws where it lists none.",
           "type": "object",
           "properties": {
             "column": {
               "type": "string"
+            },
+            "fraction": {
+              "$ref": "#/$defs/Rate"
             },
             "id": {
               "type": [
@@ -432,9 +435,6 @@
             "op": {
               "type": "string",
               "const": "hot_keys"
-            },
-            "share": {
-              "$ref": "#/$defs/Rate"
             }
           },
           "additionalProperties": false,
@@ -442,17 +442,20 @@
             "op",
             "column",
             "keys",
-            "share"
+            "fraction"
           ]
         },
         {
-          "description": "Copies of existing rows, so that `rate` of the rows written are copies. Each block's count is\nplanned up front, so block boundaries never move.",
+          "description": "Copies of existing rows, so that `fraction` of the rows written are copies. Each block's count is\nplanned up front, so block boundaries never move.",
           "type": "object",
           "properties": {
             "exact": {
               "description": "False varies one non-key column of each copy, taking that column's value from another row.",
               "type": "boolean",
               "default": true
+            },
+            "fraction": {
+              "$ref": "#/$defs/Rate"
             },
             "id": {
               "type": [
@@ -464,9 +467,6 @@
               "type": "string",
               "const": "duplicates"
             },
-            "rate": {
-              "$ref": "#/$defs/Rate"
-            },
             "scope": {
               "$ref": "#/$defs/DuplicateScope"
             }
@@ -474,16 +474,19 @@
           "additionalProperties": false,
           "required": [
             "op",
-            "rate"
+            "fraction"
           ]
         },
         {
-          "description": "`rate` of rows have their event time shifted earlier by a drawn lag.",
+          "description": "`fraction` of rows have their event time shifted earlier by a drawn lag.",
           "type": "object",
           "properties": {
             "column": {
               "description": "The event time.",
               "type": "string"
+            },
+            "fraction": {
+              "$ref": "#/$defs/Rate"
             },
             "id": {
               "type": [
@@ -492,7 +495,7 @@
               ]
             },
             "ingest": {
-              "description": "A column to hold each row's unshifted time, as when it arrived. It is written whether or not\nthe profile holds it, and added with the event column's type when it does not. A date\ncolumn takes the time truncated to its day. `late_arrival.rate` is measured against it.",
+              "description": "A column to hold each row's unshifted time, as when it arrived. It is written whether or not\nthe profile holds it, and added with the event column's type when it does not. A date\ncolumn takes the time truncated to its day. `late_arrival.fraction` is measured against it.",
               "type": [
                 "string",
                 "null"
@@ -504,21 +507,18 @@
             "op": {
               "type": "string",
               "const": "late_arrival"
-            },
-            "rate": {
-              "$ref": "#/$defs/Rate"
             }
           },
           "additionalProperties": false,
           "required": [
             "op",
             "column",
-            "rate",
+            "fraction",
             "lag"
           ]
         },
         {
-          "description": "Nulls written into `column`: MCAR uniformly, MAR more often for higher values of `depends_on`,\nand MNAR more often for the column's own higher values. Each averages `rate` over the rows.",
+          "description": "Nulls written into `column`: MCAR uniformly, MAR more often for higher values of `depends_on`,\nand MNAR more often for the column's own higher values. Each averages `fraction` over the rows.",
           "type": "object",
           "properties": {
             "column": {
@@ -530,6 +530,9 @@
                 "string",
                 "null"
               ]
+            },
+            "fraction": {
+              "$ref": "#/$defs/Rate"
             },
             "id": {
               "type": [
@@ -543,9 +546,6 @@
             "op": {
               "type": "string",
               "const": "missingness"
-            },
-            "rate": {
-              "$ref": "#/$defs/Rate"
             }
           },
           "additionalProperties": false,
@@ -553,11 +553,11 @@
             "op",
             "column",
             "mechanism",
-            "rate"
+            "fraction"
           ]
         },
         {
-          "description": "`rate` of rows take a sentinel from `values`, or a value past the column's extreme on the side\n`beyond` names. Exactly one of the two is given.",
+          "description": "`fraction` of rows take a sentinel from `values`, or a value past the column's extreme on the side\n`beyond` names. Exactly one of the two is given.",
           "type": "object",
           "properties": {
             "beyond": {
@@ -573,6 +573,9 @@
             "column": {
               "type": "string"
             },
+            "fraction": {
+              "$ref": "#/$defs/Rate"
+            },
             "id": {
               "type": [
                 "string",
@@ -582,9 +585,6 @@
             "op": {
               "type": "string",
               "const": "out_of_range"
-            },
-            "rate": {
-              "$ref": "#/$defs/Rate"
             },
             "values": {
               "description": "Sentinels, each cast to the column's type.",
@@ -599,11 +599,11 @@
           "required": [
             "op",
             "column",
-            "rate"
+            "fraction"
           ]
         },
         {
-          "description": "Two columns' values exchanged in `rate` of rows. Both must have one type.",
+          "description": "Two columns' values exchanged in `fraction` of rows. Both must have one type.",
           "type": "object",
           "properties": {
             "columns": {
@@ -614,6 +614,9 @@
               "maxItems": 2,
               "minItems": 2
             },
+            "fraction": {
+              "$ref": "#/$defs/Rate"
+            },
             "id": {
               "type": [
                 "string",
@@ -623,16 +626,13 @@
             "op": {
               "type": "string",
               "const": "swapped_values"
-            },
-            "rate": {
-              "$ref": "#/$defs/Rate"
             }
           },
           "additionalProperties": false,
           "required": [
             "op",
             "columns",
-            "rate"
+            "fraction"
           ]
         },
         {
@@ -652,7 +652,7 @@
               "type": "string",
               "const": "categorical_shift"
             },
-            "to": {
+            "to_fractions": {
               "type": "object",
               "additionalProperties": {
                 "$ref": "#/$defs/Rate"
@@ -663,15 +663,18 @@
           "required": [
             "op",
             "column",
-            "to"
+            "to_fractions"
           ]
         },
         {
-          "description": "Gaussian noise of standard deviation `sigma`, in the column's units, added to `rate` of rows.",
+          "description": "Gaussian noise of standard deviation `sigma`, in the column's units, added to `fraction` of rows.",
           "type": "object",
           "properties": {
             "column": {
               "type": "string"
+            },
+            "fraction": {
+              "$ref": "#/$defs/Rate"
             },
             "id": {
               "type": [
@@ -683,9 +686,6 @@
               "type": "string",
               "const": "noise"
             },
-            "rate": {
-              "$ref": "#/$defs/Rate"
-            },
             "sigma": {
               "type": "number",
               "format": "double",
@@ -696,12 +696,12 @@
           "required": [
             "op",
             "column",
-            "rate",
+            "fraction",
             "sigma"
           ]
         },
         {
-          "description": "`rate` of rows multiplied by `factor`, a unit error such as cents written as dollars.",
+          "description": "`fraction` of rows multiplied by `factor`, a unit error such as cents written as dollars.",
           "type": "object",
           "properties": {
             "column": {
@@ -710,6 +710,9 @@
             "factor": {
               "type": "number",
               "format": "double"
+            },
+            "fraction": {
+              "$ref": "#/$defs/Rate"
             },
             "id": {
               "type": [
@@ -720,25 +723,25 @@
             "op": {
               "type": "string",
               "const": "scaling"
-            },
-            "rate": {
-              "$ref": "#/$defs/Rate"
             }
           },
           "additionalProperties": false,
           "required": [
             "op",
             "column",
-            "rate",
+            "fraction",
             "factor"
           ]
         },
         {
-          "description": "`rate` of strings broken: one holding a character past ASCII is mojibake, its UTF-8 read as\nwindows-1252, and any other has one character replaced by U+FFFD.",
+          "description": "`fraction` of strings broken: one holding a character past ASCII is mojibake, its UTF-8 read as\nwindows-1252, and any other has one character replaced by U+FFFD.",
           "type": "object",
           "properties": {
             "column": {
               "type": "string"
+            },
+            "fraction": {
+              "$ref": "#/$defs/Rate"
             },
             "id": {
               "type": [
@@ -749,24 +752,24 @@
             "op": {
               "type": "string",
               "const": "broken_characters"
-            },
-            "rate": {
-              "$ref": "#/$defs/Rate"
             }
           },
           "additionalProperties": false,
           "required": [
             "op",
             "column",
-            "rate"
+            "fraction"
           ]
         },
         {
-          "description": "`rate` of rows set far past the trimmed extremes: between `multiplier` and `multiplier + 1`\ntimes the span between them, beyond the high extreme, or beyond the low one in a column that\ngoes below zero.",
+          "description": "`fraction` of rows set far past the trimmed extremes: between `multiplier` and `multiplier + 1`\ntimes the span between them, beyond the high extreme, or beyond the low one in a column that\ngoes below zero.",
           "type": "object",
           "properties": {
             "column": {
               "type": "string"
+            },
+            "fraction": {
+              "$ref": "#/$defs/Rate"
             },
             "id": {
               "type": [
@@ -782,16 +785,13 @@
             "op": {
               "type": "string",
               "const": "outliers"
-            },
-            "rate": {
-              "$ref": "#/$defs/Rate"
             }
           },
           "additionalProperties": false,
           "required": [
             "op",
             "column",
-            "rate",
+            "fraction",
             "multiplier"
           ]
         },
@@ -897,7 +897,7 @@
               "type": "string",
               "const": "partition_skew"
             },
-            "shares": {
+            "value_fractions": {
               "type": "object",
               "additionalProperties": {
                 "$ref": "#/$defs/Rate"
@@ -908,15 +908,26 @@
           "required": [
             "op",
             "column",
-            "shares"
+            "value_fractions"
           ]
         },
         {
-          "description": "Bytes a reader rejects or misreads, written into the files and listed in `_faults.jsonl` beside\nthem. With no `rate`, `kinds` or `files_share`, it reproduces the malformed rows and type mix the\nprofile records of its CSV source. Otherwise `rate` of rows each take one of the row\nkinds named, and `files_share` of files each take one of the file kinds named.",
+          "description": "Bytes a reader rejects or misreads, written into the files and listed in `_faults.jsonl` beside\nthem. With no `fraction`, `kinds` or `files_fraction`, it reproduces the malformed rows and type mix\nthe profile records of its CSV source. Otherwise `fraction` of rows each take one of the row\nkinds named, and `files_fraction` of files each take one of the file kinds named.",
           "type": "object",
           "properties": {
-            "files_share": {
+            "files_fraction": {
               "description": "The share of files given a file fault, each kind named equally often.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fraction": {
+              "description": "The share of rows given a row fault, each kind named equally often.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/Rate"
@@ -944,17 +955,6 @@
             "op": {
               "type": "string",
               "const": "malformed_rows"
-            },
-            "rate": {
-              "description": "The share of rows given a row fault, each kind named equally often.",
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Rate"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             }
           },
           "additionalProperties": false,
@@ -977,7 +977,7 @@
                 }
               ]
             },
-            "deletes": {
+            "delete_fraction": {
               "description": "The share of the full load's rows deleted, each after its updates.",
               "anyOf": [
                 {
@@ -988,7 +988,7 @@
                 }
               ]
             },
-            "duplicate_delivery_rate": {
+            "duplicate_delivery_fraction": {
               "description": "The chance an eligible change is written a second time, in the first change file after the\none holding its key's last change. A change is eligible when its key's last change comes\nafter it, and deletes the row or leaves it different from this change's.",
               "anyOf": [
                 {
@@ -1021,7 +1021,7 @@
               "type": "boolean",
               "default": false
             },
-            "inserts": {
+            "insert_fraction": {
               "description": "New rows, as a share of the full load's.",
               "anyOf": [
                 {
@@ -1043,8 +1043,8 @@
               "type": "string",
               "const": "cdc"
             },
-            "out_of_order_rate": {
-              "description": "The chance an eligible change is written late instead, in the first change file after the\none holding its key's last change. Eligible as for `duplicate_delivery_rate`.",
+            "out_of_order_fraction": {
+              "description": "The chance an eligible change is written late instead, in the first change file after the\none holding its key's last change. Eligible as for `duplicate_delivery_fraction`.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/Rate"
@@ -1082,7 +1082,7 @@
                 }
               ]
             },
-            "updates": {
+            "update_fraction": {
               "description": "The share of the full load's rows updated at least once.",
               "anyOf": [
                 {

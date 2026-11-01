@@ -56,7 +56,7 @@ A test pins the digest of one fixed identity, which the library's `rfc8785` pack
 ## Every table of a bundle is named by the bundle, so its own manifest regenerates it alone
 
 A bundle's tables share its profile digest, seed, scale and scenario digest. Each table's identity
-adds its own name and its own rows, `round(row_count × scale)`. The bundle's own identity names no
+adds its own name and its own rows, `round(rows × scale)`. The bundle's own identity names no
 table, and its rows are the sum of its tables'.
 
 - **A bundle's scenario digest is taken over the map of each table to its scenario.** Each entry is
@@ -78,7 +78,7 @@ table, and its rows are the sum of its tables'.
   rows in the parent permutation's order. So the parent column's generated values decide every
   placement, and a change to how that column draws moves every child row's parent. Past
   `PLACED_PARENTS` parents, or for a sorted draw, the parent permutation alone places them.
-- **Each `top_share` pin sits at its rank times the scale.** At scale 0.1, `top10` pins the busiest
+- **Each `top_fractions` pin sits at its rank times the scale.** At scale 0.1, `top10` pins the busiest
   parent. A pin under one parent, or on every parent, is left out. So the
   counts a parent holds move with the scale, which the identity carries.
 - **A bridge's second draw takes its positions from the first's.** A bridge is a child whose
@@ -112,7 +112,7 @@ a value for every row, a null row's included. So a column's values do not move w
 its error rate or its tokens change. A nested
 field's streams are named by its dotted path, so it draws the same whatever its siblings are.
 
-A column generating as text from its `type_mix` draws each row's share from its `type_mix` stream,
+A column generating as text from its `type_mix_fractions` draws each row's share from its `type_mix` stream,
 one word a row, and each value of another type from `type_mix_text`. Its own share renders what its
 sampler draws typed, so the text changes no other stream. A stated key's values of other types are
 derived from the row, and its own draws at a row are those the typed key holds there.

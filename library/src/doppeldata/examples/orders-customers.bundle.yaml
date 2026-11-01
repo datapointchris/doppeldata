@@ -8,24 +8,24 @@ tables:
     kind: table
     name: customers
     dataset:
-      row_count: 40000
+      rows: 40000
       keys:
         primary: {columns: [customer_id], uniqueness: 1.0}
     privacy:
       policy: default
       k_min: 11
       audit:
-        - {column: customer_id, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+        - {column: customer_id, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_rows: 11}
         - {column: customer_id, field: /numeric/sequence, values: 1, rule: "follows the trimmed extreme"}
-        - {column: region, field: /string/top_values, values: 4, rule: "count >= k_min", min_count: 8000}
-        - {column: segment, field: /string/top_values, values: 3, rule: "count >= k_min", min_count: 2800}
-        - {column: signed_up_at, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+        - {column: region, field: /string/top_values, values: 4, rule: "count >= k_min", min_rows: 8000}
+        - {column: segment, field: /string/top_values, values: 3, rule: "count >= k_min", min_rows: 2800}
+        - {column: signed_up_at, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_rows: 11}
     columns:
       - name: customer_id
         physical_type: int64
         logical_type: integer
         nullable: false
-        null_rate: 0.0
+        null_fraction: 0.0
         numeric:
           integral: true
           extremes: {low: 11, high: 39990, method: trimmed_k}
@@ -35,30 +35,30 @@ tables:
         physical_type: string
         logical_type: string
         nullable: false
-        null_rate: 0.0
+        null_fraction: 0.0
         string:
           top_values:
-            - {value: northeast, rate: 0.27}
-            - {value: south, rate: 0.31}
-            - {value: midwest, rate: 0.2}
-            - {value: west, rate: 0.22}
-          other_rate: 0.0
+            - {value: northeast, fraction: 0.27}
+            - {value: south, fraction: 0.31}
+            - {value: midwest, fraction: 0.2}
+            - {value: west, fraction: 0.22}
+          other_fraction: 0.0
       - name: segment
         physical_type: string
         logical_type: string
         nullable: false
-        null_rate: 0.0
+        null_fraction: 0.0
         string:
           top_values:
-            - {value: consumer, rate: 0.72}
-            - {value: small_business, rate: 0.21}
-            - {value: enterprise, rate: 0.07}
-          other_rate: 0.0
+            - {value: consumer, fraction: 0.72}
+            - {value: small_business, fraction: 0.21}
+            - {value: enterprise, fraction: 0.07}
+          other_fraction: 0.0
       - name: signed_up_at
         physical_type: "timestamp[us, tz=UTC]"
         logical_type: timestamp
         nullable: false
-        null_rate: 0.0
+        null_fraction: 0.0
         temporal:
           timezone: UTC
           extremes: {low: "2019-01-01T00:00:00Z", high: "2025-12-31T23:59:59Z", granularity: second}
@@ -66,28 +66,28 @@ tables:
     kind: table
     name: orders
     dataset:
-      row_count: 550000
+      rows: 550000
       keys:
         primary: {columns: [order_id], uniqueness: 1.0}
     privacy:
       policy: default
       k_min: 11
       audit:
-        - {column: order_id, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+        - {column: order_id, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_rows: 11}
         - {column: order_id, field: /numeric/sequence, values: 1, rule: "follows the trimmed extreme"}
-        - {column: customer_id, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
-        - {column: region, field: /string/top_values, values: 4, rule: "count >= k_min", min_count: 110000}
-        - {column: amount, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_count: 11}
-        - {column: amount, field: /numeric/quantiles, values: 7, rule: "k_min rows from each end", min_count: 5501}
+        - {column: customer_id, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_rows: 11}
+        - {column: region, field: /string/top_values, values: 4, rule: "count >= k_min", min_rows: 110000}
+        - {column: amount, field: /numeric/extremes, values: 2, rule: "trimmed_k", min_rows: 11}
+        - {column: amount, field: /numeric/quantiles, values: 7, rule: "k_min rows from each end", min_rows: 5501}
         - {column: amount, field: /numeric/fit, values: 3, rule: "fitted within the trimmed extremes"}
-        - {column: status, field: /string/top_values, values: 5, rule: "count >= k_min", min_count: 43505}
-        - {column: ordered_at, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_count: 11}
+        - {column: status, field: /string/top_values, values: 5, rule: "count >= k_min", min_rows: 43505}
+        - {column: ordered_at, field: /temporal/extremes, values: 2, rule: "trimmed_k", min_rows: 11}
     columns:
       - name: order_id
         physical_type: int64
         logical_type: integer
         nullable: false
-        null_rate: 0.0
+        null_fraction: 0.0
         numeric:
           integral: true
           extremes: {low: 11, high: 549990, method: trimmed_k}
@@ -97,7 +97,7 @@ tables:
         physical_type: int64
         logical_type: integer
         nullable: true
-        null_rate: 0.001
+        null_fraction: 0.001
         numeric:
           integral: true
           extremes: {low: 11, high: 39990, method: trimmed_k}
@@ -106,19 +106,19 @@ tables:
         physical_type: string
         logical_type: string
         nullable: false
-        null_rate: 0.0
+        null_fraction: 0.0
         string:
           top_values:
-            - {value: northeast, rate: 0.27}
-            - {value: south, rate: 0.31}
-            - {value: midwest, rate: 0.2}
-            - {value: west, rate: 0.22}
-          other_rate: 0.0
+            - {value: northeast, fraction: 0.27}
+            - {value: south, fraction: 0.31}
+            - {value: midwest, fraction: 0.2}
+            - {value: west, fraction: 0.22}
+          other_fraction: 0.0
       - name: amount
         physical_type: "decimal128(12, 2)"
         logical_type: number
         nullable: false
-        null_rate: 0.0
+        null_fraction: 0.0
         numeric:
           integral: false
           precision: 12
@@ -130,20 +130,20 @@ tables:
         physical_type: string
         logical_type: string
         nullable: false
-        null_rate: 0.0
+        null_fraction: 0.0
         string:
           top_values:
-            - {value: delivered, rate: 0.4644}
-            - {value: shipped, rate: 0.2167}
-            - {value: processing, rate: 0.1387}
-            - {value: cancelled, rate: 0.1011}
-            - {value: returned, rate: 0.0791}
-          other_rate: 0.0
+            - {value: delivered, fraction: 0.4644}
+            - {value: shipped, fraction: 0.2167}
+            - {value: processing, fraction: 0.1387}
+            - {value: cancelled, fraction: 0.1011}
+            - {value: returned, fraction: 0.0791}
+          other_fraction: 0.0
       - name: ordered_at
         physical_type: "timestamp[us, tz=UTC]"
         logical_type: timestamp
         nullable: false
-        null_rate: 0.0
+        null_fraction: 0.0
         temporal:
           timezone: UTC
           extremes: {low: "2025-01-01T00:00:00Z", high: "2025-12-31T23:59:59Z", granularity: second}
@@ -152,9 +152,9 @@ relationships:
     to: [customers.customer_id]
     cardinality: many_to_one
     containment: 0.995
-    orphan_rate: 0.002
+    orphan_fraction: 0.002
     fanout:
       quantiles: {p05: 0.0, p25: 1.0, p50: 4.0, p75: 10.0, p95: 45.0, p99: 160.0}
-      top_share: {top10: 0.003}
+      top_fractions: {top10: 0.003}
     inherited:
-      - {child: region, parent: region, agreement: 0.995}
+      - {child: region, parent: region, agreement_fraction: 0.995}

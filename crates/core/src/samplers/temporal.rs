@@ -1,6 +1,6 @@
 //! Date, timestamp and time-of-day columns. With no month, weekday or hour weights and no gaps, a
 //! value is uniform over the extremes at the column's granularity. Otherwise a day is drawn from
-//! the range, weighted by `by_month` and `by_dow` with `gap_rate`'s share of days left empty, then a
+//! the range, weighted by `by_month` and `by_dow` with `gap_fraction`'s share of days left empty, then a
 //! time within it weighted by `by_hour`.
 
 use std::sync::Arc;
@@ -217,7 +217,7 @@ pub(crate) struct TemporalSampler {
 }
 
 impl TemporalSampler {
-    /// `gap_days` shuffles the range's days when `gap_rate` leaves some empty.
+    /// `gap_days` shuffles the range's days when `gap_fraction` leaves some empty.
     pub(crate) fn new(
         stats: Option<&TemporalStats>,
         output: TemporalOutput,
@@ -240,11 +240,11 @@ impl TemporalSampler {
         let high = parse(extremes.and_then(|e| e.high.as_ref()), default_high)?.max(low);
         let granule = granule(extremes.and_then(|e| e.granularity), &output);
         let whole_days = output.is_date() || granule >= ticks_per_day;
-        let by_month = stats.and_then(|s| s.by_month.as_ref());
-        let by_dow = stats.and_then(|s| s.by_dow.as_ref());
-        let by_hour = stats.and_then(|s| s.by_hour.as_ref()).filter(|_| !whole_days);
-        let gap_rate = stats.and_then(|s| s.gap_rate).map_or(0.0, |r| r.0);
-        if by_month.is_none() && by_dow.is_none() && by_hour.is_none() && gap_rate == 0.0 {
+        let by_month = stats.and_then(|s| s.month_fractions.as_ref());
+        let by_dow = stats.and_then(|s| s.weekday_fractions.as_ref());
+        let by_hour = stats.and_then(|s| s.hour_fractions.as_ref()).filter(|_| !whole_days);
+        let gap_fraction = stats.and_then(|s| s.gap_fraction).map_or(0.0, |r| r.0);
+        if by_month.is_none() && by_dow.is_none() && by_hour.is_none() && gap_fraction == 0.0 {
             let granule = if whole_days { ticks_per_day } else { granule };
             let count = ((high - low) / granule) as u64 + 1;
             return Ok(Self {
@@ -328,7 +328,7 @@ impl TemporalSampler {
             .zip(&inside)
             .map(|(&(month, weekday), &inside)| inside * share(by_month, month, &months) * share(by_dow, weekday, &weekdays))
             .collect();
-        let gaps = ((gap_rate * weights.len() as f64).round() as usize).min(weights.len().saturating_sub(1));
+        let gaps = ((gap_fraction * weights.len() as f64).round() as usize).min(weights.len().saturating_sub(1));
         if gaps > 0 {
             let mut rng = gap_days();
             let mut order: Vec<usize> = (0..weights.len()).collect();

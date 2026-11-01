@@ -26,8 +26,8 @@ USER_ID = {
     'physical_type': 'int64',
     'logical_type': 'integer',
     'nullable': False,
-    'null_rate': 0.0,
-    'distinct': {'approx': 25_000, 'ratio': 0.1042},
+    'null_fraction': 0.0,
+    'distinct': {'approx_values': 25_000, 'ratio': 0.1042},
     'numeric': {'integral': True, 'extremes': {'low': 0, 'high': 99_999, 'method': 'digit_bounds'}, 'monotonic': 'none'},
 }
 STRING_SHARE = {'integer': 0.75, 'string': 0.25}
@@ -46,7 +46,7 @@ def with_user_id(type_mix: dict[str, float] | None) -> sd.Profile:
     document: dict[str, Any] = copy.deepcopy(sd.Profile.example('eight-columns').document)
     column = copy.deepcopy(USER_ID)
     if type_mix is not None:
-        column['type_mix'] = type_mix
+        column['type_mix_fractions'] = type_mix
     document['columns'].append(column)
     return sd.Profile(document)
 

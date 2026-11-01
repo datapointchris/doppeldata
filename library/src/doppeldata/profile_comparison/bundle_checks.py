@@ -52,7 +52,7 @@ from doppeldata.scenario_format import Scenario
 
 # The metrics comparing which values a column holds, which a relationship drawing the column decides by its parent's
 # keys, dealing each count to a parent at random. Its null share and distinct values it keeps.
-DRAWN_KEY_METRICS = registered('ks', 'tvd', 'zero_rate_delta', 'boundary_adherence', 'correlation_max_abs_diff', 'conditional_kl')
+DRAWN_KEY_METRICS = registered('ks', 'tvd', 'zero_fraction_delta', 'boundary_adherence', 'correlation_max_abs_diff', 'conditional_kl')
 
 
 def check_bundle(
@@ -201,7 +201,7 @@ def relationship_rows(
         values = {}
         if set_aside is None:
             keys = sum(held_keys for in_parent, _, held_keys in counted[index] if in_parent)
-            stated_rows = drawn_bundle['tables'][relationship['parent']]['dataset']['row_count']
+            stated_rows = drawn_bundle['tables'][relationship['parent']]['dataset']['rows']
             at = float(scale) if scale is not None else keys / stated_rows if stated_rows else 1.0
             values = measured(stated[index], counted[index], at)
         for metric in RELATIONSHIP_METRICS:

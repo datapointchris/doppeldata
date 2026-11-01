@@ -41,14 +41,14 @@ impl ListedNumbers {
         let Some(top_values) = stats.top_values.as_deref().filter(|values| !values.is_empty()) else {
             return Ok(None);
         };
-        let mut listed: Vec<(f64, f64)> = top_values.iter().map(|top| (top.value, top.rate.0)).collect();
-        let other_rate = stats.other_rate.map_or(0.0, |r| r.0);
+        let mut listed: Vec<(f64, f64)> = top_values.iter().map(|top| (top.value, top.fraction.0)).collect();
+        let other_fraction = stats.other_fraction.map_or(0.0, |r| r.0);
         // Rows hidden beyond the extremes are part of the `other` share, never added to it.
         let hidden: Vec<(f64, f64)> = source
             .map(|source| hidden_beyond(stats, rounding, &listed, source))
             .unwrap_or_default()
             .into_iter()
-            .scan(other_rate, |left, (value, rate)| {
+            .scan(other_fraction, |left, (value, rate)| {
                 let rate = rate.min(*left);
                 *left -= rate;
                 Some((value, rate))
@@ -58,7 +58,7 @@ impl ListedNumbers {
         let outside = outside_cdf(cdf, &listed, rounding);
         // With no level left outside the list, its share is drawn as the listed values are.
         let outside_rate = match outside {
-            Some(_) => (other_rate - hidden.iter().map(|&(_, rate)| rate).sum::<f64>()).max(0.0),
+            Some(_) => (other_fraction - hidden.iter().map(|&(_, rate)| rate).sum::<f64>()).max(0.0),
             None => 0.0,
         };
         let beyond_extremes = hidden.len();
@@ -160,7 +160,7 @@ fn hidden_beyond(stats: &NumericStats, rounding: Rounding, listed: &[(f64, f64)]
         .histogram
         .as_ref()
         .and_then(|h| h.overflow.as_ref())
-        .map_or((0, 0), |o| (o.below, o.above));
+        .map_or((0, 0), |o| (o.rows_below, o.rows_above));
     let above = match (rows_below > 0, rows_above > 0) {
         (false, true) => hidden,
         (true, false) => 0,

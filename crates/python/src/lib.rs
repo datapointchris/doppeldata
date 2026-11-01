@@ -126,11 +126,11 @@ mod _core {
             .collect()
     }
 
-    /// Each ``fanout.top_share`` field's name and the rank, at scale 1, its share is held at,
+    /// Each ``fanout.top_fractions`` field's name and the rank, at scale 1, its share is held at,
     /// busiest first.
     #[pyfunction]
     fn top_share_ranks() -> Vec<(&'static str, u64)> {
-        doppeldata_core::profile::TopShare::PINS.to_vec()
+        doppeldata_core::profile::TopFractions::PINS.to_vec()
     }
 
     type PerturbationFacts = (String, Vec<String>, bool, bool, bool);
@@ -163,7 +163,7 @@ mod _core {
     }
 
     /// The op whose perturbation an expectation's metric measures, such as ``hot_keys`` for
-    /// ``hot_keys.share``.
+    /// ``hot_keys.fraction``.
     #[pyfunction]
     fn expected_metric_op(metric: &str) -> PyResult<&'static str> {
         serde_json::from_value::<doppeldata_core::scenario::ExpectedMetric>(metric.into())

@@ -13,8 +13,8 @@ each. A column's nulls are dropped first, so a column with nulls is validated on
   `check_digits_hold` decides that, so the profiler and the generator read one rule.
 - **Of the types that qualify, the most values passed wins.** A tie goes to the hinted type, then to
   the pack and the detector listed first.
-- **`quality.invalid_rate` is the share that failed.** A card-number column with 0.3% bad check
-  digits writes `invalid_rate: 0.003`, and the generator leaves that share of its Luhn digits wrong.
+- **`quality.invalid_fraction` is the share that failed.** A card-number column with 0.3% bad check
+  digits writes `invalid_fraction: 0.003`, and the generator leaves that share of its Luhn digits wrong.
 - **`confidence` is the pass rate.** A name hint halves the doubt left, so 0.9 with a hint is 0.95. A
   type its name hint assigns is given `HINT_ASSIGNED_CONFIDENCE`.
 - **`detectors` lists the methods that agreed.** The first is the detector's `method`: `pattern`

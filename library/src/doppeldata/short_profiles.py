@@ -75,14 +75,14 @@ def providers() -> list[str]:
 def with_row_count(document: Any, rows: int) -> Any:
     """`document` recording `rows` as its row count, in a `dataset` section placed before the columns where it has none."""
     if 'dataset' in document:
-        document['dataset']['row_count'] = rows
+        document['dataset']['rows'] = rows
         return document
     at = list(document).index('columns') if 'columns' in document else len(document)
     if isinstance(document, CommentedMap):
-        document.insert(at, 'dataset', {'row_count': rows})
+        document.insert(at, 'dataset', {'rows': rows})
         return document
     items = list(document.items())
-    return dict([*items[:at], ('dataset', {'row_count': rows}), *items[at:]])
+    return dict([*items[:at], ('dataset', {'rows': rows}), *items[at:]])
 
 
 def file_profile(source: str | os.PathLike[str]) -> Profile:
@@ -202,7 +202,7 @@ def expanded(specs: dict[str, InlineColumn | None], rows: int | None, table: str
         raise InvalidProfile(source, issues)
     document: dict[str, Any] = {'kind': 'table', 'name': table}
     if rows is not None:
-        document['dataset'] = {'row_count': rows}
+        document['dataset'] = {'rows': rows}
     document['columns'] = columns
     return document
 

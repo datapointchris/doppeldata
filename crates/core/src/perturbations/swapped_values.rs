@@ -52,7 +52,7 @@ pub(super) fn plan(op: &SwappedValues, planning: &Planning<'_>) -> Result<Planne
     );
     let op = SwapRows {
         columns: [first, second],
-        rate: op.rate.0,
+        rate: op.fraction.0,
         rows_key: planning.key("rows"),
     };
     Ok(Planned::Rows { op: Box::new(op), schema })

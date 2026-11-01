@@ -28,7 +28,7 @@ class InlineColumn:
         """The profile column this stands for, named `name`."""
         column = {'name': name, **self.described()}
         if self.nulls:
-            column['null_rate'] = self.nulls
+            column['null_fraction'] = self.nulls
         return column
 
     def described(self) -> dict[str, Any]:
@@ -67,7 +67,7 @@ class Integers(InlineColumn):
 
     def described(self) -> dict[str, Any]:
         # One bin half an integer beyond each end, as the profiler bins an integer column, so the ends draw as often as the rest.
-        histogram = {'kind': 'equal_width', 'edges': [self.low - 0.5, self.high + 0.5], 'counts': [1]}
+        histogram = {'kind': 'equal_width', 'edges': [self.low - 0.5, self.high + 0.5], 'bin_rows': [1]}
         numeric = {'extremes': {'low': self.low, 'high': self.high}, 'histogram': histogram}
         return {'physical_type': 'int64', 'logical_type': 'integer', 'numeric': numeric}
 
@@ -144,14 +144,14 @@ class Choice(InlineColumn):
 
     def described(self) -> dict[str, Any]:
         kind = kind_of(self.values[0])
-        listed = [{'value': value, 'rate': rate} for value, rate in zip(self.values, self.rates(), strict=True)]
+        listed = [{'value': value, 'fraction': rate} for value, rate in zip(self.values, self.rates(), strict=True)]
         if kind is bool:
-            true_rate = sum(rate for value, rate in zip(self.values, self.rates(), strict=True) if value)
-            return {'physical_type': 'bool', 'logical_type': 'boolean', 'boolean': {'true_rate': true_rate}}
+            true_fraction = sum(rate for value, rate in zip(self.values, self.rates(), strict=True) if value)
+            return {'physical_type': 'bool', 'logical_type': 'boolean', 'boolean': {'true_fraction': true_fraction}}
         if kind is str:
-            return {'physical_type': 'string', 'logical_type': 'string', 'string': {'top_values': listed, 'other_rate': 0.0}}
+            return {'physical_type': 'string', 'logical_type': 'string', 'string': {'top_values': listed, 'other_fraction': 0.0}}
         extremes = {'low': min(self.values), 'high': max(self.values)}
-        numeric = {'top_values': listed, 'other_rate': 0.0, 'extremes': extremes}
+        numeric = {'top_values': listed, 'other_fraction': 0.0, 'extremes': extremes}
         if kind is int:
             return {'physical_type': 'int64', 'logical_type': 'integer', 'numeric': numeric}
         return {'physical_type': 'double', 'logical_type': 'number', 'numeric': numeric}

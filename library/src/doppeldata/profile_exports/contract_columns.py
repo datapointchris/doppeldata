@@ -374,7 +374,7 @@ def type_mix_pointers(profile: Profile) -> frozenset[str] | None:
     """The pointer of each column the engine generates as text at the profile's row count, or None where the engine
     refuses the profile, which then generates nothing."""
     document = profile.to_plain()
-    rows = (document.get('dataset') or {}).get('row_count') or 1
+    rows = (document.get('dataset') or {}).get('rows') or 1
     try:
         plan = engine_plan(document, str(profile.path or 'the exported profile'), rows)
     except UngenerableProfile:
@@ -484,12 +484,12 @@ def table_key(key: Mapping[str, Any], facts: 'TableFacts') -> Key:
 
 
 def foreign_key(relationship: StatedRelationship, child: ContractTable) -> ForeignKey:
-    """The relationship from columns of `child`. Its share is `1 − orphan_rate`, at the rows holding a value in each.
+    """The relationship from columns of `child`. Its share is `1 − orphan_fraction`, at the rows holding a value in each.
     Without one, a seed's relationship is declared whole, and a profile's distinct-value `containment` states no share of
     rows."""
     columns = relationship.child_columns
     found = [child.column(column) for column in columns]
-    orphans = relationship.document.get('orphan_rate')
+    orphans = relationship.document.get('orphan_fraction')
     if orphans is not None:
         held = None if child.rows is None or None in found else min(column.completeness.value for column in found if column)
         held_rows = None if held is None or child.rows is None else round(child.rows * held)
@@ -504,9 +504,9 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, pointer: str, 
     """The contract facts of the profile column at `pointer`, or of a struct's field present in `presence` of its
     parent's rows."""
     name = str(column['name'])
-    null_rate = column.get('null_rate') or 0.0
+    null_fraction = column.get('null_fraction') or 0.0
     rows = facts.rows
-    completeness = Share(1 - null_rate, rows, half_unit(null_rate, RATE_DIGITS), facts.sample)
+    completeness = Share(1 - null_fraction, rows, half_unit(null_fraction, RATE_DIGITS), facts.sample)
     semantic = column.get('semantic') or {}
     numeric = column.get('numeric') or {}
     temporal = column.get('temporal') or {}
@@ -516,7 +516,7 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, pointer: str, 
     measured_exactly = extremes.get('method') == 'exact'
     exact = facts.seed or (measured_exactly and facts.sample is None)
     inexact = facts.sample if measured_exactly and facts.sample else 'trimmed at k_min rows from each end'
-    held_rows = None if rows is None else round(rows * (1 - null_rate))
+    held_rows = None if rows is None else round(rows * (1 - null_fraction))
     path = str(column.get('path') or name)
     physical = str(column['physical_type'])
 
@@ -539,7 +539,7 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, pointer: str, 
     listed = listed_section(dict(column))
     if listed is not None and not identifier and stated('top_values'):
         _, section = listed
-        other = section.get('other_rate') or 0.0
+        other = section.get('other_fraction') or 0.0
         found['values'] = tuple(entry['value'] for entry in section['top_values'])
         found['values_share'] = completeness.of(Share(1 - other, held_rows, half_unit(other, RATE_DIGITS)))
     if string.get('pattern') and stated('pattern'):
@@ -547,7 +547,7 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, pointer: str, 
         found['pattern_share'] = completeness.of(pattern_share(string['pattern'], string.get('shapes'), held_rows, facts.seed))
     semantic_format = SEMANTIC_FORMATS.get(semantic.get('type') or '')
     if semantic_format is not None and stated('format'):
-        invalid = (column.get('quality') or {}).get('invalid_rate')
+        invalid = (column.get('quality') or {}).get('invalid_fraction')
         found['format'] = semantic_format
         if facts.seed:
             found['format_share'] = completeness
@@ -555,7 +555,7 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, pointer: str, 
             found['format_share'] = completeness.of(Share(1 - invalid, held_rows, half_unit(invalid, RATE_DIGITS)))
     if not identifier and held_rows:
         found |= moments(numeric, held_rows)
-    type_mix = column.get('type_mix') or {}
+    type_mix = column.get('type_mix_fractions') or {}
     logical = str(column['logical_type'])
     if type_mix and facts.json_source:
         found['type_mix'] = json_type_mix(type_mix)
@@ -577,7 +577,7 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, pointer: str, 
         if parsed is not None and found.get('trimmed_share') is not None:
             found['trimmed_share'] = found['trimmed_share'].of(parsed)
     struct = column.get('struct') or {}
-    shares = struct.get('presence') or {}
+    shares = struct.get('presence_fractions') or {}
     found['fields'] = tuple(
         contract_column(field, facts, f'{pointer}/struct/fields/{index}', shares.get(field['name']))
         for index, field in enumerate(struct.get('fields') or [])
@@ -593,14 +593,14 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, pointer: str, 
         path=column.get('path'),
         logical_type=logical,
         physical_type=physical,
-        nullable=null_rate > 0 or (facts.seed and bool(column.get('nullable'))),
+        nullable=null_fraction > 0 or (facts.seed and bool(column.get('nullable'))),
         completeness=completeness,
         exact=exact,
         inexact=inexact,
         identifier=identifier,
         sensitivity=semantic.get('sensitivity'),
         semantic_type=semantic.get('type'),
-        missing_tokens=tuple(column.get('missing_tokens') or {}),
+        missing_tokens=tuple(column.get('missing_token_fractions') or {}),
         strftime=temporal.get('format'),
         presence=presence,
         **found,
@@ -631,8 +631,8 @@ def pattern_share(pattern: str, shapes: Any, held_rows: int | None, seed: bool) 
         return Share(0.0, held_rows)
     listed = shapes or []
     # A shape's letters stand for any letter, so only the shape it came from vouches for a pattern's literal letters.
-    dominant = max(listed, key=lambda entry: entry['rate'], default=None)
-    matched = [entry['rate'] for entry in listed if entry is dominant or compiled.fullmatch(shape_value(entry['shape']))]
+    dominant = max(listed, key=lambda entry: entry['fraction'], default=None)
+    matched = [entry['fraction'] for entry in listed if entry is dominant or compiled.fullmatch(shape_value(entry['shape']))]
     return Share(min(1.0, sum(matched)), held_rows, sum(half_unit(rate, RATE_DIGITS) for rate in matched))
 
 

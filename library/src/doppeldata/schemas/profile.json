@@ -25,7 +25,7 @@
             "null"
           ]
         },
-        "min_count": {
+        "min_rows": {
           "description": "The fewest rows any literal or cell of the field rests on.",
           "type": [
             "integer",
@@ -101,7 +101,7 @@
     "BooleanStats": {
       "type": "object",
       "properties": {
-        "true_rate": {
+        "true_fraction": {
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -287,7 +287,7 @@
             }
           ]
         },
-        "missing_tokens": {
+        "missing_token_fractions": {
           "description": "Tokens a text source uses for a missing value, with the share of rows holding each.",
           "type": [
             "object",
@@ -301,7 +301,7 @@
           "description": "The column's name. A list's element is named `element`.",
           "type": "string"
         },
-        "null_rate": {
+        "null_fraction": {
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -391,7 +391,7 @@
             }
           ]
         },
-        "type_mix": {
+        "type_mix_fractions": {
           "description": "The share of raw values parsing as each type. The shares sum to 1.",
           "type": [
             "object",
@@ -444,11 +444,48 @@
         "column": {
           "type": "string"
         },
+        "fractions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/Rate"
+            }
+          }
+        },
         "given": {
           "type": "string"
         },
-        "other": {
-          "description": "The distribution of `column` over every value of `given` that `table` does not list, summing to 1 at most as a\nrow does.",
+        "other_fractions": {
+          "description": "The distribution of `column` over every value of `given` that `fractions` does not list, summing to 1 at most as\na row does.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "given",
+        "column",
+        "fractions"
+      ]
+    },
+    "ConditionalFractions": {
+      "description": "The share of `column`'s values that are zero, and of its rows that are null, within each value of the categorical\n`given`, each value a key as a conditional table's is.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "string"
+        },
+        "given": {
+          "type": "string"
+        },
+        "null_fraction": {
+          "description": "The share of rows where `column` is null, among the rows holding each value of `given`.",
           "type": [
             "object",
             "null"
@@ -457,21 +494,32 @@
             "$ref": "#/$defs/Rate"
           }
         },
-        "table": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "additionalProperties": {
-              "$ref": "#/$defs/Rate"
+        "other": {
+          "description": "Both fractions over every value of `given` that the two maps do not list.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OtherFractions"
+            },
+            {
+              "type": "null"
             }
+          ]
+        },
+        "zero_fraction": {
+          "description": "The share of `column`'s values that are zero, among the rows holding each value of `given`.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
           }
         }
       },
       "additionalProperties": false,
       "required": [
         "given",
-        "column",
-        "table"
+        "column"
       ]
     },
     "ConditionalQuantiles": {
@@ -507,54 +555,6 @@
         "given",
         "column",
         "quantiles"
-      ]
-    },
-    "ConditionalRates": {
-      "description": "The share of `column`'s values that are zero, and of its rows that are null, within each value of the categorical\n`given`, each value a key as a conditional table's is.",
-      "type": "object",
-      "properties": {
-        "column": {
-          "type": "string"
-        },
-        "given": {
-          "type": "string"
-        },
-        "null_rate": {
-          "description": "The share of rows where `column` is null, among the rows holding each value of `given`.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
-        },
-        "other": {
-          "description": "Both rates over every value of `given` that the two maps do not list.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OtherRates"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "zero_rate": {
-          "description": "The share of `column`'s values that are zero, among the rows holding each value of `given`.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "given",
-        "column"
       ]
     },
     "Correlation": {
@@ -641,7 +641,7 @@
             }
           ]
         },
-        "line_terminator_mix": {
+        "line_terminator_fractions": {
           "description": "The share of the first block's line breaks that end in each terminator.",
           "type": [
             "object",
@@ -702,6 +702,15 @@
       "description": "Facts about the table as a whole.",
       "type": "object",
       "properties": {
+        "conditional_fractions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ConditionalFractions"
+          }
+        },
         "conditional_quantiles": {
           "type": [
             "array",
@@ -709,15 +718,6 @@
           ],
           "items": {
             "$ref": "#/$defs/ConditionalQuantiles"
-          }
-        },
-        "conditional_rates": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/ConditionalRates"
           }
         },
         "conditionals": {
@@ -757,7 +757,7 @@
             "$ref": "#/$defs/Dependency"
           }
         },
-        "duplicate_row_rate": {
+        "duplicate_row_fraction": {
           "description": "The share of rows repeating an earlier row in every column, written as 0 where fewer than `k_min` rows do.",
           "anyOf": [
             {
@@ -778,7 +778,7 @@
             }
           ]
         },
-        "row_count": {
+        "rows": {
           "type": [
             "integer",
             "null"
@@ -797,7 +797,7 @@
           "description": "The RFC 6901 pointer to the field from the profile's root, such as `/dataset/conditionals/0`.",
           "type": "string"
         },
-        "min_count": {
+        "min_rows": {
           "description": "The fewest rows any cell or counted value of the field rests on.",
           "type": [
             "integer",
@@ -1010,7 +1010,7 @@
             "type": "string"
           }
         },
-        "violation_rate": {
+        "violation_fraction": {
           "description": "The share of rows whose `lhs` value holds more than one `rhs` value, of the rows whose `lhs` value at least\n`k_min` rows hold.",
           "anyOf": [
             {
@@ -1084,7 +1084,7 @@
               ],
               "format": "int32"
             },
-            "violation_rate": {
+            "violation_fraction": {
               "description": "The share of rows the expression does not hold for, which draw the column from its own statistics instead.",
               "anyOf": [
                 {
@@ -1229,7 +1229,7 @@
     "Distinct": {
       "type": "object",
       "properties": {
-        "approx": {
+        "approx_values": {
           "type": [
             "integer",
             "null"
@@ -1301,10 +1301,10 @@
             }
           ]
         },
-        "top_share": {
+        "top_fractions": {
           "anyOf": [
             {
-              "$ref": "#/$defs/TopShare"
+              "$ref": "#/$defs/TopFractions"
             },
             {
               "type": "null"
@@ -1318,30 +1318,6 @@
             "null"
           ],
           "format": "double"
-        }
-      },
-      "additionalProperties": false
-    },
-    "FileCounts": {
-      "type": "object",
-      "properties": {
-        "count": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "size_bytes": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FileSizes"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "additionalProperties": false
@@ -1416,7 +1392,7 @@
             "null"
           ]
         },
-        "sample": {
+        "sample_rows": {
           "description": "The rows the fit was made on.",
           "type": [
             "integer",
@@ -1552,7 +1528,7 @@
       "type": "object",
       "properties": {
         "check_digit": {
-          "description": "The check digit a value's last digit holds. `quality.invalid_rate` of values hold a wrong one.",
+          "description": "The check digit a value's last digit holds. `quality.invalid_fraction` of values hold a wrong one.",
           "anyOf": [
             {
               "$ref": "#/$defs/CheckDigit"
@@ -1597,10 +1573,10 @@
       ]
     },
     "Histogram": {
-      "description": "Bin edges and the rows in each bin. `counts` has one entry fewer than `edges`. Each bin holds\nthe rows from its lower edge up to its upper one, and the last bin holds its upper edge too.",
+      "description": "Bin edges and the rows in each bin. `bin_rows` has one entry fewer than `edges`. Each bin holds\nthe rows from its lower edge up to its upper one, and the last bin holds its upper edge too.",
       "type": "object",
       "properties": {
-        "counts": {
+        "bin_rows": {
           "type": "array",
           "items": {
             "type": "integer",
@@ -1634,7 +1610,7 @@
       "required": [
         "kind",
         "edges",
-        "counts"
+        "bin_rows"
       ]
     },
     "HistogramKind": {
@@ -1648,12 +1624,12 @@
       "description": "Rows below the first edge and above the last. A count of fewer than `k_min` rows is written as\n0, and its rows are counted in the outermost bin on their side.",
       "type": "object",
       "properties": {
-        "above": {
+        "rows_above": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
-        "below": {
+        "rows_below": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -1661,15 +1637,15 @@
       },
       "additionalProperties": false,
       "required": [
-        "below",
-        "above"
+        "rows_below",
+        "rows_above"
       ]
     },
     "Inherited": {
       "description": "A child column that copies a column of its parent row, as a share of joined rows, never a value.",
       "type": "object",
       "properties": {
-        "agreement": {
+        "agreement_fraction": {
           "description": "The share of joined child rows whose value equals their parent row's, a null equal to a null.",
           "$ref": "#/$defs/Rate"
         },
@@ -1686,7 +1662,7 @@
       "required": [
         "child",
         "parent",
-        "agreement"
+        "agreement_fraction"
       ]
     },
     "JsonSettings": {
@@ -1830,15 +1806,23 @@
     "Layout": {
       "type": "object",
       "properties": {
-        "files": {
+        "file_size_bytes": {
           "anyOf": [
             {
-              "$ref": "#/$defs/FileCounts"
+              "$ref": "#/$defs/FileSizes"
             },
             {
               "type": "null"
             }
           ]
+        },
+        "files": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         },
         "partitioning": {
           "anyOf": [
@@ -1931,7 +1915,7 @@
             }
           ]
         },
-        "empty_rate": {
+        "empty_fraction": {
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -1970,20 +1954,10 @@
       ]
     },
     "MalformedRows": {
-      "description": "The data rows a reader rejects, as shares of every data row the files hold. A type held by\nfewer than `k_min` rows is left out, and `rate` is the sum of the rest.",
+      "description": "The data rows a reader rejects, as shares of every data row the files hold. A type held by\nfewer than `k_min` rows is left out, and `fraction` is the sum of the rest.",
       "type": "object",
       "properties": {
-        "by_type": {
-          "description": "Each rejected row is counted once, under its first error.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
-        },
-        "rate": {
+        "fraction": {
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -1992,6 +1966,16 @@
               "type": "null"
             }
           ]
+        },
+        "type_fractions": {
+          "description": "Each rejected row is counted once, under its first error.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
         }
       },
       "additionalProperties": false
@@ -2097,7 +2081,7 @@
             }
           ]
         },
-        "negative_rate": {
+        "negative_fraction": {
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -2107,7 +2091,7 @@
             }
           ]
         },
-        "other_rate": {
+        "other_fraction": {
           "description": "The share of values outside `top_values`.",
           "anyOf": [
             {
@@ -2189,7 +2173,7 @@
             "$ref": "#/$defs/NumericTopValue"
           }
         },
-        "zero_rate": {
+        "zero_fraction": {
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -2205,7 +2189,7 @@
     "NumericTopValue": {
       "type": "object",
       "properties": {
-        "rate": {
+        "fraction": {
           "$ref": "#/$defs/Rate"
         },
         "value": {
@@ -2216,13 +2200,13 @@
       "additionalProperties": false,
       "required": [
         "value",
-        "rate"
+        "fraction"
       ]
     },
-    "OtherRates": {
+    "OtherFractions": {
       "type": "object",
       "properties": {
-        "null_rate": {
+        "null_fraction": {
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -2232,7 +2216,7 @@
             }
           ]
         },
-        "zero_rate": {
+        "zero_fraction": {
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -2419,6 +2403,17 @@
         "name": {
           "type": "string"
         },
+        "other_fraction": {
+          "description": "The share of rows under a non-null value `value_fractions` does not list.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "type": {
           "description": "An Arrow type string.",
           "type": [
@@ -2426,15 +2421,24 @@
             "null"
           ]
         },
+        "value_fractions": {
+          "description": "The share of rows under each value at least `k_min` rows hold, written where the key takes\nno more values than a string column's top values list.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
+        },
         "values": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValueCount"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "description": "The distinct values the key takes.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "additionalProperties": false,
@@ -2485,7 +2489,7 @@
       "description": "A column's values counted by their leading characters, each generated value a prefix followed\nby a value of `suffix`.",
       "type": "object",
       "properties": {
-        "other_rate": {
+        "other_fraction": {
           "description": "The share of values beginning with a prefix `values` does not list.",
           "anyOf": [
             {
@@ -2649,7 +2653,7 @@
     "Quality": {
       "type": "object",
       "properties": {
-        "invalid_rate": {
+        "invalid_fraction": {
           "description": "The share of values failing the semantic validator, such as a bad check digit.",
           "anyOf": [
             {
@@ -2767,7 +2771,7 @@
             "null"
           ]
         },
-        "orphan_rate": {
+        "orphan_fraction": {
           "description": "The share of `from`'s rows holding a value that `to` does not hold, of those holding a value.",
           "anyOf": [
             {
@@ -2954,7 +2958,7 @@
       "description": "A value's characters mapped to their class: `A` for an ASCII upper-case letter, `a` for an\nASCII lower-case one, `9` for an ASCII digit, and any other character as itself.",
       "type": "object",
       "properties": {
-        "rate": {
+        "fraction": {
           "$ref": "#/$defs/Rate"
         },
         "shape": {
@@ -2964,7 +2968,7 @@
       "additionalProperties": false,
       "required": [
         "shape",
-        "rate"
+        "fraction"
       ]
     },
     "SignedDuration": {
@@ -3099,7 +3103,7 @@
     "StringStats": {
       "type": "object",
       "properties": {
-        "case": {
+        "case_fractions": {
           "description": "The share of values in each case: upper, lower, title or mixed.",
           "type": [
             "object",
@@ -3129,7 +3133,7 @@
             }
           ]
         },
-        "other_rate": {
+        "other_fraction": {
           "description": "The share of rows holding a value outside `top_values`.",
           "anyOf": [
             {
@@ -3188,7 +3192,7 @@
             "$ref": "#/$defs/TopValue"
           }
         },
-        "whitespace_edge_rate": {
+        "whitespace_edge_fraction": {
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -3213,7 +3217,7 @@
             "$ref": "#/$defs/Column"
           }
         },
-        "presence": {
+        "presence_fractions": {
           "description": "The share of rows in which each field is present.",
           "type": [
             "object",
@@ -3384,42 +3388,6 @@
     "TemporalStats": {
       "type": "object",
       "properties": {
-        "by_dow": {
-          "description": "The share of rows on each day of the week, Monday first.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Rate"
-          },
-          "maxItems": 7,
-          "minItems": 7
-        },
-        "by_hour": {
-          "description": "The share of rows in each hour of the day, from 00.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Rate"
-          },
-          "maxItems": 24,
-          "minItems": 24
-        },
-        "by_month": {
-          "description": "The share of rows in each month, January first.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Rate"
-          },
-          "maxItems": 12,
-          "minItems": 12
-        },
         "extremes": {
           "anyOf": [
             {
@@ -3437,7 +3405,7 @@
             "null"
           ]
         },
-        "gap_rate": {
+        "gap_fraction": {
           "description": "The share of days between the extremes holding no rows.",
           "anyOf": [
             {
@@ -3448,11 +3416,47 @@
             }
           ]
         },
+        "hour_fractions": {
+          "description": "The share of rows in each hour of the day, from 00.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Rate"
+          },
+          "maxItems": 24,
+          "minItems": 24
+        },
+        "month_fractions": {
+          "description": "The share of rows in each month, January first.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Rate"
+          },
+          "maxItems": 12,
+          "minItems": 12
+        },
         "timezone": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "weekday_fractions": {
+          "description": "The share of rows on each day of the week, Monday first.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Rate"
+          },
+          "maxItems": 7,
+          "minItems": 7
         }
       },
       "additionalProperties": false
@@ -3489,7 +3493,7 @@
         "ns"
       ]
     },
-    "TopShare": {
+    "TopFractions": {
       "description": "The share of matched child rows the busiest parents hold together, at the rank each field names.",
       "type": "object",
       "properties": {
@@ -3532,7 +3536,7 @@
     "TopValue": {
       "type": "object",
       "properties": {
-        "rate": {
+        "fraction": {
           "$ref": "#/$defs/Rate"
         },
         "value": {
@@ -3542,49 +3546,14 @@
       "additionalProperties": false,
       "required": [
         "value",
-        "rate"
+        "fraction"
       ]
-    },
-    "ValueCount": {
-      "type": "object",
-      "properties": {
-        "count": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "other_rate": {
-          "description": "The share of rows under a non-null value `shares` does not list.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "shares": {
-          "description": "The share of rows under each value at least `k_min` rows hold, written where the key takes\nno more values than a string column's top values list.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
-        }
-      },
-      "additionalProperties": false
     },
     "ValueOverflow": {
       "type": "object",
       "properties": {
         "new_value_rows": {
-          "description": "The rows `other_rate` holds beyond the share it held when the list was first frozen: the\nearlier profile's `other_rate`, less its own `new_value_rows`. So a column whose values did\nnot change writes about 0. A count of fewer than `k_min` rows is written as 0.",
+          "description": "The rows `other_fraction` holds beyond the share it held when the list was first frozen: the\nearlier profile's `other_fraction`, less its own `new_value_rows`. So a column whose values did\nnot change writes about 0. A count of fewer than `k_min` rows is written as 0.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0

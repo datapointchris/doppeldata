@@ -2,12 +2,12 @@
 //!
 //! A curve over the continuous rank t in [0, P] gives the rows at each rank, and rank k holds what
 //! its span (k − 1, k] integrates to, rounded so the counts sum to the matched rows exactly. Each
-//! `top_share` pin sits at its rank times the table's scale, and the curve integrates to its share
+//! `top_fractions` pin sits at its rank times the table's scale, and the curve integrates to its share
 //! there. Each band between two pins bends the curve between its quantiles until it holds its rows,
 //! so the quantiles stay as stated, and is scaled only past that.
 
 use crate::profile::Fanout;
-use crate::profile::TopShare;
+use crate::profile::TopFractions;
 use crate::samplers::quantile_knots;
 /// The steepest power law fitted above the top quantile.
 const STEEPEST: f64 = 20.0;
@@ -244,7 +244,10 @@ impl RankedCounts {
         if points.windows(2).any(|pair| pair[1].1 > pair[0].1) {
             return Err("the fan-out quantiles fall".into());
         }
-        let shares = fanout.and_then(|f| f.top_share.as_ref()).map(TopShare::pins).unwrap_or_default();
+        let shares = fanout
+            .and_then(|f| f.top_fractions.as_ref())
+            .map(TopFractions::pins)
+            .unwrap_or_default();
         let mut pins: Vec<(f64, f64)> = Vec::new();
         for (name, rank, share) in shares {
             let at = rank as f64 * scale;
@@ -253,7 +256,7 @@ impl RankedCounts {
             }
             let rows = share.0 * matched as f64;
             if pins.last().is_some_and(|&(_, below)| rows < below) {
-                return Err(format!("top_share.{name} is below a busier rank's share"));
+                return Err(format!("top_fractions.{name} is below a busier rank's share"));
             }
             pins.push((at, rows));
         }

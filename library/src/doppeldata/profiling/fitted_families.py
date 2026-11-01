@@ -62,7 +62,7 @@ def finite_values(column: pa.ChunkedArray) -> np.ndarray:
     return values[np.isfinite(values)]
 
 
-def best_fit(values: np.ndarray, *, integral: bool, low: float, high: float, zero_rate: float) -> Fitted | None:
+def best_fit(values: np.ndarray, *, integral: bool, low: float, high: float, zero_fraction: float) -> Fitted | None:
     """The family with the lowest AIC, fitted to the values from `low` to `high`, or None when no family fits.
 
     `low` and `high` are the column's trimmed extremes. A support parameter such as loguniform's `b` lands on
@@ -72,7 +72,7 @@ def best_fit(values: np.ndarray, *, integral: bool, low: float, high: float, zer
     """
     x = np.sort(values[(values >= low) & (values <= high)])
     zero_inflation = None
-    if zero_rate >= ZERO_INFLATION_RATE and x.size:
+    if zero_fraction >= ZERO_INFLATION_RATE and x.size:
         zero_inflation = float(np.mean(x == 0))
         x = x[x != 0]
     distinct, counts = np.unique(x, return_counts=True)

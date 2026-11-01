@@ -52,7 +52,7 @@ pub struct BundleCheckReport {
     pub verified: bool,
     /// Each table's check, every parent before its children.
     pub tables: Vec<CheckedTable>,
-    /// `fanout_ks`, `orphan_rate_delta` and `top_share_delta` of each relationship, in the
+    /// `fanout_ks`, `orphan_fraction_delta` and `top_fraction_delta` of each relationship, in the
     /// bundle's order, each naming its relationship in `relationship`.
     pub relationships: Vec<MetricResult>,
 }
@@ -155,7 +155,7 @@ pub struct MetricResult {
     /// value misses `threshold` or is unmeasured.
     pub passed: bool,
     /// False on a row the report's verdict leaves out: a score against the real data whose
-    /// threshold no thresholds file sets, and `malformed_rate_delta` on data written with no
+    /// threshold no thresholds file sets, and `malformed_fraction_delta` on data written with no
     /// `malformed_rows`. Such a row passes. A score's `threshold` is its reference, which `value`
     /// and `bound` say whether it meets.
     pub decides: bool,
@@ -232,9 +232,9 @@ pub enum ChangeKind {
 /// A scenario's declared expectation and the value the data holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ExpectationResult {
-    /// The statistic expected, such as `hot_keys.share`.
+    /// The statistic expected, such as `hot_keys.fraction`.
     pub metric: String,
-    /// The column measured, or null for a metric of the whole table, such as `malformed.rate`.
+    /// The column measured, or null for a metric of the whole table, such as `malformed.fraction`.
     pub column: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_least: Option<f64>,

@@ -80,8 +80,8 @@ INTEGER_FORMAT_RANGES = {
     'uint32': (0, 2**32 - 1),
     'uint64': (0, 2**64 - 1),
 }
-TEMPORAL_RATE_SETS = ('by_month', 'by_dow', 'by_hour')
-# Each column section that can list values, as `top_values` and `other_rate`.
+TEMPORAL_RATE_SETS = ('month_fractions', 'weekday_fractions', 'hour_fractions')
+# Each column section that can list values, as `top_values` and `other_fraction`.
 LISTING_SECTIONS = ('string', 'numeric')
 
 PointerParts = tuple[str | int, ...]
@@ -90,23 +90,24 @@ PointerParts = tuple[str | int, ...]
 @dc.dataclass(frozen=True)
 class GivenList:
     """A dataset list whose entries each draw `column` given the values of the column `given`. `by_value` names the
-    fields of an entry keyed by a listed given value, beside `other`, which holds every other value's. Where `nested`,
-    each key's value is a group of literals, as a table's row is, and otherwise one literal. Where `child_keyed`, the
-    child's values key those groups, so its column must list them."""
+    fields of an entry keyed by a listed given value, beside the field `other` names, which holds every other value's.
+    Where `nested`, each key's value is a group of literals, as a table's row is, and otherwise one literal. Where
+    `child_keyed`, the child's values key those groups, so its column must list them."""
 
     by_value: tuple[str, ...]
     nested: bool
     child_keyed: bool
+    other: str = 'other'
 
     def keys(self, entry: dict[str, Any]) -> set[str]:
         """The values of the given column the entry lists."""
         return {key for field in self.by_value if isinstance(by := entry.get(field), dict) for key in by}
 
     def groups(self, entry: dict[str, Any]) -> list[Any]:
-        """The groups of literals the entry holds, each listed value's and then `other`."""
+        """The groups of literals the entry holds, each listed value's and then every other value's."""
         fields = [entry.get(field) or {} for field in self.by_value]
         listed = [group for by in fields if isinstance(by, dict) for group in by.values()] if self.nested else fields
-        return [*listed, entry.get('other') or {}]
+        return [*listed, entry.get(self.other) or {}]
 
     def literals(self, entry: dict[str, Any]) -> int:
         return sum(len(group) for group in self.groups(entry) if isinstance(group, dict))
@@ -120,9 +121,9 @@ class GivenList:
 
 # The dataset's lists naming a parent column and the values of it each entry is drawn given.
 GIVEN_LISTS = {
-    'conditionals': GivenList(('table',), nested=True, child_keyed=True),
+    'conditionals': GivenList(('fractions',), nested=True, child_keyed=True, other='other_fractions'),
     'conditional_quantiles': GivenList(('quantiles',), nested=True, child_keyed=False),
-    'conditional_rates': GivenList(('zero_rate', 'null_rate'), nested=False, child_keyed=False),
+    'conditional_fractions': GivenList(('zero_fraction', 'null_fraction'), nested=False, child_keyed=False),
 }
 
 
@@ -422,17 +423,18 @@ def table_ordering_issues(table: dict[str, Any], at: PointerParts) -> Iterator[I
     layout = (table.get('source') or {}).get('layout') or {}
     yield from quantile_issues(layout.get('rows_per_file'), (*at, 'source', 'layout', 'rows_per_file'))
     for index, conditional in enumerate((table.get('dataset') or {}).get('conditionals') or []):
-        for given, row in conditional['table'].items():
-            yield from share_ceiling_issues(row.values(), (*at, 'dataset', 'conditionals', index, 'table', given))
-        if conditional.get('other'):
-            yield from share_ceiling_issues(conditional['other'].values(), (*at, 'dataset', 'conditionals', index, 'other'))
+        for given, row in conditional['fractions'].items():
+            yield from share_ceiling_issues(row.values(), (*at, 'dataset', 'conditionals', index, 'fractions', given))
+        if conditional.get('other_fractions'):
+            other = conditional['other_fractions'].values()
+            yield from share_ceiling_issues(other, (*at, 'dataset', 'conditionals', index, 'other_fractions'))
     for index, column in enumerate(table.get('columns') or []):
         yield from column_ordering_issues(column, (*at, 'columns', index))
 
 
 def column_ordering_issues(column: dict[str, Any], at: PointerParts) -> Iterator[Issue]:
-    if column.get('type_mix'):
-        yield from rate_sum_issues(column['type_mix'].values(), (*at, 'type_mix'))
+    if column.get('type_mix_fractions'):
+        yield from rate_sum_issues(column['type_mix_fractions'].values(), (*at, 'type_mix_fractions'))
     numeric = column.get('numeric') or {}
     yield from quantile_issues(numeric.get('quantiles'), (*at, 'numeric', 'quantiles'))
     if numeric.get('histogram'):
@@ -481,7 +483,7 @@ def listed_section(column: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
 def described_rows(document: dict[str, Any]) -> int | None:
     """The rows a profile's rates are shares of: those its sample read, or else every row."""
     sample = (document.get('generated') or {}).get('sample') or {}
-    rows: int | None = sample.get('rows_read') or (document.get('dataset') or {}).get('row_count')
+    rows: int | None = sample.get('rows_read') or (document.get('dataset') or {}).get('rows')
     return rows
 
 
@@ -507,7 +509,7 @@ def share_ceiling_issues(shares: Any, at: PointerParts) -> Iterator[Issue]:
 
 
 def histogram_issues(histogram: dict[str, Any], at: PointerParts) -> Iterator[Issue]:
-    edges, counts = histogram['edges'], histogram['counts']
+    edges, counts = histogram['edges'], histogram['bin_rows']
     if len(counts) != len(edges) - 1:
         message = f'{len(edges)} edges bound {len(edges) - 1} bins, and there are {len(counts)} counts'
         yield Issue('histogram-bins-mismatch', pointer(at), message)

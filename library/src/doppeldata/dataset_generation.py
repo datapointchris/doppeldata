@@ -371,9 +371,9 @@ def engine_arguments(
     source = str(profile.path) if profile.path else f'profile {profile.document.get("name")!r}'
     effective = scenario.apply(profile) if scenario is not None else profile
     if rows is None:
-        rows = (effective.document.get('dataset') or {}).get('row_count')
+        rows = (effective.document.get('dataset') or {}).get('rows')
         if rows is None:
-            issue = Issue('no-row-count', '/dataset/row_count', 'the profile records no row count, so rows must be given')
+            issue = Issue('no-row-count', '/dataset/rows', 'the profile records no row count, so rows must be given')
             raise UngenerableProfile(source, [issue])
     if rows < 0:
         raise ValueError(f'rows must be zero or more, not {rows}')

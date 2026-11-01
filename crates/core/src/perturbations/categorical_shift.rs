@@ -45,18 +45,18 @@ pub(super) fn plan(op: &CategoricalShift, planning: &Planning<'_>) -> Result<Pla
     let profiled = planning.profile_column(&op.column);
     let mut current: Vec<(String, f64)> = match field.data_type() {
         DataType::Boolean => {
-            let true_rate = profiled
+            let true_fraction = profiled
                 .and_then(|c| c.boolean.as_ref())
-                .and_then(|b| b.true_rate)
+                .and_then(|b| b.true_fraction)
                 .map_or(0.5, |r| r.0);
-            vec![("true".into(), true_rate), ("false".into(), 1.0 - true_rate)]
+            vec![("true".into(), true_fraction), ("false".into(), 1.0 - true_fraction)]
         }
         DataType::Utf8 | DataType::LargeUtf8 => {
             let string = profiled.and_then(|c| c.string.as_ref());
             let top: Vec<(String, f64)> = string
                 .iter()
                 .flat_map(|s| s.top_values.iter().flatten())
-                .map(|top| (top.value.clone(), top.rate.0))
+                .map(|top| (top.value.clone(), top.fraction.0))
                 .collect();
             if top.is_empty() {
                 return Err(planning.refuse(
@@ -65,7 +65,7 @@ pub(super) fn plan(op: &CategoricalShift, planning: &Planning<'_>) -> Result<Pla
                     format!("{:?} lists no top_values, so it has no category mix to move", op.column),
                 ));
             }
-            let other = string.and_then(|s| s.other_rate).map_or(0.0, |r| r.0);
+            let other = string.and_then(|s| s.other_fraction).map_or(0.0, |r| r.0);
             let total = top.iter().map(|(_, rate)| rate).sum::<f64>() + other;
             top.into_iter()
                 .map(|(value, rate)| (value, rate / total))
@@ -86,7 +86,7 @@ pub(super) fn plan(op: &CategoricalShift, planning: &Planning<'_>) -> Result<Pla
     };
     let string_column = field.data_type() != &DataType::Boolean;
     let known = current.len() - usize::from(string_column);
-    for value in op.to.keys() {
+    for value in op.to_fractions.keys() {
         if !current[..known].iter().any(|(known, _)| known == value) {
             if !string_column {
                 return Err(planning.refuse(
@@ -99,8 +99,12 @@ pub(super) fn plan(op: &CategoricalShift, planning: &Planning<'_>) -> Result<Pla
         }
     }
     let known = current.len() - usize::from(string_column);
-    let named_target: f64 = op.to.values().map(|r| r.0).sum();
-    let named_now: f64 = current.iter().filter(|(value, _)| op.to.contains_key(value)).map(|(_, p)| p).sum();
+    let named_target: f64 = op.to_fractions.values().map(|r| r.0).sum();
+    let named_now: f64 = current
+        .iter()
+        .filter(|(value, _)| op.to_fractions.contains_key(value))
+        .map(|(_, p)| p)
+        .sum();
     if named_target > 1.0 + SHARE_SLACK {
         return Err(planning.refuse(
             ScenarioFault::InvalidParameter,
@@ -125,7 +129,7 @@ pub(super) fn plan(op: &CategoricalShift, planning: &Planning<'_>) -> Result<Pla
     };
     let target = |index: usize| {
         let (value, now) = &current[index];
-        match (index < known).then(|| op.to.get(value)).flatten() {
+        match (index < known).then(|| op.to_fractions.get(value)).flatten() {
             Some(share) => share.0,
             None => now * scale,
         }

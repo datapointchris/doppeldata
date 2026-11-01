@@ -139,21 +139,21 @@ def entry_of(key: str, node: JsonNode, profiled: ProfiledTable, *, nested: bool)
         entry |= {name: value for name, value in scalar.items() if name != 'name'}
         if nested:
             # A field missing from an object is null in Arrow, so a field any object lacks is nullable.
-            entry |= {'nullable': counts.null + counts.missing > 0, 'null_rate': rate(counts.null, present)}
+            entry |= {'nullable': counts.null + counts.missing > 0, 'null_fraction': rate(counts.null, present)}
         return entry
     held = counts.object if node.kind == 'object' else counts.array
     nullable = held < present or (nested and counts.missing > 0)
-    entry |= {'physical_type': '', 'logical_type': node.kind, 'nullable': nullable, 'null_rate': rate(present - held, present)}
+    entry |= {'physical_type': '', 'logical_type': node.kind, 'nullable': nullable, 'null_fraction': rate(present - held, present)}
     if node.kind == 'object':
         fields = [entry_of(field, child, profiled, nested=True) for field, child in node.fields]
         presence = {field: rate(profiled.rows - profiled.counts[child.column].missing, counts.object) for field, child in node.fields}
         entry['physical_type'] = 'struct<' + ', '.join(f'{field["name"]}: {field["physical_type"]}' for field in fields) + '>'
-        entry['struct'] = {'fields': fields, 'presence': presence}
+        entry['struct'] = {'fields': fields, 'presence_fractions': presence}
     elif node.element is not None:
         elements = profiled.elements[node.path]
         element = entry_of(ELEMENT, node.element, elements, nested=False)
         lengths = profiled.lengths[node.column]
         listed: dict[str, Any] = {'length': lengths.quantiles} if lengths.quantiles else {}
         entry['physical_type'] = f'list<item: {element["physical_type"]}>'
-        entry['list'] = listed | {'empty_rate': rate(lengths.empty, counts.array), 'element': element}
+        entry['list'] = listed | {'empty_fraction': rate(lengths.empty, counts.array), 'element': element}
     return entry

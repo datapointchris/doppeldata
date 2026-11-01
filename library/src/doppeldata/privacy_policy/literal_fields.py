@@ -20,13 +20,13 @@ from doppeldata.profile_format import quantile_level
 from doppeldata.published_schemas import published_enum
 from doppeldata.published_schemas import published_fields
 
-CALENDAR_SHARES = ('by_month', 'by_dow', 'by_hour')
+CALENDAR_SHARES = ('month_fractions', 'weekday_fractions', 'hour_fractions')
 TRIMMED_K = 'trimmed_k'
 DIGIT_BOUNDS = 'digit_bounds'
 EXACT = 'exact'
 # The rule a table's keys are withheld by: they are stated only over at least k_min rows.
 ROWS_AT_LEAST_K_MIN = 'rows >= k_min'
-ROWS_EXPECTED = 'expected dataset.row_count, or generated.sample.rows_read'
+ROWS_EXPECTED = 'expected dataset.rows, or generated.sample.rows_read'
 
 
 class FieldKind(enum.Enum):
@@ -39,7 +39,7 @@ class FieldKind(enum.Enum):
     PREFIXES = ('prefixes', 'count >= k_min', 'prefixes')
     BOOLEAN = ('boolean', 'cell >= k_min', 'true and false counts')
     SHAPES = ('shapes', 'count >= k_min', 'shapes')
-    MISSING_TOKENS = ('missing_tokens', 'count >= k_min', 'missing-value tokens')
+    MISSING_TOKENS = ('missing_token_fractions', 'count >= k_min', 'missing-value tokens')
     HISTOGRAM = ('histogram', 'cell >= k_min', 'histogram')
     CALENDAR_SHARES = ('calendar_shares', 'cell >= k_min', 'calendar shares')
     NUMERIC_EXTREMES = ('numeric_extremes', 'trimmed_k', 'extremes')
@@ -50,7 +50,7 @@ class FieldKind(enum.Enum):
     SEQUENCE = ('sequence', 'follows the trimmed extreme', 'sequence start')
     CONDITIONAL = ('conditional', 'cell >= k_min', 'conditional table')
     CONDITIONAL_QUANTILES = ('conditional_quantiles', 'k_min rows from each end', 'conditional quantiles')
-    CONDITIONAL_RATES = ('conditional_rates', 'cell >= k_min', 'conditional rates')
+    CONDITIONAL_RATES = ('conditional_fractions', 'cell >= k_min', 'conditional rates')
     DEPENDENCY = ('dependency', 'lhs >= k_min', 'functional dependency')
     LAG = ('lag', 'k_min rows from each end', 'lag')
 
@@ -73,7 +73,7 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
             'list',
             'logical_type',
             'name',
-            'null_rate',
+            'null_fraction',
             'nullable',
             'numeric',
             'path',
@@ -83,27 +83,27 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
             'string',
             'struct',
             'temporal',
-            'type_mix',
+            'type_mix_fractions',
         )
     )
     # An expression names columns and holds no data value, so only a timedelta's lag is read.
-    | {'missing_tokens': FieldKind.MISSING_TOKENS, 'derived': FieldKind.LAG},
-    'BooleanStats': {'true_rate': FieldKind.BOOLEAN},
-    # `other_rate` and `overflow` count what a top-value list leaves out, so they are read as part of it.
+    | {'missing_token_fractions': FieldKind.MISSING_TOKENS, 'derived': FieldKind.LAG},
+    'BooleanStats': {'true_fraction': FieldKind.BOOLEAN},
+    # `other_fraction` and `overflow` count what a top-value list leaves out, so they are read as part of it.
     'NumericStats': dict.fromkeys(
         (
             'integral',
             'kurtosis',
             'mean',
             'monotonic',
-            'negative_rate',
-            'other_rate',
+            'negative_fraction',
+            'other_fraction',
             'overflow',
             'precision',
             'scale',
             'skew',
             'std',
-            'zero_rate',
+            'zero_fraction',
         )
     )
     | {
@@ -114,21 +114,21 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
         'sequence': FieldKind.SEQUENCE,
         'top_values': FieldKind.TOP_VALUES,
     },
-    'StringStats': dict.fromkeys(('case', 'charset', 'length', 'other_rate', 'overflow', 'whitespace_edge_rate'))
+    'StringStats': dict.fromkeys(('case_fractions', 'charset', 'length', 'other_fraction', 'overflow', 'whitespace_edge_fraction'))
     | {'top_values': FieldKind.TOP_VALUES, 'prefixes': FieldKind.PREFIXES, 'shapes': FieldKind.SHAPES, 'pattern': FieldKind.PATTERN},
-    'TemporalStats': dict.fromkeys(('format', 'gap_rate', 'timezone'))
+    'TemporalStats': dict.fromkeys(('format', 'gap_fraction', 'timezone'))
     | {
         'extremes': FieldKind.TEMPORAL_EXTREMES,
-        'by_month': FieldKind.CALENDAR_SHARES,
-        'by_dow': FieldKind.CALENDAR_SHARES,
-        'by_hour': FieldKind.CALENDAR_SHARES,
+        'month_fractions': FieldKind.CALENDAR_SHARES,
+        'weekday_fractions': FieldKind.CALENDAR_SHARES,
+        'hour_fractions': FieldKind.CALENDAR_SHARES,
     },
     # A key, a correlation and a dependency name columns, and a repeated row's share is written as 0 under k_min rows.
-    'Dataset': dict.fromkeys(('row_count', 'duplicate_row_rate', 'keys', 'correlations', 'correlation_ratios'))
+    'Dataset': dict.fromkeys(('rows', 'duplicate_row_fraction', 'keys', 'correlations', 'correlation_ratios'))
     | {
         'conditionals': FieldKind.CONDITIONAL,
         'conditional_quantiles': FieldKind.CONDITIONAL_QUANTILES,
-        'conditional_rates': FieldKind.CONDITIONAL_RATES,
+        'conditional_fractions': FieldKind.CONDITIONAL_RATES,
         'dependencies': FieldKind.DEPENDENCY,
     },
 }
@@ -190,7 +190,7 @@ class Fault:
 def described_rows(table: dict[str, Any]) -> float | None:
     """The rows a profile's statistics were computed over: the sample's, or the table's."""
     sample = (table.get('generated') or {}).get('sample') or {}
-    rows = sample.get('rows_read') or (table.get('dataset') or {}).get('row_count')
+    rows = sample.get('rows_read') or (table.get('dataset') or {}).get('rows')
     return float(rows) if rows is not None else None
 
 
@@ -208,13 +208,13 @@ def nested_literals(column: dict[str, Any], at: PointerParts, rows: float | None
     A struct field's are its parent's objects times the field's presence. An array element's are not stated by the
     file, which gives an array's length only by quantile, and an element's count is of elements rather than rows.
     """
-    held = rows * (1 - (column.get('null_rate') or 0.0)) if rows is not None else None
+    held = rows * (1 - (column.get('null_fraction') or 0.0)) if rows is not None else None
     yield ColumnLiterals(column, at, held, list(literal_fields(column, at, rows, held)))
     element = (column.get('list') or {}).get('element')
     if isinstance(element, dict):
         yield from nested_literals(element, (*at, 'list', 'element'), None)
     struct = column.get('struct') or {}
-    presence = struct.get('presence') or {}
+    presence = struct.get('presence_fractions') or {}
     for index, field in enumerate(struct.get('fields') or []):
         if isinstance(field, dict):
             share = presence.get(field.get('name'))
@@ -228,14 +228,14 @@ def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None,
     def share(rate: Any, of: float | None) -> float | None:
         return rate * of if of is not None and isinstance(rate, int | float) else None
 
-    tokens = column.get('missing_tokens') or {}
+    tokens = column.get('missing_token_fractions') or {}
     if tokens:
-        cells = tuple(Cell((*at, 'missing_tokens', token), share(rate, rows)) for token, rate in tokens.items())
-        yield LiteralField((*at, 'missing_tokens'), FieldKind.MISSING_TOKENS, len(cells), cells)
-    true_rate = (column.get('boolean') or {}).get('true_rate')
-    if isinstance(true_rate, int | float):
-        at_rate = (*at, 'boolean', 'true_rate')
-        cells = (Cell(at_rate, share(true_rate, held), True), Cell(at_rate, share(1 - true_rate, held), True))
+        cells = tuple(Cell((*at, 'missing_token_fractions', token), share(rate, rows)) for token, rate in tokens.items())
+        yield LiteralField((*at, 'missing_token_fractions'), FieldKind.MISSING_TOKENS, len(cells), cells)
+    true_fraction = (column.get('boolean') or {}).get('true_fraction')
+    if isinstance(true_fraction, int | float):
+        at_rate = (*at, 'boolean', 'true_fraction')
+        cells = (Cell(at_rate, share(true_fraction, held), True), Cell(at_rate, share(1 - true_fraction, held), True))
         yield LiteralField((*at, 'boolean'), FieldKind.BOOLEAN, 2, cells)
     numeric = column.get('numeric') or {}
     extremes = numeric.get('extremes') or {}
@@ -246,12 +246,16 @@ def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None,
         yield quantile_field((*at, 'numeric', 'quantiles'), numeric['quantiles'], held)
     histogram = numeric.get('histogram')
     if histogram:
-        cells = tuple(Cell((*at, 'numeric', 'histogram', 'counts', index), count, True) for index, count in enumerate(histogram['counts']))
+        cells = tuple(
+            Cell((*at, 'numeric', 'histogram', 'bin_rows', index), count, True) for index, count in enumerate(histogram['bin_rows'])
+        )
         overflow = histogram.get('overflow') or {}
         cells += tuple(
-            Cell((*at, 'numeric', 'histogram', 'overflow', end), overflow[end], True) for end in ('below', 'above') if end in overflow
+            Cell((*at, 'numeric', 'histogram', 'overflow', end), overflow[end], True)
+            for end in ('rows_below', 'rows_above')
+            if end in overflow
         )
-        yield LiteralField((*at, 'numeric', 'histogram'), FieldKind.HISTOGRAM, len(histogram['counts']), cells)
+        yield LiteralField((*at, 'numeric', 'histogram'), FieldKind.HISTOGRAM, len(histogram['bin_rows']), cells)
     if numeric.get('fit'):
         yield LiteralField((*at, 'numeric', 'fit'), FieldKind.FIT, len(numeric['fit'].get('params') or {}))
     if numeric.get('sequence'):
@@ -260,22 +264,22 @@ def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None,
     for name, section in (('numeric', numeric), ('string', string)):
         listed = section.get('top_values')
         if listed:
-            cells = tuple(Cell((*at, name, 'top_values', index), share(entry.get('rate'), held)) for index, entry in enumerate(listed))
-            if 'other_rate' in section:
-                cells += (Cell((*at, name, 'other_rate'), share(section['other_rate'], held), True),)
+            cells = tuple(Cell((*at, name, 'top_values', index), share(entry.get('fraction'), held)) for index, entry in enumerate(listed))
+            if 'other_fraction' in section:
+                cells += (Cell((*at, name, 'other_fraction'), share(section['other_fraction'], held), True),)
             yield LiteralField((*at, name, 'top_values'), FieldKind.TOP_VALUES, len(listed), cells)
     prefixes = string.get('prefixes') or {}
     if prefixes.get('values'):
         listed = prefixes['values']
         cells = tuple(
-            Cell((*at, 'string', 'prefixes', 'values', index), share(entry.get('rate'), held)) for index, entry in enumerate(listed)
+            Cell((*at, 'string', 'prefixes', 'values', index), share(entry.get('fraction'), held)) for index, entry in enumerate(listed)
         )
-        if 'other_rate' in prefixes:
-            cells += (Cell((*at, 'string', 'prefixes', 'other_rate'), share(prefixes['other_rate'], held), True),)
+        if 'other_fraction' in prefixes:
+            cells += (Cell((*at, 'string', 'prefixes', 'other_fraction'), share(prefixes['other_fraction'], held), True),)
         yield LiteralField((*at, 'string', 'prefixes'), FieldKind.PREFIXES, len(listed), cells)
     if string.get('shapes'):
         cells = tuple(
-            Cell((*at, 'string', 'shapes', index), share(entry.get('rate'), held)) for index, entry in enumerate(string['shapes'])
+            Cell((*at, 'string', 'shapes', index), share(entry.get('fraction'), held)) for index, entry in enumerate(string['shapes'])
         )
         yield LiteralField((*at, 'string', 'shapes'), FieldKind.SHAPES, len(cells), cells)
     if string.get('pattern'):
@@ -306,7 +310,7 @@ def dataset_literals(table: dict[str, Any]) -> Iterator[LiteralField]:
     each rate, and a dependency's the entries of its lookup table, or 1 where it states none.
 
     The file counts neither a cell's rows nor a dependency's left-hand values, so neither is recomputed from it, and
-    `min_count` in the audit is what states them.
+    `min_rows` in the audit is what states them.
     """
     dataset = table.get('dataset') or {}
     for name, listed in GIVEN_LISTS.items():
@@ -323,7 +327,7 @@ def dataset_literals(table: dict[str, Any]) -> Iterator[LiteralField]:
 
 def listed_values(column: dict[str, Any]) -> list[str] | None:
     """The values a column lists, written as text as a conditional table's keys are, or None where it lists none."""
-    if (column.get('boolean') or {}).get('true_rate') is not None:
+    if (column.get('boolean') or {}).get('true_fraction') is not None:
         return ['true', 'false']
     for section in ('string', 'numeric'):
         listed = (column.get(section) or {}).get('top_values')
@@ -409,7 +413,7 @@ def sequence_start(end: int, step: int, k_min: int) -> int:
     return end - (k_min - 1) * step
 
 
-def min_count(field: LiteralField, k_min: int) -> int | None:
+def min_rows(field: LiteralField, k_min: int) -> int | None:
     """The fewest rows any literal or cell of the field rests on, as `privacy.audit` records it."""
     if field.kind in (FieldKind.NUMERIC_EXTREMES, FieldKind.TEMPORAL_EXTREMES, FieldKind.DEPENDENCY):
         return k_min

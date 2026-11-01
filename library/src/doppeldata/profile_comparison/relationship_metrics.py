@@ -30,14 +30,14 @@ FANOUT_KS = Thresholded(
     0.05,
 )
 ORPHAN_RATE_DELTA = Thresholded(
-    'orphan_rate_delta',
-    "the difference between the share of child rows holding a key no parent holds and the relationship's orphan_rate",
+    'orphan_fraction_delta',
+    "the difference between the share of child rows holding a key no parent holds and the relationship's orphan_fraction",
     Bound.AT_MOST,
     0.005,
 )
 TOP_SHARE_DELTA = Thresholded(
-    'top_share_delta',
-    "the largest difference in the busiest parents' share of the child rows that name a parent, across each top_share it states",
+    'top_fraction_delta',
+    "the largest difference in the busiest parents' share of the child rows that name a parent, across each top_fractions it states",
     Bound.AT_MOST,
     0.001,
 )
@@ -70,24 +70,24 @@ def fanout_ks(relationship: dict[str, Any], counts: Counts) -> Compared | Unmeas
     return Compared(max(gaps))
 
 
-def orphan_rate_delta(relationship: dict[str, Any], counts: Counts) -> Compared | Unmeasured:
+def orphan_fraction_delta(relationship: dict[str, Any], counts: Counts) -> Compared | Unmeasured:
     """The generated orphan rate's distance from the stated one, which is 0 where the relationship states none."""
     child_rows = sum(rows * values for _, rows, values in counts)
-    expected = relationship.get('orphan_rate') or 0.0
+    expected = relationship.get('orphan_fraction') or 0.0
     if not child_rows:
         return Unmeasured('no child row holds a key', expected)
     observed = sum(rows * values for held, rows, values in counts if not held) / child_rows
     return Compared(abs(observed - expected), expected, observed)
 
 
-def top_share_delta(relationship: dict[str, Any], counts: Counts, scale: float) -> Compared | Unmeasured | None:
+def top_fraction_delta(relationship: dict[str, Any], counts: Counts, scale: float) -> Compared | Unmeasured | None:
     """The stated top share the generated one is furthest from, and how far. None where the relationship states none.
 
     A scale keeps the share of the same fraction of the parents, so the top 10 of 40,000 parents are the top 5 of 20,000
     at scale 0.5. A share falling on a fraction of a parent takes that fraction of the next one's rows, and one falling on
     less than one parent is not compared.
     """
-    shares = (relationship.get('fanout') or {}).get('top_share')
+    shares = (relationship.get('fanout') or {}).get('top_fractions')
     if not shares:
         return None
     busiest = sorted(parents_of(counts), reverse=True)
@@ -111,6 +111,6 @@ def measured(relationship: dict[str, Any], counts: Counts, scale: float) -> dict
     """Each relationship metric's value on one relationship, by name, at `scale` times its parent table's stated rows."""
     return {
         FANOUT_KS.name: fanout_ks(relationship, counts),
-        ORPHAN_RATE_DELTA.name: orphan_rate_delta(relationship, counts),
-        TOP_SHARE_DELTA.name: top_share_delta(relationship, counts, scale),
+        ORPHAN_RATE_DELTA.name: orphan_fraction_delta(relationship, counts),
+        TOP_SHARE_DELTA.name: top_fraction_delta(relationship, counts, scale),
     }

@@ -56,7 +56,7 @@ pub(super) fn plan(op: &HotKeys, planning: &Planning<'_>) -> Result<Planned, Pla
         return Ok(planning.rows(ForeignHotKeys {
             hot,
             count: op.keys,
-            share: op.share.0,
+            share: op.fraction.0,
             rows_key: planning.key("rows"),
             keys_key: planning.key("keys"),
         }));
@@ -83,7 +83,7 @@ pub(super) fn plan(op: &HotKeys, planning: &Planning<'_>) -> Result<Planned, Pla
         .string
         .iter()
         .flat_map(|string| string.top_values.iter().flatten())
-        .map(|top| (top.value.as_str(), top.rate.0))
+        .map(|top| (top.value.as_str(), top.fraction.0))
         .collect();
     top.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
     let texts: Vec<Option<String>> = top.iter().take(wanted).map(|(value, _)| Some(value.to_string())).collect();
@@ -132,7 +132,7 @@ pub(super) fn plan(op: &HotKeys, planning: &Planning<'_>) -> Result<Planned, Pla
     Ok(planning.rows(HotKeyRows {
         column,
         keys: concat(&parts).expect("every key has the column's type"),
-        share: op.share.0,
+        share: op.fraction.0,
         rows_key: planning.key("rows"),
         keys_key: planning.key("keys"),
     }))

@@ -31,7 +31,7 @@ def kinds_in(format: str) -> list[str]:
 
 def alone(kind: str, orders: sd.Profile) -> sd.Scenario:
     breaks_files = _core.fault_kind_facts(kind, 'csv')[0]
-    share = {'files_share': FILES_SHARE} if breaks_files else {'rate': LINE_TOO_LONG_RATE if kind == 'line_too_long' else ROW_RATE}
+    share = {'files_fraction': FILES_SHARE} if breaks_files else {'fraction': LINE_TOO_LONG_RATE if kind == 'line_too_long' else ROW_RATE}
     patch = {'patch': accented_status(orders)} if kind == 'latin1_file' else {}
     return sd.Scenario({'scenario': f'only-{kind}', **patch, 'perturbations': [{'op': 'malformed_rows', 'kinds': [kind], **share}]})
 

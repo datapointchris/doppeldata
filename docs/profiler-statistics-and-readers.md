@@ -92,14 +92,14 @@ at least `k_min`.
 
 - **A bin leaving a smaller cell merges into its smaller neighbor**, as a bin under `k_min` rows
   does.
-- **Where one bin still leaves one, `negative_rate` is left out and the bins merged again.**
+- **Where one bin still leaves one, `negative_fraction` is left out and the bins merged again.**
   It is one rate, and the bins are several counts. A listed column whose few unlisted negative
   values fall under `k_min` keeps its bins this way.
 - **Where that fails too, the histogram is left out.** With no histogram, a cell the stated counts
-  leave across the whole column drops `negative_rate`, then `zero_rate`.
+  leave across the whole column drops `negative_fraction`, then `zero_fraction`.
 - **The arithmetic is exact.** Rates keep `RATE_DIGITS` significant digits, which hide a few rows
   only at large counts, so the floor never rests on that rounding.
-- **`zero_rate` and `negative_rate` under `k_min` rows are written as 0.**
+- **`zero_fraction` and `negative_fraction` under `k_min` rows are written as 0.**
 
 An integer column's edges sit half a unit below the least integer of each bin, and its last edge
 half a unit above the trimmed high. An interior quantile equal to the trimmed high is a boundary
@@ -128,9 +128,9 @@ other family, such as `gamma`, leaves the column a linear tail, so it is not a c
   mass is its own. A continuous family's is its probability over the unit interval centered on the
   integer, which is what the generator's rounding gives it. So AIC compares masses with masses, and
   the KS statistic compares the step functions at each integer.
-- **A zero-inflated column is fitted on the rest.** Where `zero_rate` is at least
+- **A zero-inflated column is fitted on the rest.** Where `zero_fraction` is at least
   `ZERO_INFLATION_RATE`, the zeros are left out of the fit. `zero_inflation` records their share of
-  the values the fit saw, which is the mixture's weight. `zero_rate` stays the share of every
+  the values the fit saw, which is the mixture's weight. `zero_fraction` stays the share of every
   non-null value, and the generator's run at zero comes from it.
 - **loguniform's `loc` is searched alone, with `scale` fixed at 1.** `scale` only rescales `a` and
   `b`. For a given `loc`, the likeliest `a` and `b` are the least and greatest values less `loc`.
@@ -165,25 +165,25 @@ parameters write two profiles, and those generate different tails.
   profile. Otherwise a `ProfilingWarning` names the first thing that differs, which `profile create`
   prints. No cache directory is written, because the library runs inside Glue executors.
 - **Otherwise each column is counted against the earlier histogram edges and value list.** Values
-  outside the edges are written as `histogram.overflow`, `below` and `above`. A column only one of
+  outside the edges are written as `histogram.overflow`, `rows_below` and `rows_above`. A column only one of
   the two tables holds issues one `ColumnsNotFrozen` warning naming it. So does a column whose list
   would move to another section, such as a code read as integers before and as strings now. It is
   profiled afresh.
-- **`overflow.new_value_rows` is the growth of `other_rate` since the list was first frozen**, in
-  `string.overflow` or `numeric.overflow`. It is the rows `other_rate` holds now, less the share it
-  held then: the earlier profile's `other_rate`, less that profile's own `new_value_rows`. So an
+- **`overflow.new_value_rows` is the growth of `other_fraction` since the list was first frozen**, in
+  `string.overflow` or `numeric.overflow`. It is the rows `other_fraction` holds now, less the share it
+  held then: the earlier profile's `other_fraction`, less that profile's own `new_value_rows`. So an
   unchanged column writes about 0, and drift is reported against the first profile however long
   the chain of re-profiles.
   With 5% of rows already outside the list, giving 10% of rows a new value writes 9.5% of rows: the
   0.5% already outside add nothing.
-- **`new_value_rows` is counted from `other_rate`'s own rows**, so it discloses nothing that rate
-  does not. A listed value now held by fewer than `k_min` rows folds into `other_rate`, and counts as
+- **`new_value_rows` is counted from `other_fraction`'s own rows**, so it discloses nothing that rate
+  does not. A listed value now held by fewer than `k_min` rows folds into `other_fraction`, and counts as
   growth with the rest. Counting only the rows outside the list would give that value's count away,
-  as `other_rate` less the count. The earlier profile holds no value outside its list, so a value
+  as `other_fraction` less the count. The earlier profile holds no value outside its list, so a value
   never seen before cannot be told from a rare one that grew.
 - **A numeric column needs its own `new_value_rows` beside the histogram's overflow.** A new value
   between the outer edges lands in a bin beside the listed values, and the bins cannot tell it from
-  their growth. Re-profiling `[1, 2, 3, 4]` as `[1.5, 2, 3, 4]` writes `other_rate` 0.25 and
+  their growth. Re-profiling `[1, 2, 3, 4]` as `[1.5, 2, 3, 4]` writes `other_fraction` 0.25 and
   `new_value_rows` 500 of 2,000 rows, and `profile diff` reports it.
 - **Two profiles of one table then compare bin for bin**, which the round-trip check and drift
   detection read. Rebinning stays explicit, by profiling again without `edges_from`.
@@ -282,7 +282,7 @@ in, whose version is the cluster's, so a missing pyspark is refused with that sa
 ## A text column is read as the type most of its values parse as
 
 Each non-null raw value is classified as the first of `RAW_TYPES` it parses as, in one chain, so the
-counts are disjoint. A value parsing as none of them is a string. The shares become `type_mix`. The
+counts are disjoint. A value parsing as none of them is a string. The shares become `type_mix_fractions`. The
 type that reads the most values is the column's, and a decimal column reads every integer too, so
 decimal's count includes them. A value of another type is null in the parsed column, so the
 column's statistics are of the values parsing as its type. In a decimal column the integers' share
@@ -302,7 +302,7 @@ The null rate comes from the raw text, so an unparsed value counts as a value ra
 
 A delimited source's null tokens are null before any column is typed. Each column's empty fields and
 its fields holding one of `NULL_TOKENS` are counted. The token the file writes most across all its
-columns becomes `csv.writer.null`. Each column's other tokens become its `missing_tokens`, each a share of
+columns becomes `csv.writer.null`. Each column's other tokens become its `missing_token_fractions`, each a share of
 all rows, and one is kept only where `k_min` rows hold it.
 
 A JSON value is typed by its JSON type rather than its text. `json_type` makes a number an integer or
@@ -352,7 +352,7 @@ threads.
 - **`quoting` is read from the block's fields.** It is `always` where every field is quoted, and
   `non_numeric` where exactly the fields that are not numbers are. Otherwise it is `necessary`,
   including where no field is quoted, because a writer that never quotes writes that block alike.
-- **`line_terminator_mix` gives each terminator's share of the block's line breaks**, those inside
+- **`line_terminator_fractions` gives each terminator's share of the block's line breaks**, those inside
   quoted fields included. The commoner one is `line_terminator`. `trailing_delimiter` is true where
   every record ends in an empty field.
 - **A dialect the files are known to be written in is read as given, and no sniffer runs.** A check
@@ -372,7 +372,7 @@ is left out of the table, and counted once, under its first error by position.
 - **`cast` counts rows holding a value that does not parse as its column's type.** Polars counts it
   as `unparsed_rows`, because a read with every column as text casts nothing.
 - **Each type's rate is a share of the data rows**, those read and those rejected. A type fewer
-  than `k_min` rows give is left out, and `malformed.rate` is the sum of the rest.
+  than `k_min` rows give is left out, and `malformed.fraction` is the sum of the rest.
 - **A sampled profile's rates are still shares of every row read.** DuckDB rejects rows over the
   whole read, before the sample is drawn. `cast` is counted in the sample, so its share of the
   sample is scaled to the rows read.
@@ -415,12 +415,12 @@ statistic is taken from the rows, under the floor below.
 
 ## A dataset's layout is its files, their rows, its Hive keys and its sort order
 
-- **`files` gives the count and the sizes** from the listing. `rows_per_file` gives quantiles of each
+- **`files` counts the files and `file_size_bytes` gives their sizes**, from the listing. `rows_per_file` gives quantiles of each
   file's rows, from its footer or from the rows read.
 - **A Hive key stays a column.** The writers partition by a column, so a key the profile drops could
   not be written again. Its type is the column's.
-- **A key's `values.shares` is each value's share of rows**, kept where `k_min` rows hold it, as a
-  top value is. `other_rate` holds the rest. They are written where the key takes no more than
+- **A key's `value_fractions` is each value's share of rows**, kept where `k_min` rows hold it, as a
+  top value is. `other_fraction` holds the rest. They are written where the key takes no more than
   `TOP_VALUES_THRESHOLD` values.
 - **`sort_order` is the sorting columns every footer declares.** Without them, it is the first
   integer column whose values never fall in read order.
@@ -502,11 +502,11 @@ relationships:
 - from: [orders.customer_id]
   to: [customers.customer_id]
   containment: 0.9524
-  orphan_rate: 0.0478
+  orphan_fraction: 0.0478
   cardinality: many_to_one
   fanout:
     quantiles: {p01: 10, p05: 12, p25: 16, p50: 19, p75: 22, p95: 27, p99: 30}
-    top_share: {top1: 0.0002048, top10: 0.001875, top100: 0.01687}
+    top_fractions: {top1: 0.0002048, top10: 0.001875, top100: 0.01687}
     zipf_s: 0.1776
 ```
 
@@ -514,8 +514,8 @@ The `orders` table's own section names its key:
 
 ```yaml
 dataset:
-  row_count: 200000
-  duplicate_row_rate: 0.0
+  rows: 200000
+  duplicate_row_fraction: 0.0
   keys:
     primary: {columns: [order_id], uniqueness: 1.0}
 ```
@@ -543,11 +543,11 @@ few for `channel` to list:
   conditionals:
     - given: channel
       column: payment
-      table:
+      fractions:
         web: {card: 0.6993, paypal: 0.2906, gift: 0.01013}
         store: {card: 0.4451, cash: 0.5549}
         phone: {card: 1.0}
-      other: {card: 1.0}
+      other_fractions: {card: 1.0}
 ```
 
 The phone row drops its 878 invoices too. Its card and invoice rows would leave 6 phone rows
@@ -566,7 +566,7 @@ which `--sample` makes its sample.
 
 [performance.md](performance.md) gives what these passes take of a Polars profile.
 
-- **`duplicate_row_rate` is the rows less the distinct rows, as a share of the rows.** A null
+- **`duplicate_row_fraction` is the rows less the distinct rows, as a share of the rows.** A null
   equals a null. Polars counts the distinct rows by a 64-bit hash of each
   row, and Spark by `xxhash64` over each value and whether it is null. Over 10^8 rows, two distinct
   rows share a hash with odds under one in a thousand. Fewer than `k_min` repeated rows are written
@@ -681,11 +681,11 @@ which `--sample` makes its sample.
   write:
 
   ```yaml
-    conditional_rates:
+    conditional_fractions:
       - given: channel
         column: paid_amount
-        null_rate: {web: 0.009989, store: 0.009795, phone: 0.1489}
-        zero_rate: {web: 0.02019, store: 0.1984, phone: 0.09952}
+        null_fraction: {web: 0.009989, store: 0.009795, phone: 0.1489}
+        zero_fraction: {web: 0.02019, store: 0.1984, phone: 0.09952}
   ```
 
 - **A functional dependency `lhs → rhs` is recorded where at most `DEPENDENCY_VIOLATION` of the
@@ -717,12 +717,12 @@ which `--sample` makes its sample.
   primary key it is, where only one is. Otherwise it points toward the table the key is named for,
   as `user_id` is for `users`, then toward the key holding more of the other's values, then toward
   the earlier table. So `user_profiles.user_id` refers to `users.user_id` in either order.
-- **`containment` is the share of the child's distinct values the key holds.** `orphan_rate` is
+- **`containment` is the share of the child's distinct values the key holds.** `orphan_fraction` is
   the share of child rows whose value it lacks. `cardinality` is `one_to_one` where no parent value
   has two child rows, else `many_to_one`. Where fewer than `k_min` child rows are orphans,
-  `containment` is written as 1 and `orphan_rate` as 0.
+  `containment` is written as 1 and `orphan_fraction` as 0.
 - **The fan-out is each parent value's child rows, counting a parent with none.** Its quantiles stay
-  `k_min` parents clear of each end. `top_share` is the share of the matched child rows held by
+  `k_min` parents clear of each end. `top_fractions` is the share of the matched child rows held by
   each count of busiest parents `TOP_SHARES` names, each stated where its last parent holds `k_min`
   rows. `zipf_s` is the
   exponent maximizing the likelihood of the child rows under a Zipf law over the parents ranked
@@ -732,9 +732,9 @@ which `--sample` makes its sample.
 - **A child column is `inherited` where it equals a column of its parent row on `AGREEMENT_FLOOR`
   of the joined rows.** The two are of one kind, neither is a key the join is taken on, and the
   parent column holds two values or more. Where several parent columns agree, the one agreeing on
-  most rows is named. `agreement` is the share of joined rows equal, written as 1 where fewer than
+  most rows is named. `agreement_fraction` is the share of joined rows equal, written as 1 where fewer than
   `k_min` disagree. So `orders.region` copying `customers.region` is written
-  `{child: region, parent: region, agreement: 0.995}`. The generator copies it from the parent row
+  `{child: region, parent: region, agreement_fraction: 0.995}`. The generator copies it from the parent row
   each child row draws, on the share of rows that lands that agreement.
 - **A child column is the `ordinal` where it numbers every key's rows from 1 to their count.** One
   grouped pass over the child counts each key's rows and each candidate's least and greatest value
@@ -790,7 +790,7 @@ and a constant take no part.
   `LINE_NCH_PMT_AMT_7 / CLM_THRU_DT` gives `LINE_NCH_PMT_AMT_8` on most rows, because both amounts
   are mostly 0.
 - **An expression is screened on the first `SCREEN_ROWS` rows of the sample, then on all of it.**
-  At most `EXPRESSIONS_CONFIRMED` survivors are counted over every row. `violation_rate` is the
+  At most `EXPRESSIONS_CONFIRMED` survivors are counted over every row. `violation_fraction` is the
   share of the rows holding all three columns that it fails on. A rate names no value, so it is
   written however few rows fail, as a dependency's is. One checkout in a hundred holds a total that
   is not its price times its quantity, and `total` writes:
@@ -799,7 +799,7 @@ and a constant take no part.
   derived:
     kind: expression
     expr: unit_price * quantity
-    violation_rate: 0.01019
+    violation_fraction: 0.01019
   ```
 
   The generator rounds an expression to the column's `numeric.scale`, so none writes `round`.
@@ -820,12 +820,12 @@ table of their own, profiled as a table is.
   reads objects concatenated with no delimiter, as Kinesis Data Firehose writes them unless its
   newline delimiter is turned on, and pretty-printed ones.
 
-- **A field's `presence` is the share of its parent's objects holding its key.** Three records with
+- **A field's share in `presence_fractions` is the share of its parent's objects holding its key.** Three records with
   an `addr` object, one holding `apt`, give `addr.apt` 0.333. The generator draws a field only where
   its parent is an object, so a share of all rows would shrink twice.
-- **A nested field's `null_rate` is over the objects holding its key.** A field any object lacks is
+- **A nested field's `null_fraction` is over the objects holding its key.** A field any object lacks is
   `nullable`, because Arrow holds it as null.
-- **A nested field's `type_mix` is recorded as the files hold it.** A field whose own share is under
+- **A nested field's `type_mix_fractions` is recorded as the files hold it.** A field whose own share is under
   1 generates as text, as a top-level column does.
 - **`source.json` records `max_depth` and `writer.explicit_nulls`**, which is true where any path
   holds a JSON null.
@@ -863,16 +863,16 @@ and the policy's pass then removes what each column's rule withholds:
   rate counts and the rest each number 0 or at least `k_min`. A value breaking that joins `other`.
 - **A lookup table** lists only the `lhs` values `k_min` rows hold.
 - **A top value** is kept only when `k_min` rows hold it. While the remainder holds 1 to `k_min - 1`
-  rows, the smallest kept value folds into it, so `other_rate` never reveals a small cell. That
+  rows, the smallest kept value folds into it, so `other_fraction` never reveals a small cell. That
   holds for a numeric column's list as for a string's.
 - **A histogram bin** of 1 to `k_min - 1` rows merges into its smaller non-empty neighbor. An empty
   bin discloses no row, so it stays, and frozen edges are kept wherever the floor allows. So a
   re-profile's edges are a subset of the frozen ones, and a diff sums the earlier bins over a merged
   one.
 - **An overflow count** of 1 to `k_min - 1` rows is written as 0. A numeric column's rows join the
-  outermost bin on their side, and a string column's stay in `other_rate`.
+  outermost bin on their side, and a string column's stay in `other_fraction`.
 - **The floor holds within one profile, not across two.** A value one profile lists and the next
-  folds into `other_rate` shows its count as that rate's growth, where nothing else changed. A bin
+  folds into `other_fraction` shows its count as that rate's growth, where nothing else changed. A bin
   merged under the floor shows the same way against the earlier bins. Holding a series of profiles to
   the floor needs noise, which this profiler does not add.
 - **A fit** is made only on the values between the trimmed extremes. A support parameter lands on
@@ -903,14 +903,14 @@ written with every row's steps and trimmed extremes, the ones its `start` follow
 
 ## A sampled profile counts distinct values in every row
 
-`--sample` profiles a seeded sample, and `dataset.row_count` stays the whole table's count. The
+`--sample` profiles a seeded sample, and `dataset.rows` stays the whole table's count. The
 generator multiplies `distinct.ratio` by the rows it writes, and a distinct ratio does not scale from
 a sample. So a sampled profile counts each column's distinct values in one pass over every row, and
 takes the ratio over the whole table.
 
 ## Distinct values are counted exactly by Polars, and estimated by Spark at a 1% standard error
 
-`distinct.approx` holds an exact count on the Polars backend, so `distinct.ratio` does not move with
+`distinct.approx_values` holds an exact count on the Polars backend, so `distinct.ratio` does not move with
 its version. Spark estimates it with HyperLogLog++ at a relative standard deviation of 0.01, and
 writes the estimate to the same field. A count of a few hundred falls in HyperLogLog++'s linear
 counting, and lands within a few values of exact.

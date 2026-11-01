@@ -222,15 +222,15 @@ def table_check(table: Any, at: PointerParts) -> TableCheck:
         dataset_seen.add(audited_at)
         entry_at = (*at, 'privacy', 'dataset_audit', audited_at)
         violations += audit_faults(dataset_audit[audited_at], entry_at, field, k_min)
-        if dataset_audit[audited_at].get('min_count') is None:
-            detail = f'the entry states no min_count, which is all that holds the {field.kind.label} to k_min; expected at least {k_min}'
+        if dataset_audit[audited_at].get('min_rows') is None:
+            detail = f'the entry states no min_rows, which is all that holds the {field.kind.label} to k_min; expected at least {k_min}'
             violations.append(Violation('rows-not-stated', pointer(entry_at), field.kind.rule, None, detail))
     for index, entry in enumerate(dataset_audit):
         if index not in dataset_seen:
             detail = f'the file holds no dependence between columns at {entry.get("field")}; expected the pointer of one it holds'
             violations.append(Violation('stale-audit-entry', pointer((*at, 'privacy', 'dataset_audit', index)), None, None, detail))
     dataset = table.get('dataset') or {}
-    rows = dataset.get('row_count') or 0
+    rows = dataset.get('rows') or 0
     if dataset.get('keys') and rows < k_min:
         detail = f'the table holds {rows} rows, and a key is stated only over {k_min}; expected no keys'
         violations.append(Violation('keys-under-k-min', pointer((*at, 'dataset', 'keys')), ROWS_AT_LEAST_K_MIN, None, detail))
@@ -250,7 +250,7 @@ def audit_faults(entry: dict[str, Any], at: PointerParts, field: LiteralField, k
     if entry.get('values') is not None and entry['values'] != field.values:
         detail = f'values is {entry["values"]}; the field holds {field.values}'
         found.append(Violation('audit-values-mismatch', pointer((*at, 'values')), rule, None, detail))
-    if entry.get('min_count') is not None and entry['min_count'] < k_min:
-        detail = f'min_count is {entry["min_count"]}; expected at least {k_min}'
-        found.append(Violation('below-k-min', pointer((*at, 'min_count')), rule, None, detail))
+    if entry.get('min_rows') is not None and entry['min_rows'] < k_min:
+        detail = f'min_rows is {entry["min_rows"]}; expected at least {k_min}'
+        found.append(Violation('below-k-min', pointer((*at, 'min_rows')), rule, None, detail))
     return found

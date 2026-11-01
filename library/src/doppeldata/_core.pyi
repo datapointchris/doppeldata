@@ -324,7 +324,7 @@ def determinism_values_digest(profile_json: str, profile_digest: str, seed: Supp
 def expected_metric_op(metric: str) -> str:
     """
     The op whose perturbation an expectation's metric measures, such as ``hot_keys`` for
-    ``hot_keys.share``.
+    ``hot_keys.fraction``.
     """
 
 def expected_metric_takes_column(metric: str) -> bool:
@@ -416,6 +416,6 @@ def shape_of(value: str) -> str:
 
 def top_share_ranks() -> list[tuple[str, int]]:
     """
-    Each ``fanout.top_share`` field's name and the rank, at scale 1, its share is held at,
+    Each ``fanout.top_fractions`` field's name and the rank, at scale 1, its share is held at,
     busiest first.
     """

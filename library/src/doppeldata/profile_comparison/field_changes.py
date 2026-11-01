@@ -163,13 +163,13 @@ def overflow_changes(source: Document, observed: Document) -> list[FieldChange]:
         histogram = (column.get('numeric') or {}).get('histogram') or {}
         frozen = ((ours[name].get('numeric') or {}).get('histogram') or {}).get('edges')
         if 'overflow' in histogram and frozen and (histogram['edges'][0], histogram['edges'][-1]) == (frozen[0], frozen[-1]):
-            outside = histogram['overflow']['below'] + histogram['overflow']['above']
-            share = outside / (outside + sum(histogram['counts'])) if outside else 0.0
+            outside = histogram['overflow']['rows_below'] + histogram['overflow']['rows_above']
+            share = outside / (outside + sum(histogram['bin_rows'])) if outside else 0.0
             at = pointer(('columns', index, 'numeric', 'histogram', 'overflow'))
             if share > OVERFLOW_SHARE:
                 message = f'{share:.1%} of {name} values fall outside the histogram edges frozen from the source profile'
                 changes.append(FieldChange(ChangeKind.OVERFLOW, name, at, None, round(share, 6), False, message))
-        values = rows * (1 - (column.get('null_rate') or 0.0)) if rows else 0
+        values = rows * (1 - (column.get('null_fraction') or 0.0)) if rows else 0
         for section in LISTING_SECTIONS:
             new_rows = ((column.get(section) or {}).get('overflow') or {}).get('new_value_rows')
             if new_rows and values and new_rows / values > OVERFLOW_SHARE:

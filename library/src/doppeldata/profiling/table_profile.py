@@ -179,10 +179,10 @@ class FrozenLayout:
             listing = listed_section(column)
             if listing:
                 section_name, section = listing
-                other = section.get('other_rate') or 0.0
+                other = section.get('other_fraction') or 0.0
                 # A list frozen from a profile before it carries that profile's drift in its new_value_rows, which the baseline leaves out.
                 drifted = (section.get('overflow') or {}).get('new_value_rows') or 0
-                held = described * (1 - (column.get('null_rate') or 0.0)) if described else 0
+                held = described * (1 - (column.get('null_fraction') or 0.0)) if described else 0
                 baseline = max(0.0, other - drifted / held) if held else other
                 values[column['name']] = FrozenValues(tuple(entry['value'] for entry in section['top_values']), baseline, section_name)
         return cls(histograms, values, FrozenPairs.of(document))
@@ -271,7 +271,7 @@ def profile_table(
     json_root = read.json.paths if read.json else None
     profiled = profile_columns(backend, table, settings, rows, whole_distinct, json_root, read.table if sampled else None)
     full = profiled.table if profiled.whole is None else profiled.whole
-    dataset: dict[str, Any] = {'row_count': rows}
+    dataset: dict[str, Any] = {'rows': rows}
     cell_floors: dict[tuple[str, str, str], int] = {}
     if read.json is None and profiled.dependence_sample is not None:
         found, cell_floors = dataset_sections(backend, full, profiled, rows, whole_distinct, k_min, settings.frozen.pairs)
@@ -689,12 +689,12 @@ def column_entry(
     # A text value that did not parse is null in the parsed column, so the null rate comes from the raw text.
     nulls = text.null_count if text else stat('null_count')
     entry['nullable'] = nulls > 0
-    entry['null_rate'] = rate(nulls, described)
+    entry['null_fraction'] = rate(nulls, described)
     tokens = {token: rate(rows, described) for token, rows in sorted(text.missing_tokens.items()) if rows >= k_min} if text else {}
     if tokens:
-        entry['missing_tokens'] = tokens
+        entry['missing_token_fractions'] = tokens
     if text and text.non_null:
-        entry['type_mix'] = {raw: rate(count, text.non_null) for raw, count in text.counts.items() if count}
+        entry['type_mix_fractions'] = {raw: rate(count, text.non_null) for raw, count in text.counts.items() if count}
     if spec.kind is ColumnKind.OTHER:
         return entry | nested_types(spec.physical_type)
     values = described - stat('null_count')
@@ -705,7 +705,7 @@ def column_entry(
         # The column describes its prefixes, so its distinct count is theirs, and the generator holds that.
         count = len(prefixes)
     if counted_over:
-        entry['distinct'] = {'approx': count, 'ratio': significant(min(1.0, count / counted_over), RATE_DIGITS)}
+        entry['distinct'] = {'approx_values': count, 'ratio': significant(min(1.0, count / counted_over), RATE_DIGITS)}
     # A statistic of fewer than k_min values can give one of them away, as the mean of one value does.
     if values < k_min:
         return entry
@@ -729,7 +729,7 @@ def column_entry(
     elif spec.kind in (ColumnKind.DATE, ColumnKind.DATETIME):
         entry['temporal'] = temporal_section(spec, stat, values, text, k_min, year_level=treatment is Treatment.DATE_TO_YEAR)
     elif spec.kind is ColumnKind.BOOLEAN:
-        entry['boolean'] = {'true_rate': significant(stat('true_rate'), RATE_DIGITS)}
+        entry['boolean'] = {'true_fraction': significant(stat('true_fraction'), RATE_DIGITS)}
     if typing:
         entry |= semantic_sections(typing)
     return entry
@@ -833,9 +833,9 @@ def numeric_section(
     for name in ('skew', 'kurtosis'):
         # Shape moments carry no units, and a parallel sum's order moves a zero one in its last bits from run to run.
         section[name] = significant(round(stat(name), SHAPE_MOMENT_DECIMALS), MOMENT_DIGITS) + 0.0 if is_finite(stat(name)) else None
-    zeros, negatives = (floored_count(stat(name), values, k_min) for name in ('zero_rate', 'negative_rate'))
-    section['zero_rate'] = rate(zeros, values)
-    section['negative_rate'] = rate(negatives, values)
+    zeros, negatives = (floored_count(stat(name), values, k_min) for name in ('zero_fraction', 'negative_fraction'))
+    section['zero_fraction'] = rate(zeros, values)
+    section['negative_fraction'] = rate(negatives, values)
     at_level = dict(zip(NUMERIC_LEVELS, stat('quantiles'), strict=True))
     quantiles = {name: number(at_level[level]) for name, level in QUANTILES.items() if clear_of_the_ends(level, values, k_min)}
     if quantiles:
@@ -850,14 +850,14 @@ def numeric_section(
         # The rows below zero are one rate and the bins are several counts, so the rate gives way first.
         histogram = floored_histogram(layout.binning, stat('histogram_counts'), k_min, StatedCounts((*kept, *zero_point)))
         if histogram:
-            section['negative_rate'] = None
+            section['negative_fraction'] = None
     if histogram:
         section['histogram'] = histogram
     if histogram is None and small_cell(stated.unaccounted([Region(-math.inf, math.inf, False, values)]), k_min):
         # With no bin to merge, a count stated beside the list that leaves a small cell is left out.
-        section['negative_rate'] = None
+        section['negative_fraction'] = None
         if small_cell(StatedCounts((*kept, *zero_point)).unaccounted([Region(-math.inf, math.inf, False, values)]), k_min):
-            section['zero_rate'] = None
+            section['zero_fraction'] = None
     if layout.fit_applies:
         section['fit'] = layout.fit
     if integral and stat('step_min') is not None:
@@ -908,11 +908,11 @@ class CountedValues:
     new_value_rows: int | None = None
 
     def written(self, values: int, written_value: Callable[[Any], Any]) -> dict[str, Any]:
-        """The section's `top_values`, `other_rate` and `overflow`, each value written by `written_value`."""
+        """The section's `top_values`, `other_fraction` and `overflow`, each value written by `written_value`."""
         section: dict[str, Any] = {}
         if self.kept:
-            section['top_values'] = [{'value': written_value(value), 'rate': rate(count, values)} for value, count in self.kept]
-            section['other_rate'] = rate(self.other, values)
+            section['top_values'] = [{'value': written_value(value), 'fraction': rate(count, values)} for value, count in self.kept]
+            section['other_fraction'] = rate(self.other, values)
         if self.new_value_rows is not None:
             section['overflow'] = {'new_value_rows': self.new_value_rows}
         return section
@@ -921,7 +921,7 @@ class CountedValues:
 def counted_against(listed: FrozenValues, counts: list[int], values: int, k_min: int) -> CountedValues:
     """The values of `listed` counted by `counts`, and the rows outside it beyond the share it started from."""
     kept, other = kept_values(list(zip(listed.values, counts, strict=True)), values, k_min)
-    # Counted from `other_rate`'s own rows, so it discloses nothing that rate does not. The rows outside the
+    # Counted from `other_fraction`'s own rows, so it discloses nothing that rate does not. The rows outside the
     # list count too, so a listed value that fell under k_min reveals no count of its own.
     beyond = other - round(listed.baseline_other_rate * values)
     return CountedValues(kept, other, beyond if beyond >= k_min else 0)
@@ -1053,9 +1053,9 @@ def floored_histogram(binning: Binning, counted: list[int], k_min: int, stated: 
         del edges[first]
     if small:
         return None
-    histogram: dict[str, Any] = {'kind': binning.kind, 'edges': edges, 'counts': [region.rows for region in regions[1:-1]]}
+    histogram: dict[str, Any] = {'kind': binning.kind, 'edges': edges, 'bin_rows': [region.rows for region in regions[1:-1]]}
     if binning.frozen:
-        histogram['overflow'] = {'below': regions[0].rows, 'above': regions[-1].rows}
+        histogram['overflow'] = {'rows_below': regions[0].rows, 'rows_above': regions[-1].rows}
     return histogram
 
 
@@ -1086,9 +1086,9 @@ def string_section(
     quantiles = {name: int(at_level[level]) for name, level in QUANTILES.items() if clear_of_the_ends(level, values, k_min)}
     if quantiles:
         length['quantiles'] = quantiles
-    section: dict[str, Any] = {'length': length, 'whitespace_edge_rate': significant(stat('whitespace_edge_rate'), RATE_DIGITS)}
+    section: dict[str, Any] = {'length': length, 'whitespace_edge_fraction': significant(stat('whitespace_edge_fraction'), RATE_DIGITS)}
     if shapes:
-        section['shapes'] = [{'shape': shape, 'rate': rate(count, values)} for shape, count in shapes]
+        section['shapes'] = [{'shape': shape, 'fraction': rate(count, values)} for shape, count in shapes]
     if pattern:
         section['pattern'] = pattern
     if prefixes is not None:
@@ -1114,7 +1114,7 @@ def zip_prefix_counts(counted: list[tuple[Any, int]]) -> dict[str, int]:
 
 def zip_prefixes_section(merged: dict[str, int], shapes: list[tuple[str, int]], values: int, k_min: int) -> dict[str, Any]:
     """A ZIP column's three-digit prefixes held by k_min rows, and the digits the generator appends to each. A prefix
-    that is not three digits is counted in `other_rate`."""
+    that is not three digits is counted in `other_fraction`."""
     ordered = sorted(
         ((prefix, count) for prefix, count in merged.items() if ZIP_PREFIX.fullmatch(prefix)), key=lambda item: (-item[1], item[0])
     )
@@ -1122,8 +1122,10 @@ def zip_prefixes_section(merged: dict[str, int], shapes: list[tuple[str, int]], 
     if not kept:
         return {}
     plus_four = bool(shapes) and shapes[0][0] == ZIP_PLUS_FOUR_SHAPE
-    listed = [{'value': prefix, 'rate': rate(count, values)} for prefix, count in kept]
-    return {'prefixes': {'values': listed, 'other_rate': rate(other, values), 'suffix': ZIP_PLUS_FOUR_SUFFIX if plus_four else ZIP_SUFFIX}}
+    listed = [{'value': prefix, 'fraction': rate(count, values)} for prefix, count in kept]
+    return {
+        'prefixes': {'values': listed, 'other_fraction': rate(other, values), 'suffix': ZIP_PLUS_FOUR_SUFFIX if plus_four else ZIP_SUFFIX}
+    }
 
 
 def semantic_sections(typing: 'Typing') -> dict[str, Any]:
@@ -1140,7 +1142,7 @@ def semantic_sections(typing: 'Typing') -> dict[str, Any]:
         semantic['generator_hint'] = typing.generator_hint
     sections: dict[str, Any] = {'semantic': semantic}
     if typing.passed is not None:
-        sections['quality'] = {'invalid_rate': rate(typing.sampled - typing.passed, typing.sampled)}
+        sections['quality'] = {'invalid_fraction': rate(typing.sampled - typing.passed, typing.sampled)}
     return sections
 
 
@@ -1204,7 +1206,7 @@ def column_fits(
             integral=spec.kind is ColumnKind.INTEGER,
             low=float(stat('trimmed_low')),
             high=float(stat('trimmed_high')),
-            zero_rate=stat('zero_rate'),
+            zero_fraction=stat('zero_fraction'),
         )
         fits[spec.name] = fit_entry(fitted) if fitted else None
     poor = {name: (fit['family'], fit['ks']) for name, fit in fits.items() if fit and fit['poor']}
@@ -1226,7 +1228,7 @@ def fit_entry(fitted: Any) -> dict[str, Any]:
         'params': params,
         'ks': significant(fitted.ks, RATE_DIGITS),
         'aic': significant(fitted.aic, MOMENT_DIGITS),
-        'sample': fitted.rows,
+        'sample_rows': fitted.rows,
     }
     if fitted.zero_inflation is not None:
         entry['zero_inflation'] = significant(fitted.zero_inflation, RATE_DIGITS)
@@ -1250,7 +1252,7 @@ def temporal_section(
             if isinstance(low, dt.datetime):
                 low, high = (value.replace(hour=0, minute=0, second=0, microsecond=0) for value in (low, high))
         section['extremes'] = {'low': low.isoformat(), 'high': high.isoformat(), 'granularity': granularity(spec, stat)}
-    for field, counts in (('by_month', 'month_counts'), ('by_dow', 'weekday_counts'), ('by_hour', 'hour_counts')):
+    for field, counts in (('month_fractions', 'month_counts'), ('weekday_fractions', 'weekday_counts'), ('hour_fractions', 'hour_counts')):
         if spec.kind is ColumnKind.DATETIME or counts != 'hour_counts':
             shares = floored_shares(stat(counts), k_min)
             if shares:
@@ -1260,7 +1262,7 @@ def temporal_section(
         first, last = day_of(stat('trimmed_low')), day_of(stat('trimmed_high'))
         if year_level:
             first, last = dt.date(first.year, 1, 1), dt.date(last.year, 12, 31)
-        section['gap_rate'] = significant(1 - stat('distinct_days') / ((last - first).days + 1), RATE_DIGITS)
+        section['gap_fraction'] = significant(1 - stat('distinct_days') / ((last - first).days + 1), RATE_DIGITS)
     return section
 
 

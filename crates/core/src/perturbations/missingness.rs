@@ -67,7 +67,7 @@ pub(super) fn plan(op: &Missingness, planning: &Planning<'_>) -> Result<Planned,
     let op = WriteNulls {
         column,
         ranked,
-        rate: op.rate.0,
+        rate: op.fraction.0,
         rows_key: planning.key("rows"),
     };
     Ok(Planned::Rows { op: Box::new(op), schema })
