@@ -561,6 +561,7 @@ dependencies = [
  "rand_distr",
  "rand_regex",
  "rayon",
+ "regex-automata",
  "regex-syntax",
  "schemars",
  "serde",

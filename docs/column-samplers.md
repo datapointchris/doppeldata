@@ -144,6 +144,45 @@ every call, and it panics on lower-case input and on a `u8` overflow past about 
 generated address reaches anyone. That holds 3,007 × 474 × 3 = 4,275,954 addresses. *Rejected:*
 fake's `SafeEmail`. It is a first name at one of the three domains, so it holds 9,021 addresses.
 
+## A key stated unique draws each of its pattern's strings at most once
+
+A pattern drawn fresh on each row repeats a value about n²/2N times over n rows of N strings. A
+column that alone is a primary or candidate key, of `uniqueness` 1 or none stated, and draws from a
+pattern, holds no value twice instead. It ranks, enciphers and unranks, as format-preserving
+encryption builds a cipher over a regular language.
+
+- **A keyed permutation takes each row to a rank among the pattern's strings.** It is the Feistel
+  network with cycle walking that places a bundle's foreign keys, drawn from the `key_rank` stream.
+- **A DFA of the pattern turns the rank into its string.** Each unbounded repetition runs to
+  `PATTERN_MAX_REPEAT` repeats past its least, as the fresh draw runs it. The DFA counts the strings ending within each
+  number of bytes of each state. A rank takes the transition whose strings hold it, a byte at a
+  time. A DFA holds one path per string, so two ranks never reach one string.
+- **Each string is as likely as any other.** So a ranged repetition such as `\d{6,8}` draws mostly
+  its longest strings, where the fresh draw takes each repeat count as often.
+- **Past 2^64 strings, each place the permutation reaches takes its own band of ranks.** A hash of
+  the place picks the rank inside it. Past 2^128 the counts saturate. A transition with more
+  strings past it than any rank reaches is then picked by a hash of the rank. One position can take
+  fewer characters there: 3 of the 26 letters at the third of `[a-z]{30}`.
+- **A check digit is written over the last digit, so the key counts what precedes it.** It draws
+  the strings ending in an ASCII digit, ranked by their part before it. Each row's part is its own,
+  so its check digit, right or wrong, leaves the value its own too.
+- **A child reads the key at its parent's row**, so a foreign key holds the strings the parent
+  writes.
+- **More rows than the pattern holds strings is refused at plan time as `E-PROFILE-125`.** A pattern
+  whose DFA or count table passes `AUTOMATON_BYTES` is refused as `E-PROFILE-126`. A key whose
+  stated `uniqueness` is under 1 draws fresh, so either refusal is lifted that way.
+- **`cdc` still refuses such a key.** It inserts rows past the full load, beyond the rows the
+  permutation spans.
+
+*Rejected:* an affine map `a·i + b mod N`. Neighboring rows' keys step by one constant, which shows
+in their digits.
+
+*Rejected:* a mixed-radix count over the parsed pattern. A pattern writing one string two ways, as
+`\d{1,2}\d{1,2}` writes `123`, would give that string two ranks.
+
+*Rejected:* the fresh draw for a pattern past the bound. It would repeat a key the profile states
+unique.
+
 ## A column below a distinct ratio of 1 draws each value at an index
 
 A generated string or number is drawn fresh by default, so its distinct count is whatever the

@@ -85,6 +85,11 @@ issue_codes! {
     PROFILE_MODEL_MISMATCH = "E-PROFILE-123", exit 1,
         "a profile the library validated does not read as the engine's model, as a library and engine of different releases give";
     TABLE_NOT_BUNDLE = "E-PROFILE-124", exit 2, "a table profile was given where a bundle is planned";
+    KEY_WIDER_THAN_PATTERN = "E-PROFILE-125", exit 2, "a key stated unique is asked for more rows than its pattern holds strings",
+        hint "generate fewer rows, widen the key's pattern, or state the key's uniqueness under 1";
+    KEY_PATTERN_TOO_COMPLEX = "E-PROFILE-126", exit 2,
+        "a key stated unique draws from a pattern whose automaton passes the bound its strings are counted within",
+        hint "simplify the key's pattern, or state the key's uniqueness under 1";
 
     UNKNOWN_SCENARIO_COLUMN = "E-SCENARIO-101", exit 2, "an op or the patch names a column the profile does not hold";
     OP_NOT_FOR_COLUMN = "E-SCENARIO-102", exit 2, "an op cannot act on its column's type, such as noise on a string";

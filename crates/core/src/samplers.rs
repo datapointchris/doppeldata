@@ -17,6 +17,7 @@ mod text;
 mod text_cells;
 mod text_lengths;
 mod type_mix;
+mod unique_pattern_key;
 
 use std::sync::Arc;
 
@@ -53,6 +54,7 @@ use self::numeric_top_values::SourceCounts;
 use self::temporal::TemporalOutput;
 use self::temporal::TemporalSampler;
 use self::text::CheckDigitDraw;
+use self::text::Pattern;
 use self::text::Shape;
 use self::text::StringOutput;
 use self::text::TextSampler;
@@ -67,6 +69,8 @@ pub use self::type_mix::TYPE_MIX_FIELD_KEY;
 use self::type_mix::TypeMix;
 pub(crate) use self::type_mix::foreign_text;
 pub use self::type_mix::raw_type_name;
+use self::unique_pattern_key::KeyEnd;
+use self::unique_pattern_key::UniquePatternKey;
 use crate::physical_type;
 use crate::physical_type::Container;
 use crate::physical_type::PhysicalType;
@@ -133,6 +137,16 @@ impl PlanContext<'_> {
             .iter()
             .chain(keys.candidates.iter().flatten())
             .any(|key| key.columns.iter().any(|column| column == name))
+    }
+
+    /// Whether `name` alone is a key the profile states unique: of uniqueness 1, or none stated, as a
+    /// declared key is read.
+    fn is_unique_key(&self, name: &str) -> bool {
+        let Some(keys) = self.keys else { return false };
+        keys.primary
+            .iter()
+            .chain(keys.candidates.iter().flatten())
+            .any(|key| key.columns == [name] && key.uniqueness.is_none_or(|uniqueness| uniqueness.0 >= 1.0))
     }
 
     /// The distinct values a column is to hold over the dataset, drawn in its `filled_rows`. At or
@@ -243,6 +257,8 @@ pub(crate) struct StreamKeys {
     type_mix: u64,
     /// The text of each row holding a share of another type.
     type_mix_text: u64,
+    /// The permutation taking a unique key's row to its rank among its pattern's strings.
+    key_rank: u64,
 }
 
 impl StreamKeys {
@@ -262,6 +278,7 @@ impl StreamKeys {
             given: key("given"),
             type_mix: key("type_mix"),
             type_mix_text: key("type_mix_text"),
+            key_rank: key("key_rank"),
         }
     }
 
@@ -520,7 +537,9 @@ impl ColumnPlan {
             }
             ValueSampler::Text(text) => {
                 text.by_row = true;
-                self.sampler = format!("{}, each row its own value", self.sampler);
+                if text.unique.is_none() {
+                    self.sampler = format!("{}, each row its own value", self.sampler);
+                }
                 RowKey::TextAtRow {
                     seed,
                     keys: self.keys,
@@ -830,6 +849,9 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
             if text.index.is_some() {
                 description.push_str(", at the profiled distinct ratio");
             }
+            if let Some(unique) = &text.unique {
+                description.push_str(&format!(", each row one of its {} no other row holds", unique.counted()));
+            }
             if let Some(check_digit) = &text.check_digit {
                 description.push_str(&format!(", with a {:?} check digit", check_digit.kind).to_lowercase());
             }
@@ -1022,13 +1044,56 @@ fn value_sampler(
             invalid: Bernoulli::new(invalid_fraction),
         }
     });
+    let unique = match &source {
+        TextSource::Pattern(pattern) if !site.nested && context.is_unique_key(&column.name) => {
+            let field = match hint.and_then(|hint| hint.pattern.as_ref()) {
+                Some(_) => HINTED_PATTERN,
+                None => STORED_PATTERN,
+            };
+            Some(unique_pattern_key(context, column, site, pattern, check_digit.is_some(), field)?)
+        }
+        _ => None,
+    };
     Ok(ValueSampler::Text(TextSampler {
-        index: target.and_then(|target| ValueIndex::for_distinct(target, &source.variety())),
+        index: match unique {
+            Some(_) => None,
+            None => target.and_then(|target| ValueIndex::for_distinct(target, &source.variety())),
+        },
         by_row: false,
+        unique,
         source,
         check_digit,
         output,
     }))
+}
+
+/// The draw of a key stated unique from `pattern`, refused where the rows outnumber its strings. A
+/// check digit is written over each string's last digit, so the key counts what precedes it.
+fn unique_pattern_key(
+    context: &PlanContext,
+    column: &Column,
+    site: &ColumnSite,
+    pattern: &Pattern,
+    check_digit: bool,
+    field: &str,
+) -> Result<Arc<UniquePatternKey>, PlanError> {
+    let end = match check_digit {
+        true => KeyEnd::BeforeCheckDigit,
+        false => KeyEnd::Whole,
+    };
+    let key = UniquePatternKey::new(&pattern.hir, PATTERN_MAX_REPEAT, end).map_err(|error| {
+        site.refuse_as(ColumnFault::KeyPatternTooComplex, field)(format!("{:?} is a key stated unique, and {error}", column.name))
+    })?;
+    let rows = context.rows.max(0.0).ceil() as u64;
+    if u128::from(rows) > key.strings() {
+        let message = format!(
+            "{:?} is a key stated unique over {rows} rows, and its pattern holds {}",
+            column.name,
+            key.counted()
+        );
+        return Err(site.refuse_as(ColumnFault::KeyWiderThanPattern, field)(message));
+    }
+    Ok(Arc::new(key))
 }
 
 /// The whole values a string column lists, which the categorical sampler draws before `prefixes`.
@@ -1046,6 +1111,9 @@ fn empty_numeric_stats() -> crate::profile::NumericStats {
     serde_json::from_value(serde_json::json!({})).expect("every numeric statistic is optional")
 }
 
+const HINTED_PATTERN: &str = "/semantic/generator_hint/pattern";
+const STORED_PATTERN: &str = "/string/pattern";
+
 /// Where a string column's generated values come from, most specific first: a provider, a
 /// pattern, the shapes, then characters of the profiled classes.
 fn text_source(
@@ -1062,13 +1130,11 @@ fn text_source(
         }
         return Ok(TextSource::Provider(provider));
     }
-    const HINTED: &str = "/semantic/generator_hint/pattern";
-    const STORED: &str = "/string/pattern";
-    let pattern = match reads.read("pattern", HINTED, hint.and_then(|hint| hint.pattern.as_deref())) {
-        Some(hinted) => Some((hinted, HINTED)),
+    let pattern = match reads.read("pattern", HINTED_PATTERN, hint.and_then(|hint| hint.pattern.as_deref())) {
+        Some(hinted) => Some((hinted, HINTED_PATTERN)),
         None => reads
-            .read("pattern", STORED, string.and_then(|s| s.pattern.as_deref()))
-            .map(|stored| (stored, STORED)),
+            .read("pattern", STORED_PATTERN, string.and_then(|s| s.pattern.as_deref()))
+            .map(|stored| (stored, STORED_PATTERN)),
     };
     if let Some((pattern, field)) = pattern {
         let compiled = text::compile_pattern(pattern, PATTERN_MAX_REPEAT).map_err(site.refuse_as(ColumnFault::InvalidPattern, field))?;

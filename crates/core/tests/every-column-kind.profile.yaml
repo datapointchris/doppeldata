@@ -195,6 +195,12 @@ columns:
   - name: dea_check_digit
     quality: {invalid_fraction: 0.1}
     semantic: {generator_hint: {pattern: '^[ABFM][A-Z]\d{7}$', check_digit: dea}}
+  # Two keys stated unique, each drawing one of its pattern's strings a row.
+  - name: key_from_pattern
+    string: {pattern: '^K-[A-Z]{2}\d{3,5}$'}
+  - name: key_from_pattern_with_check_digit
+    quality: {invalid_fraction: 0.1}
+    semantic: {generator_hint: {pattern: '^7\d{8}$', check_digit: luhn}}
   - name: top_prefixes_with_suffix
     distinct: {ratio: 0.02}
     string:
@@ -419,6 +425,8 @@ dataset:
   keys:
     candidates:
       - {columns: [key_with_foreign_text]}
+      - {columns: [key_from_pattern]}
+      - {columns: [key_from_pattern_with_check_digit], uniqueness: 1.0}
   correlations:
     - {a: copula_amount, b: copula_items, method: spearman, value: 0.7}
     - {a: copula_amount, b: copula_weight, method: spearman, value: 0.4}

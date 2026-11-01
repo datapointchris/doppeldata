@@ -125,6 +125,10 @@ pub enum ColumnFault {
     /// kind the dependence cannot apply to, a value its column's type cannot hold, or one that would make a
     /// column depend on itself.
     InvalidDependence,
+    /// A key stated unique is asked for more rows than its pattern holds strings.
+    KeyWiderThanPattern,
+    /// A key stated unique draws from a pattern whose automaton is too large to count its strings in.
+    KeyPatternTooComplex,
 }
 
 impl ColumnFault {
@@ -142,6 +146,8 @@ impl ColumnFault {
             Self::TokensExceedNullRate => &issue_codes::TOKENS_EXCEED_NULL_FRACTION,
             Self::UnknownColumn => &issue_codes::UNKNOWN_COLUMN,
             Self::InvalidDependence => &issue_codes::INVALID_DEPENDENCE,
+            Self::KeyWiderThanPattern => &issue_codes::KEY_WIDER_THAN_PATTERN,
+            Self::KeyPatternTooComplex => &issue_codes::KEY_PATTERN_TOO_COMPLEX,
         }
     }
 }
