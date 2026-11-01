@@ -125,5 +125,28 @@ fn generated_rows_hold_each_stated_correlation_and_each_conditional_share() {
                 );
             }
         }
+        if conditional.get("other_fractions").is_none() {
+            // A given value with no row draws what the rows leave, so the child keeps its own shares.
+            let entry = document["columns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["name"] == column)
+                .unwrap();
+            let yes = entry["boolean"]["true_fraction"].as_f64().expect("a child listing no rest");
+            let rows = totals.values().sum::<f64>();
+            for (child, share) in [("true", yes), ("false", 1.0 - yes)] {
+                let held = counts
+                    .iter()
+                    .filter(|((_, value), _)| value == child)
+                    .map(|(_, count)| count)
+                    .sum::<f64>();
+                assert!(
+                    (held / rows - share).abs() < SHARE_TOLERANCE,
+                    "{column}={child} over every {given}: {:.4} against its own {share}",
+                    held / rows
+                );
+            }
+        }
     }
 }

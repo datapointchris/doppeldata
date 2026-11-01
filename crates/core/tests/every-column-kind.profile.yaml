@@ -397,6 +397,11 @@ dataset:
         north: {web: 0.7, store: 0.2, phone: 0.1}
         south: {web: 0.3, store: 0.5, phone: 0.2}
       other_fractions: {web: 0.4, store: 0.3, phone: 0.3}
+    # pending and the rest of status have no row, so they draw what shipped leaves of flag's own shares.
+    - given: status
+      column: flag
+      fractions:
+        shipped: {'true': 0.2, 'false': 0.8}
   conditional_quantiles:
     - given: channel
       column: paid_amount

@@ -399,15 +399,17 @@ fn listed_shares(column: &Column) -> Option<(Vec<(String, f64)>, f64)> {
 /// Where the share a conditional table's row leaves short of 1 is drawn. Each value the child lists takes the share
 /// of it the table's rows leave unstated, each row weighted by its given value's share, which is one step of
 /// iterative proportional fitting toward the child's own shares. The share of values the child lists none of takes
-/// its own draw.
+/// its own draw. A given value with no row and no `other_fractions` takes the `remainder` of the child's own shares.
 struct RestShares {
     unstated: Vec<(String, f64)>,
     unlisted: f64,
+    own: Vec<(String, f64)>,
+    given: Vec<(String, f64)>,
 }
 
 impl RestShares {
     /// The rest of `conditional`'s rows, or `None` where its given or child column lists no values, which leaves each
-    /// row's rest to the child's own draw.
+    /// row's rest, and each given value with no row, to the child's own draw.
     fn of(conditional: &Conditional, given: &Column, child: &Column) -> Option<Self> {
         let (child_listed, unlisted) = listed_shares(child)?;
         let (given_listed, given_other) = listed_shares(given)?;
@@ -426,34 +428,51 @@ impl RestShares {
             }
         }
         let unstated = child_listed
-            .into_iter()
+            .iter()
             .filter_map(|(value, own)| {
                 let left = own - stated.get(value.as_str()).copied().unwrap_or(0.0);
-                (left > UNSTATED_FLOOR * own).then_some((value, left))
+                (left > UNSTATED_FLOOR * own).then(|| (value.clone(), left))
             })
             .collect();
-        Some(Self { unstated, unlisted })
+        Some(Self {
+            unstated,
+            unlisted,
+            own: child_listed,
+            given: given_listed,
+        })
+    }
+
+    /// What a given value with no row draws: the child's own shares less what `rows` draw at their given values'
+    /// shares, a value left under `UNSTATED_FLOOR` of its own taking none. `None` where they leave nothing.
+    fn remainder<'a>(&self, rows: impl IntoIterator<Item = (&'a str, &'a [(Option<String>, f64)])>) -> Option<Vec<(Option<String>, f64)>> {
+        let mut drawn: HashMap<Option<&str>, f64> = HashMap::new();
+        for (given, shares) in rows {
+            let weight = self.given.iter().find(|(value, _)| value == given).map_or(0.0, |(_, rate)| *rate);
+            for (value, share) in shares {
+                *drawn.entry(value.as_deref()).or_default() += weight * share;
+            }
+        }
+        let left = |value: Option<&str>, own: f64| {
+            let left = own - drawn.get(&value).copied().unwrap_or(0.0);
+            (left > UNSTATED_FLOOR * own).then_some((value.map(str::to_string), left))
+        };
+        let shares: Vec<(Option<String>, f64)> = self
+            .own
+            .iter()
+            .filter_map(|(value, own)| left(Some(value), *own))
+            .chain(left(None, self.unlisted))
+            .collect();
+        let total = shares.iter().map(|(_, share)| share).sum::<f64>();
+        (total > 0.0).then(|| shares.into_iter().map(|(value, share)| (value, share / total)).collect())
     }
 }
 
-/// A row of a conditional table. The share its cells leave short of 1 is the rows whose value the table does not
-/// state, spread as `rest` says, or drawn as the column's own value where it says nothing.
-fn table_row(
-    cells: &BTreeMap<String, Rate>,
-    rest: Option<&RestShares>,
-    values: &mut Vec<String>,
-    field: &str,
-) -> Result<TableRow, PlanError> {
-    let mut place_of = |value: &String| {
-        let place = values.iter().position(|known| known == value).unwrap_or_else(|| {
-            values.push(value.clone());
-            values.len() - 1
-        });
-        Some(place as u32)
-    };
-    let mut places: Vec<Option<u32>> = cells.keys().map(&mut place_of).collect();
-    let mut shares: Vec<f64> = cells.values().map(|rate| rate.0).collect();
-    let left = 1.0 - shares.iter().sum::<f64>();
+/// A conditional table row's share of each child value, `None` for the column's own draw. The share its cells leave
+/// short of 1 is the rows whose value the table does not state, spread as `rest` says, or drawn as the column's own
+/// value where it says nothing.
+fn row_shares(cells: &BTreeMap<String, Rate>, rest: Option<&RestShares>) -> Vec<(Option<String>, f64)> {
+    let mut shares: Vec<(Option<String>, f64)> = cells.iter().map(|(value, rate)| (Some(value.clone()), rate.0)).collect();
+    let left = 1.0 - cells.values().map(|rate| rate.0).sum::<f64>();
     if left > SHARE_SLACK {
         let spread: Vec<&(String, f64)> = rest
             .into_iter()
@@ -463,21 +482,33 @@ fn table_row(
         let unlisted = rest.map_or(0.0, |rest| rest.unlisted);
         let total = spread.iter().map(|(_, share)| share).sum::<f64>() + unlisted;
         if spread.is_empty() {
-            shares.push(left);
-            places.push(None);
+            shares.push((None, left));
         } else {
-            for (value, share) in spread {
-                shares.push(left * share / total);
-                places.push(place_of(value));
-            }
+            shares.extend(spread.into_iter().map(|(value, share)| (Some(value.clone()), left * share / total)));
             if unlisted > 0.0 {
-                shares.push(left * unlisted / total);
-                places.push(None);
+                shares.push((None, left * unlisted / total));
             }
         }
     }
-    let choice =
-        WeightedAliasIndex::new(shares).map_err(|error| refuse(field.to_string(), format!("the row's shares are unusable: {error}")))?;
+    shares
+}
+
+/// A row drawing each child value at its share, placing a value among `values` the first time a row names it.
+fn table_row(shares: &[(Option<String>, f64)], values: &mut Vec<String>, field: &str) -> Result<TableRow, PlanError> {
+    let places = shares
+        .iter()
+        .map(|(value, _)| {
+            value.as_ref().map(|value| {
+                let place = values.iter().position(|known| known == value).unwrap_or_else(|| {
+                    values.push(value.clone());
+                    values.len() - 1
+                });
+                place as u32
+            })
+        })
+        .collect();
+    let choice = WeightedAliasIndex::new(shares.iter().map(|(_, share)| *share).collect())
+        .map_err(|error| refuse(field.to_string(), format!("the row's shares are unusable: {error}")))?;
     Ok(TableRow { choice, values: places })
 }
 
@@ -696,18 +727,23 @@ impl DependentColumns {
             let rest = RestShares::of(conditional, &planner.profile[parent], &planner.profile[child]);
             let mut values = Vec::new();
             let mut rows = Vec::with_capacity(conditional.fractions.len());
+            let mut stated = Vec::with_capacity(conditional.fractions.len());
             for (given, cells) in &conditional.fractions {
+                let shares = row_shares(cells, rest.as_ref());
                 rows.push(table_row(
-                    cells,
-                    rest.as_ref(),
+                    &shares,
                     &mut values,
                     &format!("{field}/table/{}", crate::perturbations::pointer_token(given)),
                 )?);
+                stated.push((given.as_str(), shares));
             }
-            let other = conditional
-                .other_fractions
-                .as_ref()
-                .map(|cells| table_row(cells, rest.as_ref(), &mut values, &format!("{field}/other")))
+            let other = match (&conditional.other_fractions, &rest) {
+                (Some(cells), _) => Some(row_shares(cells, rest.as_ref())),
+                (None, Some(rest)) => rest.remainder(stated.iter().map(|(given, shares)| (*given, shares.as_slice()))),
+                (None, None) => None,
+            };
+            let other = other
+                .map(|shares| table_row(&shares, &mut values, &format!("{field}/other")))
                 .transpose()?;
             let child_values = planner.child_values(child, &values, &format!("{field}/table"))?;
             planner.depend(parent, child, &format!("{field}/given"))?;

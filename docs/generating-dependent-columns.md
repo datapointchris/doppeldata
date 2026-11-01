@@ -96,9 +96,18 @@ matrix. Clipping shrinks every pair toward 0, the stated ones too.
 ```
 
 - **Each row of `fractions` sums to 1 at most, and `other_fractions` covers every value of `given`
-  the table does not list.** Without `other_fractions`, such a row draws from the column's own
-  values. A null parent
-  does too. `profile check` refuses a row over 1 as `E-PROFILE-015`.
+  the table does not list.** `profile check` refuses a row over 1 as `E-PROFILE-015`. A null parent
+  draws from the column's own values.
+- **Without `other_fractions`, a given value with no row draws what the rows leave of the child's
+  own shares.** Each child value takes its own share less what every row draws of it, each row
+  weighted by its given value's share. A row's draw is its cells and the rest spread over it. So the
+  marginal holds where the profiler dropped the row of the values `given` does not list. A value
+  left under 1% of its own share takes none. Where nothing is left, or either column lists no
+  values, such a row draws from the column's own values.
+- **That draw states nothing the profile does not.** It is computed from the profile's rates
+  alone. For a child value some row states, what is left is its rows outside the kept cells, which
+  the writer holds at 0 or at least `k_min`. For a child value no row states, it is only what the
+  spread estimates.
 - **The share a row leaves short of 1 is the rows of child values it does not state.** The
   profiler leaves out a cell under `k_min` rows. Each child value the column lists takes as much of
   that share as no row states of it, each row weighted by its given value's share. That is one step
@@ -109,7 +118,15 @@ matrix. Clipping shrinks every pair toward 0, the stated ones too.
 - **A column takes one parent.** Where two entries name the same child, the first is drawn and the
   second set aside.
 
-The same test holds each share of that table within its tolerance.
+The same test holds each share of that table within its tolerance, and the child's own shares
+where a table states no `other_fractions`.
+
+*Rejected:* drawing a given value with no row from the column's own values. Where the profiler
+dropped the row of a rare rest, the child values that rest held were drawn too seldom.
+
+*Rejected:* spreading a given value with no row over the shares no row states, as a row's rest is
+spread. The rows' rests already draw most of those shares, so the values only the rowless given
+values hold were still drawn too seldom.
 
 *Rejected:* scaling a row's stated cells up to 1. A row missing its rare values then draws its
 common ones too often, and the child's marginal drifts.
