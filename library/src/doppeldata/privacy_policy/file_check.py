@@ -6,7 +6,9 @@ withholds from must hold nothing it withholds, and must meet each rule of its tr
 """
 
 import dataclasses as dc
+import importlib.resources
 import json
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -15,7 +17,13 @@ from typing import ClassVar
 from doppeldata import issue_codes
 from doppeldata.embedded_profiles import data_file_metadata
 from doppeldata.embedded_profiles import embedded_document
-from doppeldata.errors import CheckFailed
+from doppeldata.errors import InvalidArgument
+from doppeldata.errors import ProfileFailsCheck
+from doppeldata.errors import ProfileNotFound
+from doppeldata.example_profiles import bundle_example_names
+from doppeldata.example_profiles import bundle_example_resource
+from doppeldata.example_profiles import example_names
+from doppeldata.example_profiles import example_resource
 from doppeldata.issue_codes import PROFILE_DOCUMENT
 from doppeldata.issue_codes import Issue
 from doppeldata.issue_codes import issue_table
@@ -183,9 +191,29 @@ def member_check(member: Path, name: str) -> TableCheck:
     return table_check(document, ())
 
 
+def profile_file_check(source: str | os.PathLike[str]) -> ProfileFileCheck:
+    """`profile check`'s check of the file `source` names, else of the example of that name, from the file alone. A name
+    that is neither raises ProfileNotFound, and a file that cannot be read InvalidArgument, each at `profile`."""
+    named = os.fspath(source)
+    path = Path(source)
+    try:
+        if path.is_file():
+            return ProfileFileCheck.of(named, file_checks(path))
+        if named in example_names() or named in bundle_example_names():
+            resource = example_resource(named) if named in example_names() else bundle_example_resource(named)
+            with importlib.resources.as_file(resource) as example:
+                return ProfileFileCheck.of(named, file_checks(example))
+    except OSError as error:
+        message = f'{named} cannot be read: {error.strerror}'
+        raise InvalidArgument(issue_codes.FILE_UNREADABLE, message, field='profile', value=named) from error
+    message = f'{named!r} is neither a profile file nor an example; name a file, or an example'
+    known = [*example_names(), *bundle_example_names()]
+    raise ProfileNotFound(issue_codes.PROFILE_NOT_FOUND, message, field='profile', value=named, valid=known)
+
+
 def refuse_failed_check(found: Profile | Bundle) -> None:
-    """Raise CheckFailed where a table made from data fails `profile check`, before its literals leave the profile. A seed
-    was written under no policy."""
+    """Raise ProfileFailsCheck where a table made from data fails `profile check`, before its literals leave the profile. A
+    seed was written under no policy."""
     tables = found.tables if isinstance(found, Bundle) else {found.document['name']: found}
     at = ('tables',) if isinstance(found, Bundle) else ()
     checks = [
@@ -194,7 +222,7 @@ def refuse_failed_check(found: Profile | Bundle) -> None:
         if (profile.document.get('generated') or {}).get('engine') != 'import'
     ]
     if any(result.violations for result in checks):
-        raise CheckFailed(ProfileFileCheck.of(str(found.document['name']), checks))
+        raise ProfileFailsCheck(ProfileFileCheck.of(str(found.document['name']), checks))
 
 
 def table_check(table: Any, at: PointerParts) -> TableCheck:

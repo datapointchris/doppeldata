@@ -437,6 +437,11 @@ GLUE_REGION = declare('E-IMPORT-008', "the Glue Data Catalog's region is not nam
 GLUE_TABLE_UNKNOWN = declare('E-IMPORT-009', 'the Glue Data Catalog holds no table of the name given', exit_code=2)
 DETECTED_ENTITIES_UNMATCHED = declare('E-IMPORT-010', 'the detected entities name a column the Glue table lacks', exit_code=2)
 UNKNOWN_IMPORT_KIND = declare('E-IMPORT-011', 'an import names a kind of schema doppeldata does not read', exit_code=2)
+IMPORT_OPTION_UNREAD = declare('E-IMPORT-012', 'an import was given an option the kind of schema it reads takes none of', exit_code=2)
+GLUE_TABLE_NAME = declare('E-IMPORT-013', 'a Glue table is not named as DATABASE.TABLE', exit_code=2)
+DETECTED_ENTITIES_UNREADABLE = declare(
+    'E-IMPORT-014', 'the detected entities are not a JSON object of each column to a list of entity types', exit_code=2
+)
 
 UNKNOWN_EXPORT_FORMAT = declare(
     'E-EXPORT-001',
@@ -491,3 +496,7 @@ TOO_MANY_ROWS_FOR_DRIVER = declare(
 UNKNOWN_SCHEMA = declare(
     'E-USAGE-023', 'a schema named is not one doppeldata ships', exit_code=2, hint='doppeldata schemas list names every schema'
 )
+AWS_PROFILE_WITH_SPARK = declare(
+    'E-USAGE-024', "an AWS profile was named for Spark profiling, which reads S3 with its own session's credentials", exit_code=2
+)
+PROFILE_OR_COLUMNS = declare('E-USAGE-025', 'a call was given both a profile and column names, or neither', exit_code=2)

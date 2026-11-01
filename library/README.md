@@ -56,8 +56,10 @@ table it holds, and `profile_tables()` profiles it to a `Bundle` of one table pe
 as an AWS Glue crawler splits one. A list given to `profile_tables()` groups each path on its own,
 and the bundle records the foreign keys between its tables. With scipy installed too, it fits a distribution family to each
 numeric column with enough distinct values. Without it, each such fit is written as null, and
-`profile()` issues a `FitsSkipped` warning. Every warning `profile()` issues is a `ProfilingWarning`. A write to S3
-needs boto3.
+`profile()` issues a `FitsSkipped` warning. Every warning `profile()` issues is a `ProfilingWarning`. Each step
+a call takes, such as the files it listed, goes to the `doppeldata` logger, which writes nothing until a caller adds a
+handler. A write to S3 needs boto3. Every call reaching S3 or the Glue catalog through boto3 takes `aws_profile=` to
+name the AWS profile for that call, and `sd.spark` takes none, because Spark reads S3 with its session's own credentials.
 
 `profile(..., packs=['acme'])` types columns with a third party's detector pack beside the general
 one. A pack registers under the `doppeldata.detector_packs` entry-point group, and is a

@@ -151,20 +151,20 @@ def read_code_lists(paths: Mapping[str, str | os.PathLike[str]], packs: list[Ena
     for name, path in paths.items():
         if name not in readers:
             message = f'no enabled detector reads a code list named {name!r}; {list_readers(readers)}'
-            raise InvalidCodeList(issue_codes.CODE_LIST_UNREAD, message, field=name, valid=sorted(readers))
+            raise InvalidCodeList(issue_codes.CODE_LIST_UNREAD, message, field='code_lists', value=name, valid=sorted(readers))
         try:
             content = Path(path).read_bytes()
             lines = [line.strip() for line in content.decode('utf-8').splitlines()]
         except OSError as error:
             message = f'the code list {name!r} cannot be read from {path}: {error.strerror}'
-            raise InvalidCodeList(issue_codes.FILE_UNREADABLE, message, field=name, value=os.fspath(path)) from error
+            raise InvalidCodeList(issue_codes.FILE_UNREADABLE, message, field='code_lists', value=os.fspath(path)) from error
         except UnicodeDecodeError as error:
             message = f'the code list {name!r} at {path} is not UTF-8 text: {error.reason}'
-            raise InvalidCodeList(issue_codes.INVALID_CODE_LIST, message, field=name, value=os.fspath(path)) from error
+            raise InvalidCodeList(issue_codes.INVALID_CODE_LIST, message, field='code_lists', value=os.fspath(path)) from error
         codes = tuple(line for line in lines if line)
         if not codes:
             message = f'the code list {name!r} at {path} holds no code; expected one code a line'
-            raise InvalidCodeList(issue_codes.INVALID_CODE_LIST, message, field=name, value=os.fspath(path))
+            raise InvalidCodeList(issue_codes.INVALID_CODE_LIST, message, field='code_lists', value=os.fspath(path))
         supplied[name] = SuppliedCodeList(name, 'sha256:' + hashlib.sha256(content).hexdigest(), codes)
     return supplied
 

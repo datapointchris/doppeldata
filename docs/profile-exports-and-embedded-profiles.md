@@ -47,7 +47,7 @@ Without `--out` the export prints.
 - **The same profile exports the same bytes.** An export names the profile's digest and holds no
   time. ODCS `examples` are generated from the profile with a fixed seed, never read from data.
 - **A profile made from data is checked first.** One that fails `profile check` is refused, exit 2,
-  as `CheckFailed` in Python. An export never carries a literal the privacy policy did not pass.
+  as `ProfileFailsCheck` in Python. An export never carries a literal the privacy policy did not pass.
 - **No validator is a dependency.** The modules import pandera, dataframely or pyspark when they
   run, and doppeldata imports none of them to write one.
 
@@ -272,7 +272,7 @@ provenance keys already name. Every PROFILE argument takes such a file.
 - **Only Parquet and Arrow IPC hold it.** A write in another format refuses `--embed-profile`
   before writing a byte, exit 2, and Python raises `WriteFailed`.
 - **A profile made from data that fails `profile check` is refused**, before writing a byte, exit
-  2, and Python raises `CheckFailed`. The file carries every literal the profile holds, so it must
+  2, and Python raises `ProfileFailsCheck`. The file carries every literal the profile holds, so it must
   pass the check an export passes.
 - **`data generate FILE` defaults `--seed`, `--rows` and `--scenario` to what the file's write
   recorded**, and prints each value it took from the file. So the last command above writes the

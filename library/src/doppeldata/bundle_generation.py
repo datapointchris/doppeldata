@@ -65,11 +65,11 @@ def run_of(profile: ProfileSource | Bundle, rows: int | None, seed: int | None, 
     and refuses `rows`, which sizes one table. Anything else is one table, which refuses `scale`, which sizes a bundle."""
     if not isinstance(profile, Bundle):
         if scale is not None:
-            message = "scale sizes a bundle, a multiple of each table's row count; give rows for one table"
+            message = "a scale sizes a bundle as a multiple of each table's row count, and this is one table; give a row count"
             raise InvalidArgument(issue_codes.ROWS_AND_SCALE, message, field='scale', value=scale)
         return TableRun(profile, rows, seed)
     if rows is not None:
-        message = "rows sizes one table, and a bundle is sized by scale, a multiple of each table's row count"
+        message = "a row count sizes one table, and a bundle is sized by a scale, a multiple of each table's row count"
         raise InvalidArgument(issue_codes.ROWS_AND_SCALE, message, field='rows', value=rows)
     return BundleRun(profile, 0 if seed is None else seed, 1.0 if scale is None else scale)
 
@@ -210,13 +210,13 @@ def prepared_bundle_write(
     if one_file_of(out) is not None:
         message = f'{os.fspath(out)} names one file, and a bundle writes a directory of tables; write it to a directory'
         raise WriteFailed(issue_codes.BUNDLE_WRITES_A_DIRECTORY, message)
-    choice = (('partition_by', choices.partition_by), ('partition_style', choices.partition_style))
-    held = [name for name, value in choice if value is not None]
+    choice = (('partition keys', choices.partition_by), ('partition style', choices.partition_style))
+    held = [concept for concept, value in choice if value is not None]
     if held:
         message = f'each table of a bundle is partitioned as its profile records, so a bundle write takes no {" or ".join(held)}'
         raise WriteFailed(issue_codes.BUNDLE_PARTITIONS_BY_TABLE, message)
     if choices.embed_profile:
-        message = 'a bundle table regenerates from the whole bundle, which no file embeds; write it without embed_profile'
+        message = 'a bundle table regenerates from the whole bundle, which no file embeds; write it without embedding the profile'
         raise WriteFailed(issue_codes.BUNDLE_EMBEDS_NO_PROFILE, message)
     destination, scheme, bucket = destination_of(out)
     scenarios = table_scenarios(scenario, bundle)
@@ -244,7 +244,10 @@ def plan_bundle(run: BundleRun, out: str | os.PathLike[str], *, choices: WriteCh
         destination=prepared.destination,
         identity=json.loads(prepared.engine.identity_json),
         dataset_digest=prepared.engine.dataset_digest,
-        tables={name: write_plan_of(table, options, destination) for name, table, options, destination in prepared.tables},
+        tables={
+            name: write_plan_of(table, options, destination, prepared.scenarios.get(name))
+            for name, table, options, destination in prepared.tables
+        },
         relationships=json.loads(prepared.engine.relationships_json),
         set_aside=prepared.engine.set_aside(),
     )

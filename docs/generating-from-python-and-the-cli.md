@@ -278,6 +278,9 @@ sets the writers' cancel flag, and the workers stop at the next block.
   multipart upload.** A sink dropped unfinished aborts its upload. `doppeldata.spark.write` is the
   exception: a failed Spark job's partial manifest lists no object, as
   [generating-inside-spark.md](generating-inside-spark.md) says.
+- **`data generate` names the partial manifest it stored, on stderr.** Under `--json` it prints
+  the partial manifest on stdout instead, as a finished write prints its manifest. So a program
+  reads the objects completed from the same shape either way.
 - **`data generate` treats SIGTERM as Ctrl-C.** A container stop or a `kill` sends SIGTERM, which
   would otherwise end the process mid-upload.
 - **A process ended outright leaves its open multipart uploads in the bucket.** SIGKILL does that,
@@ -308,6 +311,20 @@ the uploads alike.
   after `CONNECT_TIMEOUT`. `aws_access.py` holds both, beside the client config every boto3 client
   of doppeldata's takes.
 - **A write through boto3's chain stores the same bytes as a local write with the same flags.**
+- **`aws_profile`, or `--aws-profile`, names the AWS profile for one call.** Every call that reaches
+  S3 or the Glue Data Catalog through boto3 takes it: `profile`, `profile_tables`,
+  `Profile.from_glue`, `check`, `plan` and `write`. It is refused as `E-IO-001`, exit 2, before anything is read or written, where
+  the AWS config and credentials files hold no profile of that name. Left out, a call takes
+  `AWS_PROFILE`, then boto3's default chain.
+- **The profile is held for the call alone, in a context variable.** The call sets it on entry and
+  resets it by its token on the way out, so two threads, or two calls in turn, never see each
+  other's. A call that names none inside one that names one takes the outer one's. Each boto3
+  session, and each credential provider handed to Polars, is built from it while the call runs, so
+  nothing reads it after the call returns. A global, or setting `AWS_PROFILE` for the call, was
+  rejected, because either leaks to every other thread of the process.
+- **Spark reads S3 with its session's own credentials, so it takes no `aws_profile`.**
+  `doppeldata.spark` has none. `profile(engine='spark')` and `profile create --engine spark`
+  refuse one as `E-USAGE-024`, exit 2.
 - **boto3 is imported only for an S3 destination**, and declared nowhere. Without it, `plan` and
   `write` both refuse with `E-USAGE-019`, exit 2.
 - *Rejected:* obstore. pyo3-object_store builds the same `S3Store` inside doppeldata's own extension,
@@ -383,8 +400,9 @@ and `profile show` prints one.
 
 **Python takes a bundle only as a `Bundle`**, which `Bundle.load` reads from a file or directory
 and `Bundle.example` from an example's name. So a string or path given to `generate`, `plan` or
-`write` always names one table, and each call's return type follows from its argument. `check`
-takes a `Profile` or a `Bundle`.
+`write` always names one table, and each call's return type follows from its argument. The command
+line asks `profile_or_columns` for the `Bundle` a name holds, then passes it on. `check` takes a
+`Profile`, a `Bundle`, or a file or example name holding either. A name gives either report.
 
 - **`--scale` multiplies every table's row count**, 1 where left out. Each table generates
   `round(rows × scale)` rows, so the fan-out's shape holds at any scale. Each `top_fractions`

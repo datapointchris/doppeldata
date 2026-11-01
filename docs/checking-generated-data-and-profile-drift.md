@@ -6,8 +6,8 @@
 `k_min`, then measures the new profile against PROFILE. Under the same policy, each field the new
 profile writes is one PROFILE could hold, such as a ZIP column's prefixes under `healthcare`. The histograms and value lists then compare bin for bin.
 `--against` is the one way a check reads real rows, and a section below covers it.
-Generated data has its own `source_fingerprint`, so the stats cache never hands PROFILE back
-unchanged. DATA is typed with the detector packs PROFILE records, so a type one of them declares can
+A check profiles DATA even where it is the very files PROFILE was made from, where `profile create`
+would hand PROFILE back unchanged. So every metric is measured. DATA is typed with the detector packs PROFILE records, so a type one of them declares can
 be confirmed. A column the engine generates as text from its `type_mix_fractions` is typed by its text in
 any format, as PROFILE's text source was. So a Parquet column of `48213` and `abc` profiles as an
 integer column holding a type mix, and its statistics are its integers', as PROFILE's are. A nested

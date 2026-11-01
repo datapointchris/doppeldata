@@ -90,31 +90,46 @@ def with_row_count(document: Any, rows: int) -> Any:
     return dict([*items[:at], ('dataset', {'rows': rows}), *items[at:]])
 
 
+def bundle_named(source: str | os.PathLike[str]) -> Path | str | None:
+    """The bundle directory `source` names, as a Path, or the example bundle it names, as its name. None for any other
+    source, a file included, which `is_bundle_document` tells apart once it is read."""
+    path = Path(source)
+    if path.is_dir():
+        return path if (path / BUNDLE_INDEX).is_file() else None
+    if not path.is_file() and isinstance(source, str) and source in bundle_example_names():
+        return source
+    return None
+
+
+def is_bundle_document(document: Any) -> bool:
+    """Whether a document read from a file is a bundle's."""
+    return isinstance(document, dict) and document.get('kind') == 'bundle'
+
+
 def file_profile(source: str | os.PathLike[str]) -> Profile:
     """A short or full YAML file's profile, the profile a Parquet or Arrow IPC file embeds, or the example `source` names."""
     path = Path(source)
+    bundled = bundle_named(source)
+    if isinstance(bundled, Path):
+        message = f'{path} holds a bundle, and this call takes one table; Bundle.load({os.fspath(path)!r}) reads it'
+        raise InvalidArgument(issue_codes.BUNDLE_GIVEN, message, field='profile', value=os.fspath(path))
+    if bundled is not None:
+        message = f'{bundled} is an example bundle, and this call takes one table; Bundle.example({bundled!r}) reads it'
+        raise InvalidArgument(issue_codes.BUNDLE_GIVEN, message, field='profile', value=bundled)
     if not path.is_file():
         if isinstance(source, str) and source in example_names():
             return Profile.example(source)
-        if isinstance(source, str) and source in bundle_example_names():
-            message = f'{source} is an example bundle; give Bundle.example({source!r}), which every call generating a bundle takes'
-            raise InvalidArgument(issue_codes.BUNDLE_GIVEN, message, value=source)
-        if (path / BUNDLE_INDEX).is_file():
-            message = (
-                f'{os.fspath(source)} holds a bundle; give Bundle.load({os.fspath(source)!r}), which every call generating a bundle takes'
-            )
-            raise InvalidArgument(issue_codes.BUNDLE_GIVEN, message, value=os.fspath(source))
         named = os.fspath(source)
-        examples = example_names()
+        examples = [*example_names(), *bundle_example_names()]
         message = f'{named} is neither a profile file nor an example; name a file, or an example'
-        raise ProfileNotFound(issue_codes.PROFILE_NOT_FOUND, message, value=named, valid=examples)
+        raise ProfileNotFound(issue_codes.PROFILE_NOT_FOUND, message, field='profile', value=named, valid=examples)
     metadata = data_file_metadata(path)
     if metadata is not None:
         return data_file_profile(path, metadata)
     document = to_plain(read_document(path))
-    if isinstance(document, dict) and document.get('kind') == 'bundle':
-        message = f'{path} is a bundle; give Bundle.load({os.fspath(path)!r}), which every call generating a bundle takes'
-        raise InvalidArgument(issue_codes.BUNDLE_GIVEN, message, value=os.fspath(path))
+    if is_bundle_document(document):
+        message = f'{path} is a bundle, and this call takes one table; Bundle.load({os.fspath(path)!r}) reads it'
+        raise InvalidArgument(issue_codes.BUNDLE_GIVEN, message, field='profile', value=os.fspath(path))
     if not is_short(document):
         return Profile.load(path)
     return validated(short_expanded(document, path), str(path))

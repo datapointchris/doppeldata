@@ -149,4 +149,6 @@ dev = [
     "frictionless>=5.21.0",
     "pandera[polars]>=0.34.1",
     "polars>=2.0.0",
+    # The S3 and Glue endpoint the AWS profile test writes to and reads from, so no test reaches AWS.
+    "moto[server]>=5.1.0",
 ]

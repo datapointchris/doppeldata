@@ -40,6 +40,10 @@ print the files a run will write before a byte is written.
 - **`planned_ranges` gives each range with the path its files take.** A partitioned range becomes
   one object per partition value it holds. So its path has `*` for each partition directory, and
   `objects_at_most` bounds its objects. The size estimate counts objects from the same list.
+- **`check_writable` refuses what a write refuses before it claims a destination.** That is a
+  layout the files cannot take, a format that cannot encode them, and a fault they cannot hold. A
+  local destination's directory is created as its store opens. So the library's `prepared_write`
+  runs the check first, and `plan` and `write` refuse each of these before any destination exists.
 - **A name is `part-{range:05}-{identity8}.{ext}`.** `identity8` is the first eight hex digits of the
   dataset identity, so a run with a changed input never mixes its files with an earlier run's.
 - **A scenario's `schema_drift` reshapes each file whose first row lies at or past its cut.** The

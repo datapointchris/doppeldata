@@ -1,7 +1,9 @@
 """The hand-written example profiles and bundles the library ships under `doppeldata/examples/`."""
 
+import dataclasses as dc
 import importlib.resources
 from importlib.resources.abc import Traversable
+from typing import Any
 
 from doppeldata.errors import InvalidArgument
 from doppeldata.issue_codes import PROFILE_NOT_FOUND
@@ -46,3 +48,50 @@ def example_text(name: str) -> str:
 def bundle_example_text(name: str) -> str:
     """An example bundle's YAML as shipped, comments included."""
     return bundle_example_resource(name).read_text()
+
+
+@dc.dataclass(frozen=True)
+class ShippedExample:
+    """An example profile or bundle as shipped: its name, `table` or `bundle`, its YAML with comments, and its document."""
+
+    name: str
+    kind: str
+    text: str
+    document: dict[str, Any]
+
+
+def shipped_example(name: str) -> ShippedExample:
+    """The example profile or bundle `name`, refused at `name` with every example's name where it is neither."""
+    from doppeldata.profile_format import Bundle
+    from doppeldata.profile_format import Profile
+
+    if name in bundle_example_names():
+        return ShippedExample(name, 'bundle', bundle_example_text(name), Bundle.example(name).to_plain())
+    if name in example_names():
+        return ShippedExample(name, 'table', example_text(name), Profile.example(name).to_plain())
+    message = f'{name!r} is not an example profile or bundle doppeldata ships'
+    raise InvalidArgument(PROFILE_NOT_FOUND, message, field='name', value=name, valid=[*example_names(), *bundle_example_names()])
+
+
+def shipped_examples() -> list[dict[str, Any]]:
+    """Each example as `profile list` lists it: its name, kind and rows, then a table's columns or a bundle's tables and
+    relationships."""
+    from doppeldata.profile_format import Bundle
+    from doppeldata.profile_format import Profile
+
+    listed: list[dict[str, Any]] = []
+    for name in example_names():
+        document = Profile.example(name).document
+        listed.append({'name': name, 'kind': 'table', 'rows': document['dataset']['rows'], 'columns': len(document['columns'])})
+    for name in bundle_example_names():
+        bundle = Bundle.example(name)
+        listed.append(
+            {
+                'name': name,
+                'kind': 'bundle',
+                'rows': sum(table.document['dataset']['rows'] for table in bundle.tables.values()),
+                'tables': len(bundle.tables),
+                'relationships': len(bundle.document.get('relationships') or []),
+            }
+        )
+    return listed

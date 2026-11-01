@@ -17,6 +17,7 @@ import polars.selectors as cs
 import pyarrow as pa
 
 from doppeldata import issue_codes
+from doppeldata.aws_sessions import polars_credentials
 from doppeldata.errors import SourceError
 from doppeldata.profiling import json_paths
 from doppeldata.profiling import parquet_footers
@@ -630,14 +631,16 @@ def read_files(source: Source) -> SourceRead:
     format_name = source.format.value if source.format else 'a table'
     paths = [file.path for file in source.files]
     hive = bool(source.partition_keys)
+    # Built here, on the calling thread, so the scan holds the AWS profile the call chose wherever Polars reads it.
+    credentials: Any = polars_credentials() if any(path.startswith('s3://') for path in paths) else 'auto'
     try:
         match source.format:
             case SourceFormat.PARQUET:
                 every = parquet_footers.read_footers(source.files)
-                scan = pl.scan_parquet(paths, hive_partitioning=hive, **schema_union(every))
+                scan = pl.scan_parquet(paths, hive_partitioning=hive, credential_provider=credentials, **schema_union(every))
                 read = SourceRead(scan, footers=parquet_footers.sampled_footers(source.files, every))
             case SourceFormat.ARROW:
-                read = SourceRead(pl.scan_ipc(paths, hive_partitioning=hive))
+                read = SourceRead(pl.scan_ipc(paths, hive_partitioning=hive, credential_provider=credentials))
             case SourceFormat.CSV | SourceFormat.TSV:
                 read = read_delimited(source)
             case _:

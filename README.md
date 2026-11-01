@@ -105,8 +105,9 @@ def test_refunds(synthetic, spark):
 [Generating test data in pytest](docs/generating-test-data-in-pytest.md) says how the fixture finds a
 profile and which seed each test takes.
 
-`profile create` reads Parquet and Arrow locally or from S3, with the credentials and endpoint the
-AWS environment names, such as `AWS_PROFILE`. It reads CSV, TSV and JSON from local files.
+`profile create` reads Parquet and Arrow locally or from S3, with the credentials and endpoint of the
+AWS profile `--aws-profile` names, else the AWS environment's. It reads CSV, TSV and JSON from local
+files.
 
 `--engine spark` computes the profile in Spark instead: in the Spark Connect session `SPARK_REMOTE`
 names, or in one it starts on `local[*]`. Spark reads Parquet, CSV and TSV, from S3 too. It
@@ -226,13 +227,43 @@ uv add sweetviz  # for check(..., html=...), the side-by-side HTML
 and charset-normalizer for CSV or TSV. A Spark install brings pyspark, and the CLI declares none.
 
 Code that writes to S3 installs boto3, which resolves the AWS environment's credentials, SSO
-profiles included.
+profiles included. Each call reaching S3 or the Glue catalog through boto3 takes `aws_profile=` to
+name the profile for that call. Spark reads S3 with its session's own credentials, so
+`doppeldata.spark` takes none.
 
 The library runs on Python 3.11 and later, and the command line on 3.13 and later. The command line
 is a separate distribution, so a project importing the library installs no CLI dependencies. The
 library's generator is compiled Rust. A wheel is built for each platform the `wheels` job in
 `.github/workflows/build-library.yml` lists. Anywhere else, the install builds the sdist, which
 needs a Rust toolchain.
+
+## First run
+
+Profile a table you hold, check the profile, then generate from it and check what was written:
+
+```bash
+doppeldata profile create data/orders/ --out orders.profile.yaml   # a profile of the files, holding no row
+doppeldata profile check orders.profile.yaml                       # its schema and privacy policy, from the file alone
+doppeldata data plan orders.profile.yaml --rows 1000000 --out synthetic/orders/      # what the write makes, before it runs
+doppeldata data generate orders.profile.yaml --rows 1000000 --out synthetic/orders/  # the files, beside _manifest.json
+doppeldata data generate orders.profile.yaml --rows 1000000 --out s3://bucket/orders/ --aws-profile analytics
+doppeldata data check orders.profile.yaml synthetic/orders/        # the data against the profile it came from
+```
+
+- **`data plan` prints what `data generate` writes with the same flags.** It names the dataset's
+  digest, the files, each column's sampler and an estimate of the bytes, and reads nothing at
+  `--out`.
+- **Both writes print the same dataset digest**, because a dataset is a pure function of its
+  profile, row count and seed. Each records it in its `_manifest.json`.
+- **`--aws-profile` names the AWS profile S3 and the Glue Data Catalog are reached with.** Left out,
+  `AWS_PROFILE` names it, then boto3's default chain. A name the AWS config lacks is refused before
+  a byte is written. `profile create --engine spark` refuses it, because Spark reads S3 with its
+  session's own credentials.
+- **`profile check` and `data check` exit 0 when clean and 3 on a finding**, so CI can run either.
+  Each prints a Markdown report a pull request takes as it is.
+- **With no data at hand, an example stands in.** `doppeldata profile list` names them, and
+  `orders` in place of `orders.profile.yaml` runs every line after the first.
+- **Every command's `--help` ends in examples, and every command takes `--json`.**
 
 ## Run the library inside an AWS Glue job
 

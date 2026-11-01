@@ -4,7 +4,9 @@ import dataclasses as dc
 import difflib
 import importlib
 import importlib.metadata
+import logging
 import os
+import time
 import warnings
 from collections.abc import Collection
 from collections.abc import Mapping
@@ -16,6 +18,8 @@ from typing import Any
 
 from doppeldata import errors
 from doppeldata import issue_codes
+from doppeldata.aws_sessions import aws_profile_chosen
+from doppeldata.counted_nouns import counted
 from doppeldata.errors import ColumnsNotFrozen
 from doppeldata.errors import EarlierProfileNotReused
 from doppeldata.errors import InvalidArgument
@@ -44,6 +48,8 @@ from doppeldata.profiling.detector_packs import read_code_lists
 
 if TYPE_CHECKING:
     import pyarrow as pa
+
+log = logging.getLogger(__name__)
 
 
 @dc.dataclass(frozen=True)
@@ -126,9 +132,10 @@ def profile(
     sample: int | None = None,
     policy: str = Policy.DEFAULT,
     k_min: int | None = None,
-    edges_from: Profile | None = None,
+    edges_from: Profile | str | os.PathLike[str] | None = None,
     packs: Sequence[str] = (),
     code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
+    aws_profile: str | None = None,
 ) -> Profile:
     """Profile `data` into a valid profile of one table holding no rows, written under the privacy policy `policy`.
 
@@ -154,7 +161,11 @@ def profile(
     `generated.code_lists` records each list's sha256 and never its path. `InvalidCodeList` names a list no
     enabled detector reads, or a file that cannot be read.
 
-    `edges_from` is an earlier profile of the same table, so the source is profiled as one table without grouping.
+    S3 is listed and read with the credentials of the AWS profile `aws_profile` names, else of AWS_PROFILE and boto3's
+    default chain. A profile the AWS config lacks is refused before anything is read. Spark reads S3 with its session's
+    own credentials, so `engine='spark'` takes no `aws_profile`.
+
+    `edges_from` is an earlier profile of the same table, or its file, so the source is profiled as one table without grouping.
     Where its source fingerprint matches the files listed now, and it was made by this doppeldata, scipy, detector
     packs, code lists and readers, such as DuckDB and CleverCSV, with the same engine, policy, `k_min` and sampling,
     it is returned unchanged, so a reviewer's edits survive a re-run. Otherwise an `EarlierProfileNotReused` names what
@@ -162,18 +173,39 @@ def profile(
     are written as the column's `overflow`. A column only one of the two tables holds, or whose list would move to
     another section, issues `ColumnsNotFrozen`.
     """
-    return profile_in_dialect(
-        data,
-        None,
-        engine=engine,
-        spark=spark,
-        sample=sample,
-        policy=policy,
-        k_min=k_min,
-        edges_from=edges_from,
-        packs=packs,
-        code_lists=code_lists,
-    )
+    refuse_spark_aws_profile(engine, aws_profile)
+    earlier = earlier_profile(edges_from)
+    with aws_profile_chosen(aws_profile):
+        return profile_in_dialect(
+            data,
+            None,
+            engine=engine,
+            spark=spark,
+            sample=sample,
+            policy=policy,
+            k_min=k_min,
+            edges_from=earlier,
+            packs=packs,
+            code_lists=code_lists,
+        )
+
+
+def refuse_spark_aws_profile(engine: str, aws_profile: str | None) -> None:
+    """Refuse an AWS profile named for Spark, which would list S3 with it and read the files with its session's own."""
+    if aws_profile is not None and engine == 'spark':
+        message = "spark reads S3 with its session's own credentials, so an AWS profile would reach the listing alone"
+        raise InvalidArgument(issue_codes.AWS_PROFILE_WITH_SPARK, message, field='aws_profile', value=aws_profile)
+
+
+def earlier_profile(edges_from: Profile | str | os.PathLike[str] | None) -> Profile | None:
+    """The earlier profile `edges_from` gives or names, refused at `edges_from` where its file cannot be read."""
+    if edges_from is None or isinstance(edges_from, Profile):
+        return edges_from
+    try:
+        return Profile.load(Path(edges_from))
+    except OSError as error:
+        message = f'{os.fspath(edges_from)} could not be read: {error.strerror or error}'
+        raise InvalidArgument(issue_codes.FILE_UNREADABLE, message, field='edges_from', value=os.fspath(edges_from)) from error
 
 
 def profile_in_dialect(
@@ -189,18 +221,21 @@ def profile_in_dialect(
     packs: Sequence[str] = (),
     code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
     type_mix_columns: Collection[str] = (),
+    reuse_unchanged: bool = True,
 ) -> Profile:
     """`profile`, reading delimited `data` in `dialect` where one is given rather than in the dialect its files are
     sniffed in, as a check reads files whose manifest records how they were written. Each string column `type_mix_columns`
-    names is typed by its text, as a check reads a column the engine generates as text in any format."""
+    names is typed by its text, as a check reads a column the engine generates as text in any format. A check sets
+    `reuse_unchanged` False, because it measures the data, even data `edges_from` was made from."""
     settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
+    started = time.monotonic()
     listed, reading = listed_source(data, engine)
     source = listed if edges_from is not None else table_grouping.only_table(listed)
     if dialect is not None:
         source = dc.replace(source, dialect=dialect)
     backend = engine_backend(engine, data, spark)
     readers = session_readers(backend, reading)
-    if edges_from is not None:
+    if edges_from is not None and reuse_unchanged:
         changed = what_changed(
             edges_from,
             source.fingerprint,
@@ -213,6 +248,8 @@ def profile_in_dialect(
             readers=readers,
         )
         if changed is None:
+            named = edges_from.path or edges_from.document.get('name')
+            log.warning(f'{named} was made from these files with these settings, so it is returned unchanged')
             return edges_from
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=3)
     frozen = table_profile.FrozenLayout.of(edges_from.to_plain()) if edges_from is not None else None
@@ -220,7 +257,11 @@ def profile_in_dialect(
     importlib.import_module(SOURCES_MODULE).check_unchanged(listed)
     issues = only.validate()
     if issues:
+        log.error(f'the profile written of {", ".join(source.roots)} fails its own schema, which is a bug in doppeldata')
         raise InvalidProfile(f'the profile of {data!r}', issues)
+    held = only.document
+    measured = f'{counted(held["dataset"]["rows"], "row")} and {counted(len(held["columns"]), "column")}'
+    log.info(f'{source.name}: profiled {measured} with {engine} in {time.monotonic() - started:.2f} s')
     if edges_from is not None:
         earlier, now = (column_names(document.to_plain()) for document in (edges_from, only))
         undescribed, missing = [name for name in now if name not in earlier], [name for name in earlier if name not in now]
@@ -240,6 +281,7 @@ def profile_tables(
     k_min: int | None = None,
     packs: Sequence[str] = (),
     code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
+    aws_profile: str | None = None,
 ) -> Bundle:
     """Profile every table `data` holds into a valid bundle, with the foreign keys between its tables, taking `profile`'s
     arguments but `edges_from`.
@@ -254,6 +296,25 @@ def profile_tables(
     its distinct values, a constant of `doppeldata.profiling.foreign_keys`.
     Each records the share the key holds, the child rows whose value it lacks, its cardinality and its fan-out.
     """
+    refuse_spark_aws_profile(engine, aws_profile)
+    with aws_profile_chosen(aws_profile):
+        return profiled_bundle(
+            data, engine=engine, spark=spark, sample=sample, policy=policy, k_min=k_min, packs=packs, code_lists=code_lists
+        )
+
+
+def profiled_bundle(
+    data: Any,
+    *,
+    engine: str,
+    spark: Any,
+    sample: int | None,
+    policy: str,
+    k_min: int | None,
+    packs: Sequence[str],
+    code_lists: Mapping[str, str | os.PathLike[str]] | None,
+) -> Bundle:
+    """`profile_tables` under the AWS profile its call chose."""
     settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
     named = list(data) if isinstance(data, list | tuple) else [data]
     if not named:
@@ -400,6 +461,12 @@ def listed_source(data: Any, engine: str = 'polars') -> tuple[Source, list[Engin
     chosen = ENGINES[engine]
     sources = importlib.import_module(SOURCES_MODULE)
     source: Source = sources.resolve(data)
+    if source.format is not None:
+        files = counted(len(source.files), f'{source.format.value} file')
+        held = counted(sum(file.size for file in source.files), 'byte')
+        log.info(f'{", ".join(source.roots)}: {files}, {held}')
+        for file in source.files:
+            log.debug(f'{file.path}: {counted(file.size, "byte")}')
     if source.table is not None and sources.is_spark_frame(source.table) and not chosen.sessioned:
         message = f"a Spark DataFrame is profiled with engine='spark', and this run chose {engine}"
         raise SourceError(issue_codes.ENGINE_DOES_NOT_READ, message, value=engine, valid=['spark'])

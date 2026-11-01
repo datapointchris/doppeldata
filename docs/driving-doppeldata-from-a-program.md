@@ -88,6 +88,42 @@ its code, what was found and its hint, so a report pastes into a pull request or
 - **A check prints its report on stdout and its verdict on stderr.** The verdict is the one issue
   the root group prints for any refusal, so it reads the same under `--json`.
 
+## Every command is a noun and a verb, and every one takes `--json`
+
+A command is `doppeldata NOUN VERB`, such as `doppeldata data generate`. A verb means one thing
+under every noun. `check` exits 0 when clean and 3 on a finding, `list` names each thing `show`
+takes, and `show` prints one of them. `capabilities show --json` lists every command.
+
+- **Every command takes `--json`.** A read prints its answer as JSON on stdout, and a list with
+  nothing in it prints `[]`. A refusal prints as one line of JSON per issue on stderr.
+- **The library does the work, and the command line parses, calls and renders.** A refusal names
+  the library's argument, such as `aws_profile`, and the root group names it as the flag that was
+  typed, `--aws-profile`. So a program calling the library and a person at the shell get one
+  refusal with one code.
+- **Each help screen ends in examples**, each a command beside what it is for. A test walks the
+  assembled tree, so a command added without them, or without `--json`, fails it.
+- **The exit statuses are the issue codes'.** A refused command line exits 2, `profile diff`
+  exits 1 on drift, and a check that finds something or cannot finish exits 3.
+
+## Progress goes to the `doppeldata` logger, and a condition a caller may act on is a warning
+
+The library writes each step it takes to the `doppeldata` logger and adds only a `NullHandler`, as
+the Python logging HOWTO's "Configuring Logging for a Library" says. A program that wants the
+lines adds its own handler. The command line adds one writing to stderr for each invocation.
+
+- **A status line is a log record.** Which files were listed, how long a profile took, an earlier
+  profile returned unchanged, metrics a diff could not measure, and the values a data file's write
+  supplied are each one.
+- **A condition a caller may act on is a warning category it can filter or escalate**, as
+  scikit-learn's `ConvergenceWarning` is. Each `ProfilingWarning` is one, such as `PoorFits` naming
+  the columns no family fits. A caller can turn it into an error with `warnings.simplefilter`.
+- **`-v` and `-q` set what stderr carries, and never what stdout prints.** Warnings print by
+  default, each step at `-v`, each file and request at `-vv`, and only failures at `-q`. A command
+  given both refuses them, exit 2. The command line hands each `ProfilingWarning` to the same
+  handler, so `-q` drops it too. Only a command that prints such lines takes the two flags.
+- *Rejected:* `warnings.warn` for a status line. `warnings` shows a message once per call site, so a
+  program would see a step's line once per process.
+
 ## Rejected
 
 - *Rejected:* a `--markdown` flag. The text a person reads is already the report, and a terminal
