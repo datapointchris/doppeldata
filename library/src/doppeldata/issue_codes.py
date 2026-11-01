@@ -121,7 +121,7 @@ def issue_table(issues: Sequence[Issue]) -> list[str]:
     lines = ['| Field | Code | Issue | Hint |', '| --- | --- | --- | --- |']
     for issue in issues:
         field = f'`{issue.field}`' if issue.field else ''
-        closest = f' Closest: {", ".join(issue.closest)}.' if issue.closest else ''
+        closest = f'; the closest {"is" if len(issue.closest) == 1 else "are"} {", ".join(issue.closest)}' if issue.closest else ''
         cells = (field, issue.code, issue.message + closest, issue.hint or '')
         lines.append('| ' + ' | '.join(cell.replace('|', '\\|').replace('\n', ' ') for cell in cells) + ' |')
     return [*lines, '']
