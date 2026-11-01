@@ -204,8 +204,10 @@ pub struct FieldChange {
     /// the other profile for every other change.
     pub field: String,
     /// The field's value in the source profile, or A, and null where it holds none.
+    #[serde(serialize_with = "crate::sorted_keys::serialize")]
     pub expected: Option<serde_json::Value>,
     /// The field's value in the profile of the data checked, or B, and null where it holds none.
+    #[serde(serialize_with = "crate::sorted_keys::serialize")]
     pub observed: Option<serde_json::Value>,
     /// False when the change fails the check or counts as drift.
     pub passed: bool,

@@ -236,6 +236,7 @@ pub struct ColumnTrace {
 pub struct SamplerParameter {
     pub name: &'static str,
     pub field: String,
+    #[serde(serialize_with = "crate::sorted_keys::serialize")]
     pub value: Value,
 }
 

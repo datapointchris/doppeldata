@@ -4,25 +4,9 @@
   "description": "One fault `malformed_rows` placed, as a line of `_faults.jsonl`.",
   "type": "object",
   "properties": {
-    "column": {
-      "description": "The column the fault is in, or null where it breaks the record or the file.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "detail": {
-      "description": "What the fault wrote, under keys its `kind` sets, such as `text` for a `type_invalid`. Empty\nfor a kind that writes nothing more than its name says, such as `bom`.",
-      "type": "object",
-      "additionalProperties": true
-    },
     "file": {
       "description": "The object's path under the destination, as the manifest's `files` names it, or its\n`cdc.files` for a fault in a change stream. Beside a one-file write, that file's name.",
       "type": "string"
-    },
-    "kind": {
-      "description": "What broke: a kind `malformed_rows` names in `kinds`, or a fault `cdc` places in a change\nstream.",
-      "$ref": "#/$defs/ListedFault"
     },
     "line": {
       "description": "The 1-based line the broken record starts on, a header counted. Null in a JSON array or a\nParquet file, and for a fault of the whole file.",
@@ -41,6 +25,22 @@
       ],
       "format": "uint64",
       "minimum": 0
+    },
+    "kind": {
+      "description": "What broke: a kind `malformed_rows` names in `kinds`, or a fault `cdc` places in a change\nstream.",
+      "$ref": "#/$defs/ListedFault"
+    },
+    "column": {
+      "description": "The column the fault is in, or null where it breaks the record or the file.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "detail": {
+      "description": "What the fault wrote, under keys its `kind` sets, such as `text` for a `type_invalid`. Empty\nfor a kind that writes nothing more than its name says, such as `bom`.",
+      "type": "object",
+      "additionalProperties": true
     }
   },
   "required": [
@@ -49,6 +49,17 @@
     "detail"
   ],
   "$defs": {
+    "ListedFault": {
+      "description": "A fault a fault list names: one `malformed_rows` writes, or one `cdc` places.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FaultKind"
+        },
+        {
+          "$ref": "#/$defs/StreamFault"
+        }
+      ]
+    },
     "FaultKind": {
       "description": "One way a file is broken. A row kind breaks one record, and a file kind a whole file.",
       "oneOf": [
@@ -146,17 +157,6 @@
           "description": "A file whose decimal columns are stored one digit of scale wider than the rest.",
           "type": "string",
           "const": "parquet_decimal_scale_drift"
-        }
-      ]
-    },
-    "ListedFault": {
-      "description": "A fault a fault list names: one `malformed_rows` writes, or one `cdc` places.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/FaultKind"
-        },
-        {
-          "$ref": "#/$defs/StreamFault"
         }
       ]
     },

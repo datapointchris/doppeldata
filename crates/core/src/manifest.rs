@@ -58,6 +58,7 @@ pub struct FaultRecord {
     pub column: Option<String>,
     /// What the fault wrote, under keys its `kind` sets, such as `text` for a `type_invalid`. Empty
     /// for a kind that writes nothing more than its name says, such as `bom`.
+    #[serde(serialize_with = "crate::sorted_keys::serialize")]
     pub detail: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -280,6 +281,7 @@ pub struct ManifestScenario {
     pub path: Option<String>,
     /// The canonical document `identity.scenario_digest` is taken over, so the dataset regenerates
     /// with no scenario file.
+    #[serde(serialize_with = "crate::sorted_keys::serialize")]
     pub document: serde_json::Map<String, serde_json::Value>,
     /// The scenarios composed, in order, present only for a composition.
     #[serde(default, skip_serializing_if = "Option::is_none")]

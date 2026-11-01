@@ -11,12 +11,6 @@
     "b": {
       "$ref": "#/$defs/ReportedProfile"
     },
-    "changes": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/FieldChange"
-      }
-    },
     "drifted": {
       "description": "Whether any metric failed or any field changed. A metric B cannot supply is listed and\npasses, because a diff reports what changed between two profiles, and B binned afresh\ncarries no overflow.",
       "type": "boolean"
@@ -25,6 +19,12 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/MetricResult"
+      }
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FieldChange"
       }
     }
   },
@@ -36,6 +36,136 @@
     "changes"
   ],
   "$defs": {
+    "ReportedProfile": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The profile's `name`.",
+          "type": "string"
+        },
+        "digest": {
+          "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The profile's path as the caller gave it, or null when it came from memory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "digest"
+      ]
+    },
+    "MetricResult": {
+      "description": "One metric's value for one column, or for a pair where `paired_with` names the second, or for\nthe table where `column` is null. `metric`, `column` and `paired_with` together name the row.",
+      "type": "object",
+      "properties": {
+        "metric": {
+          "description": "The metric's name, such as `ks` or `KSComplement`, as `--thresholds` keys it.",
+          "type": "string"
+        },
+        "column": {
+          "description": "The column, or a pair's first column in the profile's order.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "paired_with": {
+          "description": "A pair's second column, for a score of two columns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worst_given_value": {
+          "description": "The value of `paired_with` the metric's value is worst within, for a metric of one column\ngiven another, such as `conditional_kl`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relationship": {
+          "description": "The relationship, as `orders.customer_id → customers.customer_id`, for a metric of one\nin a bundle check. `column` is then null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "The metric's value. It is null where `unmeasured` says why the other profile cannot supply\nit, where `skipped_by` names the perturbation that moves it, and where `drawn_by` names the\nrelationship that decides it.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "threshold": {
+          "type": "number",
+          "format": "double"
+        },
+        "bound": {
+          "description": "Whether `value` passes at or below `threshold`, or at or above it.",
+          "$ref": "#/$defs/Bound"
+        },
+        "passed": {
+          "description": "Whether the row counts against the report: false only on a row that decides and whose\nvalue misses `threshold` or is unmeasured.",
+          "type": "boolean"
+        },
+        "decides": {
+          "description": "False on a row the report's verdict leaves out: a score against the real data whose\nthreshold no thresholds file sets, and `malformed_fraction_delta` on data written with no\n`malformed_rows`. Such a row passes. A score's `threshold` is its reference, which `value`\nand `bound` say whether it meets.",
+          "type": "boolean"
+        },
+        "expected": {
+          "description": "The statistic the metric compares, as the source profile holds it, or the real data for a\nscore against it: A's, in a diff.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "observed": {
+          "description": "The same statistic in the data checked: B's, in a diff.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "unmeasured": {
+          "description": "Why the metric has no value: the source profile states what it compares, and the other\nprofile holds nothing to compare it with, as a column under `k_min` values holds no\nquantiles. Or the data was written so as not to hold it, as clean files hold none of the\nsource's malformed rows.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skipped_by": {
+          "description": "The id of the scenario's perturbation that moves what the metric compares, so the metric\nis not measured and passes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "drawn_by": {
+          "description": "In a bundle check, the relationship drawing a foreign-key column, as\n`orders.customer_id → customers.customer_id`, for a metric comparing which values that column\nholds, which the relationship deals out from its parent's keys. The metric is not measured\nand passes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "metric",
+        "threshold",
+        "bound",
+        "passed",
+        "decides"
+      ]
+    },
     "Bound": {
       "oneOf": [
         {
@@ -48,6 +178,45 @@
           "type": "string",
           "const": "at_least"
         }
+      ]
+    },
+    "FieldChange": {
+      "description": "A field that differs between the two profiles, outside what the metrics measure.",
+      "type": "object",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/ChangeKind"
+        },
+        "column": {
+          "description": "The column the change is in, or null for a table-level field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "field": {
+          "description": "An RFC 6901 pointer to the field: in the source profile, or A, for a dropped column, and in\nthe other profile for every other change.",
+          "type": "string"
+        },
+        "expected": {
+          "description": "The field's value in the source profile, or A, and null where it holds none."
+        },
+        "observed": {
+          "description": "The field's value in the profile of the data checked, or B, and null where it holds none."
+        },
+        "passed": {
+          "description": "False when the change fails the check or counts as drift.",
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "change",
+        "field",
+        "passed",
+        "message"
       ]
     },
     "ChangeKind": {
@@ -77,175 +246,6 @@
           "type": "string",
           "const": "overflow"
         }
-      ]
-    },
-    "FieldChange": {
-      "description": "A field that differs between the two profiles, outside what the metrics measure.",
-      "type": "object",
-      "properties": {
-        "change": {
-          "$ref": "#/$defs/ChangeKind"
-        },
-        "column": {
-          "description": "The column the change is in, or null for a table-level field.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "expected": {
-          "description": "The field's value in the source profile, or A, and null where it holds none."
-        },
-        "field": {
-          "description": "An RFC 6901 pointer to the field: in the source profile, or A, for a dropped column, and in\nthe other profile for every other change.",
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        },
-        "observed": {
-          "description": "The field's value in the profile of the data checked, or B, and null where it holds none."
-        },
-        "passed": {
-          "description": "False when the change fails the check or counts as drift.",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "change",
-        "field",
-        "passed",
-        "message"
-      ]
-    },
-    "MetricResult": {
-      "description": "One metric's value for one column, or for a pair where `paired_with` names the second, or for\nthe table where `column` is null. `metric`, `column` and `paired_with` together name the row.",
-      "type": "object",
-      "properties": {
-        "bound": {
-          "description": "Whether `value` passes at or below `threshold`, or at or above it.",
-          "$ref": "#/$defs/Bound"
-        },
-        "column": {
-          "description": "The column, or a pair's first column in the profile's order.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "decides": {
-          "description": "False on a row the report's verdict leaves out: a score against the real data whose\nthreshold no thresholds file sets, and `malformed_fraction_delta` on data written with no\n`malformed_rows`. Such a row passes. A score's `threshold` is its reference, which `value`\nand `bound` say whether it meets.",
-          "type": "boolean"
-        },
-        "drawn_by": {
-          "description": "In a bundle check, the relationship drawing a foreign-key column, as\n`orders.customer_id → customers.customer_id`, for a metric comparing which values that column\nholds, which the relationship deals out from its parent's keys. The metric is not measured\nand passes.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "expected": {
-          "description": "The statistic the metric compares, as the source profile holds it, or the real data for a\nscore against it: A's, in a diff.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "metric": {
-          "description": "The metric's name, such as `ks` or `KSComplement`, as `--thresholds` keys it.",
-          "type": "string"
-        },
-        "observed": {
-          "description": "The same statistic in the data checked: B's, in a diff.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "paired_with": {
-          "description": "A pair's second column, for a score of two columns.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "passed": {
-          "description": "Whether the row counts against the report: false only on a row that decides and whose\nvalue misses `threshold` or is unmeasured.",
-          "type": "boolean"
-        },
-        "relationship": {
-          "description": "The relationship, as `orders.customer_id → customers.customer_id`, for a metric of one\nin a bundle check. `column` is then null.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "skipped_by": {
-          "description": "The id of the scenario's perturbation that moves what the metric compares, so the metric\nis not measured and passes.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "threshold": {
-          "type": "number",
-          "format": "double"
-        },
-        "unmeasured": {
-          "description": "Why the metric has no value: the source profile states what it compares, and the other\nprofile holds nothing to compare it with, as a column under `k_min` values holds no\nquantiles. Or the data was written so as not to hold it, as clean files hold none of the\nsource's malformed rows.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "value": {
-          "description": "The metric's value. It is null where `unmeasured` says why the other profile cannot supply\nit, where `skipped_by` names the perturbation that moves it, and where `drawn_by` names the\nrelationship that decides it.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "worst_given_value": {
-          "description": "The value of `paired_with` the metric's value is worst within, for a metric of one column\ngiven another, such as `conditional_kl`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "metric",
-        "threshold",
-        "bound",
-        "passed",
-        "decides"
-      ]
-    },
-    "ReportedProfile": {
-      "type": "object",
-      "properties": {
-        "digest": {
-          "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON.",
-          "type": "string"
-        },
-        "name": {
-          "description": "The profile's `name`.",
-          "type": "string"
-        },
-        "path": {
-          "description": "The profile's path as the caller gave it, or null when it came from memory.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "name",
-        "digest"
       ]
     }
   }

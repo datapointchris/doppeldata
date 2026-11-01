@@ -296,10 +296,11 @@ mod _core {
     fn patched_profile(profile_json: &str, scenario_json: &str) -> PyResult<(String, Vec<String>)> {
         let scenario = read_scenario(scenario_json)?;
         let profile: serde_json::Value = serde_json::from_str(profile_json).map_err(|error| not_the_profile_model("the profile", error))?;
-        let (patched, unknown) = match &scenario.patch {
+        let (mut patched, unknown) = match &scenario.patch {
             Some(patch) => doppeldata_core::scenario::patched_profile(&profile, patch),
             None => (profile, Vec::new()),
         };
+        patched.sort_all_objects();
         Ok((patched.to_string(), unknown))
     }
 
@@ -597,7 +598,9 @@ mod _core {
                     })
                 })
                 .collect();
-            Ok(serde_json::Value::from(ranges).to_string())
+            let mut ranges = serde_json::Value::from(ranges);
+            ranges.sort_all_objects();
+            Ok(ranges.to_string())
         }
 
         /// The change stream a ``cdc`` write makes beside its full load, as a JSON object keyed
@@ -609,15 +612,16 @@ mod _core {
                 .detach(|| doppeldata_writers::planned_stream(plan, options))
                 .map_err(|error| self.refused(py, error))?;
             Ok(stream.map(|stream| {
-                json!({
+                let mut planned = json!({
                     "style": stream.style,
                     "prefix": stream.prefix,
                     "expected_prefix": stream.expected_prefix,
                     "changes": stream.changes,
                     "change_files_at_most": stream.change_files_at_most,
                     "expected_parts": stream.expected_parts,
-                })
-                .to_string()
+                });
+                planned.sort_all_objects();
+                planned.to_string()
             }))
         }
 
@@ -633,6 +637,7 @@ mod _core {
             let output = doppeldata_writers::planned_output(&self.plan, &options.options);
             let mut settings = serde_json::to_value(&output).expect("an output always serializes");
             settings["layout"] = serde_json::to_value(&options.options.layout).expect("a layout always serializes");
+            settings.sort_all_objects();
             settings.to_string()
         }
 
@@ -833,10 +838,11 @@ mod _core {
                     .map_or("the scenario", String::as_str)
                     .to_string()
             };
-            let patched = doppeldata_core::scenario::patched_bundle(&document, &read).map_err(|error| {
+            let mut patched = doppeldata_core::scenario::patched_bundle(&document, &read).map_err(|error| {
                 let scenario_source = source_of(&error);
                 scenario_refused(py, &scenario_source, error.code(), error.field(), &plan_message(&error))
             })?;
+            patched.sort_all_objects();
             let patched_json = patched.to_string();
             let table_documents = patched.get("tables").cloned().unwrap_or_default();
             let Profile::Bundle(bundle) = serde_json::from_value(patched).map_err(not_the_model)? else {
@@ -1056,6 +1062,7 @@ mod _core {
         fn settings_json(&self) -> String {
             let mut settings = serde_json::to_value(&self.options.output).expect("an output always serializes");
             settings["layout"] = serde_json::to_value(&self.options.layout).expect("a layout always serializes");
+            settings.sort_all_objects();
             settings.to_string()
         }
     }

@@ -11,6 +11,442 @@
     }
   ],
   "$defs": {
+    "TableProfile": {
+      "description": "One table's profile. Every section is optional, and the generator falls back to defaults.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "table"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "generated": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Generated"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "privacy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Privacy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Source"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dataset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Dataset"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "columns": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name"
+      ]
+    },
+    "Generated": {
+      "description": "How and when the profile was made. `GENERATED_FIELDS` in the library's\n`doppeldata.profile_format` says which fields the profile's digest leaves out.",
+      "type": "object",
+      "properties": {
+        "tool": {
+          "description": "The tool and its version, as `doppeldata <version>`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "at": {
+          "description": "When profiling finished, in RFC 3339.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Engine"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fitter": {
+          "description": "The package that fits each numeric column's family, and its version, as `scipy <version>`.\nLeft out when scipy was not installed, so no column was fitted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detector_packs": {
+          "description": "Each detector pack the profiler typed columns with, by name, with the distribution that\nprovides it and its version, as `doppeldata <version>`.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "code_lists": {
+          "description": "Each code list the caller supplied a detector, by the name the detector reads it by, with\nthe sha256 of the file's content, as `sha256:<hex>`. The file's path is not recorded.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "readers": {
+          "description": "Each package that read or sniffed the source files, by its distribution name, with its\ninstalled version.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "source_fingerprint": {
+          "description": "A hash of each source file's path, size and revision as listed: its modification time on\ndisk, or its S3 ETag. It tells two listings apart, and never hashes the content.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sample": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sample"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "imported_from": {
+          "description": "The schema an `import` profile was read from, as `<kind>:<name>[#<table>]`. The kind names\nwhat read it, such as `odcs`, `glue` or `pandera`. A file's name is the file's alone, with\nno directory, such as `odcs:orders.odcs.yaml#orders`, and `#<table>` names one table of\nseveral. A Glue table is `<region>/<database>/<table>`, and `@<version>` the catalog's\nversion of it where the catalog gives one. A schema class is its module and class, such as\n`pandera:shop.Orders`, and an object is its own name, else its type, such as\n`spark:StructType`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "declared": {
+          "description": "The facts an `import` profile's schema declared, by column path: a column's name, or the\ndotted path of a nested field, such as `shipping.city`. Every other bound, length or format\nthe profile states is a draw default, such as its date window, which no export carries.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/DeclaredFact"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Engine": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "polars",
+            "duckdb",
+            "spark"
+          ]
+        },
+        {
+          "description": "Read from a catalog or a data contract rather than computed from data.",
+          "type": "string",
+          "const": "import"
+        }
+      ]
+    },
+    "Sample": {
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "$ref": "#/$defs/SampleStrategy"
+        },
+        "rows_read": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "strategy"
+      ]
+    },
+    "SampleStrategy": {
+      "type": "string",
+      "enum": [
+        "full",
+        "head",
+        "reservoir"
+      ]
+    },
+    "DeclaredFact": {
+      "description": "A fact a schema declared, named for the profile field it marks.",
+      "oneOf": [
+        {
+          "description": "The low end of `numeric.extremes` or `temporal.extremes`.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "The high end of `numeric.extremes` or `temporal.extremes`.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "`numeric.scale`.",
+          "type": "string",
+          "const": "scale"
+        },
+        {
+          "description": "`string.length.min`.",
+          "type": "string",
+          "const": "min_length"
+        },
+        {
+          "description": "`string.length.max`.",
+          "type": "string",
+          "const": "max_length"
+        },
+        {
+          "description": "The least of `list.length`.",
+          "type": "string",
+          "const": "min_items"
+        },
+        {
+          "description": "The most of `list.length`.",
+          "type": "string",
+          "const": "max_items"
+        },
+        {
+          "description": "`semantic.type`, read from a format such as `email`.",
+          "type": "string",
+          "const": "format"
+        },
+        {
+          "description": "`string.pattern`.",
+          "type": "string",
+          "const": "pattern"
+        },
+        {
+          "description": "`top_values`.",
+          "type": "string",
+          "const": "top_values"
+        }
+      ]
+    },
+    "Privacy": {
+      "description": "The privacy policy the profile was written under, and every literal it kept or withheld.",
+      "type": "object",
+      "properties": {
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PrivacyPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "k_min": {
+          "description": "The fewest rows any stored literal or cell may rest on.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "dp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DifferentialPrivacy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suppressed": {
+          "description": "Columns whose literals were withheld, and why.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Suppression"
+          }
+        },
+        "audit": {
+          "description": "Every literal kept, and the rule that admitted it.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/AuditEntry"
+          }
+        },
+        "dataset_audit": {
+          "description": "Every dataset-level field a floor holds, such as a conditional table's cells or a dependency's left-hand\nvalues, and the rule it met.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DatasetAuditEntry"
+          }
+        },
+        "withheld": {
+          "description": "Every dataset-level field left out because it failed a floor, and the rule it failed.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/WithheldField"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "PrivacyPolicy": {
+      "type": "string",
+      "enum": [
+        "default",
+        "strict",
+        "healthcare",
+        "dp",
+        "none"
+      ]
+    },
+    "DifferentialPrivacy": {
+      "type": "object",
+      "properties": {
+        "epsilon": {
+          "type": "number",
+          "format": "double"
+        },
+        "delta": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "epsilon",
+        "delta"
+      ]
+    },
+    "Suppression": {
+      "description": "A column some of whose literals the policy withheld.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/SuppressionReason"
+        },
+        "semantic": {
+          "description": "The column's `semantic.type`, where it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "column",
+        "reason"
+      ]
+    },
+    "SuppressionReason": {
+      "oneOf": [
+        {
+          "description": "Typed `identifier`, so the column keeps no literal, extreme or top value.",
+          "type": "string",
+          "const": "identifier"
+        },
+        {
+          "description": "Typed `quasi_identifier` under `strict`, which treats it as an identifier.",
+          "type": "string",
+          "const": "quasi_identifier"
+        },
+        {
+          "description": "Typed `free_text`, so the column keeps its length statistics only.",
+          "type": "string",
+          "const": "free_text"
+        },
+        {
+          "description": "A ZIP code under `healthcare`, which keeps three-digit prefixes and writes a restricted one as `000`.",
+          "type": "string",
+          "const": "zip_prefix"
+        },
+        {
+          "description": "An age under `healthcare`, which collapses every age over 89 into one bin at 90.",
+          "type": "string",
+          "const": "age_over_89"
+        },
+        {
+          "description": "A date or timestamp under `healthcare`, whose extremes keep only their years.",
+          "type": "string",
+          "const": "date_to_year"
+        }
+      ]
+    },
     "AuditEntry": {
       "description": "One field holding literals, and the rule that admitted them.",
       "type": "object",
@@ -25,8 +461,8 @@
             "null"
           ]
         },
-        "min_rows": {
-          "description": "The fewest rows any literal or cell of the field rests on.",
+        "values": {
+          "description": "How many literals or cells the field holds.",
           "type": [
             "integer",
             "null"
@@ -37,8 +473,8 @@
         "rule": {
           "$ref": "#/$defs/AuditRule"
         },
-        "values": {
-          "description": "How many literals or cells the field holds.",
+        "min_rows": {
+          "description": "The fewest rows any literal or cell of the field rests on.",
           "type": [
             "integer",
             "null"
@@ -98,331 +534,147 @@
         }
       ]
     },
-    "BooleanStats": {
+    "DatasetAuditEntry": {
+      "description": "One dataset-level field a floor holds, and the rule it met.",
       "type": "object",
       "properties": {
-        "true_fraction": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "BundleProfile": {
-      "description": "Several tables' profiles and the relationships between them.",
-      "type": "object",
-      "properties": {
-        "generated": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Generated"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "kind": {
-          "type": "string",
-          "enum": [
-            "bundle"
-          ]
-        },
-        "name": {
+        "field": {
+          "description": "The RFC 6901 pointer to the field from the profile's root, such as `/dataset/conditionals/0`.",
           "type": "string"
         },
-        "relationships": {
+        "values": {
+          "description": "How many cells or counted values the field holds.",
           "type": [
-            "array",
+            "integer",
             "null"
           ],
-          "items": {
-            "$ref": "#/$defs/Relationship"
-          }
+          "format": "uint64",
+          "minimum": 0
         },
-        "tables": {
-          "description": "Each table by name: a profile file's path relative to the bundle, or the profile inline.",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/BundleTable"
-          }
+        "rule": {
+          "$ref": "#/$defs/AuditRule"
+        },
+        "min_rows": {
+          "description": "The fewest rows any cell or counted value of the field rests on.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "additionalProperties": false,
       "required": [
-        "kind",
-        "name",
-        "tables"
+        "field",
+        "rule"
       ]
     },
-    "BundleTable": {
-      "description": "A table of a bundle: its file's path relative to the bundle, or the table profile inline, as\nits own file would hold it.",
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "$ref": "#/$defs/TableProfile"
-        }
-      ]
-    },
-    "Cardinality": {
-      "type": "string",
-      "enum": [
-        "one_to_one",
-        "one_to_many",
-        "many_to_one",
-        "many_to_many"
-      ]
-    },
-    "CharClass": {
-      "type": "string",
-      "enum": [
-        "upper",
-        "lower",
-        "digit",
-        "space",
-        "punct",
-        "other"
-      ]
-    },
-    "Charset": {
+    "WithheldField": {
       "type": "object",
       "properties": {
-        "ascii": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "field": {
+          "description": "The RFC 6901 pointer to the field from the profile's root, such as `/dataset/keys`.",
+          "type": "string"
         },
-        "classes": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/CharClass"
-          }
+        "rule": {
+          "$ref": "#/$defs/WithheldRule"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "rule"
+      ]
     },
-    "CheckDigit": {
+    "WithheldRule": {
+      "description": "The floor a withheld field failed.",
       "oneOf": [
         {
-          "description": "The mod-10 digit of payment card numbers.",
+          "description": "The table holds at least `k_min` rows, as a key is stated only over that many.",
           "type": "string",
-          "const": "luhn"
-        },
-        {
-          "description": "A National Provider Identifier's: the Luhn digit over `80840` and the digits before it.",
-          "type": "string",
-          "const": "npi"
-        },
-        {
-          "description": "A DEA registration number's: the last digit of the first, third and fifth digits plus twice\nthe second, fourth and sixth.",
-          "type": "string",
-          "const": "dea"
+          "const": "rows >= k_min"
         }
       ]
     },
-    "Column": {
-      "description": "One column, or one field nested in a list or struct column.",
+    "Source": {
+      "description": "The files the data came from. `csv`, `parquet` and `json` each hold the format's `writer`, as a\nmanifest's `writer` holds it, so a generated dataset can be written the way its source was.\nBeside it each holds what the profiler observed of the files that no writer setting reproduces.",
       "type": "object",
       "properties": {
-        "boolean": {
+        "format": {
           "anyOf": [
             {
-              "$ref": "#/$defs/BooleanStats"
+              "$ref": "#/$defs/SourceFormat"
             },
             {
               "type": "null"
             }
           ]
         },
-        "derived": {
-          "description": "How the column is computed from others, in place of being drawn from its own statistics.",
+        "compression": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Derived"
+              "$ref": "#/$defs/Compression"
             },
             {
               "type": "null"
             }
           ]
         },
-        "distinct": {
+        "layout": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Distinct"
+              "$ref": "#/$defs/Layout"
             },
             {
               "type": "null"
             }
           ]
         },
-        "list": {
+        "csv": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ListStats"
+              "$ref": "#/$defs/CsvSource"
             },
             {
               "type": "null"
             }
           ]
         },
-        "logical_type": {
+        "parquet": {
           "anyOf": [
             {
-              "$ref": "#/$defs/LogicalType"
+              "$ref": "#/$defs/ParquetSource"
             },
             {
               "type": "null"
             }
           ]
         },
-        "missing_token_fractions": {
-          "description": "Tokens a text source uses for a missing value, with the share of rows holding each.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
-        },
-        "name": {
-          "description": "The column's name. A list's element is named `element`.",
-          "type": "string"
-        },
-        "null_fraction": {
+        "json": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Rate"
+              "$ref": "#/$defs/JsonSource"
             },
             {
               "type": "null"
             }
           ]
-        },
-        "nullable": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "numeric": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NumericStats"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "path": {
-          "description": "The dotted path to a nested field.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "physical_type": {
-          "description": "An Arrow type string, such as `decimal128(12, 2)`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "quality": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Quality"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "semantic": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Semantic"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "string": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StringStats"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "struct": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StructStats"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "temporal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TemporalStats"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "type_mix_fractions": {
-          "description": "The share of raw values parsing as each type. The shares sum to 1.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "properties": {
-            "boolean": {
-              "$ref": "#/$defs/Rate"
-            },
-            "date": {
-              "$ref": "#/$defs/Rate"
-            },
-            "decimal": {
-              "$ref": "#/$defs/Rate"
-            },
-            "integer": {
-              "$ref": "#/$defs/Rate"
-            },
-            "string": {
-              "$ref": "#/$defs/Rate"
-            },
-            "timestamp": {
-              "$ref": "#/$defs/Rate"
-            }
-          },
-          "additionalProperties": false
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "name"
+      "additionalProperties": false
+    },
+    "SourceFormat": {
+      "type": "string",
+      "enum": [
+        "csv",
+        "tsv",
+        "json",
+        "ndjson",
+        "parquet",
+        "arrow",
+        "orc",
+        "avro"
       ]
     },
     "Compression": {
@@ -437,103 +689,28 @@
         "lzo"
       ]
     },
-    "Conditional": {
-      "description": "The distribution of `column` within each value of `given`. Each row of `table` sums to 1 at most, and the share it\nleaves is the rows of values it does not state. Each value `column` lists takes as much of that share as no row\nstates of it, and the share of values it lists none of draws `column`'s own values.\n\nBoth columns are strings, integers or booleans, and each value is a key as its text: a string as\nitself, an integer in decimal, and a boolean as `true` or `false`.",
+    "Layout": {
       "type": "object",
       "properties": {
-        "column": {
-          "type": "string"
-        },
-        "fractions": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "additionalProperties": {
-              "$ref": "#/$defs/Rate"
-            }
-          }
-        },
-        "given": {
-          "type": "string"
-        },
-        "other_fractions": {
-          "description": "The distribution of `column` over every value of `given` that `fractions` does not list, summing to 1 at most as\na row does.",
+        "files": {
           "type": [
-            "object",
+            "integer",
             "null"
           ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "given",
-        "column",
-        "fractions"
-      ]
-    },
-    "ConditionalFractions": {
-      "description": "The share of `column`'s values that are zero, and of its rows that are null, within each value of the categorical\n`given`, each value a key as a conditional table's is.",
-      "type": "object",
-      "properties": {
-        "column": {
-          "type": "string"
+          "format": "uint64",
+          "minimum": 0
         },
-        "given": {
-          "type": "string"
-        },
-        "null_fraction": {
-          "description": "The share of rows where `column` is null, among the rows holding each value of `given`.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
-        },
-        "other": {
-          "description": "Both fractions over every value of `given` that the two maps do not list.",
+        "file_size_bytes": {
           "anyOf": [
             {
-              "$ref": "#/$defs/OtherFractions"
+              "$ref": "#/$defs/FileSizes"
             },
             {
               "type": "null"
             }
           ]
         },
-        "zero_fraction": {
-          "description": "The share of `column`'s values that are zero, among the rows holding each value of `given`.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "given",
-        "column"
-      ]
-    },
-    "ConditionalQuantiles": {
-      "description": "The quantiles of the numeric `column` within each value of the categorical `given`, each value a key as a\nconditional table's is. Each row takes the same names `column`'s own quantiles do, and holds its zeros as they\ndo: a zero rate stated for the value given the same column, else `column`'s own, places its run of zeros.",
-      "type": "object",
-      "properties": {
-        "column": {
-          "type": "string"
-        },
-        "given": {
-          "type": "string"
-        },
-        "other": {
-          "description": "`column`'s quantiles over every value of `given` that `quantiles` does not list.",
+        "rows_per_file": {
           "anyOf": [
             {
               "$ref": "#/$defs/Quantiles"
@@ -543,18 +720,961 @@
             }
           ]
         },
-        "quantiles": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Quantiles"
+        "partitioning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Partitioning"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sort_order": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "FileSizes": {
+      "type": "object",
+      "properties": {
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "p50": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "max": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "total": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Quantiles": {
+      "description": "Values at named quantiles: p05 is the 5th percentile, p50 the median, p999 the 99.9th. The digits after p are the level's decimal digits, at least two and never ending in 0 past the second.",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^p[0-9]{2}([0-9]*[1-9])?$"
+      },
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "Partitioning": {
+      "type": "object",
+      "properties": {
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PartitionStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "keys": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/PartitionKey"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "PartitionStyle": {
+      "oneOf": [
+        {
+          "description": "`key=value` directories.",
+          "type": "string",
+          "const": "hive"
+        },
+        {
+          "description": "Bare value directories, one level per key.",
+          "type": "string",
+          "const": "directory"
+        }
+      ]
+    },
+    "PartitionKey": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "description": "An Arrow type string.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "values": {
+          "description": "The distinct values the key takes.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "value_fractions": {
+          "description": "The share of rows under each value at least `k_min` rows hold, written where the key takes\nno more values than a string column's top values list.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
+        },
+        "other_fraction": {
+          "description": "The share of rows under a non-null value `value_fractions` does not list.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
-        "given",
-        "column",
-        "quantiles"
+        "name"
+      ]
+    },
+    "Rate": {
+      "description": "A share, from 0 to 1.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "CsvSource": {
+      "description": "A delimited source's dialect, as a writer takes it, and how it was found.",
+      "type": "object",
+      "properties": {
+        "writer": {
+          "description": "The dialect a writer writes the files in. A setting left out takes the writer's default.",
+          "$ref": "#/$defs/DelimitedSettings",
+          "default": {
+            "delimiter": null,
+            "quote": "\"",
+            "escape": null,
+            "quoting": "necessary",
+            "header": true,
+            "null": "",
+            "line_terminator": "lf",
+            "date_format": null,
+            "timestamp_format": null,
+            "timestamp_tz_format": null,
+            "time_format": null,
+            "bom": false,
+            "encoding": "utf8",
+            "compression": "none",
+            "compression_level": null
+          }
+        },
+        "detected_encoding": {
+          "description": "The encoding charset-normalizer named for the first block, such as `ascii`, `utf_8` or\n`cp1252`. `encoding` holds the nearest one a writer writes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line_terminator_fractions": {
+          "description": "The share of the first block's line breaks that end in each terminator.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "crlf": {
+              "$ref": "#/$defs/Rate"
+            },
+            "lf": {
+              "$ref": "#/$defs/Rate"
+            }
+          },
+          "additionalProperties": false
+        },
+        "trailing_delimiter": {
+          "description": "Whether every sampled line ends in a delimiter, which a reader takes as one more empty column.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "detector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DialectDetection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "malformed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MalformedRows"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DelimitedSettings": {
+      "description": "A CSV or TSV dialect. Every character must be ASCII.",
+      "type": "object",
+      "properties": {
+        "delimiter": {
+          "description": "Null takes the format's own: `,` for CSV, a tab for TSV.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 1,
+          "default": null
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1,
+          "default": "\""
+        },
+        "escape": {
+          "description": "The character that escapes a quote inside a quoted field. Null doubles the quote instead.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 1,
+          "default": null
+        },
+        "quoting": {
+          "$ref": "#/$defs/Quoting",
+          "default": "necessary"
+        },
+        "header": {
+          "description": "Whether the first line names the columns.",
+          "type": "boolean",
+          "default": true
+        },
+        "null": {
+          "description": "What a null prints where the column's profile gives no missing token for it. When it is\nempty, an empty string is quoted so the two read back apart.",
+          "type": "string",
+          "default": ""
+        },
+        "line_terminator": {
+          "$ref": "#/$defs/LineTerminator",
+          "default": "lf"
+        },
+        "date_format": {
+          "description": "A chrono format for date columns. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timestamp_format": {
+          "description": "A chrono format for timestamp columns without a time zone. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timestamp_tz_format": {
+          "description": "A chrono format for timestamp columns with a time zone. Null writes ISO 8601 with the offset.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "time_format": {
+          "description": "A chrono format for time columns. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bom": {
+          "description": "Whether the file starts with a UTF-8 byte order mark.",
+          "type": "boolean",
+          "default": false
+        },
+        "encoding": {
+          "$ref": "#/$defs/TextEncoding",
+          "default": "utf8"
+        },
+        "compression": {
+          "$ref": "#/$defs/TextCompression",
+          "default": "none"
+        },
+        "compression_level": {
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "Quoting": {
+      "description": "Which fields are quoted. A null is never quoted.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "always"
+          ]
+        },
+        {
+          "description": "Only a field holding the delimiter, the quote or a line break, and an empty string where a\nnull prints empty.",
+          "type": "string",
+          "const": "necessary"
+        },
+        {
+          "description": "Every field that does not parse as a number.",
+          "type": "string",
+          "const": "non_numeric"
+        },
+        {
+          "description": "None, even where a field needs it.",
+          "type": "string",
+          "const": "never"
+        }
+      ]
+    },
+    "LineTerminator": {
+      "type": "string",
+      "enum": [
+        "lf",
+        "crlf"
+      ]
+    },
+    "TextEncoding": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "utf8"
+          ]
+        },
+        {
+          "description": "windows-1252, the superset of ISO-8859-1 every decoder applies to a `latin1` label.",
+          "type": "string",
+          "const": "latin1"
+        }
+      ]
+    },
+    "TextCompression": {
+      "type": "string",
+      "enum": [
+        "none",
+        "gzip",
+        "zstd"
+      ]
+    },
+    "DialectDetection": {
+      "description": "How the dialect was found. DuckDB's sniffer reads the files first, and CleverCSV confirms its\ndialect on the first block. DuckDB's is read where the two agree or CleverCSV names none, and\nCleverCSV's where they disagree.",
+      "type": "object",
+      "properties": {
+        "primary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DialectSniffer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confirm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DialectSniffer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agreed": {
+          "description": "Whether the two found the same delimiter and quote.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "chosen": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DialectSniffer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "description": "The share of the first block's records that split into the most common number of fields\nunder the chosen dialect.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sniffed": {
+          "description": "What each sniffer named, the one read first leading. So a quote read where neither named\none shows as the format's own rather than a sniffer's.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/SniffedDialect"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "DialectSniffer": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "duckdb",
+            "clevercsv"
+          ]
+        },
+        {
+          "description": "Neither sniffer named a dialect, so the format's own was read.",
+          "type": "string",
+          "const": "default"
+        }
+      ]
+    },
+    "SniffedDialect": {
+      "description": "One sniffer's dialect. Each part it named none of is null, and all are where it found no\ndialect.",
+      "type": "object",
+      "properties": {
+        "sniffer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DialectSniffer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delimiter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quote": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "escape": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "MalformedRows": {
+      "description": "The data rows a reader rejects, as shares of every data row the files hold. A type held by\nfewer than `k_min` rows is left out, and `fraction` is the sum of the rest.",
+      "type": "object",
+      "properties": {
+        "fraction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type_fractions": {
+          "description": "Each rejected row is counted once, under its first error.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ParquetSource": {
+      "description": "A Parquet source's writer settings, read from its files' footers, and what the footers say of\nthe writer. No value statistic is read from a footer.",
+      "type": "object",
+      "properties": {
+        "writer": {
+          "description": "The settings a writer reproduces the files' layout with. A setting left out takes the\nwriter's default.",
+          "$ref": "#/$defs/ParquetSettings",
+          "default": {
+            "compression": "zstd",
+            "compression_level": null,
+            "row_group_rows": 1048576,
+            "statistics": "page",
+            "dictionary_columns": null,
+            "timestamp_unit": null
+          }
+        },
+        "created_by": {
+          "description": "The `created_by` most footers name, such as `parquet-mr version 1.13.1 (build ...)`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spark_version": {
+          "description": "`org.apache.spark.version` from the key-value metadata, where Spark wrote the files.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format_version": {
+          "description": "The format version most footers declare, such as `1.0` or `2.6`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "row_groups": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RowGroups"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decimal_scale_drift": {
+          "description": "Whether a decimal column's scale differs between files.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "footers_read": {
+          "description": "How many files' footers were read: every file's, or a seeded sample's.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "timestamp_units": {
+          "description": "Each timestamp column's unit as stored. `int96` is the legacy encoding no writer reproduces.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/StoredTimestampUnit"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ParquetSettings": {
+      "type": "object",
+      "properties": {
+        "compression": {
+          "$ref": "#/$defs/ParquetCompression",
+          "default": "zstd"
+        },
+        "compression_level": {
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        },
+        "row_group_rows": {
+          "description": "The most rows a row group holds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 1048576
+        },
+        "statistics": {
+          "$ref": "#/$defs/ParquetStatistics",
+          "default": "page"
+        },
+        "dictionary_columns": {
+          "description": "The columns written with a dictionary. Null gives every column one.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "default": null
+        },
+        "timestamp_unit": {
+          "description": "The unit every timestamp column is cast to. Null keeps each column's own. Parquet holds no\nseconds unit, so a column at `s` is stored at `ms`, as pyarrow stores it. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimestampUnit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "ParquetCompression": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none",
+            "snappy",
+            "gzip",
+            "zstd"
+          ]
+        },
+        {
+          "description": "LZ4_RAW, the LZ4 codec current readers expect.",
+          "type": "string",
+          "const": "lz4"
+        }
+      ]
+    },
+    "ParquetStatistics": {
+      "description": "How much of the min, max and null count each column chunk records.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "description": "Per column chunk.",
+          "type": "string",
+          "const": "chunk"
+        },
+        {
+          "description": "Per page too, with the page index.",
+          "type": "string",
+          "const": "page"
+        }
+      ]
+    },
+    "TimestampUnit": {
+      "type": "string",
+      "enum": [
+        "s",
+        "ms",
+        "us",
+        "ns"
+      ]
+    },
+    "RowGroups": {
+      "type": "object",
+      "properties": {
+        "per_file": {
+          "description": "Row groups in each file.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quantiles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rows": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quantiles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compressed_bytes": {
+          "description": "Each row group's bytes on disk, the sum of its column chunks' compressed sizes.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quantiles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoredTimestampUnit": {
+      "type": "string",
+      "enum": [
+        "ms",
+        "us",
+        "ns",
+        "int96"
+      ]
+    },
+    "JsonSource": {
+      "description": "A JSON source's writer settings and its nesting.",
+      "type": "object",
+      "properties": {
+        "writer": {
+          "description": "The settings a writer writes the files with. A setting left out takes the writer's default.",
+          "$ref": "#/$defs/JsonSettings",
+          "default": {
+            "explicit_nulls": false,
+            "compression": "none",
+            "compression_level": null
+          }
+        },
+        "max_depth": {
+          "description": "The deepest nesting of objects and arrays, counting the record as 1.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "JsonSettings": {
+      "type": "object",
+      "properties": {
+        "explicit_nulls": {
+          "description": "Whether a null field is written as `null` rather than left out.",
+          "type": "boolean",
+          "default": false
+        },
+        "compression": {
+          "$ref": "#/$defs/TextCompression",
+          "default": "none"
+        },
+        "compression_level": {
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "Dataset": {
+      "description": "Facts about the table as a whole.",
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "duplicate_row_fraction": {
+          "description": "The share of rows repeating an earlier row in every column, written as 0 where fewer than `k_min` rows do.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "keys": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Keys"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "correlations": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Correlation"
+          }
+        },
+        "correlation_ratios": {
+          "description": "Each correlation ratio η between a numeric column and a categorical one: the square root of the share of the\nvariance of the numeric column's ranks that the categorical column's values explain, corrected for the share\nthey explain by chance. `a` and `b` follow the columns' order, and the column kinds tell which is the category.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/CorrelationRatio"
+          }
+        },
+        "conditionals": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Conditional"
+          }
+        },
+        "conditional_quantiles": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ConditionalQuantiles"
+          }
+        },
+        "conditional_fractions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ConditionalFractions"
+          }
+        },
+        "dependencies": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Dependency"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Keys": {
+      "type": "object",
+      "properties": {
+        "primary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Key"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidates": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Key"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Key": {
+      "type": "object",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "uniqueness": {
+          "description": "The share of rows whose key value no other row holds.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "columns"
       ]
     },
     "Correlation": {
@@ -620,367 +1740,148 @@
         "value"
       ]
     },
-    "CsvSource": {
-      "description": "A delimited source's dialect, as a writer takes it, and how it was found.",
+    "Conditional": {
+      "description": "The distribution of `column` within each value of `given`. Each row of `table` sums to 1 at most, and the share it\nleaves is the rows of values it does not state. Each value `column` lists takes as much of that share as no row\nstates of it, and the share of values it lists none of draws `column`'s own values.\n\nBoth columns are strings, integers or booleans, and each value is a key as its text: a string as\nitself, an integer in decimal, and a boolean as `true` or `false`.",
       "type": "object",
       "properties": {
-        "detected_encoding": {
-          "description": "The encoding charset-normalizer named for the first block, such as `ascii`, `utf_8` or\n`cp1252`. `encoding` holds the nearest one a writer writes.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "given": {
+          "type": "string"
         },
-        "detector": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DialectDetection"
-            },
-            {
-              "type": "null"
+        "column": {
+          "type": "string"
+        },
+        "fractions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/Rate"
             }
-          ]
+          }
         },
-        "line_terminator_fractions": {
-          "description": "The share of the first block's line breaks that end in each terminator.",
+        "other_fractions": {
+          "description": "The distribution of `column` over every value of `given` that `fractions` does not list, summing to 1 at most as\na row does.",
           "type": [
             "object",
             "null"
           ],
-          "properties": {
-            "crlf": {
-              "$ref": "#/$defs/Rate"
-            },
-            "lf": {
-              "$ref": "#/$defs/Rate"
-            }
-          },
-          "additionalProperties": false
-        },
-        "malformed": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MalformedRows"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "trailing_delimiter": {
-          "description": "Whether every sampled line ends in a delimiter, which a reader takes as one more empty column.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "writer": {
-          "description": "The dialect a writer writes the files in. A setting left out takes the writer's default.",
-          "$ref": "#/$defs/DelimitedSettings",
-          "default": {
-            "bom": false,
-            "compression": "none",
-            "compression_level": null,
-            "date_format": null,
-            "delimiter": null,
-            "encoding": "utf8",
-            "escape": null,
-            "header": true,
-            "line_terminator": "lf",
-            "null": "",
-            "quote": "\"",
-            "quoting": "necessary",
-            "time_format": null,
-            "timestamp_format": null,
-            "timestamp_tz_format": null
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
           }
-        }
-      },
-      "additionalProperties": false
-    },
-    "Dataset": {
-      "description": "Facts about the table as a whole.",
-      "type": "object",
-      "properties": {
-        "conditional_fractions": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/ConditionalFractions"
-          }
-        },
-        "conditional_quantiles": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/ConditionalQuantiles"
-          }
-        },
-        "conditionals": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Conditional"
-          }
-        },
-        "correlation_ratios": {
-          "description": "Each correlation ratio η between a numeric column and a categorical one: the square root of the share of the\nvariance of the numeric column's ranks that the categorical column's values explain, corrected for the share\nthey explain by chance. `a` and `b` follow the columns' order, and the column kinds tell which is the category.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/CorrelationRatio"
-          }
-        },
-        "correlations": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Correlation"
-          }
-        },
-        "dependencies": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Dependency"
-          }
-        },
-        "duplicate_row_fraction": {
-          "description": "The share of rows repeating an earlier row in every column, written as 0 where fewer than `k_min` rows do.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "keys": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Keys"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "rows": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
-    },
-    "DatasetAuditEntry": {
-      "description": "One dataset-level field a floor holds, and the rule it met.",
-      "type": "object",
-      "properties": {
-        "field": {
-          "description": "The RFC 6901 pointer to the field from the profile's root, such as `/dataset/conditionals/0`.",
-          "type": "string"
-        },
-        "min_rows": {
-          "description": "The fewest rows any cell or counted value of the field rests on.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "rule": {
-          "$ref": "#/$defs/AuditRule"
-        },
-        "values": {
-          "description": "How many cells or counted values the field holds.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
         }
       },
       "additionalProperties": false,
       "required": [
-        "field",
-        "rule"
+        "given",
+        "column",
+        "fractions"
       ]
     },
-    "DeclaredFact": {
-      "description": "A fact a schema declared, named for the profile field it marks.",
-      "oneOf": [
-        {
-          "description": "The low end of `numeric.extremes` or `temporal.extremes`.",
-          "type": "string",
-          "const": "low"
-        },
-        {
-          "description": "The high end of `numeric.extremes` or `temporal.extremes`.",
-          "type": "string",
-          "const": "high"
-        },
-        {
-          "description": "`numeric.scale`.",
-          "type": "string",
-          "const": "scale"
-        },
-        {
-          "description": "`string.length.min`.",
-          "type": "string",
-          "const": "min_length"
-        },
-        {
-          "description": "`string.length.max`.",
-          "type": "string",
-          "const": "max_length"
-        },
-        {
-          "description": "The least of `list.length`.",
-          "type": "string",
-          "const": "min_items"
-        },
-        {
-          "description": "The most of `list.length`.",
-          "type": "string",
-          "const": "max_items"
-        },
-        {
-          "description": "`semantic.type`, read from a format such as `email`.",
-          "type": "string",
-          "const": "format"
-        },
-        {
-          "description": "`string.pattern`.",
-          "type": "string",
-          "const": "pattern"
-        },
-        {
-          "description": "`top_values`.",
-          "type": "string",
-          "const": "top_values"
-        }
-      ]
-    },
-    "DelimitedSettings": {
-      "description": "A CSV or TSV dialect. Every character must be ASCII.",
+    "ConditionalQuantiles": {
+      "description": "The quantiles of the numeric `column` within each value of the categorical `given`, each value a key as a\nconditional table's is. Each row takes the same names `column`'s own quantiles do, and holds its zeros as they\ndo: a zero rate stated for the value given the same column, else `column`'s own, places its run of zeros.",
       "type": "object",
       "properties": {
-        "bom": {
-          "description": "Whether the file starts with a UTF-8 byte order mark.",
-          "type": "boolean",
-          "default": false
+        "given": {
+          "type": "string"
         },
-        "compression": {
-          "$ref": "#/$defs/TextCompression",
-          "default": "none"
+        "column": {
+          "type": "string"
         },
-        "compression_level": {
-          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
+        "quantiles": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Quantiles"
+          }
+        },
+        "other": {
+          "description": "`column`'s quantiles over every value of `given` that `quantiles` does not list.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quantiles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "given",
+        "column",
+        "quantiles"
+      ]
+    },
+    "ConditionalFractions": {
+      "description": "The share of `column`'s values that are zero, and of its rows that are null, within each value of the categorical\n`given`, each value a key as a conditional table's is.",
+      "type": "object",
+      "properties": {
+        "given": {
+          "type": "string"
+        },
+        "column": {
+          "type": "string"
+        },
+        "zero_fraction": {
+          "description": "The share of `column`'s values that are zero, among the rows holding each value of `given`.",
           "type": [
-            "integer",
+            "object",
             "null"
           ],
-          "format": "int32",
-          "default": null
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
         },
-        "date_format": {
-          "description": "A chrono format for date columns. Null writes ISO 8601.",
+        "null_fraction": {
+          "description": "The share of rows where `column` is null, among the rows holding each value of `given`.",
           "type": [
-            "string",
+            "object",
             "null"
           ],
-          "default": null
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
         },
-        "delimiter": {
-          "description": "Null takes the format's own: `,` for CSV, a tab for TSV.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null,
-          "maxLength": 1,
-          "minLength": 1
+        "other": {
+          "description": "Both fractions over every value of `given` that the two maps do not list.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OtherFractions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "given",
+        "column"
+      ]
+    },
+    "OtherFractions": {
+      "type": "object",
+      "properties": {
+        "zero_fraction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
-        "encoding": {
-          "$ref": "#/$defs/TextEncoding",
-          "default": "utf8"
-        },
-        "escape": {
-          "description": "The character that escapes a quote inside a quoted field. Null doubles the quote instead.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null,
-          "maxLength": 1,
-          "minLength": 1
-        },
-        "header": {
-          "description": "Whether the first line names the columns.",
-          "type": "boolean",
-          "default": true
-        },
-        "line_terminator": {
-          "$ref": "#/$defs/LineTerminator",
-          "default": "lf"
-        },
-        "null": {
-          "description": "What a null prints where the column's profile gives no missing token for it. When it is\nempty, an empty string is quoted so the two read back apart.",
-          "type": "string",
-          "default": ""
-        },
-        "quote": {
-          "type": "string",
-          "default": "\"",
-          "maxLength": 1,
-          "minLength": 1
-        },
-        "quoting": {
-          "$ref": "#/$defs/Quoting",
-          "default": "necessary"
-        },
-        "time_format": {
-          "description": "A chrono format for time columns. Null writes ISO 8601.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "timestamp_format": {
-          "description": "A chrono format for timestamp columns without a time zone. Null writes ISO 8601.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "timestamp_tz_format": {
-          "description": "A chrono format for timestamp columns with a time zone. Null writes ISO 8601 with the offset.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
+        "null_fraction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -1000,16 +1901,6 @@
         "rhs": {
           "type": "string"
         },
-        "table": {
-          "description": "Each value of a one-column `lhs` at least `k_min` rows hold, with the `rhs` value it determines, each a key as\na conditional table's is. The generator looks `rhs` up here, and draws it from its own statistics for an\n`lhs` value the table does not list.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
         "violation_fraction": {
           "description": "The share of rows whose `lhs` value holds more than one `rhs` value, of the rows whose `lhs` value at least\n`k_min` rows hold.",
           "anyOf": [
@@ -1020,6 +1911,16 @@
               "type": "null"
             }
           ]
+        },
+        "table": {
+          "description": "Each value of a one-column `lhs` at least `k_min` rows hold, with the `rhs` value it determines, each a key as\na conditional table's is. The generator looks `rhs` up here, and draws it from its own statistics for an\n`lhs` value the table does not list.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false,
@@ -1038,118 +1939,45 @@
         }
       ]
     },
-    "Derived": {
-      "description": "How a column is computed from other columns of its table.",
-      "oneOf": [
-        {
-          "description": "A temporal column offset from `base` by a lag drawn from its quantiles.",
-          "type": "object",
-          "properties": {
-            "base": {
-              "description": "The temporal column the lag is added to.",
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "timedelta"
-            },
-            "lag": {
-              "$ref": "#/$defs/Lag"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "base",
-            "lag"
-          ]
-        },
-        {
-          "description": "A numeric column computed from others by an arithmetic expression.",
-          "type": "object",
-          "properties": {
-            "expr": {
-              "description": "Column names, numbers, `+ - * /`, parentheses and `round(x)` or `round(x, places)`. A name holding a character\nother than a letter, a digit or `_` is quoted in backticks.",
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "expression"
-            },
-            "round": {
-              "description": "The decimal places the result is rounded to, else the column's own `numeric.scale`.",
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "int32"
-            },
-            "violation_fraction": {
-              "description": "The share of rows the expression does not hold for, which draw the column from its own statistics instead.",
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Rate"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "expr"
-          ]
-        }
-      ]
-    },
-    "Detector": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "check_digit",
-            "presidio",
-            "glue",
-            "name_hint"
-          ]
-        },
-        {
-          "description": "A regular expression matched the column's values.",
-          "type": "string",
-          "const": "pattern"
-        },
-        {
-          "description": "A check of the value other than a regular expression, such as a lookup or a parse.",
-          "type": "string",
-          "const": "validator"
-        }
-      ]
-    },
-    "DialectDetection": {
-      "description": "How the dialect was found. DuckDB's sniffer reads the files first, and CleverCSV confirms its\ndialect on the first block. DuckDB's is read where the two agree or CleverCSV names none, and\nCleverCSV's where they disagree.",
+    "Column": {
+      "description": "One column, or one field nested in a list or struct column.",
       "type": "object",
       "properties": {
-        "agreed": {
-          "description": "Whether the two found the same delimiter and quote.",
+        "name": {
+          "description": "The column's name. A list's element is named `element`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The dotted path to a nested field.",
           "type": [
-            "boolean",
+            "string",
             "null"
           ]
         },
-        "chosen": {
+        "physical_type": {
+          "description": "An Arrow type string, such as `decimal128(12, 2)`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logical_type": {
           "anyOf": [
             {
-              "$ref": "#/$defs/DialectSniffer"
+              "$ref": "#/$defs/LogicalType"
             },
             {
               "type": "null"
             }
           ]
         },
-        "confidence": {
-          "description": "The share of the first block's records that split into the most common number of fields\nunder the chosen dialect.",
+        "nullable": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "null_fraction": {
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -1159,71 +1987,164 @@
             }
           ]
         },
-        "confirm": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DialectSniffer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "primary": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DialectSniffer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "sniffed": {
-          "description": "What each sniffer named, the one read first leading. So a quote read where neither named\none shows as the format's own rather than a sniffer's.",
+        "missing_token_fractions": {
+          "description": "Tokens a text source uses for a missing value, with the share of rows holding each.",
           "type": [
-            "array",
+            "object",
             "null"
           ],
-          "items": {
-            "$ref": "#/$defs/SniffedDialect"
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
           }
-        }
-      },
-      "additionalProperties": false
-    },
-    "DialectSniffer": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "duckdb",
-            "clevercsv"
+        },
+        "type_mix_fractions": {
+          "description": "The share of raw values parsing as each type. The shares sum to 1.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "boolean": {
+              "$ref": "#/$defs/Rate"
+            },
+            "date": {
+              "$ref": "#/$defs/Rate"
+            },
+            "decimal": {
+              "$ref": "#/$defs/Rate"
+            },
+            "integer": {
+              "$ref": "#/$defs/Rate"
+            },
+            "string": {
+              "$ref": "#/$defs/Rate"
+            },
+            "timestamp": {
+              "$ref": "#/$defs/Rate"
+            }
+          },
+          "additionalProperties": false
+        },
+        "distinct": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Distinct"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
-        {
-          "description": "Neither sniffer named a dialect, so the format's own was read.",
-          "type": "string",
-          "const": "default"
-        }
-      ]
-    },
-    "DifferentialPrivacy": {
-      "type": "object",
-      "properties": {
-        "delta": {
-          "type": "number",
-          "format": "double"
+        "numeric": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NumericStats"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
-        "epsilon": {
-          "type": "number",
-          "format": "double"
+        "string": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StringStats"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "temporal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TemporalStats"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "boolean": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BooleanStats"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "list": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListStats"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "struct": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StructStats"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "semantic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Semantic"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quality": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "derived": {
+          "description": "How the column is computed from others, in place of being drawn from its own statistics.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Derived"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
-        "epsilon",
-        "delta"
+        "name"
+      ]
+    },
+    "LogicalType": {
+      "description": "The logical types of the Open Data Contract Standard v3.",
+      "type": "string",
+      "enum": [
+        "string",
+        "date",
+        "timestamp",
+        "time",
+        "number",
+        "integer",
+        "object",
+        "array",
+        "boolean"
       ]
     },
     "Distinct": {
@@ -1250,22 +2171,203 @@
       },
       "additionalProperties": false
     },
-    "Engine": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "polars",
-            "duckdb",
-            "spark"
+    "NumericStats": {
+      "type": "object",
+      "properties": {
+        "integral": {
+          "type": [
+            "boolean",
+            "null"
           ]
         },
-        {
-          "description": "Read from a catalog or a data contract rather than computed from data.",
-          "type": "string",
-          "const": "import"
+        "precision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "scale": {
+          "description": "Decimal places: a decimal type's scale, or the fewest places every value of a float column\nequals itself rounded to, where the profiler finds one.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "extremes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NumericExtremes"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mean": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "std": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "skew": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "kurtosis": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "zero_fraction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "negative_fraction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quantiles": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quantiles"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "histogram": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Histogram"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "monotonic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Monotonic"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sequence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sequence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "top_values": {
+          "description": "Values at least `k_min` rows hold, in a column with few distinct values that is not an\nidentifier.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/NumericTopValue"
+          }
+        },
+        "other_fraction": {
+          "description": "The share of values outside `top_values`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overflow": {
+          "description": "Written when the value list was frozen from an earlier profile.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ValueOverflow"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
-      ]
+      },
+      "additionalProperties": false
+    },
+    "NumericExtremes": {
+      "type": "object",
+      "properties": {
+        "low": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "high": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "method": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtremesMethod"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "ExtremesMethod": {
       "oneOf": [
@@ -1286,303 +2388,12 @@
         }
       ]
     },
-    "Fanout": {
-      "description": "Children per parent: the join skew a Spark comparison needs.",
-      "type": "object",
-      "properties": {
-        "quantiles": {
-          "description": "The child rows each of `to`'s values is held by, counting the values no child row holds.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Quantiles"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "top_fractions": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TopFractions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "zipf_s": {
-          "description": "The exponent of a Zipf law fitted by maximum likelihood to the parents' child counts, busiest first.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        }
-      },
-      "additionalProperties": false
-    },
-    "FileSizes": {
-      "type": "object",
-      "properties": {
-        "max": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "min": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "p50": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "total": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        }
-      },
-      "additionalProperties": false
-    },
-    "Fit": {
-      "description": "A fitted distribution, named as scipy.stats names it, with its parameters.",
-      "type": "object",
-      "properties": {
-        "aic": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "family": {
-          "type": "string"
-        },
-        "ks": {
-          "description": "The Kolmogorov-Smirnov statistic of the fit.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "params": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "number",
-            "format": "double"
-          }
-        },
-        "poor": {
-          "description": "Whether the KS statistic is above the profiler's poor-fit threshold, so the family describes\nthe column's tail only loosely.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "sample_rows": {
-          "description": "The rows the fit was made on.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "zero_inflation": {
-          "description": "The share of the fitting sample's values that were zero and were left out of the fit, so\nthe column is the family mixed with this share of zeros.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "family",
-        "params"
-      ]
-    },
-    "Generated": {
-      "description": "How and when the profile was made. `GENERATED_FIELDS` in the library's\n`doppeldata.profile_format` says which fields the profile's digest leaves out.",
-      "type": "object",
-      "properties": {
-        "at": {
-          "description": "When profiling finished, in RFC 3339.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "code_lists": {
-          "description": "Each code list the caller supplied a detector, by the name the detector reads it by, with\nthe sha256 of the file's content, as `sha256:<hex>`. The file's path is not recorded.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "declared": {
-          "description": "The facts an `import` profile's schema declared, by column path: a column's name, or the\ndotted path of a nested field, such as `shipping.city`. Every other bound, length or format\nthe profile states is a draw default, such as its date window, which no export carries.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/DeclaredFact"
-            }
-          }
-        },
-        "detector_packs": {
-          "description": "Each detector pack the profiler typed columns with, by name, with the distribution that\nprovides it and its version, as `doppeldata <version>`.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "engine": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Engine"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "fitter": {
-          "description": "The package that fits each numeric column's family, and its version, as `scipy <version>`.\nLeft out when scipy was not installed, so no column was fitted.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "imported_from": {
-          "description": "The schema an `import` profile was read from, as `<kind>:<name>[#<table>]`. The kind names\nwhat read it, such as `odcs`, `glue` or `pandera`. A file's name is the file's alone, with\nno directory, such as `odcs:orders.odcs.yaml#orders`, and `#<table>` names one table of\nseveral. A Glue table is `<region>/<database>/<table>`, and `@<version>` the catalog's\nversion of it where the catalog gives one. A schema class is its module and class, such as\n`pandera:shop.Orders`, and an object is its own name, else its type, such as\n`spark:StructType`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "readers": {
-          "description": "Each package that read or sniffed the source files, by its distribution name, with its\ninstalled version.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "sample": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Sample"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "source_fingerprint": {
-          "description": "A hash of each source file's path, size and revision as listed: its modification time on\ndisk, or its S3 ETag. It tells two listings apart, and never hashes the content.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tool": {
-          "description": "The tool and its version, as `doppeldata <version>`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "GeneratorHint": {
-      "type": "object",
-      "properties": {
-        "check_digit": {
-          "description": "The check digit a value's last digit holds. `quality.invalid_fraction` of values hold a wrong one.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CheckDigit"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pattern": {
-          "description": "A regular expression every value matches. It takes the place of `string.pattern`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "provider": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Provider"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "Granularity": {
-      "type": "string",
-      "enum": [
-        "year",
-        "month",
-        "day",
-        "hour",
-        "minute",
-        "second",
-        "millisecond",
-        "microsecond",
-        "nanosecond"
-      ]
-    },
     "Histogram": {
       "description": "Bin edges and the rows in each bin. `bin_rows` has one entry fewer than `edges`. Each bin holds\nthe rows from its lower edge up to its upper one, and the last bin holds its upper edge too.",
       "type": "object",
       "properties": {
-        "bin_rows": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
+        "kind": {
+          "$ref": "#/$defs/HistogramKind"
         },
         "edges": {
           "type": "array",
@@ -1591,8 +2402,13 @@
             "format": "double"
           }
         },
-        "kind": {
-          "$ref": "#/$defs/HistogramKind"
+        "bin_rows": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
         },
         "overflow": {
           "description": "The rows outside the edges, written when the edges were frozen from an earlier profile.",
@@ -1624,12 +2440,12 @@
       "description": "Rows below the first edge and above the last. A count of fewer than `k_min` rows is written as\n0, and its rows are counted in the outermost bin on their side.",
       "type": "object",
       "properties": {
-        "rows_above": {
+        "rows_below": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
-        "rows_below": {
+        "rows_above": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -1641,240 +2457,37 @@
         "rows_above"
       ]
     },
-    "Inherited": {
-      "description": "A child column that copies a column of its parent row, as a share of joined rows, never a value.",
+    "Fit": {
+      "description": "A fitted distribution, named as scipy.stats names it, with its parameters.",
       "type": "object",
       "properties": {
-        "agreement_fraction": {
-          "description": "The share of joined child rows whose value equals their parent row's, a null equal to a null.",
-          "$ref": "#/$defs/Rate"
-        },
-        "child": {
-          "description": "The column of `from`'s table holding the copy.",
+        "family": {
           "type": "string"
         },
-        "parent": {
-          "description": "The column of `to`'s table it copies.",
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "child",
-        "parent",
-        "agreement_fraction"
-      ]
-    },
-    "JsonSettings": {
-      "type": "object",
-      "properties": {
-        "compression": {
-          "$ref": "#/$defs/TextCompression",
-          "default": "none"
-        },
-        "compression_level": {
-          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32",
-          "default": null
-        },
-        "explicit_nulls": {
-          "description": "Whether a null field is written as `null` rather than left out.",
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "JsonSource": {
-      "description": "A JSON source's writer settings and its nesting.",
-      "type": "object",
-      "properties": {
-        "max_depth": {
-          "description": "The deepest nesting of objects and arrays, counting the record as 1.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "writer": {
-          "description": "The settings a writer writes the files with. A setting left out takes the writer's default.",
-          "$ref": "#/$defs/JsonSettings",
-          "default": {
-            "compression": "none",
-            "compression_level": null,
-            "explicit_nulls": false
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "Key": {
-      "type": "object",
-      "properties": {
-        "columns": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "uniqueness": {
-          "description": "The share of rows whose key value no other row holds.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "columns"
-      ]
-    },
-    "Keys": {
-      "type": "object",
-      "properties": {
-        "candidates": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Key"
-          }
-        },
-        "primary": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Key"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "Lag": {
-      "description": "The lag between the base column and the column, at named quantiles as [`Quantiles`] names them, between its\ntrimmed extremes. A date's lag is written in days, and a timestamp's in seconds.",
-      "type": "object",
-      "properties": {
-        "max": {
-          "description": "The lag at rank `k_min` from the high end.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SignedDuration"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "min": {
-          "description": "The lag at rank `k_min` from the low end.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SignedDuration"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "quantiles": {
-          "type": [
-            "object",
-            "null"
-          ],
+        "params": {
+          "type": "object",
           "additionalProperties": {
-            "$ref": "#/$defs/SignedDuration"
+            "type": "number",
+            "format": "double"
           }
-        }
-      },
-      "additionalProperties": false
-    },
-    "Layout": {
-      "type": "object",
-      "properties": {
-        "file_size_bytes": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FileSizes"
-            },
-            {
-              "type": "null"
-            }
-          ]
         },
-        "files": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "partitioning": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Partitioning"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "rows_per_file": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Quantiles"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "sort_order": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "LengthStats": {
-      "type": "object",
-      "properties": {
-        "max": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "mean": {
+        "ks": {
+          "description": "The Kolmogorov-Smirnov statistic of the fit.",
           "type": [
             "number",
             "null"
           ],
           "format": "double"
         },
-        "min": {
+        "aic": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "sample_rows": {
+          "description": "The rows the fit was made on.",
           "type": [
             "integer",
             "null"
@@ -1882,40 +2495,8 @@
           "format": "uint64",
           "minimum": 0
         },
-        "quantiles": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Quantiles"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "LineTerminator": {
-      "type": "string",
-      "enum": [
-        "lf",
-        "crlf"
-      ]
-    },
-    "ListStats": {
-      "type": "object",
-      "properties": {
-        "element": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Column"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "empty_fraction": {
+        "zero_inflation": {
+          "description": "The share of the fitting sample's values that were zero and were left out of the fit, so\nthe column is the family mixed with this share of zeros.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -1925,60 +2506,19 @@
             }
           ]
         },
-        "length": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Quantiles"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "LogicalType": {
-      "description": "The logical types of the Open Data Contract Standard v3.",
-      "type": "string",
-      "enum": [
-        "string",
-        "date",
-        "timestamp",
-        "time",
-        "number",
-        "integer",
-        "object",
-        "array",
-        "boolean"
-      ]
-    },
-    "MalformedRows": {
-      "description": "The data rows a reader rejects, as shares of every data row the files hold. A type held by\nfewer than `k_min` rows is left out, and `fraction` is the sum of the rest.",
-      "type": "object",
-      "properties": {
-        "fraction": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "type_fractions": {
-          "description": "Each rejected row is counted once, under its first error.",
+        "poor": {
+          "description": "Whether the KS statistic is above the profiler's poor-fit threshold, so the family describes\nthe column's tail only loosely.",
           "type": [
-            "object",
+            "boolean",
             "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
+          ]
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "params"
+      ]
     },
     "Monotonic": {
       "type": "string",
@@ -1988,100 +2528,91 @@
         "none"
       ]
     },
-    "NumericExtremes": {
+    "Sequence": {
+      "description": "An integer column counting from `start` by `step` with no gaps.",
       "type": "object",
       "properties": {
-        "high": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
+        "start": {
+          "type": "integer",
+          "format": "int64"
         },
-        "low": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "method": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ExtremesMethod"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "step": {
+          "type": "integer",
+          "format": "int64"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "step"
+      ]
     },
-    "NumericStats": {
+    "NumericTopValue": {
       "type": "object",
       "properties": {
-        "extremes": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NumericExtremes"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "fit": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Fit"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "histogram": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Histogram"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "integral": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "kurtosis": {
-          "type": [
-            "number",
-            "null"
-          ],
+        "value": {
+          "type": "number",
           "format": "double"
         },
-        "mean": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "monotonic": {
+        "fraction": {
+          "$ref": "#/$defs/Rate"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "fraction"
+      ]
+    },
+    "ValueOverflow": {
+      "type": "object",
+      "properties": {
+        "new_value_rows": {
+          "description": "The rows `other_fraction` holds beyond the share it held when the list was first frozen: the\nearlier profile's `other_fraction`, less its own `new_value_rows`. So a column whose values did\nnot change writes about 0. A count of fewer than `k_min` rows is written as 0.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "new_value_rows"
+      ]
+    },
+    "StringStats": {
+      "type": "object",
+      "properties": {
+        "length": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Monotonic"
+              "$ref": "#/$defs/LengthStats"
             },
             {
               "type": "null"
             }
           ]
         },
-        "negative_fraction": {
+        "charset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Charset"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "case_fractions": {
+          "description": "The share of values in each case: upper, lower, title or mixed.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          }
+        },
+        "whitespace_edge_fraction": {
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -2090,12 +2621,49 @@
               "type": "null"
             }
           ]
+        },
+        "shapes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Shape"
+          }
+        },
+        "pattern": {
+          "description": "A generalized regular expression, never an alternation of literals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "top_values": {
+          "description": "Values at least `k_min` rows hold, in a column that is not an identifier.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/TopValue"
+          }
         },
         "other_fraction": {
-          "description": "The share of values outside `top_values`.",
+          "description": "The share of rows holding a value outside `top_values`.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prefixes": {
+          "description": "The values' leading characters, counted in place of `top_values`, as a policy keeps a ZIP\ncode's first three digits.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Prefixes"
             },
             {
               "type": "null"
@@ -2112,14 +2680,35 @@
               "type": "null"
             }
           ]
-        },
-        "precision": {
+        }
+      },
+      "additionalProperties": false
+    },
+    "LengthStats": {
+      "type": "object",
+      "properties": {
+        "min": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "uint32",
+          "format": "uint64",
           "minimum": 0
+        },
+        "max": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mean": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
         },
         "quantiles": {
           "anyOf": [
@@ -2130,71 +2719,67 @@
               "type": "null"
             }
           ]
-        },
-        "scale": {
-          "description": "Decimal places: a decimal type's scale, or the fewest places every value of a float column\nequals itself rounded to, where the profiler finds one.",
+        }
+      },
+      "additionalProperties": false
+    },
+    "Charset": {
+      "type": "object",
+      "properties": {
+        "ascii": {
           "type": [
-            "integer",
+            "boolean",
             "null"
-          ],
-          "format": "int32"
-        },
-        "sequence": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Sequence"
-            },
-            {
-              "type": "null"
-            }
           ]
         },
-        "skew": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "std": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "top_values": {
-          "description": "Values at least `k_min` rows hold, in a column with few distinct values that is not an\nidentifier.",
+        "classes": {
           "type": [
             "array",
             "null"
           ],
           "items": {
-            "$ref": "#/$defs/NumericTopValue"
+            "$ref": "#/$defs/CharClass"
           }
-        },
-        "zero_fraction": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "additionalProperties": false
     },
-    "NumericTopValue": {
+    "CharClass": {
+      "type": "string",
+      "enum": [
+        "upper",
+        "lower",
+        "digit",
+        "space",
+        "punct",
+        "other"
+      ]
+    },
+    "Shape": {
+      "description": "A value's characters mapped to their class: `A` for an ASCII upper-case letter, `a` for an\nASCII lower-case one, `9` for an ASCII digit, and any other character as itself.",
       "type": "object",
       "properties": {
+        "shape": {
+          "type": "string"
+        },
         "fraction": {
           "$ref": "#/$defs/Rate"
-        },
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "shape",
+        "fraction"
+      ]
+    },
+    "TopValue": {
+      "type": "object",
+      "properties": {
         "value": {
-          "type": "number",
-          "format": "double"
+          "type": "string"
+        },
+        "fraction": {
+          "$ref": "#/$defs/Rate"
         }
       },
       "additionalProperties": false,
@@ -2203,292 +2788,17 @@
         "fraction"
       ]
     },
-    "OtherFractions": {
-      "type": "object",
-      "properties": {
-        "null_fraction": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "zero_fraction": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "ParquetCompression": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "none",
-            "snappy",
-            "gzip",
-            "zstd"
-          ]
-        },
-        {
-          "description": "LZ4_RAW, the LZ4 codec current readers expect.",
-          "type": "string",
-          "const": "lz4"
-        }
-      ]
-    },
-    "ParquetSettings": {
-      "type": "object",
-      "properties": {
-        "compression": {
-          "$ref": "#/$defs/ParquetCompression",
-          "default": "zstd"
-        },
-        "compression_level": {
-          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32",
-          "default": null
-        },
-        "dictionary_columns": {
-          "description": "The columns written with a dictionary. Null gives every column one.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "default": null,
-          "items": {
-            "type": "string"
-          }
-        },
-        "row_group_rows": {
-          "description": "The most rows a row group holds.",
-          "type": "integer",
-          "format": "uint64",
-          "default": 1048576,
-          "minimum": 0
-        },
-        "statistics": {
-          "$ref": "#/$defs/ParquetStatistics",
-          "default": "page"
-        },
-        "timestamp_unit": {
-          "description": "The unit every timestamp column is cast to. Null keeps each column's own. Parquet holds no\nseconds unit, so a column at `s` is stored at `ms`, as pyarrow stores it. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TimestampUnit"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "additionalProperties": false
-    },
-    "ParquetSource": {
-      "description": "A Parquet source's writer settings, read from its files' footers, and what the footers say of\nthe writer. No value statistic is read from a footer.",
-      "type": "object",
-      "properties": {
-        "created_by": {
-          "description": "The `created_by` most footers name, such as `parquet-mr version 1.13.1 (build ...)`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "decimal_scale_drift": {
-          "description": "Whether a decimal column's scale differs between files.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "footers_read": {
-          "description": "How many files' footers were read: every file's, or a seeded sample's.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "format_version": {
-          "description": "The format version most footers declare, such as `1.0` or `2.6`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "row_groups": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RowGroups"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "spark_version": {
-          "description": "`org.apache.spark.version` from the key-value metadata, where Spark wrote the files.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "timestamp_units": {
-          "description": "Each timestamp column's unit as stored. `int96` is the legacy encoding no writer reproduces.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/StoredTimestampUnit"
-          }
-        },
-        "writer": {
-          "description": "The settings a writer reproduces the files' layout with. A setting left out takes the\nwriter's default.",
-          "$ref": "#/$defs/ParquetSettings",
-          "default": {
-            "compression": "zstd",
-            "compression_level": null,
-            "dictionary_columns": null,
-            "row_group_rows": 1048576,
-            "statistics": "page",
-            "timestamp_unit": null
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "ParquetStatistics": {
-      "description": "How much of the min, max and null count each column chunk records.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "none"
-          ]
-        },
-        {
-          "description": "Per column chunk.",
-          "type": "string",
-          "const": "chunk"
-        },
-        {
-          "description": "Per page too, with the page index.",
-          "type": "string",
-          "const": "page"
-        }
-      ]
-    },
-    "PartitionKey": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "other_fraction": {
-          "description": "The share of rows under a non-null value `value_fractions` does not list.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "type": {
-          "description": "An Arrow type string.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "value_fractions": {
-          "description": "The share of rows under each value at least `k_min` rows hold, written where the key takes\nno more values than a string column's top values list.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
-        },
-        "values": {
-          "description": "The distinct values the key takes.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "name"
-      ]
-    },
-    "PartitionStyle": {
-      "oneOf": [
-        {
-          "description": "`key=value` directories.",
-          "type": "string",
-          "const": "hive"
-        },
-        {
-          "description": "Bare value directories, one level per key.",
-          "type": "string",
-          "const": "directory"
-        }
-      ]
-    },
-    "Partitioning": {
-      "type": "object",
-      "properties": {
-        "keys": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/PartitionKey"
-          }
-        },
-        "style": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PartitionStyle"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
     "Prefixes": {
       "description": "A column's values counted by their leading characters, each generated value a prefix followed\nby a value of `suffix`.",
       "type": "object",
       "properties": {
+        "values": {
+          "description": "Each prefix at least `k_min` rows begin with, and its share of the column's values.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TopValue"
+          }
+        },
         "other_fraction": {
           "description": "The share of values beginning with a prefix `values` does not list.",
           "anyOf": [
@@ -2503,13 +2813,6 @@
         "suffix": {
           "description": "A regular expression drawn after each prefix, such as `\\d{2}` after a ZIP code's first three\ndigits.",
           "type": "string"
-        },
-        "values": {
-          "description": "Each prefix at least `k_min` rows begin with, and its share of the column's values.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TopValue"
-          }
         }
       },
       "additionalProperties": false,
@@ -2518,91 +2821,327 @@
         "suffix"
       ]
     },
-    "Privacy": {
-      "description": "The privacy policy the profile was written under, and every literal it kept or withheld.",
+    "TemporalStats": {
       "type": "object",
       "properties": {
-        "audit": {
-          "description": "Every literal kept, and the rule that admitted it.",
+        "format": {
+          "description": "The strftime format of a textual date or time.",
           "type": [
-            "array",
+            "string",
             "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/AuditEntry"
-          }
+          ]
         },
-        "dataset_audit": {
-          "description": "Every dataset-level field a floor holds, such as a conditional table's cells or a dependency's left-hand\nvalues, and the rule it met.",
+        "timezone": {
           "type": [
-            "array",
+            "string",
             "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/DatasetAuditEntry"
-          }
+          ]
         },
-        "dp": {
+        "extremes": {
           "anyOf": [
             {
-              "$ref": "#/$defs/DifferentialPrivacy"
+              "$ref": "#/$defs/TemporalExtremes"
             },
             {
               "type": "null"
             }
           ]
         },
-        "k_min": {
-          "description": "The fewest rows any stored literal or cell may rest on.",
+        "month_fractions": {
+          "description": "The share of rows in each month, January first.",
           "type": [
-            "integer",
+            "array",
             "null"
           ],
-          "format": "uint64",
-          "minimum": 0
+          "items": {
+            "$ref": "#/$defs/Rate"
+          },
+          "minItems": 12,
+          "maxItems": 12
         },
-        "policy": {
+        "weekday_fractions": {
+          "description": "The share of rows on each day of the week, Monday first.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Rate"
+          },
+          "minItems": 7,
+          "maxItems": 7
+        },
+        "hour_fractions": {
+          "description": "The share of rows in each hour of the day, from 00.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Rate"
+          },
+          "minItems": 24,
+          "maxItems": 24
+        },
+        "gap_fraction": {
+          "description": "The share of days between the extremes holding no rows.",
           "anyOf": [
             {
-              "$ref": "#/$defs/PrivacyPolicy"
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TemporalExtremes": {
+      "type": "object",
+      "properties": {
+        "low": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "high": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "granularity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Granularity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Granularity": {
+      "type": "string",
+      "enum": [
+        "year",
+        "month",
+        "day",
+        "hour",
+        "minute",
+        "second",
+        "millisecond",
+        "microsecond",
+        "nanosecond"
+      ]
+    },
+    "BooleanStats": {
+      "type": "object",
+      "properties": {
+        "true_fraction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ListStats": {
+      "type": "object",
+      "properties": {
+        "length": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quantiles"
             },
             {
               "type": "null"
             }
           ]
         },
-        "suppressed": {
-          "description": "Columns whose literals were withheld, and why.",
+        "empty_fraction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "element": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Column"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "StructStats": {
+      "type": "object",
+      "properties": {
+        "fields": {
           "type": [
             "array",
             "null"
           ],
           "items": {
-            "$ref": "#/$defs/Suppression"
+            "$ref": "#/$defs/Column"
           }
         },
-        "withheld": {
-          "description": "Every dataset-level field left out because it failed a floor, and the rule it failed.",
+        "presence_fractions": {
+          "description": "The share of rows in which each field is present.",
           "type": [
-            "array",
+            "object",
             "null"
           ],
-          "items": {
-            "$ref": "#/$defs/WithheldField"
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
           }
         }
       },
       "additionalProperties": false
     },
-    "PrivacyPolicy": {
+    "Semantic": {
+      "description": "What the column holds, as a semantic detector judged it.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "A type from the detector pack's vocabulary, such as `email`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pack": {
+          "description": "The detector pack whose detector assigned the type, such as `general`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detectors": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Detector"
+          }
+        },
+        "sensitivity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sensitivity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generator_hint": {
+          "description": "What the generator should draw from, such as `{provider: email}`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeneratorHint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Detector": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "check_digit",
+            "presidio",
+            "glue",
+            "name_hint"
+          ]
+        },
+        {
+          "description": "A regular expression matched the column's values.",
+          "type": "string",
+          "const": "pattern"
+        },
+        {
+          "description": "A check of the value other than a regular expression, such as a lookup or a parse.",
+          "type": "string",
+          "const": "validator"
+        }
+      ]
+    },
+    "Sensitivity": {
       "type": "string",
       "enum": [
-        "default",
-        "strict",
-        "healthcare",
-        "dp",
+        "identifier",
+        "quasi_identifier",
+        "sensitive",
         "none"
       ]
+    },
+    "GeneratorHint": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Provider"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pattern": {
+          "description": "A regular expression every value matches. It takes the place of `string.pattern`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "check_digit": {
+          "description": "The check digit a value's last digit holds. `quality.invalid_fraction` of values hold a wrong one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CheckDigit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "Provider": {
       "description": "A source of realistic values. The names are doppeldata's, so a change of faker breaks no profile.",
@@ -2650,6 +3189,25 @@
         }
       ]
     },
+    "CheckDigit": {
+      "oneOf": [
+        {
+          "description": "The mod-10 digit of payment card numbers.",
+          "type": "string",
+          "const": "luhn"
+        },
+        {
+          "description": "A National Provider Identifier's: the Luhn digit over `80840` and the digits before it.",
+          "type": "string",
+          "const": "npi"
+        },
+        {
+          "description": "A DEA registration number's: the last digit of the first, third and fifth digits plus twice\nthe second, fourth and sixth.",
+          "type": "string",
+          "const": "dea"
+        }
+      ]
+    },
     "Quality": {
       "type": "object",
       "properties": {
@@ -2667,67 +3225,223 @@
       },
       "additionalProperties": false
     },
-    "Quantiles": {
-      "description": "Values at named quantiles: p05 is the 5th percentile, p50 the median, p999 the 99.9th. The digits after p are the level's decimal digits, at least two and never ending in 0 past the second.",
-      "type": "object",
-      "additionalProperties": {
-        "type": "number"
-      },
-      "propertyNames": {
-        "pattern": "^p[0-9]{2}([0-9]*[1-9])?$"
-      }
-    },
-    "Quoting": {
-      "description": "Which fields are quoted. A null is never quoted.",
+    "Derived": {
+      "description": "How a column is computed from other columns of its table.",
       "oneOf": [
         {
-          "type": "string",
-          "enum": [
-            "always"
+          "description": "A temporal column offset from `base` by a lag drawn from its quantiles.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "timedelta"
+            },
+            "base": {
+              "description": "The temporal column the lag is added to.",
+              "type": "string"
+            },
+            "lag": {
+              "$ref": "#/$defs/Lag"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "base",
+            "lag"
           ]
         },
         {
-          "description": "Only a field holding the delimiter, the quote or a line break, and an empty string where a\nnull prints empty.",
-          "type": "string",
-          "const": "necessary"
-        },
-        {
-          "description": "Every field that does not parse as a number.",
-          "type": "string",
-          "const": "non_numeric"
-        },
-        {
-          "description": "None, even where a field needs it.",
-          "type": "string",
-          "const": "never"
+          "description": "A numeric column computed from others by an arithmetic expression.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "expression"
+            },
+            "expr": {
+              "description": "Column names, numbers, `+ - * /`, parentheses and `round(x)` or `round(x, places)`. A name holding a character\nother than a letter, a digit or `_` is quoted in backticks.",
+              "type": "string"
+            },
+            "round": {
+              "description": "The decimal places the result is rounded to, else the column's own `numeric.scale`.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "violation_fraction": {
+              "description": "The share of rows the expression does not hold for, which draw the column from its own statistics instead.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "expr"
+          ]
         }
       ]
     },
-    "Rate": {
-      "description": "A share, from 0 to 1.",
-      "type": "number",
-      "maximum": 1,
-      "minimum": 0
-    },
-    "Relationship": {
-      "description": "A foreign key between two tables, as shares and quantiles, never key values.",
+    "Lag": {
+      "description": "The lag between the base column and the column, at named quantiles as [`Quantiles`] names them, between its\ntrimmed extremes. A date's lag is written in days, and a timestamp's in seconds.",
       "type": "object",
       "properties": {
-        "cardinality": {
+        "quantiles": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/SignedDuration"
+          }
+        },
+        "min": {
+          "description": "The lag at rank `k_min` from the low end.",
           "anyOf": [
             {
-              "$ref": "#/$defs/Cardinality"
+              "$ref": "#/$defs/SignedDuration"
             },
             {
               "type": "null"
             }
           ]
         },
+        "max": {
+          "description": "The lag at rank `k_min` from the high end.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignedDuration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SignedDuration": {
+      "description": "A length of time as a whole number, `-` before it where negative, and a unit: ms, s, m, h, d or w, such as 2d or -690s.",
+      "type": "string",
+      "pattern": "^-?[0-9]+(ms|s|m|h|d|w)$"
+    },
+    "BundleProfile": {
+      "description": "Several tables' profiles and the relationships between them.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "bundle"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "generated": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Generated"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tables": {
+          "description": "Each table by name: a profile file's path relative to the bundle, or the profile inline.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/BundleTable"
+          }
+        },
+        "relationships": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Relationship"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "tables"
+      ]
+    },
+    "BundleTable": {
+      "description": "A table of a bundle: its file's path relative to the bundle, or the table profile inline, as\nits own file would hold it.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/TableProfile"
+        }
+      ]
+    },
+    "Relationship": {
+      "description": "A foreign key between two tables, as shares and quantiles, never key values.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "Each `table.column` holding the reference, all in one table. A composite key names each of its\ncolumns, in the order `to` names the columns each refers to.",
+          "type": "array",
+          "items": {
+            "description": "A column of one of the bundle's tables, as table.column. The table runs to the first dot.",
+            "type": "string",
+            "pattern": "^[^.]+\\..+$"
+          },
+          "minItems": 1
+        },
+        "to": {
+          "description": "Each `table.column` referred to, all in one table, one for each of `from`.",
+          "type": "array",
+          "items": {
+            "description": "A column of one of the bundle's tables, as table.column. The table runs to the first dot.",
+            "type": "string",
+            "pattern": "^[^.]+\\..+$"
+          },
+          "minItems": 1
+        },
         "containment": {
           "description": "The share of `from`'s distinct values that `to` holds.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "orphan_fraction": {
+          "description": "The share of `from`'s rows holding a value that `to` does not hold, of those holding a value.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cardinality": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cardinality"
             },
             {
               "type": "null"
@@ -2743,16 +3457,6 @@
               "type": "null"
             }
           ]
-        },
-        "from": {
-          "description": "Each `table.column` holding the reference, all in one table. A composite key names each of its\ncolumns, in the order `to` names the columns each refers to.",
-          "type": "array",
-          "items": {
-            "description": "A column of one of the bundle's tables, as table.column. The table runs to the first dot.",
-            "type": "string",
-            "pattern": "^[^.]+\\..+$"
-          },
-          "minItems": 1
         },
         "inherited": {
           "description": "The child columns holding their parent row's value on nearly every joined row, such as the\ncustomer's `region` an order carries.",
@@ -2770,27 +3474,6 @@
             "string",
             "null"
           ]
-        },
-        "orphan_fraction": {
-          "description": "The share of `from`'s rows holding a value that `to` does not hold, of those holding a value.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "to": {
-          "description": "Each `table.column` referred to, all in one table, one for each of `from`.",
-          "type": "array",
-          "items": {
-            "description": "A column of one of the bundle's tables, as table.column. The table runs to the first dot.",
-            "type": "string",
-            "pattern": "^[^.]+\\..+$"
-          },
-          "minItems": 1
         }
       },
       "additionalProperties": false,
@@ -2799,11 +3482,21 @@
         "to"
       ]
     },
-    "RowGroups": {
+    "Cardinality": {
+      "type": "string",
+      "enum": [
+        "one_to_one",
+        "one_to_many",
+        "many_to_one",
+        "many_to_many"
+      ]
+    },
+    "Fanout": {
+      "description": "Children per parent: the join skew a Spark comparison needs.",
       "type": "object",
       "properties": {
-        "compressed_bytes": {
-          "description": "Each row group's bytes on disk, the sum of its column chunks' compressed sizes.",
+        "quantiles": {
+          "description": "The child rows each of `to`'s values is held by, counting the values no child row holds.",
           "anyOf": [
             {
               "$ref": "#/$defs/Quantiles"
@@ -2813,685 +3506,26 @@
             }
           ]
         },
-        "per_file": {
-          "description": "Row groups in each file.",
+        "top_fractions": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Quantiles"
+              "$ref": "#/$defs/TopFractions"
             },
             {
               "type": "null"
             }
           ]
         },
-        "rows": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Quantiles"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "zipf_s": {
+          "description": "The exponent of a Zipf law fitted by maximum likelihood to the parents' child counts, busiest first.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
         }
       },
       "additionalProperties": false
-    },
-    "Sample": {
-      "type": "object",
-      "properties": {
-        "rows_read": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "strategy": {
-          "$ref": "#/$defs/SampleStrategy"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "strategy"
-      ]
-    },
-    "SampleStrategy": {
-      "type": "string",
-      "enum": [
-        "full",
-        "head",
-        "reservoir"
-      ]
-    },
-    "Semantic": {
-      "description": "What the column holds, as a semantic detector judged it.",
-      "type": "object",
-      "properties": {
-        "confidence": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "detectors": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Detector"
-          }
-        },
-        "generator_hint": {
-          "description": "What the generator should draw from, such as `{provider: email}`.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GeneratorHint"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pack": {
-          "description": "The detector pack whose detector assigned the type, such as `general`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "sensitivity": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Sensitivity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "type": {
-          "description": "A type from the detector pack's vocabulary, such as `email`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "Sensitivity": {
-      "type": "string",
-      "enum": [
-        "identifier",
-        "quasi_identifier",
-        "sensitive",
-        "none"
-      ]
-    },
-    "Sequence": {
-      "description": "An integer column counting from `start` by `step` with no gaps.",
-      "type": "object",
-      "properties": {
-        "start": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "step": {
-          "type": "integer",
-          "format": "int64"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "start",
-        "step"
-      ]
-    },
-    "Shape": {
-      "description": "A value's characters mapped to their class: `A` for an ASCII upper-case letter, `a` for an\nASCII lower-case one, `9` for an ASCII digit, and any other character as itself.",
-      "type": "object",
-      "properties": {
-        "fraction": {
-          "$ref": "#/$defs/Rate"
-        },
-        "shape": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "shape",
-        "fraction"
-      ]
-    },
-    "SignedDuration": {
-      "description": "A length of time as a whole number, `-` before it where negative, and a unit: ms, s, m, h, d or w, such as 2d or -690s.",
-      "type": "string",
-      "pattern": "^-?[0-9]+(ms|s|m|h|d|w)$"
-    },
-    "SniffedDialect": {
-      "description": "One sniffer's dialect. Each part it named none of is null, and all are where it found no\ndialect.",
-      "type": "object",
-      "properties": {
-        "delimiter": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "escape": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "quote": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "sniffer": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DialectSniffer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "Source": {
-      "description": "The files the data came from. `csv`, `parquet` and `json` each hold the format's `writer`, as a\nmanifest's `writer` holds it, so a generated dataset can be written the way its source was.\nBeside it each holds what the profiler observed of the files that no writer setting reproduces.",
-      "type": "object",
-      "properties": {
-        "compression": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Compression"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "csv": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CsvSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "format": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SourceFormat"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "json": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/JsonSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "layout": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Layout"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "parquet": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ParquetSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "SourceFormat": {
-      "type": "string",
-      "enum": [
-        "csv",
-        "tsv",
-        "json",
-        "ndjson",
-        "parquet",
-        "arrow",
-        "orc",
-        "avro"
-      ]
-    },
-    "StoredTimestampUnit": {
-      "type": "string",
-      "enum": [
-        "ms",
-        "us",
-        "ns",
-        "int96"
-      ]
-    },
-    "StringStats": {
-      "type": "object",
-      "properties": {
-        "case_fractions": {
-          "description": "The share of values in each case: upper, lower, title or mixed.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
-        },
-        "charset": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Charset"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "length": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LengthStats"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "other_fraction": {
-          "description": "The share of rows holding a value outside `top_values`.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "overflow": {
-          "description": "Written when the value list was frozen from an earlier profile.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValueOverflow"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pattern": {
-          "description": "A generalized regular expression, never an alternation of literals.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "prefixes": {
-          "description": "The values' leading characters, counted in place of `top_values`, as a policy keeps a ZIP\ncode's first three digits.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Prefixes"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "shapes": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Shape"
-          }
-        },
-        "top_values": {
-          "description": "Values at least `k_min` rows hold, in a column that is not an identifier.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/TopValue"
-          }
-        },
-        "whitespace_edge_fraction": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "StructStats": {
-      "type": "object",
-      "properties": {
-        "fields": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Column"
-          }
-        },
-        "presence_fractions": {
-          "description": "The share of rows in which each field is present.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "$ref": "#/$defs/Rate"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "Suppression": {
-      "description": "A column some of whose literals the policy withheld.",
-      "type": "object",
-      "properties": {
-        "column": {
-          "type": "string"
-        },
-        "reason": {
-          "$ref": "#/$defs/SuppressionReason"
-        },
-        "semantic": {
-          "description": "The column's `semantic.type`, where it has one.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "column",
-        "reason"
-      ]
-    },
-    "SuppressionReason": {
-      "oneOf": [
-        {
-          "description": "Typed `identifier`, so the column keeps no literal, extreme or top value.",
-          "type": "string",
-          "const": "identifier"
-        },
-        {
-          "description": "Typed `quasi_identifier` under `strict`, which treats it as an identifier.",
-          "type": "string",
-          "const": "quasi_identifier"
-        },
-        {
-          "description": "Typed `free_text`, so the column keeps its length statistics only.",
-          "type": "string",
-          "const": "free_text"
-        },
-        {
-          "description": "A ZIP code under `healthcare`, which keeps three-digit prefixes and writes a restricted one as `000`.",
-          "type": "string",
-          "const": "zip_prefix"
-        },
-        {
-          "description": "An age under `healthcare`, which collapses every age over 89 into one bin at 90.",
-          "type": "string",
-          "const": "age_over_89"
-        },
-        {
-          "description": "A date or timestamp under `healthcare`, whose extremes keep only their years.",
-          "type": "string",
-          "const": "date_to_year"
-        }
-      ]
-    },
-    "TableProfile": {
-      "description": "One table's profile. Every section is optional, and the generator falls back to defaults.",
-      "type": "object",
-      "properties": {
-        "columns": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Column"
-          }
-        },
-        "dataset": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Dataset"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "generated": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Generated"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "kind": {
-          "type": "string",
-          "enum": [
-            "table"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "privacy": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Privacy"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "source": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Source"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "kind",
-        "name"
-      ]
-    },
-    "TemporalExtremes": {
-      "type": "object",
-      "properties": {
-        "granularity": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Granularity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "high": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "low": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "TemporalStats": {
-      "type": "object",
-      "properties": {
-        "extremes": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TemporalExtremes"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "format": {
-          "description": "The strftime format of a textual date or time.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "gap_fraction": {
-          "description": "The share of days between the extremes holding no rows.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rate"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "hour_fractions": {
-          "description": "The share of rows in each hour of the day, from 00.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Rate"
-          },
-          "maxItems": 24,
-          "minItems": 24
-        },
-        "month_fractions": {
-          "description": "The share of rows in each month, January first.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Rate"
-          },
-          "maxItems": 12,
-          "minItems": 12
-        },
-        "timezone": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "weekday_fractions": {
-          "description": "The share of rows on each day of the week, Monday first.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/Rate"
-          },
-          "maxItems": 7,
-          "minItems": 7
-        }
-      },
-      "additionalProperties": false
-    },
-    "TextCompression": {
-      "type": "string",
-      "enum": [
-        "none",
-        "gzip",
-        "zstd"
-      ]
-    },
-    "TextEncoding": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "utf8"
-          ]
-        },
-        {
-          "description": "windows-1252, the superset of ISO-8859-1 every decoder applies to a `latin1` label.",
-          "type": "string",
-          "const": "latin1"
-        }
-      ]
-    },
-    "TimestampUnit": {
-      "type": "string",
-      "enum": [
-        "s",
-        "ms",
-        "us",
-        "ns"
-      ]
     },
     "TopFractions": {
       "description": "The share of matched child rows the busiest parents hold together, at the rank each field names.",
@@ -3533,62 +3567,28 @@
       },
       "additionalProperties": false
     },
-    "TopValue": {
+    "Inherited": {
+      "description": "A child column that copies a column of its parent row, as a share of joined rows, never a value.",
       "type": "object",
       "properties": {
-        "fraction": {
+        "child": {
+          "description": "The column of `from`'s table holding the copy.",
+          "type": "string"
+        },
+        "parent": {
+          "description": "The column of `to`'s table it copies.",
+          "type": "string"
+        },
+        "agreement_fraction": {
+          "description": "The share of joined child rows whose value equals their parent row's, a null equal to a null.",
           "$ref": "#/$defs/Rate"
-        },
-        "value": {
-          "type": "string"
         }
       },
       "additionalProperties": false,
       "required": [
-        "value",
-        "fraction"
-      ]
-    },
-    "ValueOverflow": {
-      "type": "object",
-      "properties": {
-        "new_value_rows": {
-          "description": "The rows `other_fraction` holds beyond the share it held when the list was first frozen: the\nearlier profile's `other_fraction`, less its own `new_value_rows`. So a column whose values did\nnot change writes about 0. A count of fewer than `k_min` rows is written as 0.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "new_value_rows"
-      ]
-    },
-    "WithheldField": {
-      "type": "object",
-      "properties": {
-        "field": {
-          "description": "The RFC 6901 pointer to the field from the profile's root, such as `/dataset/keys`.",
-          "type": "string"
-        },
-        "rule": {
-          "$ref": "#/$defs/WithheldRule"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "field",
-        "rule"
-      ]
-    },
-    "WithheldRule": {
-      "description": "The floor a withheld field failed.",
-      "oneOf": [
-        {
-          "description": "The table holds at least `k_min` rows, as a key is stated only over that many.",
-          "type": "string",
-          "const": "rows >= k_min"
-        }
+        "child",
+        "parent",
+        "agreement_fraction"
       ]
     }
   }

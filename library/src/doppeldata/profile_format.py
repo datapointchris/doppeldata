@@ -160,7 +160,7 @@ def integer_format_checker() -> jsonschema.FormatChecker:
 @cache
 def validators() -> dict[str, jsonschema.Draft202012Validator]:
     """One validator per `kind`, so an error inside a table is not reported as a bundle's."""
-    schema = json.loads(schema_text('profile'))
+    schema = profile_schema()
     checker = integer_format_checker()
     root = {key: value for key, value in schema.items() if key != 'oneOf'}
     by_kind: dict[str, jsonschema.Draft202012Validator] = {}
@@ -266,6 +266,55 @@ def plain_key(key: Any) -> str:
     if isinstance(key, bool):
         return 'true' if key else 'false'
     return str(key)
+
+
+@cache
+def profile_schema() -> dict[str, Any]:
+    return json.loads(schema_text('profile'))
+
+
+def in_schema_order(document: Any) -> Any:
+    """`document` with each mapping's keys in the order the profile schema lists them, the order `profile create` writes,
+    and each key the schema does not list, such as a map's own, after them in the order held."""
+    schema = profile_schema()
+    return schema_ordered(document, schema, schema['$defs'])
+
+
+def schema_ordered(value: Any, schema: Any, defs: dict[str, Any]) -> Any:
+    branches = list(schema_branches(schema, defs))
+    if isinstance(value, dict):
+        listed, rest = closest_branch(value, branches)
+        keys = [key for key in listed if key in value] + [key for key in value if key not in listed]
+        return {key: schema_ordered(value[key], listed.get(key, rest), defs) for key in keys}
+    if isinstance(value, list):
+        items = next((branch['items'] for branch in branches if isinstance(branch.get('items'), dict)), None)
+        return [schema_ordered(item, items, defs) for item in value]
+    return value
+
+
+def schema_branches(schema: Any, defs: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """`schema` and each subschema it may validate a value as, through `$ref`, `anyOf` and `oneOf`."""
+    if not isinstance(schema, dict):
+        return
+    yield schema
+    if '$ref' in schema:
+        yield from schema_branches(defs[schema['$ref'].rsplit('/', 1)[1]], defs)
+    for combined in ('anyOf', 'oneOf'):
+        for branch in schema.get(combined, ()):
+            yield from schema_branches(branch, defs)
+
+
+def closest_branch(value: dict[str, Any], branches: list[dict[str, Any]]) -> tuple[dict[str, Any], Any]:
+    """The properties and the `additionalProperties` of the branch listing the most of `value`'s keys, the first of equals."""
+    best = max(
+        branches,
+        key=lambda branch: (
+            len(value.keys() & (branch.get('properties') or {}).keys()),
+            isinstance(branch.get('additionalProperties'), dict),
+        ),
+        default={},
+    )
+    return best.get('properties') or {}, best.get('additionalProperties')
 
 
 def generated_section(**fields: Any) -> dict[str, Any]:

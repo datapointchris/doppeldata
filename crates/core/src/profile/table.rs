@@ -39,6 +39,9 @@ pub enum TableKind {
 pub struct Generated {
     /// The tool and its version, as `doppeldata <version>`.
     pub tool: Option<String>,
+    /// When profiling finished, in RFC 3339.
+    pub at: Option<String>,
+    pub engine: Option<Engine>,
     /// The package that fits each numeric column's family, and its version, as `scipy <version>`.
     /// Left out when scipy was not installed, so no column was fitted.
     pub fitter: Option<String>,
@@ -51,9 +54,6 @@ pub struct Generated {
     /// Each package that read or sniffed the source files, by its distribution name, with its
     /// installed version.
     pub readers: Option<BTreeMap<String, String>>,
-    /// When profiling finished, in RFC 3339.
-    pub at: Option<String>,
-    pub engine: Option<Engine>,
     /// A hash of each source file's path, size and revision as listed: its modification time on
     /// disk, or its S3 ETag. It tells two listings apart, and never hashes the content.
     pub source_fingerprint: Option<String>,
@@ -210,9 +210,9 @@ pub enum SuppressionReason {
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AuditEntry {
+    pub column: String,
     /// The RFC 6901 pointer to the field within `column`, such as `/string/top_values`.
     pub field: Option<String>,
-    pub column: String,
     /// How many literals or cells the field holds.
     pub values: Option<u64>,
     pub rule: AuditRule,
@@ -374,12 +374,12 @@ pub struct ParquetSource {
     /// The format version most footers declare, such as `1.0` or `2.6`.
     pub format_version: Option<String>,
     pub row_groups: Option<RowGroups>,
-    /// Each timestamp column's unit as stored. `int96` is the legacy encoding no writer reproduces.
-    pub timestamp_units: Option<BTreeMap<String, StoredTimestampUnit>>,
     /// Whether a decimal column's scale differs between files.
     pub decimal_scale_drift: Option<bool>,
     /// How many files' footers were read: every file's, or a seeded sample's.
     pub footers_read: Option<u64>,
+    /// Each timestamp column's unit as stored. `int96` is the legacy encoding no writer reproduces.
+    pub timestamp_units: Option<BTreeMap<String, StoredTimestampUnit>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]

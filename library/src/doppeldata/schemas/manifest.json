@@ -4,64 +4,20 @@
   "description": "The record of a generated dataset, which with its profile and scenario regenerates every file byte for byte.",
   "type": "object",
   "properties": {
-    "cdc": {
-      "description": "The change stream and the expected table a `cdc` write adds beside its full load, which\n`files` lists. Null for any other write.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ManifestCdc"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
+    "kind": {
+      "description": "Always `table`: the manifest of one table's files.",
+      "$ref": "#/$defs/TableManifestKind"
+    },
+    "tool": {
+      "description": "The tool that wrote the files, as `doppeldata <version>`. The files' bytes are a function of\nthe identity and this version.",
+      "type": "string"
     },
     "dataset_digest": {
       "description": "`sha256:` and the hex SHA-256 of `identity`'s RFC 8785 canonical JSON.",
       "type": "string"
     },
-    "destination": {
-      "description": "Where the files were written, as the caller named it, such as `s3://bucket/orders/`.",
-      "type": "string"
-    },
-    "elapsed_ms": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
-    },
-    "faults": {
-      "description": "The faults the write's fault list holds, counted by kind, or null for a write that lists\nnone: one with no `malformed_rows`, and no `cdc` with a fault rate. A partial manifest counts\nthe faults of the objects it lists.",
-      "type": [
-        "object",
-        "null"
-      ],
-      "additionalProperties": {
-        "type": "integer",
-        "format": "uint64",
-        "minimum": 0
-      },
-      "default": null
-    },
-    "files": {
-      "description": "Every object of the rows written, in path order. Under `cdc` these are the full-load\nfiles, and `cdc` lists the change files and the expected table.",
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/ManifestFile"
-      }
-    },
     "identity": {
       "$ref": "#/$defs/ManifestIdentity"
-    },
-    "kind": {
-      "description": "Always `table`: the manifest of one table's files.",
-      "$ref": "#/$defs/TableManifestKind"
-    },
-    "layout": {
-      "$ref": "#/$defs/LayoutSettings"
-    },
-    "partial": {
-      "description": "True when the run stopped early, so `files` lists only the objects that completed. Such a\nmanifest is stored as `_manifest.partial.json`, and regenerates nothing.",
-      "type": "boolean"
     },
     "profile": {
       "$ref": "#/$defs/ManifestProfile"
@@ -77,15 +33,48 @@
         }
       ]
     },
-    "tasks": {
-      "description": "The tasks a write split across processes divided its ranges among, such as a Spark job's,\nor null for a write in one process.",
+    "layout": {
+      "$ref": "#/$defs/LayoutSettings"
+    },
+    "destination": {
+      "description": "Where the files were written, as the caller named it, such as `s3://bucket/orders/`.",
+      "type": "string"
+    },
+    "files": {
+      "description": "Every object of the rows written, in path order. Under `cdc` these are the full-load\nfiles, and `cdc` lists the change files and the expected table.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ManifestFile"
+      }
+    },
+    "faults": {
+      "description": "The faults the write's fault list holds, counted by kind, or null for a write that lists\nnone: one with no `malformed_rows`, and no `cdc` with a fault rate. A partial manifest counts\nthe faults of the objects it lists.",
       "type": [
-        "integer",
+        "object",
         "null"
       ],
-      "format": "uint32",
-      "default": null,
-      "minimum": 0
+      "additionalProperties": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "default": null
+    },
+    "cdc": {
+      "description": "The change stream and the expected table a `cdc` write adds beside its full load, which\n`files` lists. Null for any other write.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ManifestCdc"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "partial": {
+      "description": "True when the run stopped early, so `files` lists only the objects that completed. Such a\nmanifest is stored as `_manifest.partial.json`, and regenerates nothing.",
+      "type": "boolean"
     },
     "threads": {
       "description": "The threads that generated and encoded in each process that wrote. The count never changes\na byte.",
@@ -93,15 +82,40 @@
       "format": "uint32",
       "minimum": 0
     },
-    "tool": {
-      "description": "The tool that wrote the files, as `doppeldata <version>`. The files' bytes are a function of\nthe identity and this version.",
-      "type": "string"
+    "tasks": {
+      "description": "The tasks a write split across processes divided its ranges among, such as a Spark job's,\nor null for a write in one process.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "default": null
+    },
+    "elapsed_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
     },
     "written_at": {
       "description": "When the write finished, in RFC 3339.",
       "type": "string"
     }
   },
+  "required": [
+    "kind",
+    "tool",
+    "dataset_digest",
+    "identity",
+    "profile",
+    "layout",
+    "destination",
+    "files",
+    "partial",
+    "threads",
+    "elapsed_ms",
+    "written_at"
+  ],
   "oneOf": [
     {
       "type": "object",
@@ -202,58 +216,63 @@
       ]
     }
   ],
-  "required": [
-    "kind",
-    "tool",
-    "dataset_digest",
-    "identity",
-    "profile",
-    "layout",
-    "destination",
-    "files",
-    "partial",
-    "threads",
-    "elapsed_ms",
-    "written_at"
-  ],
   "$defs": {
-    "ArrowSettings": {
-      "type": "object",
-      "properties": {
-        "compression": {
-          "$ref": "#/$defs/IpcCompression",
-          "default": "none"
-        },
-        "ipc": {
-          "$ref": "#/$defs/IpcFormat",
-          "default": "file"
-        }
-      },
-      "additionalProperties": false
+    "TableManifestKind": {
+      "description": "The `kind` of a [`Manifest`], which tells it from a [`BundleManifest`] under the same file name.",
+      "type": "string",
+      "enum": [
+        "table"
+      ]
     },
-    "ChangeCounts": {
+    "ManifestIdentity": {
+      "description": "The values a dataset's rows are a pure function of, keyed and written as the identity's canonical\nJSON, so a reader rebuilds `dataset_digest` from them with no mapping.",
       "type": "object",
       "properties": {
-        "deletes": {
+        "dataset_rows": {
+          "description": "The rows generated, in decimal, before any copies a scenario's `duplicates` adds. `files`\ngives the rows each file holds.",
+          "$ref": "#/$defs/Decimal"
+        },
+        "profile_digest": {
+          "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON, as given, before a\nscenario's patch. In a bundle, the bundle's, every table inline.",
+          "type": "string"
+        },
+        "scale": {
+          "description": "The scale a bundle was generated at, in decimal, or null for a table generated alone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scenario_digest": {
+          "description": "`sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON, or null for none.\nThe JSON is taken with each perturbation's `id` resolved, and with `description` and\n`expect` left out. A composition's is its composed document's: the patches merged in order,\nthe perturbations concatenated, and the names joined with `+`. In a bundle, the map of each\ntable a scenario names to its composed document.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seed": {
+          "description": "The seed, in decimal.",
+          "$ref": "#/$defs/Decimal"
+        },
+        "stream_version": {
+          "description": "The engine's stream version.",
           "type": "integer",
-          "format": "uint64",
+          "format": "uint32",
           "minimum": 0
         },
-        "inserts": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "updates": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
+        "table": {
+          "description": "The bundle table the rows are of, or null for a table generated alone and for a bundle's own\nmanifest.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "inserts",
-        "updates",
-        "deletes"
+        "dataset_rows",
+        "profile_digest",
+        "seed",
+        "stream_version"
       ]
     },
     "Decimal": {
@@ -261,18 +280,94 @@
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,19})$"
     },
-    "DelimitedSettings": {
-      "description": "A CSV or TSV dialect. Every character must be ASCII.",
+    "ManifestProfile": {
       "type": "object",
       "properties": {
-        "bom": {
-          "description": "Whether the file starts with a UTF-8 byte order mark.",
-          "type": "boolean",
-          "default": false
+        "name": {
+          "description": "The profile's `name`.",
+          "type": "string"
         },
+        "path": {
+          "description": "The profile's path as the caller gave it, or null when it came from memory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "embedded": {
+          "description": "Whether each file `files` and `cdc.expected` list holds the whole profile's canonical JSON,\nunder the metadata key `doppeldata.profile`, and the scenario's document under\n`doppeldata.scenario` where one applies. A `cdc` change file never holds either. Left out\nwhen false.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "ManifestScenario": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The scenario's name. A composition's joins its members' names with `+`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The scenario's path as the caller gave it, or null when it came from memory or composes\nseveral.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "document": {
+          "description": "The canonical document `identity.scenario_digest` is taken over, so the dataset regenerates\nwith no scenario file.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "composed_of": {
+          "description": "The scenarios composed, in order, present only for a composition.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ScenarioMember"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "document"
+      ]
+    },
+    "ScenarioMember": {
+      "description": "One scenario of a composition.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "description": "The scenario's path as the caller gave it, or null when it came from memory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "digest": {
+          "description": "The scenario's own digest, taken as `identity.scenario_digest` is.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "digest"
+      ]
+    },
+    "ParquetSettings": {
+      "type": "object",
+      "properties": {
         "compression": {
-          "$ref": "#/$defs/TextCompression",
-          "default": "none"
+          "$ref": "#/$defs/ParquetCompression",
+          "default": "zstd"
         },
         "compression_level": {
           "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
@@ -283,27 +378,146 @@
           "format": "int32",
           "default": null
         },
-        "date_format": {
-          "description": "A chrono format for date columns. Null writes ISO 8601.",
+        "row_group_rows": {
+          "description": "The most rows a row group holds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 1048576
+        },
+        "statistics": {
+          "$ref": "#/$defs/ParquetStatistics",
+          "default": "page"
+        },
+        "dictionary_columns": {
+          "description": "The columns written with a dictionary. Null gives every column one.",
           "type": [
-            "string",
+            "array",
             "null"
           ],
+          "items": {
+            "type": "string"
+          },
           "default": null
         },
+        "timestamp_unit": {
+          "description": "The unit every timestamp column is cast to. Null keeps each column's own. Parquet holds no\nseconds unit, so a column at `s` is stored at `ms`, as pyarrow stores it. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimestampUnit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "ParquetCompression": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none",
+            "snappy",
+            "gzip",
+            "zstd"
+          ]
+        },
+        {
+          "description": "LZ4_RAW, the LZ4 codec current readers expect.",
+          "type": "string",
+          "const": "lz4"
+        }
+      ]
+    },
+    "ParquetStatistics": {
+      "description": "How much of the min, max and null count each column chunk records.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "description": "Per column chunk.",
+          "type": "string",
+          "const": "chunk"
+        },
+        {
+          "description": "Per page too, with the page index.",
+          "type": "string",
+          "const": "page"
+        }
+      ]
+    },
+    "TimestampUnit": {
+      "type": "string",
+      "enum": [
+        "s",
+        "ms",
+        "us",
+        "ns"
+      ]
+    },
+    "ArrowSettings": {
+      "type": "object",
+      "properties": {
+        "ipc": {
+          "$ref": "#/$defs/IpcFormat",
+          "default": "file"
+        },
+        "compression": {
+          "$ref": "#/$defs/IpcCompression",
+          "default": "none"
+        }
+      },
+      "additionalProperties": false
+    },
+    "IpcFormat": {
+      "oneOf": [
+        {
+          "description": "The random-access file format, `.arrow`.",
+          "type": "string",
+          "const": "file"
+        },
+        {
+          "description": "The streaming format, `.arrows`.",
+          "type": "string",
+          "const": "stream"
+        }
+      ]
+    },
+    "IpcCompression": {
+      "type": "string",
+      "enum": [
+        "none",
+        "lz4",
+        "zstd"
+      ]
+    },
+    "DelimitedSettings": {
+      "description": "A CSV or TSV dialect. Every character must be ASCII.",
+      "type": "object",
+      "properties": {
         "delimiter": {
           "description": "Null takes the format's own: `,` for CSV, a tab for TSV.",
           "type": [
             "string",
             "null"
           ],
-          "default": null,
+          "minLength": 1,
           "maxLength": 1,
-          "minLength": 1
+          "default": null
         },
-        "encoding": {
-          "$ref": "#/$defs/TextEncoding",
-          "default": "utf8"
+        "quote": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1,
+          "default": "\""
         },
         "escape": {
           "description": "The character that escapes a quote inside a quoted field. Null doubles the quote instead.",
@@ -311,36 +525,30 @@
             "string",
             "null"
           ],
-          "default": null,
+          "minLength": 1,
           "maxLength": 1,
-          "minLength": 1
+          "default": null
+        },
+        "quoting": {
+          "$ref": "#/$defs/Quoting",
+          "default": "necessary"
         },
         "header": {
           "description": "Whether the first line names the columns.",
           "type": "boolean",
           "default": true
         },
-        "line_terminator": {
-          "$ref": "#/$defs/LineTerminator",
-          "default": "lf"
-        },
         "null": {
           "description": "What a null prints where the column's profile gives no missing token for it. When it is\nempty, an empty string is quoted so the two read back apart.",
           "type": "string",
           "default": ""
         },
-        "quote": {
-          "type": "string",
-          "default": "\"",
-          "maxLength": 1,
-          "minLength": 1
+        "line_terminator": {
+          "$ref": "#/$defs/LineTerminator",
+          "default": "lf"
         },
-        "quoting": {
-          "$ref": "#/$defs/Quoting",
-          "default": "necessary"
-        },
-        "time_format": {
-          "description": "A chrono format for time columns. Null writes ISO 8601.",
+        "date_format": {
+          "description": "A chrono format for date columns. Null writes ISO 8601.",
           "type": [
             "string",
             "null"
@@ -362,9 +570,252 @@
             "null"
           ],
           "default": null
+        },
+        "time_format": {
+          "description": "A chrono format for time columns. Null writes ISO 8601.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bom": {
+          "description": "Whether the file starts with a UTF-8 byte order mark.",
+          "type": "boolean",
+          "default": false
+        },
+        "encoding": {
+          "$ref": "#/$defs/TextEncoding",
+          "default": "utf8"
+        },
+        "compression": {
+          "$ref": "#/$defs/TextCompression",
+          "default": "none"
+        },
+        "compression_level": {
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
         }
       },
       "additionalProperties": false
+    },
+    "Quoting": {
+      "description": "Which fields are quoted. A null is never quoted.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "always"
+          ]
+        },
+        {
+          "description": "Only a field holding the delimiter, the quote or a line break, and an empty string where a\nnull prints empty.",
+          "type": "string",
+          "const": "necessary"
+        },
+        {
+          "description": "Every field that does not parse as a number.",
+          "type": "string",
+          "const": "non_numeric"
+        },
+        {
+          "description": "None, even where a field needs it.",
+          "type": "string",
+          "const": "never"
+        }
+      ]
+    },
+    "LineTerminator": {
+      "type": "string",
+      "enum": [
+        "lf",
+        "crlf"
+      ]
+    },
+    "TextEncoding": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "utf8"
+          ]
+        },
+        {
+          "description": "windows-1252, the superset of ISO-8859-1 every decoder applies to a `latin1` label.",
+          "type": "string",
+          "const": "latin1"
+        }
+      ]
+    },
+    "TextCompression": {
+      "type": "string",
+      "enum": [
+        "none",
+        "gzip",
+        "zstd"
+      ]
+    },
+    "JsonSettings": {
+      "type": "object",
+      "properties": {
+        "explicit_nulls": {
+          "description": "Whether a null field is written as `null` rather than left out.",
+          "type": "boolean",
+          "default": false
+        },
+        "compression": {
+          "$ref": "#/$defs/TextCompression",
+          "default": "none"
+        },
+        "compression_level": {
+          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "LayoutSettings": {
+      "description": "How rows are split into files and directories.",
+      "type": "object",
+      "properties": {
+        "file_rows": {
+          "$ref": "#/$defs/FileRows",
+          "default": 1000000
+        },
+        "partition_by": {
+          "description": "The columns whose values name each object's directories, outermost first. A partition\ncolumn is left out of the files, because its value is in the path.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "partition_style": {
+          "$ref": "#/$defs/PartitionStyle",
+          "default": "hive"
+        },
+        "partition_values": {
+          "description": "The values the partition keys take together, as the profile counts them. A range holds\n`file_rows` times this, so each of its objects lands near `file_rows` rows.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 1
+        }
+      }
+    },
+    "FileRows": {
+      "description": "The rows each object holds, before a range is scaled by its partition values.",
+      "anyOf": [
+        {
+          "description": "The same count in every range but the last.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        {
+          "description": "Each range's count drawn from these quantiles, from a stream keyed by the seed, so the\nsplit is the same on every run.",
+          "$ref": "#/$defs/Quantiles"
+        }
+      ]
+    },
+    "Quantiles": {
+      "description": "Values at named quantiles: p05 is the 5th percentile, p50 the median, p999 the 99.9th. The digits after p are the level's decimal digits, at least two and never ending in 0 past the second.",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^p[0-9]{2}([0-9]*[1-9])?$"
+      },
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "PartitionStyle": {
+      "oneOf": [
+        {
+          "description": "`key=value` directories.",
+          "type": "string",
+          "const": "hive"
+        },
+        {
+          "description": "Bare value directories, one level per key.",
+          "type": "string",
+          "const": "directory"
+        }
+      ]
+    },
+    "ManifestFile": {
+      "description": "One object the run wrote. A row or byte count is a JSON number, exact to 2^53 rows, which no\ndataset reaches.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The object's path under the destination, `/`-separated.",
+          "type": "string"
+        },
+        "range": {
+          "description": "The index of the row range the object holds, which its file name also carries.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "first_row": {
+          "description": "The dataset row the range starts at.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "range_rows": {
+          "description": "The rows the range holds. A partitioned range splits them across one object per value.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "rows": {
+          "description": "The rows in this object.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sha256": {
+          "description": "`sha256:` and the hex SHA-256 of the object's bytes.",
+          "type": "string"
+        },
+        "partition": {
+          "description": "Each partition key's value in the object's path, null for a null value. Absent when the\ndataset is not partitioned.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "required": [
+        "path",
+        "range",
+        "first_row",
+        "range_rows",
+        "rows",
+        "bytes",
+        "sha256"
+      ]
     },
     "FaultKind": {
       "description": "One way a file is broken. A row kind breaks one record, and a file kind a whole file.",
@@ -466,487 +917,6 @@
         }
       ]
     },
-    "FileRows": {
-      "description": "The rows each object holds, before a range is scaled by its partition values.",
-      "anyOf": [
-        {
-          "description": "The same count in every range but the last.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        {
-          "description": "Each range's count drawn from these quantiles, from a stream keyed by the seed, so the\nsplit is the same on every run.",
-          "$ref": "#/$defs/Quantiles"
-        }
-      ]
-    },
-    "IpcCompression": {
-      "type": "string",
-      "enum": [
-        "none",
-        "lz4",
-        "zstd"
-      ]
-    },
-    "IpcFormat": {
-      "oneOf": [
-        {
-          "description": "The random-access file format, `.arrow`.",
-          "type": "string",
-          "const": "file"
-        },
-        {
-          "description": "The streaming format, `.arrows`.",
-          "type": "string",
-          "const": "stream"
-        }
-      ]
-    },
-    "JsonSettings": {
-      "type": "object",
-      "properties": {
-        "compression": {
-          "$ref": "#/$defs/TextCompression",
-          "default": "none"
-        },
-        "compression_level": {
-          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32",
-          "default": null
-        },
-        "explicit_nulls": {
-          "description": "Whether a null field is written as `null` rather than left out.",
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "LayoutSettings": {
-      "description": "How rows are split into files and directories.",
-      "type": "object",
-      "properties": {
-        "file_rows": {
-          "$ref": "#/$defs/FileRows",
-          "default": 1000000
-        },
-        "partition_by": {
-          "description": "The columns whose values name each object's directories, outermost first. A partition\ncolumn is left out of the files, because its value is in the path.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
-        },
-        "partition_style": {
-          "$ref": "#/$defs/PartitionStyle",
-          "default": "hive"
-        },
-        "partition_values": {
-          "description": "The values the partition keys take together, as the profile counts them. A range holds\n`file_rows` times this, so each of its objects lands near `file_rows` rows.",
-          "type": "integer",
-          "format": "uint64",
-          "default": 1,
-          "minimum": 0
-        }
-      }
-    },
-    "LineTerminator": {
-      "type": "string",
-      "enum": [
-        "lf",
-        "crlf"
-      ]
-    },
-    "ManifestCdc": {
-      "description": "What a `cdc` write adds beside its full load.",
-      "type": "object",
-      "properties": {
-        "changes": {
-          "description": "The changes the stream holds, counted by operation, a fault's second delivery left out.",
-          "$ref": "#/$defs/ChangeCounts"
-        },
-        "expected": {
-          "description": "Every part of the table a correct merge of the stream produces, in path order.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/StreamFile"
-          }
-        },
-        "expected_prefix": {
-          "description": "Where the expected table lies under the destination, `_expected/<schema>/<table>/`.",
-          "type": "string"
-        },
-        "files": {
-          "description": "Every change file, in path order.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/StreamFile"
-          }
-        },
-        "prefix": {
-          "description": "Where the full load and the change files lie under the destination, `<schema>/<table>/`.",
-          "type": "string"
-        },
-        "style": {
-          "description": "The layout the stream takes, as the op's `style` names it.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "style",
-        "prefix",
-        "expected_prefix",
-        "changes",
-        "files",
-        "expected"
-      ]
-    },
-    "ManifestFile": {
-      "description": "One object the run wrote. A row or byte count is a JSON number, exact to 2^53 rows, which no\ndataset reaches.",
-      "type": "object",
-      "properties": {
-        "bytes": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "first_row": {
-          "description": "The dataset row the range starts at.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "partition": {
-          "description": "Each partition key's value in the object's path, null for a null value. Absent when the\ndataset is not partitioned.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "path": {
-          "description": "The object's path under the destination, `/`-separated.",
-          "type": "string"
-        },
-        "range": {
-          "description": "The index of the row range the object holds, which its file name also carries.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "range_rows": {
-          "description": "The rows the range holds. A partitioned range splits them across one object per value.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "rows": {
-          "description": "The rows in this object.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "sha256": {
-          "description": "`sha256:` and the hex SHA-256 of the object's bytes.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "path",
-        "range",
-        "first_row",
-        "range_rows",
-        "rows",
-        "bytes",
-        "sha256"
-      ]
-    },
-    "ManifestIdentity": {
-      "description": "The values a dataset's rows are a pure function of, keyed and written as the identity's canonical\nJSON, so a reader rebuilds `dataset_digest` from them with no mapping.",
-      "type": "object",
-      "properties": {
-        "dataset_rows": {
-          "description": "The rows generated, in decimal, before any copies a scenario's `duplicates` adds. `files`\ngives the rows each file holds.",
-          "$ref": "#/$defs/Decimal"
-        },
-        "profile_digest": {
-          "description": "`sha256:` and the hex SHA-256 of the profile's RFC 8785 canonical JSON, as given, before a\nscenario's patch. In a bundle, the bundle's, every table inline.",
-          "type": "string"
-        },
-        "scale": {
-          "description": "The scale a bundle was generated at, in decimal, or null for a table generated alone.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "scenario_digest": {
-          "description": "`sha256:` and the hex SHA-256 of the scenario's RFC 8785 canonical JSON, or null for none.\nThe JSON is taken with each perturbation's `id` resolved, and with `description` and\n`expect` left out. A composition's is its composed document's: the patches merged in order,\nthe perturbations concatenated, and the names joined with `+`. In a bundle, the map of each\ntable a scenario names to its composed document.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "seed": {
-          "description": "The seed, in decimal.",
-          "$ref": "#/$defs/Decimal"
-        },
-        "stream_version": {
-          "description": "The engine's stream version.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "table": {
-          "description": "The bundle table the rows are of, or null for a table generated alone and for a bundle's own\nmanifest.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "dataset_rows",
-        "profile_digest",
-        "seed",
-        "stream_version"
-      ]
-    },
-    "ManifestProfile": {
-      "type": "object",
-      "properties": {
-        "embedded": {
-          "description": "Whether each file `files` and `cdc.expected` list holds the whole profile's canonical JSON,\nunder the metadata key `doppeldata.profile`, and the scenario's document under\n`doppeldata.scenario` where one applies. A `cdc` change file never holds either. Left out\nwhen false.",
-          "type": "boolean"
-        },
-        "name": {
-          "description": "The profile's `name`.",
-          "type": "string"
-        },
-        "path": {
-          "description": "The profile's path as the caller gave it, or null when it came from memory.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "name"
-      ]
-    },
-    "ManifestScenario": {
-      "type": "object",
-      "properties": {
-        "composed_of": {
-          "description": "The scenarios composed, in order, present only for a composition.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/ScenarioMember"
-          }
-        },
-        "document": {
-          "description": "The canonical document `identity.scenario_digest` is taken over, so the dataset regenerates\nwith no scenario file.",
-          "type": "object",
-          "additionalProperties": true
-        },
-        "name": {
-          "description": "The scenario's name. A composition's joins its members' names with `+`.",
-          "type": "string"
-        },
-        "path": {
-          "description": "The scenario's path as the caller gave it, or null when it came from memory or composes\nseveral.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "name",
-        "document"
-      ]
-    },
-    "ParquetCompression": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "none",
-            "snappy",
-            "gzip",
-            "zstd"
-          ]
-        },
-        {
-          "description": "LZ4_RAW, the LZ4 codec current readers expect.",
-          "type": "string",
-          "const": "lz4"
-        }
-      ]
-    },
-    "ParquetSettings": {
-      "type": "object",
-      "properties": {
-        "compression": {
-          "$ref": "#/$defs/ParquetCompression",
-          "default": "zstd"
-        },
-        "compression_level": {
-          "description": "The codec's level, which must fall in the codec's range. Null takes the codec's default.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32",
-          "default": null
-        },
-        "dictionary_columns": {
-          "description": "The columns written with a dictionary. Null gives every column one.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "default": null,
-          "items": {
-            "type": "string"
-          }
-        },
-        "row_group_rows": {
-          "description": "The most rows a row group holds.",
-          "type": "integer",
-          "format": "uint64",
-          "default": 1048576,
-          "minimum": 0
-        },
-        "statistics": {
-          "$ref": "#/$defs/ParquetStatistics",
-          "default": "page"
-        },
-        "timestamp_unit": {
-          "description": "The unit every timestamp column is cast to. Null keeps each column's own. Parquet holds no\nseconds unit, so a column at `s` is stored at `ms`, as pyarrow stores it. parquet's Arrow\nwriter cannot write INT96, so no unit reproduces it.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TimestampUnit"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "additionalProperties": false
-    },
-    "ParquetStatistics": {
-      "description": "How much of the min, max and null count each column chunk records.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "none"
-          ]
-        },
-        {
-          "description": "Per column chunk.",
-          "type": "string",
-          "const": "chunk"
-        },
-        {
-          "description": "Per page too, with the page index.",
-          "type": "string",
-          "const": "page"
-        }
-      ]
-    },
-    "PartitionStyle": {
-      "oneOf": [
-        {
-          "description": "`key=value` directories.",
-          "type": "string",
-          "const": "hive"
-        },
-        {
-          "description": "Bare value directories, one level per key.",
-          "type": "string",
-          "const": "directory"
-        }
-      ]
-    },
-    "Quantiles": {
-      "description": "Values at named quantiles: p05 is the 5th percentile, p50 the median, p999 the 99.9th. The digits after p are the level's decimal digits, at least two and never ending in 0 past the second.",
-      "type": "object",
-      "additionalProperties": {
-        "type": "number"
-      },
-      "propertyNames": {
-        "pattern": "^p[0-9]{2}([0-9]*[1-9])?$"
-      }
-    },
-    "Quoting": {
-      "description": "Which fields are quoted. A null is never quoted.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "always"
-          ]
-        },
-        {
-          "description": "Only a field holding the delimiter, the quote or a line break, and an empty string where a\nnull prints empty.",
-          "type": "string",
-          "const": "necessary"
-        },
-        {
-          "description": "Every field that does not parse as a number.",
-          "type": "string",
-          "const": "non_numeric"
-        },
-        {
-          "description": "None, even where a field needs it.",
-          "type": "string",
-          "const": "never"
-        }
-      ]
-    },
-    "ScenarioMember": {
-      "description": "One scenario of a composition.",
-      "type": "object",
-      "properties": {
-        "digest": {
-          "description": "The scenario's own digest, taken as `identity.scenario_digest` is.",
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "path": {
-          "description": "The scenario's path as the caller gave it, or null when it came from memory.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "name",
-        "digest"
-      ]
-    },
     "StreamFault": {
       "description": "A fault `cdc` places in a change stream, listed in `_faults.jsonl` beside it.",
       "oneOf": [
@@ -962,20 +932,89 @@
         }
       ]
     },
-    "StreamFile": {
-      "description": "One object a `cdc` write stores beside its full load.",
+    "ManifestCdc": {
+      "description": "What a `cdc` write adds beside its full load.",
       "type": "object",
       "properties": {
-        "bytes": {
+        "style": {
+          "description": "The layout the stream takes, as the op's `style` names it.",
+          "type": "string"
+        },
+        "prefix": {
+          "description": "Where the full load and the change files lie under the destination, `<schema>/<table>/`.",
+          "type": "string"
+        },
+        "expected_prefix": {
+          "description": "Where the expected table lies under the destination, `_expected/<schema>/<table>/`.",
+          "type": "string"
+        },
+        "changes": {
+          "description": "The changes the stream holds, counted by operation, a fault's second delivery left out.",
+          "$ref": "#/$defs/ChangeCounts"
+        },
+        "files": {
+          "description": "Every change file, in path order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StreamFile"
+          }
+        },
+        "expected": {
+          "description": "Every part of the table a correct merge of the stream produces, in path order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StreamFile"
+          }
+        }
+      },
+      "required": [
+        "style",
+        "prefix",
+        "expected_prefix",
+        "changes",
+        "files",
+        "expected"
+      ]
+    },
+    "ChangeCounts": {
+      "type": "object",
+      "properties": {
+        "inserts": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
+        "updates": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "deletes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "inserts",
+        "updates",
+        "deletes"
+      ]
+    },
+    "StreamFile": {
+      "description": "One object a `cdc` write stores beside its full load.",
+      "type": "object",
+      "properties": {
         "path": {
           "description": "The object's path under the destination, `/`-separated.",
           "type": "string"
         },
         "rows": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "bytes": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -990,45 +1029,6 @@
         "rows",
         "bytes",
         "sha256"
-      ]
-    },
-    "TableManifestKind": {
-      "description": "The `kind` of a [`Manifest`], which tells it from a [`BundleManifest`] under the same file name.",
-      "type": "string",
-      "enum": [
-        "table"
-      ]
-    },
-    "TextCompression": {
-      "type": "string",
-      "enum": [
-        "none",
-        "gzip",
-        "zstd"
-      ]
-    },
-    "TextEncoding": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "utf8"
-          ]
-        },
-        {
-          "description": "windows-1252, the superset of ISO-8859-1 every decoder applies to a `latin1` label.",
-          "type": "string",
-          "const": "latin1"
-        }
-      ]
-    },
-    "TimestampUnit": {
-      "type": "string",
-      "enum": [
-        "s",
-        "ms",
-        "us",
-        "ns"
       ]
     }
   }

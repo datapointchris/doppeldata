@@ -17,6 +17,7 @@ mod related_tables;
 mod rng;
 mod samplers;
 pub mod scenario;
+mod sorted_keys;
 mod values_digest;
 
 pub use identity::DatasetIdentity;
