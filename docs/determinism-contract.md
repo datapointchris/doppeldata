@@ -128,6 +128,10 @@ derived from the row, and its own draws at a row are those the typed key holds t
 A column drawn by index takes each value from its `indexed_values` stream, positioned at the index
 rather than the block. A string column draws the string there, and a numeric column its level's
 offset inside the index's band. So the value at an index is the same in every block that draws it.
+A numeric column dealt bands by row draws nothing. Its band is the row's place in a keyed
+permutation of the planned rows, keyed by the seed and the column's index stream, or the row itself
+where the column is `monotonic`. So its value at a row depends only on the row, the planned rows and
+the seed.
 
 A copula group, the set of numeric columns correlated through one matrix, draws from one stream keyed
 by its sorted column names. Adding an unrelated column changes nothing. Adding a column to the group

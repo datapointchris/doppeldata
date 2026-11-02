@@ -1055,6 +1055,11 @@ impl DependentColumns {
             let ValueSampler::Numeric(sampler) = &planner.columns[index].values else {
                 unreachable!("a ranked column is numeric")
             };
+            // A ranked level is the copula's or the parent's, so no row takes a band of its own.
+            if let Some(bands) = &sampler.by_row {
+                let own = described[index].take().unwrap_or_else(|| planner.columns[index].sampler.clone());
+                described[index] = Some(own.replace(bands.describe(), ""));
+            }
             draws[index].values = Some(ValueDraw::Ranked(Box::new(RankedDraw {
                 copula,
                 own: RankedMarginal::of(sampler),

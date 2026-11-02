@@ -37,6 +37,7 @@ pub(crate) use self::dependent_columns::DependentColumns;
 pub(crate) use self::dependent_columns::DrawnColumns;
 pub(crate) use self::dependent_columns::FollowingColumns;
 use self::distinct_values::DistinctTarget;
+use self::distinct_values::RowPlacement;
 use self::distinct_values::ValueIndex;
 pub use self::file_rows::file_rows_draws;
 pub use self::fitted_family::FITTED_FAMILIES;
@@ -125,6 +126,9 @@ pub(crate) struct PlanContext<'a> {
     pub(crate) table: &'a str,
     pub(crate) seed: u64,
     pub(crate) rows: f64,
+    /// The dataset's rows where a column draws one value for each of them, so a draw can place a row
+    /// among them. `None` for a list's elements.
+    pub(crate) row_count: Option<u64>,
     /// The source's rows a distinct ratio is counted over, `dataset.rows`.
     pub(crate) source_rows: Option<f64>,
     /// The source's rows a rate is a share of: those a sample read, or else every row.
@@ -860,6 +864,9 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
             if numeric.index.is_some() {
                 description.push_str(", at the profiled distinct ratio");
             }
+            if let Some(bands) = &numeric.by_row {
+                description.push_str(bands.describe());
+            }
             description
         }
         ValueSampler::Categorical(categorical) => {
@@ -939,6 +946,38 @@ fn snake_case(name: &str) -> String {
     snake
 }
 
+/// The least weight of the straight line a numeric column's fitted tails mix in for its index to hold
+/// its distinct target, from `sampler_with` building the column at a weight. A profile's distinct
+/// count is measured and its fit is modeled, so a tail too thin to hold the count gives way as far as
+/// the count needs. An index holds the count once its bands are no more than the rows drawing them.
+/// With more, it caps nothing, and the count follows where the rows land, which a copula or a
+/// parent's warp moves. 0 where the fit alone reaches the target or no tail is fitted, and 1 where
+/// no weight lets the index hold it.
+fn tail_straight_share(target: DistinctTarget, sampler_with: impl Fn(f64) -> Result<NumericSampler, PlanError>) -> Result<f64, PlanError> {
+    let fitted = sampler_with(0.0)?;
+    let (reach, wanted) = fitted.fresh_reach(target);
+    if reach >= wanted || (fitted.curve.lower.is_none() && fitted.curve.upper.is_none()) {
+        return Ok(0.0);
+    }
+    let straight = sampler_with(1.0)?;
+    if straight.fresh_reach(target).0 <= reach {
+        return Ok(0.0);
+    }
+    if !straight.index_binds(target) {
+        return Ok(1.0);
+    }
+    let (mut low, mut high) = (0.0, 1.0);
+    for _ in 0..40 {
+        let mid = (low + high) / 2.0;
+        if sampler_with(mid)?.index_binds(target) {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    Ok(high)
+}
+
 /// The column's Arrow type: its `physical_type` where given, otherwise one its statistics and
 /// logical type imply.
 fn physical(column: &Column) -> Result<PhysicalType, String> {
@@ -1007,10 +1046,22 @@ fn value_sampler(
                 k_min: context.k_min,
             })
         });
-        let curve = numeric::numeric_cdf(&stats, fit.as_ref(), reads).map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/numeric"))?;
-        let sampler = NumericSampler::new(curve, &stats, output, target, source, reads)
-            .map_err(site.refuse_as(ColumnFault::UnusableRates, "/numeric/top_values"))?;
-        return Ok(ValueSampler::Numeric(sampler));
+        let placement = context.row_count.map(|rows| RowPlacement {
+            rows,
+            seed: context.seed,
+            key: keys.index,
+        });
+        let sampler_with = |straight: f64, reads: &mut FieldReads| {
+            let curve = numeric::numeric_cdf(&stats, fit.as_ref(), straight, reads)
+                .map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/numeric"))?;
+            NumericSampler::new(curve, &stats, output, target, source, placement, reads)
+                .map_err(site.refuse_as(ColumnFault::UnusableRates, "/numeric/top_values"))
+        };
+        let straight = match target {
+            Some(target) => tail_straight_share(target, |straight| sampler_with(straight, &mut FieldReads::default()))?,
+            None => 0.0,
+        };
+        return Ok(ValueSampler::Numeric(sampler_with(straight, reads)?));
     }
     if let Some(output) = TemporalOutput::from_type(&scalar) {
         let gap_days = || rng_for(context.seed, keys.gap_days, 0);
@@ -1266,6 +1317,7 @@ fn list_sampler(
     let per_row = (1.0 - empty_fraction.unwrap_or(0.0)) * nested::mean_length(&length);
     let elements = PlanContext {
         rows: context.rows * per_row,
+        row_count: None,
         source_rows: context.source_rows.map(|rows| rows * per_row),
         described_rows: context.described_rows.map(|rows| rows * per_row),
         ..*context

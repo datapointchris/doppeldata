@@ -3,9 +3,15 @@
 ## A numeric column draws a uniform level through a piecewise-linear inverse CDF
 
 The inverse CDF is a list of (level, value) knots. The stored quantiles are the frame, with the
-extremes at levels 0 and 1. A histogram's edges, at their cumulative shares, fill the body between
-the outermost quantiles. A knot that would put a value out of order is dropped, so the quantiles
-win where sources disagree.
+extremes at levels 0 and 1. A histogram's pinned edges, at their cumulative shares, fill the body
+between the quantiles and past them. Without `overflow` the outer bins hold the rows beyond the
+trimmed extremes, so only the interior edges are pinned. A knot that would put a value out of order
+is dropped, so the quantiles win where sources disagree.
+
+At 200 rows only p25, p50 and p75 pass the floor, so the edges past them carry the outer half of the
+curve. Drawn from the quantiles alone, the bundled `orders` example's `customer_id` and `amount`
+missed their histogram's shares by up to 0.058 and 0.075 at the edges past p25 and p75. With
+those edges in the body, each tail spans only the outermost bin.
 
 `zero_fraction` adds a flat run at zero, from `negative_fraction` to `negative_fraction + zero_fraction`. The run
 is clamped between the last knot below zero and the first above it, so it stays in order and is
@@ -65,6 +71,21 @@ cargo run --release -p doppeldata-core --example throughput -- eight-columns --r
   bounds the lower tail's share below zero.** The levels from it to the body's first knot draw
   between zero and that knot, so a tail fitted to the body cannot carry p001's whole share below
   zero.
+- **A fitted tail reaching fewer values than `distinct.ratio` asks is mixed with the straight
+  line.** Each tail draws through `(1 − w)·F + w·L`, where `F` is the fit's conditional CDF and `L`
+  the line's. The weight `w` is the least at which the column's index has no more bands than the
+  rows drawing them. Past that weight the bands bound the count, wherever a copula or a warp puts
+  the levels. `data plan` names the weight.
+- **The weight that only reaches the target bounds nothing.** Its index needs more bands than rows,
+  so the count follows where the levels land. The January 2025 taxi trips' `tip_amount` has a poor
+  lognormal fit, and with the fitted tail alone it held 3,744 values against the source's 4,197. At
+  the weight that reaches the target, 0.19, its levels warped by each `payment_type`'s quantiles put
+  13% more rows past p999 than the source holds, and the count rose to 4,643. At 0.37, where the
+  index binds, 20 seeds held 4,254 to 4,301.
+- **The mix moves the tail's shape along with its count.** At 0.37, January's `tip_amount` puts 971
+  rows between 100 and 200, where the source holds 46. Its standard deviation rises from 3.78 to
+  4.46. Its `ks` holds at 0.019, because the profile states no point between p999, at 27.19, and
+  the extreme of 200.
 - **The remaining lift is the body.** Below p99, linear interpolation across the stored quantiles gives 33.31
   against 30.06 for the true lognormal. A histogram's many knots shrink it.
 
@@ -91,6 +112,12 @@ holding 1 to `k_min − 1` rows outside the list, which left one bin in the two 
 - **They are drawn on the side the histogram's overflow names**: above where only `rows_above`
   counts rows, below where only `rows_below` does, and otherwise above and below in turn. Their rows
   come out of the `other_fraction`, never on top of it.
+- **A side holds no zero where `zero_fraction` is stated 0, and no negative value where
+  `negative_fraction` is.** So an integer column with a low of 1 and both rates 0 hides nothing
+  below 1, and the values that side has no room for go above. A decimal with a low of 1.00 still
+  has 0.99 down to 0.01 below it. The bundled `orders` example profiled from 200 of its rows states
+  `quantity` from 1 to 5 with 8 values. Its plan reads "4 top values and 3 beyond the extremes",
+  and all 3 lie above 5.
 - **A continuous column never draws past its extremes.** Its room between them is unbounded.
 
 `data plan` describes the curve from what `numeric_cdf` built, so each tail reads as fitted or
@@ -225,6 +252,11 @@ function of its index, no pool of values is held, and any block still generates 
   would ask for one.
 - **K is chosen so the expected count of distinct indices meets the target.** `n` uniform draws
   from `0..K` hold `K · (1 − e^(−n/K))` distinct indices. `n` counts the rows not null.
+- **K is the widest whole range at or under the one solved.** Its count then stays at or under the
+  target, so a share drawing many rows for each value never holds more values than the profile
+  states. The January 2025 taxi trips' `mta_tax` lists 4 values and states 9, so its other share of
+  13 rows is to hold 5. Its K solves to 5.54. Rounded to 6, the share is expected to hold 5.31, so
+  some seeds hold 6. At 5 it holds all 5 with chance 0.68, and 16 of 20 seeds did.
 - **A source whose strings can be counted has its collisions counted too.** `m` distinct indices
   drawn into `S` equally likely strings give `S · (1 − e^(−m/S))` distinct strings, so the index
   target is raised to meet the value target. A pattern is counted from its syntax, as if every
@@ -233,9 +265,10 @@ function of its index, no pool of values is held, and any block still generates 
   its digits. `icd10cm` and
   `hcpcs_level2` are counted from their shapes, ICD-10-CM's at the share of each length it draws. Characters and every other provider are uncounted, and each
   distinct index is taken as a distinct string.
-- **Where fresh draws reach no more than the target, the column draws fresh**, with no index. A
-  ratio of 1 is always that case. So is a source whose variety sits below the target, which caps
-  the column's distinct count.
+- **Where fresh draws reach no more than the target, a string column draws fresh**, with no index.
+  A ratio of 1 is always that case. So is a source whose variety sits below the target, which caps
+  the column's distinct count. A numeric column instead deals each row a band of levels from its
+  place among the rows.
 - **With `top_values` or `prefixes`, the index covers only the `other_fraction`.** Its target is the
   column's less the listed values' count, over the rows the share draws, for strings and numbers
   alike. A conditional table's share of values the column lists none of draws through the same
@@ -293,11 +326,30 @@ ratio to 0.2, generated by `data generate --rows 100000`. *Rejected:* solving K 
 gave a value of its own. Neighboring bands share a value wherever an edge splits a cell, so that K
 falls short of the target.
 
-A column whose fresh draws hold fewer values than its target draws fresh. Its quantiles bound it,
-at the rows or the lattice points each piece holds, whichever is fewer. The taxi trips'
-`tip_amount` holds 5,180 of the 5,541 cents its target asks. Its profile states nothing above p999
-but the fit, so the cents the source holds past p999 are drawn only as the fitted tail reaches
-them.
+## A numeric column whose fresh draws fall short deals each row a band of levels
+
+Independent levels land on values already drawn. An integer column with one value for each of its
+n rows holds about 63% of them when each row draws a level of its own, `1 − 1/e`. So where fresh
+draws reach fewer values than the target, a column with no listed values takes each row's band from
+the row's place among the dataset's rows.
+
+- **The rows take the bands through a keyed permutation**, the one a key stated unique draws its
+  strings through. Every band is dealt once before any is dealt again. A row's band depends only
+  on its row number, so any block still generates alone.
+- **A column stated `monotonic` takes its bands in row order**, rising or falling with the row.
+- **Each band gives the value at its middle level.** Two band middles a lattice cell or more apart
+  never round to one value. So a stratum holds a value for each band middle falling in it, up to
+  its values, and K is solved from that count.
+- **K is the band count whose middles reach the target, rounded down**, or one band per row where
+  no count reaches it. A band dealt only to null rows, or to rows of another type, holds no value.
+  So each band counts at the chance that one of its rows is filled.
+- **A copula member or a warped column ignores its bands.** Its level is another column's rank, so
+  `data plan` does not say it deals any.
+- **A row past the planned rows takes the band of the row its count wraps to.** So a `cdc` insert
+  past the full load's rows repeats a full-load value of such a column.
+
+The determinism fixture's three `near_unique_integer_*_by_row` columns each hold 132,685 values over
+135,393 rows, their target exactly.
 
 ## A temporal column is uniform over its range unless the profile weights it
 

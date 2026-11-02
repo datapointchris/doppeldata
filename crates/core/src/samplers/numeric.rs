@@ -33,6 +33,8 @@ use super::BlockPosition;
 use super::FieldReads;
 use super::StreamKeys;
 use super::distinct_values::DistinctTarget;
+use super::distinct_values::RowBands;
+use super::distinct_values::RowPlacement;
 use super::distinct_values::Stratum;
 use super::distinct_values::ValueIndex;
 use super::distinct_values::Variety;
@@ -75,6 +77,17 @@ pub(crate) fn quantile_knots(quantiles: Option<&Quantiles>) -> Result<Vec<(f64, 
     Ok(knots)
 }
 
+/// The histogram's edges whose levels its counts pin. Without overflow the outer bins hold the rows
+/// beyond the trimmed extremes, so the outer edges pin nothing.
+fn pinned_edges(histogram: Option<&Histogram>) -> Vec<(f64, f64)> {
+    let mut knots = histogram_knots(histogram);
+    if histogram.is_some_and(|h| h.overflow.is_none()) && knots.len() >= 2 {
+        knots.pop();
+        knots.remove(0);
+    }
+    knots
+}
+
 fn histogram_knots(histogram: Option<&Histogram>) -> Vec<(f64, f64)> {
     let Some(histogram) = histogram else {
         return Vec::new();
@@ -97,12 +110,14 @@ fn histogram_knots(histogram: Option<&Histogram>) -> Vec<(f64, f64)> {
 }
 
 /// What a numeric column's inverse CDF was built from, as a plan describes it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct CurveShape {
     pub(crate) body: CurveBody,
     /// The family each tail was drawn from, below the body and above it, or `None` for a straight one.
     pub(crate) lower: Option<&'static str>,
     pub(crate) upper: Option<&'static str>,
+    /// The weight of the straight line each fitted tail mixes in.
+    pub(crate) straight: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +132,14 @@ pub(crate) enum CurveBody {
 
 impl CurveShape {
     pub(crate) fn describe(self) -> String {
+        let mixed = match self.straight > 0.0 && (self.lower.is_some() || self.upper.is_some()) {
+            true => format!(" mixed with a straight line at weight {:.2}", self.straight),
+            false => String::new(),
+        };
+        self.describe_unmixed() + &mixed
+    }
+
+    fn describe_unmixed(self) -> String {
         let tails = match (self.lower, self.upper) {
             (Some(family), Some(_)) => format!("fitted {family} tails"),
             (None, None) => "linear tails".to_string(),
@@ -139,17 +162,24 @@ fn tail_kind(family: Option<&str>) -> String {
     family.map_or_else(|| "linear".to_string(), |family| format!("fitted {family}"))
 }
 
-/// The inverse CDF a numeric column draws through, and what it was built from.
+/// The inverse CDF a numeric column draws through, and what it was built from. Each fitted tail
+/// mixes in the straight line across it at weight `straight`, from 0 for the fit alone to 1 for the
+/// line alone.
 pub(crate) fn numeric_cdf(
     stats: &NumericStats,
     fit: Option<&FittedFamily>,
+    straight: f64,
     reads: &mut FieldReads,
 ) -> Result<(InverseCdf, CurveShape), String> {
     let extremes = reads.read("extremes", "/numeric/extremes", stats.extremes.as_ref());
     let low = extremes.and_then(|e| e.low);
     let high = extremes.and_then(|e| e.high);
     let quantiles = quantile_knots(reads.read("quantiles", "/numeric/quantiles", stats.quantiles.as_ref()))?;
-    let histogram = histogram_knots(reads.read("histogram", "/numeric/histogram", stats.histogram.as_ref()));
+    let stated_histogram = reads.read("histogram", "/numeric/histogram", stats.histogram.as_ref());
+    let histogram = match quantiles.is_empty() {
+        true => histogram_knots(stated_histogram),
+        false => pinned_edges(stated_histogram),
+    };
     let mut shape = CurveShape {
         body: if quantiles.is_empty() {
             CurveBody::Histogram
@@ -158,6 +188,7 @@ pub(crate) fn numeric_cdf(
         },
         lower: None,
         upper: None,
+        straight,
     };
     let (frame, interior) = if quantiles.is_empty() {
         (histogram, Vec::new())
@@ -184,6 +215,11 @@ pub(crate) fn numeric_cdf(
             }
         };
     }
+    // Pinned edges join the body inside and past the quantiles wherever they keep the values in
+    // order, so a tail starts past the outermost point the profile states.
+    for (level, value) in interior {
+        _ = knots.insert(level, value);
+    }
     let (body_low, body_high) = (knots.first(), knots.last());
     // The extreme sits beyond the body's outermost knot, so it is always in order. A tail knot
     // the fit cannot place, such as a NaN, is left out, and the curve runs straight across it.
@@ -199,7 +235,7 @@ pub(crate) fn numeric_cdf(
         // A family whose support stops short of the extreme cannot draw the values between them.
         let reaches = fit.filter(|fit| low.is_none_or(|low| fit.support().0 <= low));
         _ = knots.insert(top_level, top_value);
-        match reaches.and_then(|fit| Some((fit.name, lower_tail(fit, low, top_level, top_value)?))) {
+        match reaches.and_then(|fit| Some((fit.name, lower_tail(fit, low, top_level, top_value, straight)?))) {
             Some((family, tail)) => {
                 shape.lower = Some(family);
                 _ = knots.extend(tail);
@@ -210,18 +246,12 @@ pub(crate) fn numeric_cdf(
     if let Some((level, value)) = body_high.filter(|&(level, _)| level < 1.0) {
         let high = high.filter(|&high| high >= value);
         let reaches = fit.filter(|fit| high.is_none_or(|high| fit.support().1 >= high));
-        match reaches.and_then(|fit| Some((fit.name, upper_tail(fit, level, value, high)?))) {
+        match reaches.and_then(|fit| Some((fit.name, upper_tail(fit, level, value, high, straight)?))) {
             Some((family, tail)) => {
                 shape.upper = Some(family);
                 _ = knots.extend(tail);
             }
             None => _ = knots.insert(1.0, high.unwrap_or(value)),
-        }
-    }
-    if let (Some((first, _)), Some((last, _))) = (body_low, body_high) {
-        // The quantiles frame the body, so a histogram edge they contradict is left out.
-        for (level, value) in interior.into_iter().filter(|&(level, _)| first < level && level < last) {
-            _ = knots.insert(level, value);
         }
     }
     let zero_fraction = reads.read("zero_fraction", "/numeric/zero_fraction", stats.zero_fraction);
@@ -263,18 +293,61 @@ pub(crate) fn bounded_cdf(
     Ok(InverseCdf::new(knots))
 }
 
-/// Knots from level 0 up to `level`, drawn from the fit conditioned on [`low`, `value`].
-fn lower_tail(fit: &FittedFamily, low: Option<f64>, level: f64, value: f64) -> Option<Vec<(f64, f64)>> {
+/// A fitted family conditioned on the values whose CDF runs from `floor` to `top`, mixed with the
+/// straight line across `span` at weight `straight`.
+struct ConditionedTail<'a> {
+    fit: &'a FittedFamily,
+    floor: f64,
+    top: f64,
+    span: Option<(f64, f64)>,
+    straight: f64,
+}
+
+impl ConditionedTail<'_> {
+    /// The value below which the tail draws `share` of its values.
+    fn value(&self, share: f64) -> f64 {
+        let span = self.span.filter(|&(from, to)| self.straight > 0.0 && to > from);
+        let Some((from, to)) = span else {
+            return self.fit.inverse(self.floor + share * (self.top - self.floor));
+        };
+        let fitted = |x: f64| ((self.fit.cdf(x) - self.floor) / (self.top - self.floor)).clamp(0.0, 1.0);
+        let mixed = |x: f64| (1.0 - self.straight) * fitted(x) + self.straight * (x - from) / (to - from);
+        let (mut low, mut high) = (from, to);
+        for _ in 0..128 {
+            let mid = low + (high - low) / 2.0;
+            if mid <= low || mid >= high {
+                break;
+            }
+            if mixed(mid) < share {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        high
+    }
+}
+
+/// Knots from level 0 up to `level`, drawn from the fit conditioned on [`low`, `value`] and mixed
+/// with the line from `low` to `value` at weight `straight`.
+fn lower_tail(fit: &FittedFamily, low: Option<f64>, level: f64, value: f64, straight: f64) -> Option<Vec<(f64, f64)>> {
     let floor = low.map_or(0.0, |low| fit.cdf_below(low));
     let top = fit.cdf(value);
     if top.partial_cmp(&floor) != Some(std::cmp::Ordering::Greater) {
         return None;
     }
+    let tail = ConditionedTail {
+        fit,
+        floor,
+        top,
+        span: low.map(|low| (low, value)),
+        straight,
+    };
     let mut knots: Vec<(f64, f64)> = (1..=TAIL_KNOTS)
         .rev()
         .map(|k| {
             let share = libm::exp2(-f64::from(k) * TAIL_GRID_STEP);
-            let drawn = fit.inverse(floor + share * (top - floor));
+            let drawn = tail.value(share);
             (share * level, drawn.max(low.unwrap_or(drawn)).min(value))
         })
         .collect();
@@ -283,17 +356,25 @@ fn lower_tail(fit: &FittedFamily, low: Option<f64>, level: f64, value: f64) -> O
     Some(knots)
 }
 
-/// Knots from `level` up to level 1, drawn from the fit conditioned on [`value`, `high`].
-fn upper_tail(fit: &FittedFamily, level: f64, value: f64, high: Option<f64>) -> Option<Vec<(f64, f64)>> {
+/// Knots from `level` up to level 1, drawn from the fit conditioned on [`value`, `high`] and mixed
+/// with the line from `value` to `high` at weight `straight`.
+fn upper_tail(fit: &FittedFamily, level: f64, value: f64, high: Option<f64>, straight: f64) -> Option<Vec<(f64, f64)>> {
     let floor = fit.cdf_below(value);
     let top = high.map_or(1.0, |high| fit.cdf(high));
     if top.partial_cmp(&floor) != Some(std::cmp::Ordering::Greater) {
         return None;
     }
+    let tail = ConditionedTail {
+        fit,
+        floor,
+        top,
+        span: high.map(|high| (value, high)),
+        straight,
+    };
     let mut knots: Vec<(f64, f64)> = (1..=TAIL_KNOTS)
         .map(|k| {
             let share = 1.0 - libm::exp2(-f64::from(k) * TAIL_GRID_STEP);
-            let drawn = fit.inverse(floor + share * (top - floor));
+            let drawn = tail.value(share);
             (level + share * (1.0 - level), drawn.min(high.unwrap_or(drawn)).max(value))
         })
         .collect();
@@ -406,23 +487,37 @@ pub(crate) struct NumericSampler {
     pub(crate) unlisted: Option<ListedValues<f64>>,
     /// Where set, a value drawn through `cdf` is the one at an index the row draws.
     pub(crate) index: Option<ValueIndex>,
+    /// Where set, each row draws at the middle of a band its row is dealt, because independent draws
+    /// reach fewer values than the column's target. A level a copula or a parent column chooses
+    /// leaves it unread.
+    pub(crate) by_row: Option<Box<RowBands>>,
 }
 
 impl NumericSampler {
-    /// The sampler drawing through `cdf`, the column's inverse CDF, built as `curve` says. It fails
-    /// only on unusable rates.
+    /// The sampler drawing through `cdf`, the column's inverse CDF, built as `curve` says. A column
+    /// drawing one value for each row of `placement` may take its rows' places. It fails only on
+    /// unusable rates.
     pub(crate) fn new(
         (cdf, curve): (InverseCdf, CurveShape),
         stats: &NumericStats,
         output: NumericOutput,
         target: Option<DistinctTarget>,
         source: Option<SourceCounts>,
+        placement: Option<RowPlacement>,
         reads: &mut FieldReads,
     ) -> Result<Self, String> {
         let integral = reads.read("integral", "/numeric/integral", stats.integral);
         let rounding = Rounding::for_column(integral, reads.read("scale", "/numeric/scale", stats.scale), &output);
         let Some(numbers) = ListedNumbers::of(&cdf, stats, rounding, source, reads)? else {
-            let index = target.and_then(|target| ValueIndex::for_distinct_in_bands(target, &variety(&cdf, rounding)));
+            let variety = variety(&cdf, rounding);
+            let index = target.and_then(|target| ValueIndex::for_distinct_in_bands(target, &variety));
+            let by_row = match (index, target, placement) {
+                (None, Some(target), Some(placement)) => RowBands::for_distinct(target, &variety, placement, || {
+                    reads.read("monotonic", "/numeric/monotonic", stats.monotonic)
+                })
+                .map(Box::new),
+                _ => None,
+            };
             return Ok(Self {
                 cdf,
                 curve,
@@ -432,6 +527,7 @@ impl NumericSampler {
                 beyond_extremes: 0,
                 unlisted: None,
                 index,
+                by_row,
             });
         };
         let cdf = numbers.outside.unwrap_or(cdf);
@@ -446,7 +542,26 @@ impl NumericSampler {
             beyond_extremes: numbers.beyond_extremes,
             unlisted: numbers.unlisted,
             index,
+            by_row: None,
         })
+    }
+
+    /// The distinct values independent draws through `cdf` are expected to give, beside those it is
+    /// to give of `target`: of the values outside the list, where the column lists values.
+    pub(crate) fn fresh_reach(&self, target: DistinctTarget) -> (f64, f64) {
+        let target = self.listed.as_ref().map_or(target, |listed| listed.outside(target));
+        (
+            variety(&self.cdf, self.rounding).distinct_values(target.filled_rows),
+            target.distinct,
+        )
+    }
+
+    /// Whether the column draws through an index of no more bands than the rows drawing them, of
+    /// `target`'s rows outside the list where it lists values. Its bands then bound its distinct
+    /// count, wherever the rows' levels land.
+    pub(crate) fn index_binds(&self, target: DistinctTarget) -> bool {
+        let rows = self.listed.as_ref().map_or(target, |listed| listed.outside(target)).filled_rows;
+        self.index.is_some_and(|index| index.bands() as f64 <= rows)
     }
 
     pub(crate) fn generate(&self, at: &BlockPosition, keys: &StreamKeys, rows: usize, nulls: Option<NullBuffer>) -> ArrayRef {
@@ -476,9 +591,17 @@ impl NumericSampler {
             };
             self.rounding.apply(self.cdf.value_at(level))
         };
-        match listed {
-            None => self.output.drawn_array(rows, nulls, || unlisted(&mut values)),
-            Some(listed) => self.output.drawn_array(rows, nulls, || match listed.sample(&mut values) {
+        match (listed, &self.by_row) {
+            (None, Some(bands)) => {
+                let mut row = at.first_row;
+                self.output.drawn_array(rows, nulls, || {
+                    let level = bands.level(row);
+                    row += 1;
+                    self.rounding.apply(self.cdf.value_at(level))
+                })
+            }
+            (None, None) => self.output.drawn_array(rows, nulls, || unlisted(&mut values)),
+            (Some(listed), _) => self.output.drawn_array(rows, nulls, || match listed.sample(&mut values) {
                 Some(&value) => value,
                 None => unlisted(&mut values),
             }),

@@ -39,10 +39,10 @@ const _: () = assert!(
 /// release freezes the version and every hash beside it: once released, a change to any value
 /// raises STREAM_VERSION. `crates/check-stream-version-raised.sh` reads these lines and refuses a
 /// new hash at a released version.
-const PINNED_STREAM_VERSION: u32 = 16;
-const PINNED_VALUES: &str = "336c7e6634bc3e39d0171a89f0dd6e605cd744cf69364efb39da94f5ef6e1e3e";
-const PINNED_SCENARIO_VALUES: &str = "f878a1a3dd4263ac9da507f7aeb151aa152a95385c315e8836cac21330ae0b02";
-const PINNED_CDC_VALUES: &str = "b812894ae4e4d252ffa9363dbfee1d95c44faa1ea30c291c1d1c0ca0a7834551";
+const PINNED_STREAM_VERSION: u32 = 17;
+const PINNED_VALUES: &str = "632ebd8248e402bc53663fc4e832151922818dbb9a53359fd88fe7bd0bb7220a";
+const PINNED_SCENARIO_VALUES: &str = "573d2c683a14255040aea695fe6ff5f5366717fde1d55b2d3876705567f2a428";
+const PINNED_CDC_VALUES: &str = "f524dee5169d4530fa2f2ac90be627c89d0573051daeb1d7fa30b5d71d07d947";
 const PINNED_BUNDLE_VALUES: &str = "af0d522c6d3fbd024c6a4c94ae1e3eaec580114a8584fca05a4740b5703ee357";
 
 fn document(path: &Path) -> serde_json::Value {
@@ -270,12 +270,12 @@ fn a_dataset_identity_hashes_to_its_pinned_sha256() {
         concat!(
             r#"{"dataset_rows":"10000000","#,
             r#""profile_sha256":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
-            r#""scale":null,"scenario_sha256":null,"seed":"18446744073709551615","stream_version":16,"table":null}"#
+            r#""scale":null,"scenario_sha256":null,"seed":"18446744073709551615","stream_version":17,"table":null}"#
         )
     );
     assert_eq!(
         identity.sha256(),
-        "sha256:e151960893633dced4296f83b3400a80eaae07abc5512affef8cb6701209baa6"
+        "sha256:114c3bb818ad1190e39507e1c1f6418b8b5718c69ca56ad396517fc9e727a438"
     );
     let with_scenario = identity.with_scenario(SCENARIO_SHA256);
     assert_eq!(
@@ -285,7 +285,7 @@ fn a_dataset_identity_hashes_to_its_pinned_sha256() {
             r#""profile_sha256":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
             r#""scale":null,"#,
             r#""scenario_sha256":"sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","#,
-            r#""seed":"18446744073709551615","stream_version":16,"table":null}"#
+            r#""seed":"18446744073709551615","stream_version":17,"table":null}"#
         )
     );
     let in_bundle = DatasetIdentity::new(PROFILE_SHA256, u64::MAX, 10_000_000).in_bundle(0.1, Some("orders"));
@@ -294,11 +294,11 @@ fn a_dataset_identity_hashes_to_its_pinned_sha256() {
         concat!(
             r#"{"dataset_rows":"10000000","#,
             r#""profile_sha256":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","#,
-            r#""scale":"0.1","scenario_sha256":null,"seed":"18446744073709551615","stream_version":16,"table":"orders"}"#
+            r#""scale":"0.1","scenario_sha256":null,"seed":"18446744073709551615","stream_version":17,"table":"orders"}"#
         )
     );
     assert_eq!(
         with_scenario.sha256(),
-        "sha256:10d8e275f4004587bd82e73dc1a53962cb8ec80b78de26b5f6a7d933ed1cb22d"
+        "sha256:f52f5549e3023c436ccb8bee15c9a6d15aa98aa09f9844e1f5a518993d174326"
     );
 }

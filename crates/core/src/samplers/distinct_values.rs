@@ -6,6 +6,8 @@
 use rand_chacha::ChaCha8Rng;
 
 use super::StreamKeys;
+use crate::keyed_permutation::KeyedPermutation;
+use crate::profile::Monotonic;
 use crate::rng::below_u64;
 use crate::rng::rng_for;
 use crate::rng::unit;
@@ -33,7 +35,7 @@ impl Variety {
     }
 
     /// The distinct values that `indices` distinct indices are expected to give.
-    fn distinct_values(&self, indices: f64) -> f64 {
+    pub(crate) fn distinct_values(&self, indices: f64) -> f64 {
         match self {
             Self::Uncounted => indices,
             Self::Strata(strata) => strata
@@ -47,6 +49,15 @@ impl Variety {
                     }
                 })
                 .sum(),
+        }
+    }
+
+    /// The distinct values the middle levels of `bands` equal bands give. A stratum holds a value
+    /// for each band middle falling in it, up to its values.
+    fn distinct_values_at_middles(&self, bands: f64) -> f64 {
+        match self {
+            Self::Uncounted => bands,
+            Self::Strata(strata) => strata.iter().map(|stratum| (stratum.share * bands).min(stratum.values)).sum(),
         }
     }
 
@@ -120,7 +131,7 @@ impl ValueIndex {
         let widest = draws * draws / (2.0 * (draws - indices));
         let range = solve_rising(|range| distinct_indices(range, draws), indices, indices, widest);
         Some(Self {
-            range: (range.round() as u64).max(1),
+            range: widest_within(range),
         })
     }
 
@@ -140,8 +151,13 @@ impl ValueIndex {
         }
         let range = solve_rising(reached, distinct, distinct, widest);
         Some(Self {
-            range: (range.round() as u64).max(1),
+            range: widest_within(range),
         })
+    }
+
+    /// The bands, or the indices, a row draws from.
+    pub(crate) fn bands(self) -> u64 {
+        self.range
     }
 
     /// The stream of the value at the index the next row draws from `indices`.
@@ -166,6 +182,94 @@ impl ValueIndex {
         let offset = unit(&mut rng_for(seed, keys.indexed_values, index));
         ((index as f64 + offset) / self.range as f64).min(1.0 - f64::EPSILON)
     }
+}
+
+/// The rows a column draws one value for each of, and the seed and stream a permutation of them is
+/// keyed by.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RowPlacement {
+    pub(crate) rows: u64,
+    pub(crate) seed: u64,
+    pub(crate) key: u64,
+}
+
+/// The order rows take the bands in.
+#[derive(Debug, Clone)]
+enum BandOrder {
+    Permuted(KeyedPermutation),
+    Rising,
+    Falling,
+}
+
+/// Each row's band of levels taken from its row's place among the dataset's rows, so every band is
+/// dealt once before any is dealt again, and a column holds more values than independent draws
+/// reach. Each band gives the value at its middle level, so two bands a lattice cell or more apart
+/// never round to one value.
+#[derive(Debug, Clone)]
+pub(crate) struct RowBands {
+    bands: u64,
+    rows: u64,
+    order: BandOrder,
+}
+
+impl RowBands {
+    /// The bands whose middles hold the target's distinct values in its filled rows, from a source of
+    /// `variety`, or every row its own band where none holds that many. `None` where independent draws
+    /// reach the target. The rows take the bands in a permutation's order, or in their own where the
+    /// column is `monotonic`.
+    pub(crate) fn for_distinct(
+        target: DistinctTarget,
+        variety: &Variety,
+        placement: RowPlacement,
+        monotonic: impl FnOnce() -> Option<Monotonic>,
+    ) -> Option<Self> {
+        let (distinct, draws, rows) = (target.distinct.max(1.0), target.filled_rows, placement.rows);
+        if rows == 0 || draws.is_nan() || draws < 1.0 || variety.distinct_values(draws) >= distinct {
+            return None;
+        }
+        // A band dealt only to rows left null or of another type holds no value.
+        let unfilled = (1.0 - draws / rows as f64).clamp(0.0, 1.0);
+        let reached = |bands: f64| variety.distinct_values_at_middles(bands) * (1.0 - libm::pow(unfilled, rows as f64 / bands));
+        let bands = match reached(rows as f64) <= distinct {
+            true => rows,
+            false => widest_within(solve_rising(reached, distinct, 1.0, rows as f64)),
+        };
+        let order = match monotonic() {
+            Some(Monotonic::Increasing) => BandOrder::Rising,
+            Some(Monotonic::Decreasing) => BandOrder::Falling,
+            Some(Monotonic::None) | None => BandOrder::Permuted(KeyedPermutation::new(rows, placement.seed, placement.key)),
+        };
+        Some(Self { bands, rows, order })
+    }
+
+    /// The middle level of the band dealt to `row`. A row past the planned rows takes the place of
+    /// the row its count wraps to.
+    pub(crate) fn level(&self, row: u64) -> f64 {
+        let row = row % self.rows;
+        let place = match &self.order {
+            BandOrder::Permuted(permutation) => permutation.forward(row),
+            BandOrder::Rising => row,
+            BandOrder::Falling => self.rows - 1 - row,
+        };
+        let band = (u128::from(place) * u128::from(self.bands) / u128::from(self.rows)) as u64;
+        (band as f64 + 0.5) / self.bands as f64
+    }
+
+    /// How the rows take the bands, as a plan appends it to the curve.
+    pub(crate) fn describe(&self) -> &'static str {
+        match self.order {
+            BandOrder::Permuted(_) => ", at the profiled distinct ratio, each band of levels dealt once before any repeats",
+            BandOrder::Rising => ", at the profiled distinct ratio, rising with the row",
+            BandOrder::Falling => ", at the profiled distinct ratio, falling with the row",
+        }
+    }
+}
+
+/// The widest whole range at or under `range`, the one whose rising count reaches the target. Its
+/// count stays at or under the target, so a share drawing many rows for each value never holds
+/// more values than the profile states.
+fn widest_within(range: f64) -> u64 {
+    (range.floor() as u64).max(1)
 }
 
 /// The distinct indices that `draws` uniform draws from `0..range` are expected to hold.
