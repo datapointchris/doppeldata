@@ -8,6 +8,7 @@ from doppeldata.profiling import text_types
 from doppeldata.profiling.backend import ColumnSpec
 from doppeldata.profiling.backend import ParsedType
 from doppeldata.profiling.backend import Table
+from doppeldata.profiling.semantic_type_hold import HeldTyping
 
 # Each answer by its column, None for the table, and its statistic's name.
 Answers = dict[tuple[str | None, str], Any]
@@ -21,7 +22,7 @@ class ProfiledColumns:
     source writes most for a missing value, and a JSON table's paths and type counts are in `json`. `dependence_sample`
     is the seeded sample the fits and the correlations read, drawn from `recoded`, and `parsed_types` reads a delimited
     table's text as one parse, null tokens included. `whole` is every row at the columns' types where `recoded` holds a
-    sample, and None where it holds every row.
+    sample, and None where it holds every row. `held_typings` names each column whose typing an earlier profile held.
     """
 
     columns: list[dict[str, Any]]
@@ -36,6 +37,7 @@ class ProfiledColumns:
     parsed_types: dict[str, ParsedType] = dc.field(default_factory=dict)
     whole: Table = None
     unrecoded: Table = None
+    held_typings: dict[str, HeldTyping] = dc.field(default_factory=dict)
 
     @property
     def every_row(self) -> Table:

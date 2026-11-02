@@ -23,6 +23,63 @@ each. A column's nulls are dropped first, so a column with nulls is validated on
 - **A column with fewer than `k_min` sampled values is left untyped.**
 - **Typing changes no statistic.** A typed column's values stay in the profile as profiled.
 
+## A check holds PROFILE's typing until a share clears its cut by a sampling margin
+
+`data check` profiles DATA and compares its types with PROFILE's. A validator's share is measured
+on a sample, so a share near a cut lands on either side by chance. A column of procedure codes,
+most of them five digits as a ZIP code is, can sit just under the 95% cut. Two samples of it then
+type one profile `us_zip` and leave the other untyped. A hard cut decided by a sample needs an
+allowance for sampling, as `tvd` and `null_fraction_delta` subtract one.
+
+So a check's profile of DATA types through a Schmitt trigger, a cut with hysteresis. At 10,000
+values a side and the 0.95 cut, a column's five-digit share types it so:
+
+```text
+  share                  0.9408     0.95     0.9592
+                            │         │         │
+  PROFILE us_zip     untyped│  us_zip, held     │ us_zip
+  PROFILE untyped    untyped│  untyped, held    │ us_zip
+  any other profile  untyped│ untyped │ us_zip  │ us_zip
+```
+
+- **The cut falls by a margin for the type PROFILE gave, and rises by as much for every other
+  type.** A column PROFILE left untyped takes a type only past the cut plus the margin. A typed
+  column keeps its type down to the cut less the margin.
+- **The margin is `HELD_TYPING_STANDARD_ERRORS` standard errors of the gap between two samples'
+  shares.** That is `HELD_TYPING_STANDARD_ERRORS · √(c(1 − c) · (1/n_a + 1/n_b))` at the cut c,
+  which `plain_cut` gives. n_b is DATA's sampled values. n_a is PROFILE's: `value_sample_rows` of
+  its rows, less the column's nulls. At 3 standard errors, 10,000 values a side and the 0.95 cut,
+  the margin is 0.0092.
+- **The gap is taken at the cut.** PROFILE states only which side of the cut its share fell. A
+  share at the cut is the one sampling carries across it most easily.
+- **The margin makes a flip from sampling alone rare.** A flip needs PROFILE's sample on one side
+  and DATA's past the margin on the other. At the worst true share, 1 pair of samples in 4 flips at
+  the plain cut. At 3 standard errors of the gap, about 1 in 3,500 does. A margin on DATA's sample
+  alone would let 1 in 224 flip, because PROFILE's typing was decided on a sample too.
+- **A profile stating no rows adds no n_a term.** Its type is a parameter, not a measurement.
+- **A column of few sampled values takes no new type in a check.** At 3 standard errors and the
+  0.95 cut, the cut plus the margin passes 1 below about 340 values a side. A sample that small
+  cannot tell 95% from all of them.
+- **Every rule the type decides follows it.** The healthcare policy keeps a ZIP column's
+  three-digit prefixes only where it is typed `us_zip`. So a column held untyped counts its whole
+  values, as its source did, and `distinct_ratio_delta` compares like with like.
+- **The check lists each column the margin held as a passing `semantic_type_changed`.** Its
+  `expected` is PROFILE's type and its `observed` the type DATA's sample alone gives. The message
+  gives the share and the margin, and `data check -v` logs the same line.
+- **A JSON array's elements are typed afresh at the plain cut**, as their edges and value lists are
+  counted afresh.
+
+*Rejected:* holding the typing wherever a profile is made against an earlier one, as `profile
+create --edges-from` does. A check's profile of DATA is never written, and a written profile's
+privacy treatment reads its types. Held untyped, a column of ZIP codes would lose its
+`quasi_identifier` sensitivity and the healthcare policy's prefix rule, which its own data gives
+it. So a written profile types from its own data, and `profile diff` can report a type change that
+sampling alone made.
+
+*Rejected:* moving `ASSIGN_RATE`. The edge moves to whichever column sits near the new cut.
+
+*Rejected:* exempting code columns. Any code column near a validator's cut flips the same way.
+
 ## A name hint is a run of the column name's words
 
 A column name splits into lower-case words at underscores, hyphens, digits and case changes. So

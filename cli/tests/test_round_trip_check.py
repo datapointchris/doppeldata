@@ -9,6 +9,7 @@ import doppeldata as sd
 import jsonschema
 import pyarrow as pa
 import pyarrow.compute as pc
+import pytest
 from doppeldata.published_schemas import schema_text
 
 ROWS = 20_000
@@ -98,6 +99,40 @@ def test_a_copula_pair_moved_past_the_threshold_fails_it_and_passes_where_its_pr
         return row.threshold > 0.05, row.passed
 
     assert [judged(sample_rows) for sample_rows in (None, 200)] == [(False, False), (True, True)]
+
+
+def item_codes(five_digit: int) -> pa.Table:
+    """10,000 codes, `five_digit` of them five digits, a ZIP code's shape, and the rest a HCPCS Level II code's."""
+    draw = random.Random(7)
+    codes = [f'{draw.randrange(10**5):05d}' for _ in range(five_digit)]
+    codes += [f'G{draw.randrange(10**4):04d}' for _ in range(10_000 - five_digit)]
+    draw.shuffle(codes)
+    return pa.table({'item_code': codes})
+
+
+def retypings(report: sd.CheckReport) -> list[tuple[str | None, str | None, bool]]:
+    return [
+        (change.expected, change.observed, change.passed) for change in report.changes if change.change.value == 'semantic_type_changed'
+    ]
+
+
+def semantic_type(profile: sd.Profile) -> str | None:
+    return (profile.to_plain()['columns'][0].get('semantic') or {}).get('type')
+
+
+def test_a_share_sampling_carries_across_the_type_cut_keeps_the_profiles_typing_and_one_clear_of_it_fails_the_check():
+    """A ZIP code's validator types at 95% of the sampled values, and two samples of 10,000 at that share lie about 0.3%
+    apart, so a check holds 94.6% and 95.3% to one typing. A profile written against an earlier one types from its own
+    data, so the privacy policy treats a ZIP column as one."""
+    untyped, typed = sd.profile(item_codes(9_460)), sd.profile(item_codes(9_900))
+    assert [semantic_type(untyped), semantic_type(typed)] == [None, 'us_zip']
+    with pytest.warns(sd.EarlierProfileNotReused):
+        assert semantic_type(sd.profile(item_codes(9_530), edges_from=untyped)) == 'us_zip'
+
+    assert retypings(sd.check(untyped, item_codes(9_530))) == [(None, 'us_zip', True)]
+    assert retypings(sd.check(typed, item_codes(9_460))) == [('us_zip', None, True)]
+    assert retypings(sd.check(untyped, item_codes(9_900))) == [(None, 'us_zip', False)]
+    assert retypings(sd.check(typed, item_codes(9_000))) == [('us_zip', None, False)]
 
 
 def test_the_orders_example_generated_at_a_tenth_of_its_rows_keeps_every_quantity_and_passes_its_check():
