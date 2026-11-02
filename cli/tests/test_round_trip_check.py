@@ -92,7 +92,9 @@ def test_a_copula_pair_moved_past_the_threshold_fails_it_and_passes_where_its_pr
         stated['sample_rows'] = sample_rows
         if sample_rows is None:
             del stated['sample_rows']
-        row = next(result for result in sd.check(sd.Profile(document), generated).metrics if result.metric == 'correlation_max_abs_diff')
+        row = next(
+            result for result in sd.check(sd.Profile(document), generated).metrics if result.metric == 'correlation_worst_pair_change'
+        )
         return row.threshold > 0.05, row.passed
 
     assert [judged(sample_rows) for sample_rows in (None, 200)] == [(False, False), (True, True)]

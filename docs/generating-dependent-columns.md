@@ -67,7 +67,7 @@ dataset:
   each holding one value on most rows reach a Spearman value near their comonotone bound only as
   the Pearson nears 1. The plan names such a pair: `its ties holding no copula at its Spearman
   with congestion_surcharge`. No matrix lifts the pair past what it holds at that Pearson. So
-  where that sits further under the stated value than `correlation_max_abs_diff` allows, `data
+  where that sits further under the stated value than `correlation_worst_pair_change` allows, `data
   check` fails the pair.
 - **A group draws each member's nulls apart from the other members, from the column its null rate
   is given.** In the New York yellow taxi trips, `congestion_surcharge` is null exactly where
@@ -120,9 +120,9 @@ alternating projections cannot take them. Qi and Sun's semismooth Newton method 
 build.
 
 *Rejected:* the minimax fit, holding the largest miss as low as it goes, which
-`correlation_max_abs_diff` measures. It needs a constrained solver. In the New York yellow taxi
-trips of March 2024, April 2024 and January 2025, each group's largest miss is a pair no Pearson
-holds. Minimax only moves that pair nearer its value at the cap, a few thousandths in each month.
+`correlation_worst_pair_change` measures. It needs a constrained solver. In the New York yellow
+taxi trips of March 2024, April 2024 and January 2025, each group's largest miss is a pair no
+Pearson holds. Minimax only moves that pair nearer its value at the cap, a few thousandths in each month.
 
 ## A conditional table draws a categorical column from the row its parent's value picks
 
@@ -335,8 +335,8 @@ after-image keeps its lags, expressions and lookups.
 
 ## `data check` measures each copula group and each conditional table
 
-`correlation_max_abs_diff` is the change in a Spearman value within one copula group furthest past
-the threshold it is held to, as
+`correlation_worst_pair_change` is the change in a Spearman value within one copula group
+furthest past the threshold it is held to, as
 [checking generated data](checking-generated-data-and-profile-drift.md) describes.
 `conditional_kl` is a conditional table's KL divergence, weighted by each given value's share, and
 names the given value adding most. `data check --help` gives each one's default threshold. Each

@@ -767,7 +767,7 @@ METRICS = (
         malformed_rate_change,
     ),
     Metric(
-        'correlation_max_abs_diff',
+        'correlation_worst_pair_change',
         'the change in a Spearman correlation the source states between two columns of one Gaussian copula, on the pair '
         'furthest past its threshold: this one, or the standard errors of the change a group of its pairs allows where '
         'that is more',

@@ -172,14 +172,14 @@ Every kind of column is measured. A float column whose source holds cents, gener
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.
 
-## `correlation_max_abs_diff` and `conditional_kl` measure the dependence the generator draws
+## `correlation_worst_pair_change` and `conditional_kl` measure the dependence the generator draws
 
 Both read the pairs PROFILE states. The check's profile freezes those pairs, so it states each
 one again however weak it measures. Each metric writes one row per copula group or conditional
 table, naming its columns in `column` and `paired_with`.
 
-- **`correlation_max_abs_diff` is the change in a Spearman correlation within one Gaussian copula
-  that lies furthest past what it is held to.** The library plans PROFILE through the engine, which
+- **`correlation_worst_pair_change` is the change in a Spearman correlation within one Gaussian
+  copula that lies furthest past what it is held to.** The library plans PROFILE through the engine, which
   names each group, so the metric measures exactly the pairs the generator draws together. A
   Spearman pair outside every group, such as one holding a derived column or a timestamp, is not
   measured. The row names the pair, with `expected` and `observed` its two values and `threshold`
@@ -241,12 +241,12 @@ table, naming its columns in `column` and `paired_with`.
 profile=crates/core/tests/every-column-kind.profile.yaml
 doppeldata data generate $profile --rows 300000 --out generated/
 doppeldata data check $profile generated/ --json \
-  | jq -c '.metrics[] | select(.metric == "correlation_max_abs_diff" or .metric == "conditional_kl")
+  | jq -c '.metrics[] | select(.metric == "correlation_worst_pair_change" or .metric == "conditional_kl")
            | {metric, column, paired_with, worst_given_value, value, passed}'
 ```
 
 ```json
-{"metric":"correlation_max_abs_diff","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.0083,"passed":true}
+{"metric":"correlation_worst_pair_change","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.0083,"passed":true}
 {"metric":"conditional_kl","column":"channel","paired_with":"region","worst_given_value":"north","value":0.0010055,"passed":true}
 ```
 
@@ -255,12 +255,12 @@ first:
 
 ```json
 {"metric":"conditional_kl","column":"channel","paired_with":"region","worst_given_value":"north","value":0.0882845,"passed":false}
-{"metric":"correlation_max_abs_diff","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.407373,"passed":false}
+{"metric":"correlation_worst_pair_change","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.407373,"passed":false}
 ```
 
-*Rejected:* a row per pair for `correlation_max_abs_diff`. A copula holds its pairs through one
-matrix, so one pair drifting moves the group, and the row names the pair furthest past what it
-is held to.
+*Rejected:* a row per pair for `correlation_worst_pair_change`. A copula holds its pairs through
+one matrix, so one pair drifting moves the group, and the row names the pair furthest past what
+it is held to.
 
 ## Three metrics measure the files against the source's layout, scaled to the rows checked
 
@@ -337,7 +337,7 @@ tables, by the join the profiler runs. `check()` takes a `Bundle` and returns a
 - **The three are set under `defaults` in a thresholds file, never under `columns`.** Each
   measures a relationship between tables, so no column names it.
 - **A column a relationship draws skips every metric comparing which values it holds.** That is
-  `ks`, `tvd`, `zero_fraction_delta`, `boundary_adherence`, `correlation_max_abs_diff` and
+  `ks`, `tvd`, `zero_fraction_delta`, `boundary_adherence`, `correlation_worst_pair_change` and
   `conditional_kl`. Its row passes with `drawn_by` naming the relationship. The relationship
   deals out its parent's keys, so the values follow the parent's table rather than the child's
   profile. Its null rate and distinct values are still checked.
