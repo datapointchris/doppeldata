@@ -9,9 +9,10 @@ trimmed extremes, so only the interior edges are pinned. A knot that would put a
 is dropped, so the quantiles win where sources disagree.
 
 At 200 rows only p25, p50 and p75 pass the floor, so the edges past them carry the outer half of the
-curve. Drawn from the quantiles alone, the bundled `orders` example's `customer_id` and `amount`
-missed their histogram's shares by up to 0.058 and 0.075 at the edges past p25 and p75. With
-those edges in the body, each tail spans only the outermost bin.
+curve. With those edges in the body, each tail spans only the outermost bin.
+
+*Rejected:* drawing a 200-row column from its quantiles alone. Three quantiles leave the outer half
+of the curve to the tails, and the histogram's shares there go unmatched.
 
 `zero_fraction` adds a flat run at zero, from `negative_fraction` to `negative_fraction + zero_fraction`. The run
 is clamped between the last knot below zero and the first above it, so it stays in order and is
@@ -75,17 +76,22 @@ cargo run --release -p doppeldata-core --example throughput -- eight-columns --r
   line.** Each tail draws through `(1 − w)·F + w·L`, where `F` is the fit's conditional CDF and `L`
   the line's. The weight `w` is the least at which the column's index has no more bands than the
   rows drawing them. Past that weight the bands bound the count, wherever a copula or a warp puts
-  the levels. `data plan` names the weight.
-- **The weight that only reaches the target bounds nothing.** Its index needs more bands than rows,
-  so the count follows where the levels land. The January 2025 taxi trips' `tip_amount` has a poor
-  lognormal fit, and with the fitted tail alone it held 3,744 values against the source's 4,197. At
-  the weight that reaches the target, 0.19, its levels warped by each `payment_type`'s quantiles put
-  13% more rows past p999 than the source holds, and the count rose to 4,643. At 0.37, where the
-  index binds, 40 seeds held 4,236 to 4,345.
-- **The mix moves the tail's shape along with its count.** At 0.37, January's `tip_amount` puts 971
-  rows between 100 and 200, where the source holds 46. Its standard deviation rises from 3.78 to
-  4.46. Its `ks` holds at 0.019, because the profile states no point between p999, at 27.19, and
-  the extreme of 200.
+  the levels. `data plan` names the weight, and calls a tail at weight 1 linear.
+- **The weight is solved at the source's rows, so a run of any size draws the profile's shape.**
+  Above the source's rows the target grows with the run, and the fit's reach does not. Solved
+  there, the weight would climb to 1 and drop the fitted family from both tails. `data check`
+  accepts a count down to the source's own there, so nothing asks for that.
+- **The fitted tail alone can reach fewer values than the source holds where the fit is poor.**
+  The January 2025 taxi trips' lognormal `tip_amount` is one. At the weight where its index binds,
+  its count stays under the upper end of the range `data check` accepts, across seeds.
+- **The mix moves the tail's shape along with its count.** The line spreads the rows past p999
+  evenly up to the extreme, where the fit thins them out. So the standard deviation rises, and
+  `ks` does not see it where the profile states no point between p999 and the extreme.
+
+*Rejected:* the least weight that reaches the target. Its index needs more bands than rows, so the
+count follows where the levels land. A warp by another column's quantiles can then carry it past
+the range `data check` accepts.
+
 - **The remaining lift is the body.** Below p99, linear interpolation across the stored quantiles gives 33.31
   against 30.06 for the true lognormal. A histogram's many knots shrink it.
 
@@ -254,10 +260,10 @@ function of its index, no pool of values is held, and any block still generates 
   from `0..K` hold `K · (1 − e^(−n/K))` distinct indices. `n` counts the rows not null.
 - **K is the widest whole range at or under the one solved.** Its count then stays at or under the
   target, so a share drawing many rows for each value never holds more values than the profile
-  states. The January 2025 taxi trips' `mta_tax` lists 4 values and states 9, so its other share of
-  13 rows is to hold 5. Its K solves to 5.54. Rounded to 6, the share is expected to hold 5.31, so
-  some seeds hold 6. At 5 it holds all 5 with chance 0.68, 4 with chance 0.27 and 3 with chance
-  0.04. Over 40 seeds it held 5 on 26, 4 on 11 and 3 on 3.
+  states. An other share of 13 rows that is to hold 5 values solves K to 5.54. At 5 it holds all 5
+  with chance 0.68, 4 with chance 0.27 and 3 with chance 0.04.
+  - *Rejected:* rounding K to the nearest whole range. Rounding 5.54 up to 6 puts the expected
+    count at 5.31, above the target, so some seeds hold more values than the profile states.
 - **A source whose strings can be counted has its collisions counted too.** `m` distinct indices
   drawn into `S` equally likely strings give `S · (1 − e^(−m/S))` distinct strings, so the index
   target is raised to meet the value target. A pattern is counted from its syntax, as if every
@@ -349,8 +355,8 @@ the row's place among the dataset's rows.
 - **A row past the planned rows takes the band of the row its count wraps to.** So a `cdc` insert
   past the full load's rows repeats a full-load value of such a column.
 
-The determinism fixture's three `near_unique_integer_*_by_row` columns each hold 132,685 values over
-135,393 rows, their target exactly.
+Each of the determinism fixture's `near_unique_integer_*_by_row` columns holds exactly its distinct
+target over the fixture's rows.
 
 ## A temporal column is uniform over its range unless the profile weights it
 
