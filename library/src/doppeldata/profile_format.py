@@ -604,6 +604,20 @@ def listed_section(column: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
+def recoded_values(column: dict[str, Any]) -> int:
+    """How many values a column holds beyond its list where the list states no other share, by its distinct count, or 0.
+
+    The privacy floor rewrites a remainder of fewer than k_min rows as the column's modal value, so a list stating no
+    other share is exhaustive only where it lists as many values as the column holds. A column stating no distinct
+    count, as a seed's, holds only what it lists.
+    """
+    listing = listed_section(column)
+    if listing is None or listing[1].get('other_fraction'):
+        return 0
+    held = (column.get('distinct') or {}).get('approx_values') or 0
+    return max(0, held - len(listing[1]['top_values']))
+
+
 def described_rows(document: dict[str, Any]) -> int | None:
     """The rows a profile's rates are shares of: those its sample read, or else every row."""
     sample = (document.get('generated') or {}).get('sample') or {}

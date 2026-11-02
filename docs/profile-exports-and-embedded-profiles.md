@@ -53,6 +53,11 @@ description or comment, with the share that holds:
   none. So the strict formats leave each key and foreign key out and name it. DQDL carries
   `Uniqueness` and `ReferentialIntegrity` with a threshold. A seed's declared keys and
   relationships hold for every row.
+- **A list stating no `other_fraction` holds every value only where it lists as many values as
+  `distinct.approx_values`.** The privacy floor recodes a remainder of fewer than `k_min` rows into
+  the modal value, so the list leaves those values out. The strict formats leave the list out and
+  name it. DQDL carries it with a threshold `k_min − 1` rows short of every row. Spark estimates
+  the distinct count, so a list can read one value short of every value at the estimate's edge.
 - **A profile made from a sample holds nothing of every row.** Its shares are measured over the
   rows it read, so each strict format leaves out what it would carry, naming the sample.
 - **A pattern is stored where its shape holds half the values.** In CMS's DE-SynPUF carrier claims

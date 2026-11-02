@@ -1,6 +1,7 @@
 """A text source's columns: the share of raw values parsing as each type, and the type each column is read as."""
 
 import dataclasses as dc
+from collections.abc import Iterable
 
 from doppeldata.profiling import json_paths
 from doppeldata.profiling.backend import Backend
@@ -26,13 +27,15 @@ Layouts = dict[tuple[str, str], str | None]
 class TextColumn:
     """A text column's raw nulls, its non-null values by the type each parses as, and the type it is read as.
 
-    `missing_tokens` holds the rows of each null token the column writes, with an empty field's under `EMPTY`.
+    `missing_tokens` holds the rows of each null token the column writes, with an empty field's under `EMPTY`, and
+    `layouts` the date and timestamp layouts its values were counted through.
     """
 
     null_count: int
     counts: dict[str, int]
     parsed: ParsedType
     missing_tokens: dict[str, int] = dc.field(default_factory=dict)
+    layouts: tuple[tuple[str, str], ...] = ()
 
     @property
     def non_null(self) -> int:
@@ -71,14 +74,42 @@ def type_text_columns(backend: Backend, table: Table, specs: list[ColumnSpec], s
         dominant = max(READ_AS, key=lambda raw: (read[raw], -READ_AS.index(raw))) if any(counts.values()) else 'string'
         if not json and counted[Request(spec.name, 'padded_digits')]:
             dominant = 'string'
-        for folded in RAW_TYPE_FOLDS.get(dominant, ()):
-            counts[dominant] += counts[folded]
-            counts[folded] = 0
         type_column = json_paths.type_column(spec.name) if json else None
         columns[spec.name] = TextColumn(
-            nulls, counts, ParsedType(dominant, layouts.get((spec.name, dominant)), json_type_column=type_column)
+            nulls,
+            folded_counts(counts, dominant),
+            ParsedType(dominant, layouts.get((spec.name, dominant)), json_type_column=type_column),
+            layouts=column_layouts(layouts, spec.name),
         )
     return columns
+
+
+def recounted(backend: Backend, table: Table, columns: dict[str, TextColumn], names: Iterable[str]) -> dict[str, TextColumn]:
+    """`columns` with each of `names` read as text counted again by raw type over `table`, whose values of it a recode
+    rewrote. A string column's parsed values are its text, so the count reads them as the first count read the text.
+    A column read as another type is left as it is: each value it parses holds that type, the modal value's included.
+    """
+    again = {
+        name: Request(name, 'raw_type_counts', columns[name].layouts)
+        for name in names
+        if name in columns and columns[name].parsed.raw_type == 'string' and columns[name].parsed.json_type_column is None
+    }
+    if not again:
+        return columns
+    counted = backend.aggregate(table, list(again.values()))
+    return columns | {
+        name: dc.replace(columns[name], counts=folded_counts(dict(zip(READ_AS, counted[request], strict=True)), 'string'))
+        for name, request in again.items()
+    }
+
+
+def folded_counts(counts: dict[str, int], dominant: str) -> dict[str, int]:
+    """`counts` with each raw type the dominant one folds in counted as the dominant type."""
+    counts = dict(counts)
+    for folded in RAW_TYPE_FOLDS.get(dominant, ()):
+        counts[dominant] += counts[folded]
+        counts[folded] = 0
+    return counts
 
 
 def type_counts(name: str, layouts: Layouts, *, json: bool) -> Request:

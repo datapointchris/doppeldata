@@ -108,14 +108,15 @@ def spark_name(arrow_type: str) -> str | None:
 
 def polars_name(arrow_type: str) -> str | None:
     """The Polars type of a scalar Arrow type, written as an annotation pandera reads, such as `pl.Int64` or
-    `Annotated[pl.Decimal, 12, 2]`, else None."""
+    `Annotated[pl.Decimal, 12, 2]`, else None. pandera requires every argument of an annotated type, so a timestamp
+    with no zone names `None`."""
     decimal = decimal_of(arrow_type)
     if decimal is not None:
         return f'Annotated[pl.Decimal, {decimal[0]}, {decimal[1]}]'
     timestamp = timestamp_of(arrow_type)
     if timestamp is not None:
         unit, zone = timestamp
-        return f'Annotated[pl.Datetime, {unit!r}, {zone!r}]' if zone else f'Annotated[pl.Datetime, {unit!r}]'
+        return f'Annotated[pl.Datetime, {unit!r}, {zone!r}]'
     if type_name(arrow_type) == 'time64':
         return 'pl.Time'
     name = POLARS_NAMES.get(arrow_type)

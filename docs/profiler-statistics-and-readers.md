@@ -177,8 +177,9 @@ parameters write two profiles, and those generate different tails.
   With 5% of rows already outside the list, giving 10% of rows a new value writes 9.5% of rows: the
   0.5% already outside add nothing.
 - **`new_value_rows` is counted from `other_fraction`'s own rows**, so it discloses nothing that rate
-  does not. A listed value now held by fewer than `k_min` rows folds into `other_fraction`, and counts as
-  growth with the rest. Counting only the rows outside the list would give that value's count away,
+  does not. A listed value now held by fewer than `k_min` rows joins `other_fraction`, and counts as
+  growth with the rest. Where the rows outside the list number fewer than `k_min`, they are recoded
+  into the modal value instead. Counting only the rows outside the list would give that value's count away,
   as `other_fraction` less the count. The earlier profile holds no value outside its list, so a value
   never seen before cannot be told from a rare one that grew.
 - **A numeric column needs its own `new_value_rows` beside the histogram's overflow.** A new value
@@ -869,9 +870,10 @@ and the policy's pass then removes what each column's rule withholds:
 - **A rate given another column's value** is written only where the value's rows, the rows the
   rate counts and the rest each number 0 or at least `k_min`. A value breaking that joins `other`.
 - **A lookup table** lists only the `lhs` values `k_min` rows hold.
-- **A top value** is kept only when `k_min` rows hold it. While the remainder holds 1 to `k_min - 1`
-  rows, the smallest kept value folds into it, so `other_fraction` never reveals a small cell. That
-  holds for a numeric column's list as for a string's.
+- **A top value** is kept only when `k_min` rows hold it. A remainder of 1 to `k_min - 1` rows is
+  recoded into the modal value before any statistic is counted, as the next section describes, so
+  `other_fraction` never reveals a small cell. That holds for a numeric column's list as for a
+  string's.
 - **A histogram bin** of 1 to `k_min - 1` rows merges into its smaller non-empty neighbor. An empty
   bin discloses no row, so it stays, and frozen edges are kept wherever the floor allows. So a
   re-profile's edges are a subset of the frozen ones, and a diff sums the earlier bins over a merged
@@ -879,7 +881,8 @@ and the policy's pass then removes what each column's rule withholds:
 - **An overflow count** of 1 to `k_min - 1` rows is written as 0. A numeric column's rows join the
   outermost bin on their side, and a string column's stay in `other_fraction`.
 - **The floor holds within one profile, not across two.** A value one profile lists and the next
-  folds into `other_fraction` shows its count as that rate's growth, where nothing else changed. A bin
+  leaves out shows its count as the growth of `other_fraction`, or of the modal value where the next
+  recodes it, where nothing else changed. A bin
   merged under the floor shows the same way against the earlier bins. Holding a series of profiles to
   the floor needs noise, which this profiler does not add.
 - **A fit** is made only on the values between the trimmed extremes. A support parameter lands on
@@ -910,6 +913,50 @@ generated id repeats no value, where its quantiles alone would repeat some.
 Under `--sample`, a sample's steps span the rows it skipped, and its values fill a sample's share
 of the range. So an integer column's sequence is decided over every row. A sequence found there is
 written with every row's steps and trimmed extremes, the ones its `start` follows from.
+
+## A listed column's rare remainder is recoded before any statistic is counted
+
+A listing pre-pass runs once a text source's columns are typed, before the catalog's first
+aggregate. A sampled profile has drawn its sample by then, so the pre-pass counts the rows `k_min`
+counts.
+
+1. **One aggregate counts every column's nulls and distinct values**, and the values an earlier
+   profile's list names. The distinct count is written from it, so it is the real one.
+2. **Each column whose kind lists values has them counted**, where it holds no more distinct values
+   than its kind's threshold. The count runs `k_min − 1` values past the threshold. A remainder of
+   fewer than `k_min` rows holds fewer than `k_min` values, so the count always names all of it,
+   even where Spark's estimated distinct count runs a few low. These counts are the list itself,
+   so no column is counted twice.
+3. **A remainder of 1 to `k_min − 1` rows is rewritten as the modal value**, the first of the most
+   held where several tie. The backend's `recoded` projects `when(value in remainder) then modal`
+   at the column's own type, in Polars and in Spark alike.
+4. **Everything after reads the rewritten rows**: moments, quantiles, zero and negative rates,
+   trimmed extremes, lengths, shapes, the value sample the detectors and patterns read,
+   histograms, fits, correlations, conditional tables, conditional quantiles and rates, lookups,
+   lags, partition shares, and an unsampled bundle's relationships. So every count they state
+   agrees with the list.
+
+- **The distinct count, keys and repeated rows read the rows as they were.** A key states no count,
+  and a recode merges values, so a key with a recoded column would read as not unique.
+- **A sampled profile's recode is the sample's.** The whole table, which decides keys, counting
+  sequences and relationships, is read as it was. A relationship over every row and a list over
+  the sample share no denominator, so neither can be subtracted from the other.
+- **The recode is decided before the detectors type a column.** The value sample they read, and the
+  shapes, patterns and invalid share it gives, are stated, so they read the rewritten rows too. A
+  column whose list the policy then withholds, such as an identifier or an age, is recoded as well.
+  That only removes what it states.
+- **A text source's recoded string column is counted by raw type again.** Its `type_mix_fractions`
+  come from the text before parsing. A string column's parsed values are its text, so one aggregate
+  counts them again. CMS's DE-SynPUF carrier claims file hides 2 rows of `0` in
+  `LINE_PRCSG_IND_CD_1`, which its integer share would otherwise count. A column read as a number
+  needs no count: each value it parses holds the column's type, the modal value's included.
+- **`kept_values` still folds the least held value into a remainder under `k_min` rows.** The recode
+  leaves none, so the fold applies only where the pre-pass could not name the whole remainder, as
+  where a float's NaN took a counted place.
+- **It costs Polars one aggregate**, the distinct counts split from the catalog's first. Spark
+  already counts distinct values in a query of their own, so it costs Spark none. The projection is
+  not persisted: a comparison with fewer than `k_min` literals costs less than reading the table
+  back from disk.
 
 ## A sampled profile counts distinct values in every row
 

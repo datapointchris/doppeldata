@@ -237,6 +237,14 @@ class Request:
 
 
 @dc.dataclass(frozen=True)
+class Recode:
+    """A listed column's values held by fewer than k_min rows altogether, and the modal value each is rewritten as."""
+
+    values: tuple[Any, ...]
+    modal: Any
+
+
+@dc.dataclass(frozen=True)
 class ParsedType:
     """The type a text column's values are parsed as, and the strftime format of a date or timestamp."""
 
@@ -287,6 +295,10 @@ class Backend(Protocol):
 
     def parse(self, table: Table, types: dict[str, ParsedType]) -> Table:
         """The text table with each named column parsed as its type. A value that does not parse becomes null."""
+        ...
+
+    def recoded(self, table: Table, recodes: dict[str, Recode]) -> Table:
+        """The table with each named column's recoded values rewritten as its modal value, at the column's own type."""
         ...
 
     def rank_correlations(self, table: Table, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:

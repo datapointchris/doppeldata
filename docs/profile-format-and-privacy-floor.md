@@ -104,7 +104,8 @@ can be derived. That gives a domain-neutral default, `k_min: 11`, configurable p
 The `default` policy:
 
 1. A literal is stored only when at least `k_min` rows hold it, and only in a column not typed
-   `identifier`. The "other" remainder of a top-k list obeys the same floor.
+   `identifier`. The "other" remainder of a top-k list obeys the same floor. A remainder of 1 to
+   `k_min − 1` rows is recoded into the column's modal value before profiling.
 2. An `identifier` column stores no literals, no extremes and no top-k. It keeps its null rate,
    distinct ratio, length distribution, character-shape histogram and a generalized pattern. An
    integer identifier's extremes become `method: digit_bounds`, the least and greatest integers
@@ -126,6 +127,34 @@ writes everything, with exact extremes and no `k_min`. It exists for data that i
 or public, and `profile check` always reports a `none` profile. `dp` is reserved in the format for
 a differential-privacy policy, which doppeldata does not apply. `profile create --policy dp` is a
 usage error, and `profile check` reports a `dp` profile as a policy it cannot check.
+
+## A rare remainder is recoded into the modal value, so no count names its rows
+
+Rule 1's recode is global recoding, as sdcMicro and μ-Argus apply it. The data is rewritten first,
+and every statistic is computed from the rewritten rows. So a conditional table, a rate or quantile
+given the column, a histogram, a shape and a mean all count the recoded rows as the modal value,
+the same as its list does. No two counts differ by the rows recoded.
+
+- **The distinct count is the real one.** So a list stating no `other_fraction` lists every value
+  only where it lists as many values as `distinct.approx_values`. A reader learns that unlisted
+  values exist, and never how many rows hold them.
+- **The exports and `data check` read a list that way.** A strict format leaves such a list out,
+  and `data check` measures the source's distinct ratio at its listed values, the ones its
+  generator draws.
+
+*Rejected:* folding the least held listed value into the remainder, complementary suppression as
+τ-Argus applies it. It keeps every count real, but a large value can fold to hide a few rows. April
+2024's NYC yellow taxi `congestion_surcharge` holds 2.5, 0.0 and −2.5 on 35,390 rows, beside 3 rows
+of 1.0 and 2.0. Folding sent the −2.5 refunds into `other_fraction`, and the generator drew them
+across the whole curve. Recoded, −2.5 stays listed at 0.0114.
+
+*Rejected:* adding the remainder to the modal value's count in the list alone. Every other count
+still came from the real rows. On a 265-row column at `k_min` 11 whose remainder held 3 rows, a
+conditional table counted 205 rows of the modal value against 208 listed, so the difference named
+the hidden rows.
+
+*Rejected:* writing the listed shares over the listed rows alone. At four significant digits and 265
+rows, 205/262 reads 0.7824, and the denominator gives the hidden rows away.
 
 ## The policy is a pass over the computed profile, so every backend inherits it
 

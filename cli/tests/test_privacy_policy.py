@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import random
 
+import doppeldata as sd
 import polars as pl
 from doppeldata import Bundle
 from doppeldata import Profile
@@ -139,3 +140,31 @@ def test_healthcare_suppresses_identifiers_caps_ages_keeps_years_and_merges_rest
     assert 'extremes' not in columns['billing_zip']['numeric']
     for withheld in ('age_at_admission', 'patient_city', 'rendering_npi', 'mbi'):
         assert 'top_values' not in columns[withheld]['string']
+
+
+def test_a_remainder_under_k_min_profiles_as_if_its_rows_held_the_modal_value():
+    """265 rows whose `zone` holds 3 outside its list, with a conditional table and quantiles given it. Every count is
+    the one rows rewritten by hand state, so none differs from another by the 3. Only the distinct count is the real one."""
+
+    def rows(rewritten: bool) -> pl.DataFrame:
+        draw = random.Random(7)
+        zones = {'A': 100, 'B': 80, 'C': 50, 'D': 32, 'E': 2, 'F': 1}
+        usual_kind = {'A': ('x', 0.7), 'B': ('y', 0.75), 'C': ('x', 0.2), 'D': ('y', 0.5), 'E': ('y', 1.0), 'F': ('y', 1.0)}
+        zone, kind, amount = [], [], []
+        for value, held in zones.items():
+            for _ in range(held):
+                usual, share = usual_kind[value]
+                zone.append('A' if rewritten and value in ('E', 'F') else value)
+                kind.append(usual if draw.random() < share else 'xy'.replace(usual, ''))
+                amount.append(round(draw.gauss(10 * (1 + 'ABCDEF'.index(value)), 3), 2))
+        return pl.DataFrame({'id': range(1, len(zone) + 1), 'zone': zone, 'kind': kind, 'amount': amount})
+
+    profiled, by_hand = (sd.profile(rows(rewritten)).to_plain() for rewritten in (False, True))
+    assert [(entry['given'], entry['column']) for entry in profiled['dataset']['conditionals']] == [('kind', 'zone')]
+    assert [(entry['given'], entry['column']) for entry in profiled['dataset']['conditional_quantiles']] == [('zone', 'amount')]
+    distinct = []
+    for profile in (profiled, by_hand):
+        del profile['generated']
+        distinct.append(profile['columns'][1].pop('distinct')['approx_values'])
+    assert distinct == [6, 4]
+    assert profiled == by_hand
