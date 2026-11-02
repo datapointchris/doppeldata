@@ -15,7 +15,6 @@ major_on_zero = false
 
 [tool.ruff]
 line-length = 140
-# maturin generates the extension's stub, and `task check-generated` compares it byte for byte.
 extend-exclude = ["*.md"]
 # The hooks pass files by name, which ruff lints despite an exclusion unless this is set.
 force-exclude = true
@@ -29,6 +28,9 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 docstring-code-format = true
+# maturin generates the extension's stub, and `task check-generated` compares it byte for byte.
+# The shared toolchain owns `extend-exclude`, so the stub is kept out here and under lint.
+exclude = ["library/src/doppeldata/_core.pyi"]
 
 
 [tool.ruff.lint]
@@ -53,6 +55,7 @@ select = [
 ignore = [
     "SIM108",  # ternary operator — often less readable
 ]
+exclude = ["library/src/doppeldata/_core.pyi"]
 
 [tool.ruff.lint.isort]
 force-single-line = true
