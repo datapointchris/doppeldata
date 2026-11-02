@@ -19,6 +19,8 @@ pub(crate) enum Variety {
     Uncounted,
     /// Groups of values, each value drawn as often as the others in its group.
     Strata(Vec<Stratum>),
+    /// Groups whose indices each take a value of the group no other index takes, until the group runs out.
+    Unreplaced(Vec<Stratum>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,6 +51,7 @@ impl Variety {
                     }
                 })
                 .sum(),
+            Self::Unreplaced(strata) => unreplaced(strata, indices),
         }
     }
 
@@ -57,7 +60,7 @@ impl Variety {
     fn distinct_values_at_middles(&self, bands: f64) -> f64 {
         match self {
             Self::Uncounted => bands,
-            Self::Strata(strata) => strata.iter().map(|stratum| (stratum.share * bands).min(stratum.values)).sum(),
+            Self::Strata(strata) | Self::Unreplaced(strata) => unreplaced(strata, bands),
         }
     }
 
@@ -68,7 +71,7 @@ impl Variety {
         let drawn = -libm::expm1(-draws / range);
         match self {
             Self::Uncounted => range * drawn,
-            Self::Strata(strata) => strata
+            Self::Strata(strata) | Self::Unreplaced(strata) => strata
                 .iter()
                 .map(|stratum| {
                     let bands = stratum.share * range;
@@ -81,6 +84,11 @@ impl Variety {
                 .sum(),
         }
     }
+}
+
+/// The values `picks` picks give where each stratum takes its share of them, each a value no other pick in it takes.
+fn unreplaced(strata: &[Stratum], picks: f64) -> f64 {
+    strata.iter().map(|stratum| (stratum.share * picks).min(stratum.values)).sum()
 }
 
 /// The chance that some drawn band gives a value, where the levels rounding to the value span
@@ -162,7 +170,13 @@ impl ValueIndex {
 
     /// The stream of the value at the index the next row draws from `indices`.
     pub(crate) fn value_stream(self, seed: u64, keys: &StreamKeys, indices: &mut ChaCha8Rng) -> ChaCha8Rng {
-        rng_for(seed, keys.indexed_values, below_u64(indices, self.range))
+        self.drawn(seed, keys, indices).1
+    }
+
+    /// The index the next row draws from `indices`, and the stream of the value at it.
+    pub(crate) fn drawn(self, seed: u64, keys: &StreamKeys, indices: &mut ChaCha8Rng) -> (u64, ChaCha8Rng) {
+        let index = below_u64(indices, self.range);
+        (index, rng_for(seed, keys.indexed_values, index))
     }
 
     /// The level in [0, 1) of the value at the index the next row draws: a uniform draw inside the

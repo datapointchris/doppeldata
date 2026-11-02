@@ -98,24 +98,26 @@ PointerParts = tuple[str | int, ...]
 @dc.dataclass(frozen=True)
 class GivenList:
     """A dataset list whose entries each draw `column` given the values of the column `given`. `by_value` names the
-    fields of an entry keyed by a listed given value, beside the field `other` names, which holds every other value's.
-    Where `nested`, each key's value is a group of literals, as a table's row is, and otherwise one literal. Where
-    `child_keyed`, the child's values key those groups, so its column must list them."""
+    fields of an entry keyed by a listed given value, beside the field `other` names, which holds every other value's,
+    and any field `beside` names, such as a null given's. Where `nested`, each key's value is a group of literals, as a
+    table's row is, and otherwise one literal. Where `child_keyed`, the child's values key those groups, so its column
+    must list them."""
 
     by_value: tuple[str, ...]
     nested: bool
     child_keyed: bool
     other: str = 'other'
+    beside: tuple[str, ...] = ()
 
     def keys(self, entry: dict[str, Any]) -> set[str]:
         """The values of the given column the entry lists."""
         return {key for field in self.by_value if isinstance(by := entry.get(field), dict) for key in by}
 
     def groups(self, entry: dict[str, Any]) -> list[Any]:
-        """The groups of literals the entry holds, each listed value's and then every other value's."""
+        """The groups of literals the entry holds, each listed value's, then every other value's, then each `beside`."""
         fields = [entry.get(field) or {} for field in self.by_value]
         listed = [group for by in fields if isinstance(by, dict) for group in by.values()] if self.nested else fields
-        return [*listed, entry.get(self.other) or {}]
+        return [*listed, entry.get(self.other) or {}, *(entry.get(field) or {} for field in self.beside)]
 
     def literals(self, entry: dict[str, Any]) -> int:
         return sum(len(group) for group in self.groups(entry) if isinstance(group, dict))
@@ -131,7 +133,7 @@ class GivenList:
 GIVEN_LISTS = {
     'conditionals': GivenList(('fractions',), nested=True, child_keyed=True, other='other_fractions'),
     'conditional_quantiles': GivenList(('quantiles',), nested=True, child_keyed=False),
-    'conditional_fractions': GivenList(('zero_fraction', 'null_fraction'), nested=False, child_keyed=False),
+    'conditional_fractions': GivenList(('zero_fraction', 'null_fraction'), nested=False, child_keyed=False, beside=('given_null',)),
 }
 
 

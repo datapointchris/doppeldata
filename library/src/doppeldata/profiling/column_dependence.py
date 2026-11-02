@@ -242,7 +242,8 @@ def draft_plan(columns: list[DependenceColumn], derived: dict[str, dict[str, Any
 
 def without_set_aside(sections: dict[str, Any], set_aside: list[str]) -> dict[str, Any]:
     """The dataset's `sections`, each list left out where it is empty, without each entry or field whose JSON pointer
-    `set_aside` holds. A rate set aside leaves `other` too, and an entry of rates keeping neither is left out."""
+    `set_aside` holds. A rate set aside leaves `other` and `given_null` too, and an entry of rates keeping neither rate
+    is left out."""
     aside: dict[tuple[str, int], set[str | None]] = {}
     for pointer in set_aside:
         _, _, listed, at, *field = pointer.split('/')
@@ -255,13 +256,13 @@ def without_set_aside(sections: dict[str, Any], set_aside: list[str]) -> dict[st
             if None in fields:
                 continue
             entry = {key: value for key, value in entry.items() if key not in fields}
-            other = {key: value for key, value in (entry.get('other') or {}).items() if key not in fields}
             if name == 'conditional_fractions':
                 if not {'zero_fraction', 'null_fraction'} & entry.keys():
                     continue
-                entry.pop('other', None)
-                if other:
-                    entry['other'] = other
+                for group in ('other', 'given_null'):
+                    rates = {key: value for key, value in (entry.pop(group, None) or {}).items() if key not in fields}
+                    if rates:
+                        entry[group] = rates
             left.append(entry)
         if left:
             kept[name] = left
@@ -729,9 +730,10 @@ def conditional_fractions(
     copula: CopulaPairs,
 ) -> tuple[list[dict[str, Any]], dict[tuple[str, str], dict[str, int]]]:
     """Each column's null rate, and a numeric column's zero rate, within each value of a categorical column listing
-    `GIVEN_VALUES` at most, where the rate depends on the value by `RATE_DEPENDENCE` over `described`, and by
-    `RATE_TRIED` on `sample`, or `frozen` holds the pair. A pair one copula group draws takes its zeros from it, so
-    states no zero rate.
+    `GIVEN_VALUES` at most and within its nulls, where the rate depends on the value by `RATE_DEPENDENCE` over
+    `described`, and by `RATE_TRIED` on `sample`, or `frozen` holds the pair. A null parent counts as one more value,
+    because a row missing its parent is often a row missing more, as a claim's absent line holds no payment. A pair one
+    copula group draws takes its zeros from it, so states no zero rate.
 
     The generator draws each rate of a column from one parent. So a child keeps, for each rate, the pair `frozen`
     holds, else for its zero rate the parent `curve_parents` draws its quantiles from, else its strongest. A rate rests
@@ -755,7 +757,7 @@ def conditional_fractions(
         if frozen.gives('conditional_fractions', given, child)
         or any(rate_dependence(list(by_value.values())) >= RATE_TRIED for _, by_value in kind_counts(groups, zeros_stated(given, child)))
     ]
-    best: dict[tuple[str, str], tuple[tuple[bool, bool, float], str, tuple[dict[str, float], float | None, int]]] = {}
+    best: dict[tuple[str, str], tuple[tuple[bool, bool, float], str, ParentRates]] = {}
     for (given, child), groups in zip(tried, backend.grouped_rates(described, tried), strict=True):
         held = frozen.gives('conditional_fractions', given, child)
         for name, by_value in kind_counts(groups, zeros_stated(given, child)):
@@ -773,29 +775,29 @@ def conditional_fractions(
         if not kept:
             continue
         entry: dict[str, Any] = {'given': given, 'column': rated_column}
-        other: dict[str, float] = {}
+        beside: dict[str, dict[str, float]] = {'other': {}, 'given_null': {}}
         for name in ('null_fraction', 'zero_fraction'):
             if name in kept:
-                entry[name], other_fraction, _ = kept[name]
-                if other_fraction is not None:
-                    other[name] = other_fraction
-        if other:
-            entry['other'] = other
+                entry[name] = kept[name].listed
+                for group, share in (('other', kept[name].other), ('given_null', kept[name].given_null)):
+                    if share is not None:
+                        beside[group][name] = share
+        entry |= {group: shares for group, shares in beside.items() if shares}
         found.append(entry)
-        floors[(given, rated_column)] = {name: floor for name, (_, _, floor) in kept.items()}
+        floors[(given, rated_column)] = {name: rates.fewest for name, rates in kept.items()}
     return found, floors
 
 
-def kind_counts(groups: list[tuple[str | None, int, int, int]], zeros: bool) -> list[tuple[str, dict[str, tuple[int, int]]]]:
-    """Each rate a child may state, by name, with each listed parent value's rows and the rows the rate counts: its
-    null rate, and its zero rate where `zeros`. A zero rate counts among the rows holding a value."""
-    nulls = {value: (rows, null) for value, rows, null, _ in groups if value is not None}
+RateCounts = dict[str | None, tuple[int, int]]
+
+
+def kind_counts(groups: list[tuple[str | None, int, int, int]], zeros: bool) -> list[tuple[str, RateCounts]]:
+    """Each rate a child may state, by name, with each parent value's rows and the rows the rate counts, a null parent
+    keyed None: its null rate, and its zero rate where `zeros`. A zero rate counts among the rows holding a value."""
+    nulls: RateCounts = {value: (rows, null) for value, rows, null, _ in groups}
     if not zeros:
         return [('null_fraction', nulls)]
-    return [
-        ('null_fraction', nulls),
-        ('zero_fraction', {value: (rows - null, zero) for value, rows, null, zero in groups if value is not None}),
-    ]
+    return [('null_fraction', nulls), ('zero_fraction', {value: (rows - null, zero) for value, rows, null, zero in groups})]
 
 
 def rate_dependence(groups: list[tuple[int, int]]) -> float:
@@ -815,11 +817,21 @@ def rated(column: DependenceColumn) -> bool:
     return bool(column.entry.get('null_fraction') or numeric.get('zero_fraction')) and not numeric.get('sequence')
 
 
-def parent_rates(
-    by_value: dict[str, tuple[int, int]], given_values: list[str], k_min: int
-) -> tuple[dict[str, float], float | None, int] | None:
-    """Each listed parent value's rate, `counted` of `rows`, the rate of every other value as one, or None where it holds
-    no rows, and the fewest rows any stated count holds. None where no listed value keeps a rate."""
+@dc.dataclass(frozen=True)
+class ParentRates:
+    """A child's rate within each listed parent value, within every other value as one, and within a null parent, each
+    `counted` of `rows`, and the fewest rows any stated count holds."""
+
+    listed: dict[str, float]
+    other: float | None
+    given_null: float | None
+    fewest: int
+
+
+def parent_rates(by_value: RateCounts, given_values: list[str], k_min: int) -> ParentRates | None:
+    """Each listed parent value's rate, every other value's as one, and a null parent's, each None where it holds no
+    rows. A null parent's rate is left out where its counts break the floor, and the child then draws its own there.
+    None where no listed value keeps a rate."""
 
     def floored(rows: int, counted: int) -> bool:
         return rows >= k_min and all(count == 0 or count >= k_min for count in (counted, rows - counted))
@@ -832,7 +844,7 @@ def parent_rates(
         if broken:
             folded |= broken
             continue
-        others = [counts for value, counts in by_value.items() if value not in kept]
+        others = [counts for value, counts in by_value.items() if value is not None and value not in kept]
         other = (sum(rows for rows, _ in others), sum(counted for _, counted in others))
         if other[0] and not floored(*other):
             if not kept:
@@ -842,9 +854,16 @@ def parent_rates(
         break
     if not kept:
         return None
-    stated = [*kept.values(), *([other] if other[0] else [])]
+    null = by_value.get(None)
+    null = null if null is not None and null[0] and floored(*null) else None
+    stated = [*kept.values(), *([other] if other[0] else []), *([null] if null else [])]
     fewest = min(count for rows, counted in stated for count in (rows, counted, rows - counted) if count)
-    return {value: rate(counted, rows) for value, (rows, counted) in kept.items()}, rate(other[1], other[0]) if other[0] else None, fewest
+    return ParentRates(
+        {value: rate(counted, rows) for value, (rows, counted) in kept.items()},
+        rate(other[1], other[0]) if other[0] else None,
+        rate(null[1], null[0]) if null else None,
+        fewest,
+    )
 
 
 def functional_dependencies(

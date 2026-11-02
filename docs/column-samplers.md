@@ -148,8 +148,8 @@ doppeldata data check taxi.profile.yaml taxi-generated/
 ## A string column takes the most specific source its profile holds
 
 1. **`top_values`**, or else **`prefixes`**: an alias table over the rates. A draw of `other_fraction`
-   generates a value from the next source down. A drawn prefix is followed by a value of the
-   `suffix` pattern. A ZIP column under `healthcare` keeps three-digit prefixes, so `\d{2}` makes
+   generates a value the list does not hold from the next source down. A drawn prefix is followed
+   by a value of the `suffix` pattern. A ZIP column under `healthcare` keeps three-digit prefixes, so `\d{2}` makes
    each a ZIP code again.
 2. **`semantic.generator_hint.provider`**: a named generator, such as `email` or `city`. The names
    are doppeldata's own, an enum in the profile model, so the published schema lists them and
@@ -162,6 +162,12 @@ doppeldata data check taxi.profile.yaml taxi-generated/
 4. **`shapes`**: a shape is drawn by rate, then each `A` becomes an upper-case letter, each `a` a
    lower-case one, and each `9` a digit.
 5. **Characters** of `charset.classes`, at a length drawn from `length`.
+
+A `string.pattern` beside two or more `shapes` stands for the most common shape, because the
+profiler generalizes it from that shape's values alone. So the shapes are drawn by rate, and the
+most common one draws through the pattern. A column of five-digit HCPCS codes beside codes that
+start with a letter keeps both kinds. A `generator_hint.pattern` is the reviewer's, so it draws
+every value.
 
 A column typed by the general pack that holds no hint, `string.pattern` or `string.shapes` takes
 its type's hint before the engine reads the profile. So a hand-written `type: email` column draws
@@ -177,6 +183,29 @@ every call, and it panics on lower-case input and on a `u8` overflow past about 
 `email` is `first.last` at `example.com`, `example.net` or `example.org`, domains reserved so no
 generated address reaches anyone. That holds 3,007 × 474 × 3 = 4,275,954 addresses. *Rejected:*
 fake's `SafeEmail`. It is a first name at one of the three domains, so it holds 9,021 addresses.
+
+## A listed column's rest draws no value the list holds
+
+A row drawn as `other_fraction` stands for a value outside `top_values` or `prefixes`. A listed
+value drawn there instead would raise that value's share and leave the rest a value short.
+
+- **A rest of whole values from a pattern or shapes takes each string once, until they run out.**
+  Each language is ranked by the DFA a unique key builds, and its strings take the seeded order of
+  a keyed permutation on the `rest_order` stream. Slot k of the rest's value index takes the k-th
+  string of that order that the list does not hold. With several shapes, a slot picks its shape
+  by rate on the slot's own stream. So the rest's distinct count is its count of slots, until a
+  shape's unlisted strings are all taken.
+- **Every other rest draws again on a value the list holds**, up to `REST_DRAWS` times. A prefix
+  list's rest is compared on its first characters. A provider, ICD-10-CM and characters are not
+  languages the DFA ranks. Where a share q of the source's draws is listed, q^64 of the rest's rows
+  keep a listed value.
+- **The rest's variety is counted outside the list.** Each listed value takes one string from the
+  count of each shape that holds it, so the value index targets strings the rest can still draw.
+
+*Rejected:* drawing a rest of whole values with replacement, and drawing again on a listed value.
+Two slots then collide on one string as uniform draws do, so a rest of a few rows over a few values
+falls short of the distinct count the profile states. The without-replacement draw costs one DFA
+build per listed column at plan time.
 
 ## A key stated unique draws each string of its pattern or shapes at most once
 
@@ -271,7 +300,8 @@ function of its index, no pool of values is held, and any block still generates 
   the providers drawing one entry of one list are counted from fake's lists, and `zip_code` from
   its digits. `icd10cm` and
   `hcpcs_level2` are counted from their shapes, ICD-10-CM's at the share of each length it draws. Characters and every other provider are uncounted, and each
-  distinct index is taken as a distinct string.
+  distinct index is taken as a distinct string. A listed column's rest that takes each string once
+  collides on none until a shape's strings run out.
 - **Where fresh draws reach no more than the target, a string column draws fresh**, with no index.
   A ratio of 1 is always that case. So is a source whose variety sits below the target, which caps
   the column's distinct count. A numeric column instead deals each row a band of levels from its

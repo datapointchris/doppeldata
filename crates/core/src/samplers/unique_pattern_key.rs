@@ -203,6 +203,33 @@ impl UniquePatternKey {
         }
     }
 
+    /// The rank [`Self::push_rank`] writes `value` at, or None where the key holds no such string, ends before a check
+    /// digit, or holds 2^64 − 1 strings or more, past which a rank does not name one string.
+    pub(crate) fn rank_of(&self, value: &[u8]) -> Option<u128> {
+        if self.end != KeyEnd::Whole || self.strings >= u128::from(u64::MAX) || value.len() > self.budget {
+            return None;
+        }
+        let states = self.runs.len();
+        let (mut state, mut rank) = (0usize, 0u128);
+        for (at, &byte) in value.iter().enumerate() {
+            let left = self.budget - at;
+            let below = &self.within[(left - 1) * states..left * states];
+            rank += u128::from(self.ends[state]);
+            let mut next = None;
+            for run in self.runs[state].iter().filter(|run| below[run.next as usize] > 0) {
+                let each = below[run.next as usize];
+                if byte >= run.first && u16::from(byte) < u16::from(run.first) + run.bytes {
+                    rank += each * u128::from(byte - run.first);
+                    next = Some(run.next as usize);
+                    break;
+                }
+                rank += each * u128::from(run.bytes);
+            }
+            state = next?;
+        }
+        self.ends[state].then_some(rank)
+    }
+
     /// The places the row permutation runs over: one per string, up to 2^64 − 1.
     fn domain(&self) -> u64 {
         self.strings.min(u128::from(u64::MAX)) as u64
@@ -313,6 +340,17 @@ pub(crate) struct SeededPatternKey<'a> {
 }
 
 impl SeededPatternKey<'_> {
+    /// The row [`Self::push`] writes the string `rank` names on, or None where the key spreads its rows across more
+    /// than 2^64 − 1 strings.
+    pub(crate) fn row_of(&self, rank: u128) -> Option<u64> {
+        (rank < u128::from(self.pattern.domain())).then(|| self.rows.inverse(rank as u64))
+    }
+
+    /// The rows [`Self::push`] writes a string on, one per string up to 2^64 − 1.
+    pub(crate) fn rows(&self) -> u64 {
+        self.pattern.domain()
+    }
+
     /// The string row `row` holds, which no other row holds. Past 2^64 strings, the row's place among
     /// 2^64 is spread across them: each place takes its own band of ranks, and a hash its rank in it.
     pub(crate) fn push(&self, row: u64, out: &mut String) {
@@ -359,7 +397,11 @@ mod tests {
                 seeded.push(row, &mut value);
                 assert!(matches.is_match(&value), "{pattern} drew {value:?}");
                 let around_check_digit = match end {
-                    KeyEnd::Whole => value.clone(),
+                    KeyEnd::Whole => {
+                        let back = key.rank_of(value.as_bytes()).and_then(|rank| seeded.row_of(rank));
+                        assert_eq!(back, Some(row), "{pattern} wrote {value:?} at another rank than it reads");
+                        value.clone()
+                    }
                     KeyEnd::BeforeCheckDigit(_) => {
                         let site = value.bytes().rposition(|byte| byte.is_ascii_digit()).unwrap();
                         format!("{}_{}", &value[..site], &value[site + 1..])

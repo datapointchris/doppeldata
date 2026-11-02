@@ -19,6 +19,7 @@ mod text_lengths;
 mod type_mix;
 mod unique_pattern_key;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_array::ArrayRef;
@@ -33,6 +34,7 @@ use rand_distr::weighted::WeightedAliasIndex;
 use regex_syntax::hir::Hir;
 
 use self::categorical::CategoricalSampler;
+use self::categorical::UnlistedStrings;
 pub(crate) use self::dependent_columns::DependentColumns;
 pub(crate) use self::dependent_columns::DrawnColumns;
 pub(crate) use self::dependent_columns::FollowingColumns;
@@ -317,6 +319,8 @@ pub(crate) struct StreamKeys {
     type_mix_text: u64,
     /// The permutation taking a unique key's row to its rank among its pattern's strings.
     key_rank: u64,
+    /// The order a listed column's rest takes its strings in, the listed ones left out.
+    rest_order: u64,
 }
 
 impl StreamKeys {
@@ -337,6 +341,7 @@ impl StreamKeys {
             type_mix: key("type_mix"),
             type_mix_text: key("type_mix_text"),
             key_rank: key("key_rank"),
+            rest_order: key("rest_order"),
         }
     }
 
@@ -955,6 +960,9 @@ fn describe_source(source: &TextSource) -> String {
         TextSource::Icd10cm { dotted: true } => "the icd10cm provider, dotted after the category".to_string(),
         TextSource::Icd10cm { dotted: false } => "the icd10cm provider".to_string(),
         TextSource::Pattern(_) => "a pattern".to_string(),
+        TextSource::Shapes { shapes, .. } if shapes.iter().any(Shape::is_drawn_through_pattern) => {
+            format!("{} shapes, the most common through its pattern", shapes.len())
+        }
         TextSource::Shapes { shapes, .. } => format!("{} shapes", shapes.len()),
         TextSource::Characters { .. } => "characters of the profiled classes".to_string(),
     }
@@ -1124,7 +1132,7 @@ fn value_sampler(
             reads.read("rest_fraction", "/string/other_fraction", string.and_then(|s| s.other_fraction)),
             None,
             "/string/top_values",
-            source.variety(),
+            usize::MAX,
         )),
         None => match reads.read("listed_prefixes", "/string/prefixes", listed_prefixes(string)) {
             Some(prefixes) => {
@@ -1137,20 +1145,29 @@ fn value_sampler(
                     .map(|top| top.value.chars().count())
                     .max()
                     .unwrap_or_default();
-                let variety = source.leading_variety(prefix_chars);
                 Some((
                     &prefixes.values,
                     prefixes.other_fraction,
                     Some(suffix),
                     "/string/prefixes/values",
-                    variety,
+                    prefix_chars,
                 ))
             }
             None => None,
         },
     };
-    if let Some((listed, other_fraction, suffix, field, other_variety)) = categories {
+    if let Some((listed, other_fraction, suffix, field, held_chars)) = categories {
         let target = context.distinct_target(column.distinct.as_ref(), filled_rows, reads);
+        let held: Vec<&str> = listed.iter().map(|top| top.value.as_str()).collect();
+        let held_set: HashSet<String> = held.iter().map(|value| value.to_string()).collect();
+        // A rest of whole values its source ranks takes each slot's string once, and any other rest draws again on a listed value.
+        let unlisted = (held_chars == usize::MAX)
+            .then(|| UnlistedStrings::new(&source, &held_set))
+            .flatten();
+        let other_variety = match &unlisted {
+            Some((_, variety)) => variety.clone(),
+            None => source.leading_variety_outside(held_chars, &held),
+        };
         let values: Vec<_> = listed.iter().map(|top| (top.value.clone(), top.fraction.0)).collect();
         let other_fraction = other_fraction.map_or(0.0, |r| r.0);
         let listed = ListedValues::new(values, other_fraction).map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
@@ -1160,6 +1177,9 @@ fn value_sampler(
             suffix: suffix.map(Box::new),
             other: source,
             other_index,
+            unlisted: unlisted.map(|(unlisted, _)| unlisted),
+            held: held_set,
+            held_chars,
             output,
         }));
     }
@@ -1282,25 +1302,23 @@ fn text_source(
             .read("pattern", STORED_PATTERN, string.and_then(|s| s.pattern.as_deref()))
             .map(|stored| (stored, STORED_PATTERN)),
     };
+    let stated_shapes = string.and_then(|s| s.shapes.as_ref()).filter(|shapes| !shapes.is_empty());
     if let Some((pattern, field)) = pattern {
         let compiled = text::compile_pattern(pattern).map_err(site.refuse_as(ColumnFault::InvalidPattern, field))?;
-        return Ok(TextSource::Pattern(Box::new(compiled)));
+        // A stored pattern stands for the most common shape, so where others are stated they keep their shares.
+        let beside = stated_shapes.filter(|shapes| field == STORED_PATTERN && shapes.len() > 1);
+        let Some(shapes) = beside.and_then(|shapes| reads.read("shapes", STORED_SHAPES, Some(shapes))) else {
+            return Ok(TextSource::Pattern(Box::new(compiled)));
+        };
+        let dominant = shapes
+            .iter()
+            .enumerate()
+            .max_by(|(at, a), (other, b)| a.fraction.0.total_cmp(&b.fraction.0).then(other.cmp(at)))
+            .map(|(at, _)| at);
+        return shapes_source(shapes, dominant.map(|at| (at, compiled)), site);
     }
-    let shapes = reads
-        .read("shapes", STORED_SHAPES, string.and_then(|s| s.shapes.as_ref()))
-        .filter(|shapes| !shapes.is_empty());
-    if let Some(shapes) = shapes {
-        let choice = WeightedAliasIndex::new(shapes.iter().map(|shape| shape.fraction.0).collect())
-            .map_err(|error| format!("shape rates are unusable: {error}"))
-            .map_err(site.refuse_as(ColumnFault::UnusableRates, STORED_SHAPES))?;
-        let total: f64 = shapes.iter().map(|shape| shape.fraction.0).sum();
-        return Ok(TextSource::Shapes {
-            choice,
-            shapes: shapes
-                .iter()
-                .map(|shape| Shape::new(&shape.shape, shape.fraction.0 / total))
-                .collect(),
-        });
+    if let Some(shapes) = reads.read("shapes", STORED_SHAPES, stated_shapes) {
+        return shapes_source(shapes, None, site);
     }
     let length = reads.read("length", "/string/length", string.and_then(|s| s.length.as_ref()));
     let length = numeric::bounded_cdf(
@@ -1315,6 +1333,31 @@ fn text_source(
         length,
         alphabet: text::alphabet(charset.and_then(|c| c.classes.as_deref())),
     })
+}
+
+/// The shapes drawn by rate, the one at `through`'s index drawn through its pattern.
+fn shapes_source(
+    shapes: &[crate::profile::Shape],
+    through: Option<(usize, text::Pattern)>,
+    site: &ColumnSite,
+) -> Result<TextSource, PlanError> {
+    let choice = WeightedAliasIndex::new(shapes.iter().map(|shape| shape.fraction.0).collect())
+        .map_err(|error| format!("shape rates are unusable: {error}"))
+        .map_err(site.refuse_as(ColumnFault::UnusableRates, STORED_SHAPES))?;
+    let total: f64 = shapes.iter().map(|shape| shape.fraction.0).sum();
+    let mut through = through;
+    let shapes = shapes
+        .iter()
+        .enumerate()
+        .map(|(at, shape)| {
+            let drawn = Shape::new(&shape.shape, shape.fraction.0 / total);
+            match through.take_if(|(index, _)| *index == at) {
+                Some((_, pattern)) => drawn.through(pattern),
+                None => drawn,
+            }
+        })
+        .collect();
+    Ok(TextSource::Shapes { choice, shapes })
 }
 
 /// Whether the column's most common shape holds a dot, as an ICD-10-CM code written `E11.9` does.

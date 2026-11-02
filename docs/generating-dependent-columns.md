@@ -208,6 +208,7 @@ under 1% of its own takes none.
       zero_fraction: {web: 0.02, store: 0.2}
       null_fraction: {phone: 0.15}
       other: {zero_fraction: 0.1, null_fraction: 0.01}
+      given_null: {zero_fraction: 0.6, null_fraction: 0.05}
 ```
 
 - **Each row of `quantiles` warps the column's own levels for rows holding that value.** Each
@@ -217,14 +218,29 @@ under 1% of its own takes none.
   no row, and a null, draw from `other`, else from the column's own levels.
 - **A zero rate places each row's run of zeros.** It is the rate given the row's value, else
   `other`'s, else the column's own. A null rate replaces the column's for the rows it covers.
+- **`given_null` holds the rates of the rows whose given column is null.** A null given is a
+  value like any other, held to `k_min` rows. In a claims file whose later line items are empty,
+  an empty line's processing indicator is null, and its amounts are zero far more often than a
+  filled line's. Without it, those rows drew the column's own rates, which mix both.
+  - *Rejected:* the engine deducing the null rows' rates from the column's own and the stated
+    rows'. A child whose null rate follows the given too leaves the zero rate's remainder over rows
+    the profile does not count, and a reviewer cannot read a rate the profile never states.
 - **A copula member given a category reads its copula level through the category's warp**, so
   both dependencies hold. The category is drawn apart from the copula, so the member's ranks mix
   every category's warp. That lowers what each Pearson gives, so the member is calibrated against
   the mixed ranks, each category weighted by its share of the parent's rows.
 - **A warp gives way to a copula pair it would leave unreachable.** Where through its warps a
-  member's stated pair holds no Pearson its own values would hold, the copula keeps the pair and
-  the warps are not drawn. The plan says `its zero rate given payment_type set aside for its
-  Spearman with mta_tax, which no copula holds beside it`.
+  member's stated pair holds no Pearson, and both members' own marginals would hold one, the
+  copula keeps the pair and the warps are not drawn. The plan says `its zero rate given
+  payment_type set aside for its Spearman with mta_tax, which no copula holds beside it`.
+  - Each member's own values are tried against its partner's own, never its partner's warped
+    scores. Two members each warped by their own given would otherwise each find the pair
+    unreachable against the other's warp, and both warps would stay. The claims file's line
+    amounts, warped by their line's processing indicator, then drew pairs the source holds near 0.6
+    at near none.
+  - *Rejected:* measuring a rate's dependence over the rows holding a given value alone. It states
+    no rate given a null, so those rows drew the column's own mixed rates. And members warped by
+    other givens still collided, drawing their pairs far from the source's.
 - **A curve or zero rate given a member of the column's own copula group is not drawn.** The
   group draws each member's level given every other member's. So among the rows holding one
   member's value, another member's levels are not uniform, and no warp of them holds the stated

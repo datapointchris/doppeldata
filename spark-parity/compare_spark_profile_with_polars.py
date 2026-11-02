@@ -81,8 +81,8 @@ READ_FIELDS = {
     'CorrelationRatio': {'a', 'b', 'value'},
     'Conditional': {'given', 'column', 'fractions', 'other_fractions'},
     'ConditionalQuantiles': {'given', 'column', 'quantiles', 'other'},
-    'ConditionalFractions': {'given', 'column', 'zero_fraction', 'null_fraction', 'other'},
-    'OtherFractions': {'zero_fraction', 'null_fraction'},
+    'ConditionalFractions': {'given', 'column', 'zero_fraction', 'null_fraction', 'other', 'given_null'},
+    'GivenGroupFractions': {'zero_fraction', 'null_fraction'},
     'Dependency': {'kind', 'lhs', 'rhs', 'violation_fraction', 'table'},
     'Relationship': {'from', 'to', 'containment', 'orphan_fraction', 'cardinality', 'fanout', 'inherited', 'ordinal'},
     'Fanout': {'quantiles', 'top_fractions', 'zipf_s'},
@@ -166,6 +166,7 @@ def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
             for given, value in (stated.get(rate) or {}).items():
                 yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | {stated["given"]}={given}', value
             yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | (other)', (stated.get('other') or {}).get(rate)
+            yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | (null)', (stated.get('given_null') or {}).get(rate)
     for dependency in dataset.get('dependencies') or []:
         described = f'{dependency["kind"]} {"+".join(dependency["lhs"])} -> {dependency["rhs"]}'
         yield 'dependencies', described, dependency.get('violation_fraction')

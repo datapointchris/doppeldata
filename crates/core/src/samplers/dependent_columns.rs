@@ -149,32 +149,35 @@ impl ParentCurves {
     }
 }
 
-/// A share for each listed value of a parent, and one for every other value, where stated.
+/// A share for each listed value of a parent, and one for every other value and for a null parent, where stated.
 #[derive(Debug, Clone)]
 struct ParentShares {
     parent: usize,
     keys: ParentKeys,
     shares: Vec<f64>,
     other: Option<f64>,
+    null: Option<f64>,
 }
 
 impl ParentShares {
     fn share(&self, place: u32) -> Option<f64> {
         match place {
-            NULL => None,
+            NULL => self.null,
             OTHER => self.other,
             listed => Some(self.shares[listed as usize]),
         }
     }
 }
 
-/// A Bernoulli trial for each listed value of a parent, and one for every other value, where stated.
+/// A Bernoulli trial for each listed value of a parent, and one for every other value and for a null parent, where
+/// stated.
 #[derive(Debug, Clone)]
 struct ParentTrials {
     parent: usize,
     keys: ParentKeys,
     trials: Vec<Bernoulli>,
     other: Option<Bernoulli>,
+    null: Option<Bernoulli>,
 }
 
 impl ParentTrials {
@@ -183,7 +186,7 @@ impl ParentTrials {
         let mut rng = rng_for(at.seed, keys.nulls, at.block);
         BooleanBuffer::collect_bool(rows, |row| {
             let trial = match places[row] {
-                NULL => None,
+                NULL => self.null,
                 OTHER => self.other,
                 listed => Some(self.trials[listed as usize]),
             };
@@ -912,7 +915,7 @@ impl DependentColumns {
             let field = format!("/dataset/conditional_fractions/{at}");
             let child = planner.column(&rates.column, &format!("{field}/column"))?;
             let parent = planner.column(&rates.given, &format!("{field}/given"))?;
-            let other = rates.other.as_ref();
+            let (other, given_null) = (rates.other.as_ref(), rates.given_null.as_ref());
             if let Some(zero_fraction) = &rates.zero_fraction {
                 let pointer = format!("{field}/zero_fraction");
                 let held = zeros[child].as_ref().map(|zeros| ("zero rate", zeros.parent));
@@ -925,6 +928,7 @@ impl DependentColumns {
                         keys: planner.keys(zero_fraction.keys()),
                         shares: zero_fraction.values().map(|rate| rate.0).collect(),
                         other: other.and_then(|other| other.zero_fraction).map(|rate| rate.0),
+                        null: given_null.and_then(|null| null.zero_fraction).map(|rate| rate.0),
                     });
                     warp_entries[child].push(("conditional_zero_fraction", pointer));
                 }
@@ -954,6 +958,7 @@ impl DependentColumns {
                     keys: planner.keys(null_fraction.keys()),
                     trials: null_fraction.values().map(|rate| Bernoulli::new(rate.0)).collect(),
                     other: other.and_then(|other| other.null_fraction).map(|rate| Bernoulli::new(rate.0)),
+                    null: given_null.and_then(|null| null.null_fraction).map(|rate| Bernoulli::new(rate.0)),
                 });
                 draws[child]
                     .sources
@@ -1263,8 +1268,8 @@ fn pair_series(a: &MemberScores, b: &MemberScores, grid: &LatentGrid) -> PairSer
 
 /// The copula groups of the Spearman correlations `stored` holds, one per `component`, its members ordered by name
 /// and each scored on the latent grid by `scores`. A member's warps are set aside where through them a stated pair
-/// holds no Pearson that its own marginal would hold, so the copula keeps the pair. Each member set aside is
-/// returned with the partners of those pairs.
+/// holds no Pearson that both members' own marginals would hold, so the copula keeps the pair. Each member set aside
+/// is returned with the partners of those pairs.
 fn copula_groups(
     context: &PlanContext,
     profile: &[Column],
@@ -1298,8 +1303,9 @@ fn copula_groups(
                 .filter(|(other, _)| *other != index)
                 .filter_map(|(other, partner)| {
                     let rho = stored.get(&(index.min(*other), index.max(*other)))?.clamp(-1.0, 1.0);
+                    // Against a warped partner the member's own values may miss too, so they are tried against the partner's own.
                     let lost = calibrated(rho, &pair_series(member, partner, &grid)).is_none()
-                        && calibrated(rho, &PairSeries::apart(&member.own, partner.scores(), &grid)).is_some();
+                        && calibrated(rho, &PairSeries::apart(&member.own, &partner.own, &grid)).is_some();
                     lost.then(|| profile[*other].name.clone())
                 })
                 .collect();
