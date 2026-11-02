@@ -365,8 +365,31 @@ def distinct_ratio_range(count: int, ratio: float, rows: float) -> tuple[float, 
     return ratio, sampled / rows
 
 
-def boundary_adherence(source: Column, observed: Column) -> Compared | Unmeasured | None:
-    """The share of observed values inside the source's outer histogram edges, from the rows counted outside them.
+def boundary_adherences(source: Document, observed: Document) -> Iterator[Measurement]:
+    """For each column, the share of observed values inside the source's outer histogram edges, crediting the share
+    of the source's own values its extremes leave beyond them."""
+    k_min = (source.get('privacy') or {}).get('k_min') or _core.DEFAULT_K_MIN
+    for ours, theirs in shared_columns(source, observed):
+        compared = boundary_adherence(ours, theirs, beyond_extremes_share(ours, described_values(source, ours), k_min))
+        if compared is not None:
+            yield Measurement(ours['name'], compared)
+
+
+def beyond_extremes_share(column: Column, values: float, k_min: int) -> float:
+    """The share of a source column's `values` its extremes' method leaves beyond them, on both sides together.
+
+    Trimmed extremes sit at rank k_min from each end, so up to k_min − 1 values lie beyond each by construction, and
+    exact extremes leave none. A profile stating no row count leaves no share.
+    """
+    method = ((column.get('numeric') or {}).get('extremes') or {}).get('method')
+    beyond_each = _core.rows_beyond_each_extreme(method, k_min) if method else None
+    return min(1.0, 2 * beyond_each / values) if beyond_each and values else 0.0
+
+
+def boundary_adherence(source: Column, observed: Column, credited: float) -> Compared | Unmeasured | None:
+    """The share of observed values inside the source's outer histogram edges, from the rows counted outside them, with
+    `credited` of them counted inside. It compares the source's least possible adherence, 1 − `credited`, with the
+    observed share inside.
 
     The outer edges are the source's trimmed extremes, or half a unit beyond them in an integral column. Only a
     histogram counted against the source's edges carries `overflow`, so a profile binned afresh is Unmeasured.
@@ -379,7 +402,10 @@ def boundary_adherence(source: Column, observed: Column) -> Compared | Unmeasure
         return Unmeasured("the other profile was not counted against the source's histogram edges")
     outside = counted['overflow']['rows_below'] + counted['overflow']['rows_above']
     total = outside + sum(counted['bin_rows'])
-    return Compared(1 - outside / total) if total else Unmeasured('the other profile counts no values for the column')
+    if not total:
+        return Unmeasured('the other profile counts no values for the column')
+    inside = 1 - outside / total
+    return Compared(min(1.0, inside + credited), 1 - credited, inside)
 
 
 def relative_change(expected: float, observed: float | None, missing: str) -> Compared | Unmeasured:
@@ -634,10 +660,10 @@ METRICS = (
     ),
     Metric(
         'boundary_adherence',
-        "the share of values inside the source's outer histogram edges",
+        "the share of values inside the source's outer histogram edges, crediting the share its extremes leave beyond them",
         Bound.AT_LEAST,
         0.99,
-        per_column(boundary_adherence),
+        boundary_adherences,
     ),
     Metric(
         'files_delta',

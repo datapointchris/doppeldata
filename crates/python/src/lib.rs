@@ -323,6 +323,15 @@ mod _core {
             .collect()
     }
 
+    /// The most rows lying beyond each extreme that a profile's ``extremes.method`` writes under a
+    /// floor of ``k_min``, or None for a name that is no method.
+    #[pyfunction]
+    fn rows_beyond_each_extreme(method: &str, k_min: u64) -> Option<u64> {
+        serde_json::from_value::<doppeldata_core::profile::ExtremesMethod>(method.into())
+            .ok()
+            .map(|method| method.rows_beyond_each(k_min))
+    }
+
     /// The anchored regular expression grex generalizes the values to, with each digit as a digit
     /// class, or None when it would hold a literal or a character class only some values have.
     #[pyfunction]

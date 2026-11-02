@@ -432,6 +432,12 @@ def provider_lengths() -> dict[str, tuple[int, int]]:
     from the lists and templates it draws from.
     """
 
+def rows_beyond_each_extreme(method: str, k_min: SupportsIndex) -> int |None:
+    """
+    The most rows lying beyond each extreme that a profile's ``extremes.method`` writes under a
+    floor of ``k_min``, or None for a name that is no method.
+    """
+
 def scenario_ids(scenario_json: str) -> tuple[list[str], tuple[int, str] |None]:
     """
     Each perturbation's id in ``scenario_json``, in list order. Where one repeats an earlier

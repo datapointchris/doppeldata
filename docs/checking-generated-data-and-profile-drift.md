@@ -113,6 +113,15 @@ other profile's histogram.
 
 - An overflow of 1 to `k_min − 1` rows is written as 0, so adherence overstates by at most
   `2 · (k_min − 1)` rows.
+- **The check credits the share of values the source's own extremes leave beyond them.** The
+  privacy floor puts a trimmed extreme at rank `k_min` from its end. So up to `k_min − 1` of the
+  source's values lie beyond each one by construction, and `exact` extremes leave none. A check
+  cannot ask for more adherence than the profile's construction allows. So the value is
+  `min(1, adherence + 2 · (k_min − 1) / values)`, over the source's values not null, and `expected`
+  reports `1 −` that credit.
+- **The credit shrinks with the source's rows.** At the default `k_min` of 11 it is 0.1 at 200
+  values, 0.01 at 2,000, and 6 in a million at 3.4M. The bundled `orders` example profiled at 200
+  rows holds 4% of `quantity` beyond its own extremes, where the bound asks for 99% inside.
 - A histogram not counted against the source's outer edges carries no `overflow` that
   measures them, so the column's `boundary_adherence` is unmeasured.
 
@@ -373,7 +382,7 @@ Three scores sit beside a profile metric of a like name, and compare another thi
 | --- | --- | --- |
 | `ks`, at most | `KSComplement`, at least | 1 minus the Kolmogorov-Smirnov distance between the two samples' values. `ks` reads the profile's quantiles. |
 | `tvd`, at most | `TVComplement`, at least | 1 minus the total variation distance between the two samples' category shares. `tvd` reads the profile's value list. |
-| `boundary_adherence`, at least | `BoundaryAdherence`, at least | The share of the data's values inside the real sample's minimum and maximum. `boundary_adherence` reads the profile's outer histogram edges. |
+| `boundary_adherence`, at least | `BoundaryAdherence`, at least | The share of the data's values inside the real sample's minimum and maximum. `boundary_adherence` reads the profile's outer histogram edges, and credits the values its trimmed extremes leave beyond them. |
 
 - **REAL_DATA is read as DATA is**, through the profiler's readers. So `--against` reaches every source
   `profile create` reaches, and a CSV or JSON side is typed as `profile create` types it.
