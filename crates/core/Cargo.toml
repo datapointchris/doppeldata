@@ -10,14 +10,15 @@ publish.workspace = true
 
 [dependencies]
 # arrow's major must be the one pyo3-arrow builds on, so a RecordBatch built here is the type a
-# PyCapsule export through pyo3-arrow accepts. `cargo info pyo3-arrow` names that major.
-arrow-array = "59"
-arrow-buffer = "59"
-arrow-cast = "59"
-arrow-data = "59"
-arrow-ord = "59"
-arrow-schema = "59"
-arrow-select = "59"
+# PyCapsule export through pyo3-arrow accepts. pyo3-arrow's Cargo.toml at the commit crates/python
+# pins names that major.
+arrow-array = "60.1"
+arrow-buffer = "60.1"
+arrow-cast = "60.1"
+arrow-data = "60.1"
+arrow-ord = "60.1"
+arrow-schema = "60.1"
+arrow-select = "60.1"
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 fake = { version = "5.1.0", default-features = false }
 grex = { version = "1.4.6", default-features = false }
@@ -43,6 +44,6 @@ strum = { version = "0.28.0", features = ["derive"] }
 thiserror = "2.0.21"
 
 [dev-dependencies]
-arrow-ipc = "59"
+arrow-ipc = "60.1"
 rayon = "1.12.0"
 serde-saphyr = "2.0.0"

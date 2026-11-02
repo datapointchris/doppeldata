@@ -10,12 +10,12 @@ publish.workspace = true
 
 [dependencies]
 # chrono-tz lets a timestamp column whose zone has a name, such as UTC, format as text.
-arrow-array = { version = "59", features = ["chrono-tz"] }
-arrow-cast = "59"
-arrow-ipc = { version = "59", features = ["lz4", "zstd"] }
-arrow-json = "59"
-arrow-schema = "59"
-arrow-select = "59"
+arrow-array = { version = "60.1", features = ["chrono-tz"] }
+arrow-cast = "60.1"
+arrow-ipc = { version = "60.1", features = ["lz4", "zstd"] }
+arrow-json = "60.1"
+arrow-schema = "60.1"
+arrow-select = "60.1"
 bytes = "1.1"
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 # The csv crate's own writer, driven field by field, because the csv crate quotes per file and an
@@ -31,13 +31,13 @@ object_store = "0.14.2"
 # parquet's own `object_store` feature stays off. The writers drive the sync ArrowWriter into their
 # own byte sink, which uploads through object_store, so the feature would buy nothing. It would also
 # pin the object_store parquet was built against, which need not be the one this crate takes.
-parquet = { version = "59", default-features = false, features = ["arrow", "snap", "zstd", "lz4", "flate2-zlib-rs", "simdutf8"] }
+parquet = { version = "60.1", default-features = false, features = ["arrow", "snap", "zstd", "lz4", "flate2-zlib-rs", "simdutf8"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "time"] }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 object_store = { version = "0.14.2", features = ["aws"] }
