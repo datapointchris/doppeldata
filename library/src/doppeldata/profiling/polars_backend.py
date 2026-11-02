@@ -27,6 +27,7 @@ from doppeldata.profiling.backend import JsonNode
 from doppeldata.profiling.backend import JsonRead
 from doppeldata.profiling.backend import ParquetFooter
 from doppeldata.profiling.backend import ParsedType
+from doppeldata.profiling.backend import Recode
 from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
@@ -349,6 +350,16 @@ class PolarsBackend:
 
     def parse(self, table: pl.LazyFrame, types: dict[str, ParsedType]) -> pl.LazyFrame:
         return table.with_columns(parsed(pl.col(name), parsed_type).alias(name) for name, parsed_type in types.items())
+
+    def recoded(self, table: pl.LazyFrame, recodes: dict[str, Recode]) -> pl.LazyFrame:
+        dtypes = dict(table.collect_schema())
+        return table.with_columns(
+            pl.when(pl.col(name).is_in(pl.Series(recode.values, dtype=dtypes[name]).implode()))
+            .then(pl.lit(recode.modal, dtype=dtypes[name]))
+            .otherwise(pl.col(name))
+            .alias(name)
+            for name, recode in recodes.items()
+        )
 
     def average_ranks(self, table: pl.LazyFrame, names: list[str]) -> list[pl.Expr]:
         """Each named column's values as their average ranks over its own values, a null left null, aliased `r0`, `r1`

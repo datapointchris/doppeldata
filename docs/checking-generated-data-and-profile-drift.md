@@ -137,6 +137,13 @@ toward either reading passes, and only a count outside both fails. A few-valued 
 falls near zero at a small n: a 5-value column in 100,000 rows, checked at 2,000, passes holding
 anywhere from 0.1 to 5 values. `tvd` is what checks its values there.
 
+`data check` reads a list stating no `other_fraction` at the values it lists. Data generated from it
+holds only those, and the privacy floor can leave values out of it: it recodes a remainder of fewer
+than `k_min` rows into the modal value. So D and the source's ratio are the listed values'. April
+2024's taxi `congestion_surcharge` lists 3 of its 5 values, and the check expects 3. `profile diff`
+compares two profiles of data, so it reads each at its own count, and two profiles of one source
+differ by 0.
+
 Every kind of column is measured. A float column whose source holds cents, generated as continuous
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.

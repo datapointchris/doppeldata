@@ -20,6 +20,7 @@ class ProfiledColumns:
     missing value, and a JSON table's paths and type counts are in `json`. `dependence_sample` is the seeded sample the
     fits and the correlations read, and `parsed_types` reads a delimited table's text as one parse, null tokens included.
     `whole` is every row at the columns' types where `table` holds a sample, and None where it holds every row.
+    `table` holds each listed column's rare remainder rewritten as its modal value, and `unrecoded` the same rows before.
     """
 
     columns: list[dict[str, Any]]
@@ -33,3 +34,4 @@ class ProfiledColumns:
     dependence_sample: Table = None
     parsed_types: dict[str, ParsedType] = dc.field(default_factory=dict)
     whole: Table = None
+    unrecoded: Table = None

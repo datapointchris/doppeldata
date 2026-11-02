@@ -42,6 +42,7 @@ from doppeldata.profiling import parquet_footers
 from doppeldata.profiling.backend import HIDDEN_COLUMN_PREFIX
 from doppeldata.profiling.backend import ColumnSpec
 from doppeldata.profiling.backend import ParsedType
+from doppeldata.profiling.backend import Recode
 from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
@@ -1371,6 +1372,21 @@ class SparkBackend:
             self.persisted = [frame for frame in self.persisted if frame is not table]
         self.parsed = [*(frame for frame in self.parsed if frame is not table), parsed_table]
         return parsed_table
+
+    def recoded(self, table: DataFrame, recodes: dict[str, Recode]) -> DataFrame:
+        # Not persisted: a comparison with fewer than k_min literals costs less than reading the table back from disk.
+        types = {field.name: field.dataType for field in table.schema.fields}
+        recoded_table = table.withColumns(
+            {
+                name: sf.when(column(name).isin(list(recode.values)), sf.lit(recode.modal).cast(types[name])).otherwise(column(name))
+                for name, recode in recodes.items()
+            }
+        )
+        # Rewriting values keeps every row, so the rows counted of `table` stand for its recode too.
+        held = self.rows.get(id(table))
+        if held is not None and held[0] is table:
+            self.rows[id(recoded_table)] = (recoded_table, held[1])
+        return recoded_table
 
 
 def ordered_key(o: Operand, value: Any) -> Column:
