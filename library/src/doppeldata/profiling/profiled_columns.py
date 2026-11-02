@@ -15,16 +15,17 @@ Answers = dict[tuple[str | None, str], Any]
 
 @dc.dataclass(frozen=True)
 class ProfiledColumns:
-    """One table's columns profiled. `table` is parsed, `described` counts the rows read, and `unparsed_rows` the rows
-    holding a value that does not parse as its column's type. `null_token` is what a delimited source writes most for a
-    missing value, and a JSON table's paths and type counts are in `json`. `dependence_sample` is the seeded sample the
-    fits and the correlations read, and `parsed_types` reads a delimited table's text as one parse, null tokens included.
-    `whole` is every row at the columns' types where `table` holds a sample, and None where it holds every row.
-    `table` holds each listed column's rare remainder rewritten as its modal value, and `unrecoded` the same rows before.
+    """One table's columns profiled. `recoded` is the rows every statistic reads, parsed, with each listed column's rare
+    remainder rewritten as its modal value, and `unrecoded` the same rows as read. `described` counts them, and
+    `unparsed_rows` the rows holding a value that does not parse as its column's type. `null_token` is what a delimited
+    source writes most for a missing value, and a JSON table's paths and type counts are in `json`. `dependence_sample`
+    is the seeded sample the fits and the correlations read, drawn from `recoded`, and `parsed_types` reads a delimited
+    table's text as one parse, null tokens included. `whole` is every row at the columns' types where `recoded` holds a
+    sample, and None where it holds every row.
     """
 
     columns: list[dict[str, Any]]
-    table: Table
+    recoded: Table
     specs: list[ColumnSpec]
     stats: Answers
     described: int
@@ -35,3 +36,14 @@ class ProfiledColumns:
     parsed_types: dict[str, ParsedType] = dc.field(default_factory=dict)
     whole: Table = None
     unrecoded: Table = None
+
+    @property
+    def every_row(self) -> Table:
+        """Every row as read, at the columns' types."""
+        return self.unrecoded if self.whole is None else self.whole
+
+    @property
+    def every_row_recoded(self) -> Table:
+        """Every row as each list counts them. A sample's recode is the sample's alone, so where `recoded` holds a
+        sample, this is every row as read."""
+        return self.recoded if self.whole is None else self.whole

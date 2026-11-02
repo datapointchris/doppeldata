@@ -333,18 +333,17 @@ def distinct_ratio_change(source: Column, observed: Column) -> Compared | Unmeas
 
 
 def drawn_distinct(document: Document) -> Document:
-    """`document` with each column's distinct count stated as the values its generator draws.
+    """`document` with each recoded column's distinct count stated as the values its generator draws.
 
-    A list stating no other share draws only the values it lists. The privacy floor rewrites a remainder of fewer than
-    k_min rows as the modal value, so that list can hold fewer values than the column's distinct count, and data
-    generated from it holds only the listed ones. A diff of two profiles of data reads each at its own count.
+    The privacy floor rewrites a remainder of fewer than k_min rows as the modal value, so data generated from the list
+    holds only the values it lists, and no other share. A diff of two profiles of data reads each at its own count.
     """
     columns = []
     for column in document.get('columns') or []:
-        beyond = recoded_values(column)
-        if beyond:
+        listing = listed_section(column)
+        if listing and recoded_values(column):
             distinct = column['distinct']
-            listed = distinct['approx_values'] - beyond
+            listed = len(listing[1]['top_values'])
             column = column | {
                 'distinct': distinct | {'approx_values': listed, 'ratio': distinct['ratio'] * listed / distinct['approx_values']}
             }

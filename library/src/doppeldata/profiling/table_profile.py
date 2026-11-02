@@ -58,8 +58,9 @@ from doppeldata.profiling.profiled_columns import Answers
 from doppeldata.profiling.profiled_columns import ProfiledColumns
 from doppeldata.profiling.rare_remainder_recode import listed_counts
 from doppeldata.profiling.recorded_counts import RATE_DIGITS
+from doppeldata.profiling.recorded_counts import FlooredValues
 from doppeldata.profiling.recorded_counts import clear_of_the_ends
-from doppeldata.profiling.recorded_counts import kept_values
+from doppeldata.profiling.recorded_counts import floored_values
 from doppeldata.profiling.recorded_counts import rate
 from doppeldata.profiling.recorded_counts import significant
 from doppeldata.profiling.recorded_counts import written_number
@@ -237,12 +238,13 @@ def answered(backend: Backend, table: Table, requests: list[Request]) -> Answers
 
 @dc.dataclass(frozen=True)
 class ProfiledTable:
-    """A table's profile document, its every row at the types the profile gives its columns, and those columns. Beside
-    the document, each conditional table the frozen layout asked for, counted without a floor. Where the profile read
-    every row, each listed column's rare remainder is rewritten as its modal value."""
+    """A table's profile document, its every row at the types the profile gives its columns as read and as its lists
+    count them, and those columns. Beside the document, each conditional table the frozen layout asked for, counted
+    without a floor."""
 
     document: dict[str, Any]
-    table: Table
+    every_row: Table
+    every_row_recoded: Table
     specs: list[ColumnSpec]
     conditionals_without_floor: list[dict[str, Any]] = dc.field(default_factory=list)
 
@@ -283,14 +285,10 @@ def profile_table(
     settings = ColumnSettings(source.format, k_min, policy, packs, code_lists, frozen or FrozenLayout(), elements, type_mix_columns)
     json_root = read.json.paths if read.json else None
     profiled = profile_columns(backend, table, settings, rows, whole_distinct, json_root, read.table if sampled else None)
-    # A relationship's top shares count a column's rows by value, as its list does, so they read the recode. A sample's
-    # recode is the sample's alone, so every row is read as it was.
-    full = profiled.table if profiled.whole is None else profiled.whole
     dataset: dict[str, Any] = {'rows': rows}
     cell_floors: dict[tuple[str, str, str], int] = {}
     if read.json is None and profiled.dependence_sample is not None:
-        unrecoded = profiled.unrecoded if profiled.whole is None else profiled.whole
-        found, cell_floors = dataset_sections(backend, unrecoded, profiled, rows, whole_distinct, k_min, settings.frozen.pairs)
+        found, cell_floors = dataset_sections(backend, profiled, rows, whole_distinct, k_min, settings.frozen.pairs)
         dataset |= found
     fitting, _ = fitting_module()
     sampling = {'strategy': 'reservoir', 'rows_read': profiled.described} if profiled.described < rows else {'strategy': 'full'}
@@ -308,28 +306,28 @@ def profile_table(
     document['columns'] = profiled.columns
     unfloored = conditionals_without_floor(
         backend,
-        profiled.table,
+        profiled.recoded,
         settings.frozen.conditionals,
         {spec.name for spec in profiled.specs},
         frozenset(spec.name for spec in profiled.specs if spec.kind is ColumnKind.FLOAT),
     )
-    return ProfiledTable(withheld(document, policy, k_min, cell_floors), full, profiled.specs, unfloored)
+    document = withheld(document, policy, k_min, cell_floors)
+    return ProfiledTable(document, profiled.every_row, profiled.every_row_recoded, profiled.specs, unfloored)
 
 
 def dataset_sections(
     backend: Backend,
-    full: Table,
     profiled: ProfiledColumns,
     rows: int,
     whole_distinct: dict[str, int],
     k_min: int,
     frozen: FrozenPairs,
 ) -> tuple[dict[str, Any], dict[tuple[str, str, str], int]]:
-    """The dataset's repeated rows and keys over `full`, every row before the recode, and its columns' dependence, with
-    the fewest rows a literal of each entry naming a parent rests on. Each column computed from others gains its
-    `derived` entry.
+    """The dataset's repeated rows and keys over every row as read, and its columns' dependence, with the fewest rows a
+    literal of each entry naming a parent rests on. Each column computed from others gains its `derived` entry.
 
-    A key states no count, and a recode merges values, so a key with a recoded column would read as not unique.
+    A recode merges values, so two rows differing only in a recoded value would read as repeated, and a key holding a
+    recoded column as not unique.
     """
     profiled_specs = [spec for spec in profiled.specs if spec.kind in PROFILED]
     distinct: dict[str, int] = {
@@ -338,10 +336,12 @@ def dataset_sections(
     }
     entries = {entry['name']: entry for entry in profiled.columns}
     key_columns = [KeyColumn(spec, distinct[spec.name], profiled.stats[(spec.name, 'null_count')] > 0) for spec in profiled_specs]
-    found = table_keys(backend, full, profiled.dependence_sample, key_columns, rows, k_min)
+    found = table_keys(backend, profiled.every_row, profiled.dependence_sample, key_columns, rows, k_min)
     columns = [DependenceColumn(spec, distinct[spec.name], entries[spec.name]) for spec in profiled_specs if spec.name in entries]
-    derived = derived_columns(backend, profiled.dependence_sample, FIT_SAMPLE_ROWS, profiled.table, columns, k_min)
-    dependence = column_dependence(backend, profiled.dependence_sample, profiled.table, columns, profiled.described, k_min, frozen, derived)
+    derived = derived_columns(backend, profiled.dependence_sample, FIT_SAMPLE_ROWS, profiled.recoded, columns, k_min)
+    dependence = column_dependence(
+        backend, profiled.dependence_sample, profiled.recoded, columns, profiled.described, k_min, frozen, derived
+    )
     for name, entry in derived.items():
         entries[name]['derived'] = entry
     return found | dependence.sections, dependence.cell_floors
@@ -563,7 +563,7 @@ def typed_table(backend: Backend, source: Source) -> Table:
 
 def json_profiled(backend: Backend, profiled: ProfiledColumns, settings: ColumnSettings, root: JsonNode) -> json_paths.ProfiledTable:
     """One JSON table's scalar entries, each path's rows by JSON type, each array's lengths, and its elements profiled."""
-    table, k_min = profiled.table, settings.k_min
+    table, k_min = profiled.recoded, settings.k_min
     nodes = json_paths.table_nodes(root)
     requests = []
     for node in nodes:
@@ -651,24 +651,24 @@ class ColumnLayout:
     fit_applies: bool = False
     fit: dict[str, Any] | None = None
     sequence: dict[str, int] | None = None
-    # The values the listing pre-pass counted and the rows each holds after the recode, or None where it lists none.
-    counted: list[tuple[Any, int]] | None = None
+    # The values the listing pre-pass kept and the rows each holds after the recode, or None where it lists none.
+    counted: FlooredValues | None = None
 
 
 def pass_one_requests(specs: list[ColumnSpec], k_min: int) -> list[Request]:
-    """Every catalog statistic of every column it applies to, and the row count, for one aggregate. The distinct count
-    is the listing pre-pass's, over the rows before the recode."""
+    """Every catalog statistic of every column it applies to, for one aggregate, but those the listing pre-pass counts
+    `before_recode`, and the row count, which it counts too."""
     arguments = {name: k_min for name in TRIMMED_STATISTICS} | {
         'quantiles': NUMERIC_LEVELS,
         'length_quantiles': LENGTH_LEVELS,
         'decimal_places': DECIMAL_PLACES_TRIED,
     }
-    requests = [Request(None, 'rows')]
-    for spec in specs:
-        for statistic in COLUMN_STATISTICS:
-            if spec.kind in statistic.kinds and statistic.name != 'distinct_count':
-                requests.append(Request(spec.name, statistic.name, arguments.get(statistic.name)))
-    return requests
+    return [
+        Request(spec.name, statistic.name, arguments.get(statistic.name))
+        for spec in specs
+        for statistic in COLUMN_STATISTICS
+        if spec.kind in statistic.kinds and not statistic.before_recode
+    ]
 
 
 def nested_types(physical_type: str) -> dict[str, Any]:
@@ -903,46 +903,42 @@ def floored_count(share: float, values: int, k_min: int) -> int:
 
 
 def listed_values(layout: ColumnLayout, values: int, k_min: int) -> 'CountedValues | None':
-    """A column's values as the listing pre-pass counted them, against an earlier profile's list where there is one.
-
-    The recode leaves no remainder of 1 to k_min - 1 rows, so `kept_values` folds a value only where the pre-pass's
-    counts could not name the whole remainder.
-    """
-    if layout.counted is None:
+    """A column's values as the listing pre-pass kept them. Against an earlier profile's list, the rows outside it
+    beyond the share it started from too."""
+    floored = layout.counted
+    if floored is None:
         return None
-    if layout.listed is not None:
-        return counted_against(layout.listed, [count for _, count in layout.counted], values, k_min)
-    return CountedValues(*kept_values(layout.counted, values, k_min))
+    recoded = len(floored.recode.values) if floored.recode else 0
+    if layout.listed is None:
+        return CountedValues(floored.kept, floored.other, recoded=recoded)
+    # Counted from `other_fraction`'s own rows, so it discloses nothing that rate does not. The rows outside the list
+    # count too, so a listed value that fell under k_min reveals no count of its own.
+    beyond = floored.other - round(layout.listed.baseline_other_rate * values)
+    return CountedValues(floored.kept, floored.other, beyond if beyond >= k_min else 0, recoded)
 
 
 @dc.dataclass(frozen=True)
 class CountedValues:
-    """The values a list keeps with the rows each holds, the rows of every other value, and, for a list counted against
-    an earlier profile's, the rows of new values.
-    """
+    """The values a list keeps with the rows each holds, the rows of every other value, for a list counted against an
+    earlier profile's the rows of new values, and how many values the recode rewrote as the most held."""
 
     kept: list[tuple[Any, int]]
     other: int
     new_value_rows: int | None = None
+    recoded: int = 0
 
     def written(self, values: int, written_value: Callable[[Any], Any]) -> dict[str, Any]:
-        """The section's `top_values`, `other_fraction` and `overflow`, each value written by `written_value`."""
+        """The section's `top_values`, `other_fraction`, `recoded_values` and `overflow`, each value written by
+        `written_value`."""
         section: dict[str, Any] = {}
         if self.kept:
             section['top_values'] = [{'value': written_value(value), 'fraction': rate(count, values)} for value, count in self.kept]
             section['other_fraction'] = rate(self.other, values)
+            if self.recoded:
+                section['recoded_values'] = self.recoded
         if self.new_value_rows is not None:
             section['overflow'] = {'new_value_rows': self.new_value_rows}
         return section
-
-
-def counted_against(listed: FrozenValues, counts: list[int], values: int, k_min: int) -> CountedValues:
-    """The values of `listed` counted by `counts`, and the rows outside it beyond the share it started from."""
-    kept, other = kept_values(list(zip(listed.values, counts, strict=True)), values, k_min)
-    # Counted from `other_fraction`'s own rows, so it discloses nothing that rate does not. The rows outside the
-    # list count too, so a listed value that fell under k_min reveals no count of its own.
-    beyond = other - round(listed.baseline_other_rate * values)
-    return CountedValues(kept, other, beyond if beyond >= k_min else 0)
 
 
 @dc.dataclass(frozen=True)
@@ -1127,7 +1123,8 @@ def zip_prefixes_section(merged: dict[str, int], shapes: list[tuple[str, int]], 
     ordered = sorted(
         ((prefix, count) for prefix, count in merged.items() if ZIP_PREFIX.fullmatch(prefix)), key=lambda item: (-item[1], item[0])
     )
-    kept, other = kept_values(ordered, values, k_min)
+    floored = floored_values(ordered, values, k_min)
+    kept, other = floored.kept, floored.other
     if not kept:
         return {}
     plus_four = bool(shapes) and shapes[0][0] == ZIP_PLUS_FOUR_SHAPE

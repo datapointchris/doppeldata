@@ -144,7 +144,8 @@ def test_healthcare_suppresses_identifiers_caps_ages_keeps_years_and_merges_rest
 
 def test_a_remainder_under_k_min_profiles_as_if_its_rows_held_the_modal_value():
     """265 rows whose `zone` holds 3 outside its list, with a conditional table and quantiles given it. Every count is
-    the one rows rewritten by hand state, so none differs from another by the 3. Only the distinct count is the real one."""
+    the one rows rewritten by hand state, so none differs from another by the 3. Only the distinct count is the real one,
+    and the list states the 2 values it rewrote."""
 
     def rows(rewritten: bool) -> pl.DataFrame:
         draw = random.Random(7)
@@ -167,4 +168,5 @@ def test_a_remainder_under_k_min_profiles_as_if_its_rows_held_the_modal_value():
         del profile['generated']
         distinct.append(profile['columns'][1].pop('distinct')['approx_values'])
     assert distinct == [6, 4]
+    assert profiled['columns'][1]['string'].pop('recoded_values') == 2
     assert profiled == by_hand

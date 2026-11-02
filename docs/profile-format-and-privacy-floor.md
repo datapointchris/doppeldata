@@ -135,10 +135,15 @@ and every statistic is computed from the rewritten rows. So a conditional table,
 given the column, a histogram, a shape and a mean all count the recoded rows as the modal value,
 the same as its list does. No two counts differ by the rows recoded.
 
-- **The distinct count is the real one.** So a list stating no `other_fraction` lists every value
-  only where it lists as many values as `distinct.approx_values`. A reader learns that unlisted
-  values exist, and never how many rows hold them.
-- **The exports and `data check` read a list that way.** A strict format leaves such a list out,
+- **The list states how many values it recoded, as `recoded_values`.** So a list stating no
+  `other_fraction` lists every value only where it states no `recoded_values`. A reader learns that
+  unlisted values exist and how many, and never how many rows hold them. The distinct count is the
+  real one, so it already says as much.
+- **The field is counted from the recode, never from the distinct count.** Spark estimates distinct
+  values with HyperLogLog++, whose linear counting reads a 260-value column a value or two either
+  side. A list read against that estimate would read as holding every value when it does not, or
+  the reverse.
+- **The exports and `data check` read the field.** A strict format leaves a list stating it out,
   and `data check` measures the source's distinct ratio at its listed values, the ones its
   generator draws.
 
@@ -146,7 +151,11 @@ the same as its list does. No two counts differ by the rows recoded.
 τ-Argus applies it. It keeps every count real, but a large value can fold to hide a few rows. April
 2024's NYC yellow taxi `congestion_surcharge` holds 2.5, 0.0 and −2.5 on 35,390 rows, beside 3 rows
 of 1.0 and 2.0. Folding sent the −2.5 refunds into `other_fraction`, and the generator drew them
-across the whole curve. Recoded, −2.5 stays listed at 0.0114.
+across the whole curve. Recoded, −2.5 stays listed at 0.0114:
+
+```bash
+doppeldata profile create yellow_tripdata_2024-04.parquet --out april.profile.yaml
+```
 
 *Rejected:* adding the remainder to the modal value's count in the list alone. Every other count
 still came from the real rows. On a 265-row column at `k_min` 11 whose remainder held 3 rows, a

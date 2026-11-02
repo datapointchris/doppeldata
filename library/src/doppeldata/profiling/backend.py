@@ -9,6 +9,7 @@ from typing import Any
 from typing import Protocol
 
 from doppeldata.profiling.expression_rule import ExpressionCandidate
+from doppeldata.profiling.recorded_counts import Recode
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
 from doppeldata.published_schemas import published_enum
@@ -234,14 +235,6 @@ class Request:
     column: str | None
     statistic: str
     argument: Any = None
-
-
-@dc.dataclass(frozen=True)
-class Recode:
-    """A listed column's values held by fewer than k_min rows altogether, and the modal value each is rewritten as."""
-
-    values: tuple[Any, ...]
-    modal: Any
 
 
 @dc.dataclass(frozen=True)

@@ -47,8 +47,12 @@ VALUE_LISTS = {ColumnKind.STRING: ValueList('string', TOP_VALUES_THRESHOLD)} | {
 
 @dc.dataclass(frozen=True)
 class Statistic:
+    """A statistic and the column kinds it applies to. `before_recode` counts it over the rows as read, before any
+    listed column's rare remainder is rewritten, in the listing pre-pass."""
+
     name: str
     kinds: frozenset[ColumnKind]
+    before_recode: bool = False
 
 
 # Each unit a timestamp column's values may all be whole numbers of, coarsest first: its name, its
@@ -75,9 +79,11 @@ QUANTILES = {name: quantile_level(name) for name in ('p001', 'p01', 'p05', 'p25'
 # below the first, in each bin from one edge up to the next with the last bin closed, and above the
 # last. `listed_value_counts` carries a tuple of values, and answers with the rows holding each.
 COLUMN_STATISTICS = (
-    Statistic('null_count', frozenset(ColumnKind)),
-    # Non-null distinct values, exact or estimated as the engine affords, written as `distinct.approx`.
-    Statistic('distinct_count', PROFILED),
+    # A recode rewrites values and never a null, so the null count is the same either side of it.
+    Statistic('null_count', frozenset(ColumnKind), before_recode=True),
+    # Non-null distinct values, exact or estimated as the engine affords, written as `distinct.approx`. A recode merges
+    # values, so this is counted before it, and states the column's own.
+    Statistic('distinct_count', PROFILED, before_recode=True),
     Statistic('min', NUMERIC | TEMPORAL),
     Statistic('max', NUMERIC | TEMPORAL),
     Statistic('trimmed_low', NUMERIC | TEMPORAL),

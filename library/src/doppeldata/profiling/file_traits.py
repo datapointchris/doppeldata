@@ -18,7 +18,7 @@ from doppeldata.profiling.backend import SourceRead
 from doppeldata.profiling.profiled_columns import ProfiledColumns
 from doppeldata.profiling.recorded_counts import RATE_DIGITS
 from doppeldata.profiling.recorded_counts import TOP_VALUES_THRESHOLD
-from doppeldata.profiling.recorded_counts import kept_values
+from doppeldata.profiling.recorded_counts import floored_values
 from doppeldata.profiling.recorded_counts import rate
 from doppeldata.profiling.recorded_counts import significant
 from doppeldata.profiling.statistic_catalog import QUANTILES
@@ -97,9 +97,9 @@ def partition_key(backend: Backend, profiled: ProfiledColumns, key: str, k_min: 
     written: dict[str, Any] = {'name': key, 'type': spec.physical_type, 'values': distinct}
     if distinct <= TOP_VALUES_THRESHOLD:
         held = profiled.described - profiled.stats[(key, 'null_count')]
-        kept, other = kept_values(backend.top_k(profiled.table, key, TOP_VALUES_THRESHOLD), held, k_min)
-        written['value_fractions'] = {str(value): rate(count, profiled.described) for value, count in kept}
-        written['other_fraction'] = rate(other, profiled.described)
+        floored = floored_values(backend.top_k(profiled.recoded, key, TOP_VALUES_THRESHOLD), held, k_min)
+        written['value_fractions'] = {str(value): rate(count, profiled.described) for value, count in floored.kept}
+        written['other_fraction'] = rate(floored.other, profiled.described)
     return written
 
 

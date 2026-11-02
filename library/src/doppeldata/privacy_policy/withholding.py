@@ -179,3 +179,4 @@ def drop(document: dict[str, Any], path: PointerParts, kind: FieldKind, failing:
     if kind is FieldKind.TOP_VALUES:
         parent.pop('other_fraction', None)
         parent.pop('overflow', None)
+        parent.pop('recoded_values', None)

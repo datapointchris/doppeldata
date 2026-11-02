@@ -42,13 +42,13 @@ from doppeldata.profiling import parquet_footers
 from doppeldata.profiling.backend import HIDDEN_COLUMN_PREFIX
 from doppeldata.profiling.backend import ColumnSpec
 from doppeldata.profiling.backend import ParsedType
-from doppeldata.profiling.backend import Recode
 from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import SourceRead
 from doppeldata.profiling.expression_rule import ExpressionCandidate
 from doppeldata.profiling.expression_rule import counted_rows
+from doppeldata.profiling.recorded_counts import Recode
 from doppeldata.profiling.sources import is_spark_frame
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT

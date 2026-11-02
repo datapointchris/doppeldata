@@ -41,10 +41,17 @@ EVEN_TOLERANCE = 1e-9
 
 @dc.dataclass(frozen=True)
 class BundleMember:
-    """One table of a bundle: its name, its every row at the types its profile gives them, its columns, and its profile."""
+    """One table of a bundle: its name, its every row at the types its profile gives them, as read and as its lists count
+    them, its columns, and its profile.
+
+    A relationship's containment, orphans and top shares count rows by value, as a list does, so they read
+    `every_row_recoded`. An inherited column and an ordinal compare values row by row, and a recode merges values, so
+    they read `every_row`.
+    """
 
     name: str
-    table: Table
+    every_row: Table
+    every_row_recoded: Table
     specs: list[ColumnSpec]
     document: dict[str, Any]
 
@@ -124,7 +131,7 @@ def measured_relationship(
     """The relationship of `columns` to the parent's `keys`, counted over every row of both, and the child rows of the
     last parent its busiest stated top share counts. Where `contained_only`, None where the parent holds under
     `CONTAINMENT_FLOOR` of the child's values."""
-    counts = backend.foreign_key_counts(child.table, list(columns), parent.table, list(keys))
+    counts = backend.foreign_key_counts(child.every_row_recoded, list(columns), parent.every_row_recoded, list(keys))
     child_refs = [f'{child.name}.{column}' for column in columns]
     parent_refs = [f'{parent.name}.{key}' for key in keys]
     return written_relationship(child_refs, parent_refs, counts, k_min, contained_only=contained_only)
@@ -141,7 +148,7 @@ def inherited_columns(
     pairs = [(spec.name, held.name) for spec in child.specs if spec.name not in columns for held in candidates if held.kind is spec.kind]
     if not pairs:
         return []
-    joined, equal = backend.inherited_counts(child.table, list(columns), parent.table, list(keys), pairs)
+    joined, equal = backend.inherited_counts(child.every_row, list(columns), parent.every_row, list(keys), pairs)
     if not joined:
         return []
     best: dict[str, tuple[int, str]] = {}
@@ -168,7 +175,7 @@ def ordinal_column(backend: Backend, child: BundleMember, columns: tuple[str, ..
     candidates = [spec.name for spec in child.specs if spec.name not in columns and eligible(spec)]
     if not candidates:
         return None
-    keys, numbered = backend.ordinal_counts(child.table, list(columns), candidates)
+    keys, numbered = backend.ordinal_counts(child.every_row, list(columns), candidates)
     return next((name for name, count in zip(candidates, numbered, strict=True) if keys and count == keys), None)
 
 

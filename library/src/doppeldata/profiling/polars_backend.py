@@ -27,7 +27,6 @@ from doppeldata.profiling.backend import JsonNode
 from doppeldata.profiling.backend import JsonRead
 from doppeldata.profiling.backend import ParquetFooter
 from doppeldata.profiling.backend import ParsedType
-from doppeldata.profiling.backend import Recode
 from doppeldata.profiling.backend import Request
 from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
@@ -36,6 +35,7 @@ from doppeldata.profiling.expression_rule import ExpressionCandidate
 from doppeldata.profiling.expression_rule import counted_rows
 from doppeldata.profiling.first_blocks import FIRST_BLOCK_BYTES
 from doppeldata.profiling.first_blocks import first_block
+from doppeldata.profiling.recorded_counts import Recode
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
 from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT

@@ -2305,7 +2305,7 @@
           ]
         },
         "top_values": {
-          "description": "Values at least `k_min` rows hold, in a column with few distinct values that is not an\nidentifier.",
+          "description": "Values at least `k_min` rows hold, in a column with few distinct values that is not an\nidentifier. Every statistic counts a value `recoded_values` names as the most held of them.",
           "type": [
             "array",
             "null"
@@ -2315,7 +2315,7 @@
           }
         },
         "other_fraction": {
-          "description": "The share of values outside `top_values`.",
+          "description": "The share of values outside `top_values`. The values `recoded_values` counts are not in it.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -2324,6 +2324,15 @@
               "type": "null"
             }
           ]
+        },
+        "recoded_values": {
+          "description": "How many values the column holds beyond `top_values`, on fewer than `k_min` rows together,\nwhich the profiler rewrote as the most held listed value before counting any statistic.\nAbsent where it rewrote none.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         },
         "overflow": {
           "description": "Written when the value list was frozen from an earlier profile.",
@@ -2639,7 +2648,7 @@
           ]
         },
         "top_values": {
-          "description": "Values at least `k_min` rows hold, in a column that is not an identifier.",
+          "description": "Values at least `k_min` rows hold, in a column that is not an identifier. Every statistic\ncounts a value `recoded_values` names as the most held of them.",
           "type": [
             "array",
             "null"
@@ -2649,7 +2658,7 @@
           }
         },
         "other_fraction": {
-          "description": "The share of rows holding a value outside `top_values`.",
+          "description": "The share of rows holding a value outside `top_values`. The values `recoded_values` counts\nare not in it.",
           "anyOf": [
             {
               "$ref": "#/$defs/Rate"
@@ -2658,6 +2667,15 @@
               "type": "null"
             }
           ]
+        },
+        "recoded_values": {
+          "description": "How many values the column holds beyond `top_values`, on fewer than `k_min` rows together,\nwhich the profiler rewrote as the most held listed value before counting any statistic.\nAbsent where it rewrote none.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         },
         "prefixes": {
           "description": "The values' leading characters, counted in place of `top_values`, as a policy keeps a ZIP\ncode's first three digits.",

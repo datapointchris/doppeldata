@@ -920,24 +920,33 @@ A listing pre-pass runs once a text source's columns are typed, before the catal
 aggregate. A sampled profile has drawn its sample by then, so the pre-pass counts the rows `k_min`
 counts.
 
-1. **One aggregate counts every column's nulls and distinct values**, and the values an earlier
-   profile's list names. The distinct count is written from it, so it is the real one.
+1. **One aggregate counts the rows and each statistic the catalog marks `before_recode`**: every
+   column's nulls and distinct values. It counts the values an earlier profile's list names too. The
+   distinct count is written from it, so it is the real one. A recode never changes a null, so the
+   catalog's first aggregate leaves both out.
 2. **Each column whose kind lists values has them counted**, where it holds no more distinct values
    than its kind's threshold. The count runs `k_min − 1` values past the threshold. A remainder of
    fewer than `k_min` rows holds fewer than `k_min` values, so the count always names all of it,
-   even where Spark's estimated distinct count runs a few low. These counts are the list itself,
-   so no column is counted twice.
+   even where Spark's estimated distinct count runs a few low. `floored_values` decides the values
+   kept and the remainder once, and the list is written from what it returns.
 3. **A remainder of 1 to `k_min − 1` rows is rewritten as the modal value**, the first of the most
    held where several tie. The backend's `recoded` projects `when(value in remainder) then modal`
-   at the column's own type, in Polars and in Spark alike.
+   at the column's own type, in Polars and in Spark alike. The list writes how many values it
+   rewrote as `recoded_values`.
 4. **Everything after reads the rewritten rows**: moments, quantiles, zero and negative rates,
    trimmed extremes, lengths, shapes, the value sample the detectors and patterns read,
    histograms, fits, correlations, conditional tables, conditional quantiles and rates, lookups,
-   lags, partition shares, and an unsampled bundle's relationships. So every count they state
-   agrees with the list.
+   lags, partition shares, and an unsampled bundle's containment, orphans and top shares. So every
+   count they state agrees with the list.
 
-- **The distinct count, keys and repeated rows read the rows as they were.** A key states no count,
-  and a recode merges values, so a key with a recoded column would read as not unique.
+- **A list stating no `other_fraction` holds every value only where it states no
+  `recoded_values`.** The field is counted from the recode itself, so it is exact on both engines.
+  The distinct count is not: Spark estimates it.
+- **The distinct count, keys, repeated rows, and a bundle's inherited columns and ordinals read the
+  rows as they were.** Each compares values row by row, and a recode merges values. So two rows
+  differing only in a recoded value would read as repeated, and a key holding the column as not
+  unique. Where only a few orders run to the highest line numbers, those numbers would be rewritten
+  as 1, and the line number would read as no ordinal.
 - **A sampled profile's recode is the sample's.** The whole table, which decides keys, counting
   sequences and relationships, is read as it was. A relationship over every row and a list over
   the sample share no denominator, so neither can be subtracted from the other.
@@ -947,16 +956,14 @@ counts.
   That only removes what it states.
 - **A text source's recoded string column is counted by raw type again.** Its `type_mix_fractions`
   come from the text before parsing. A string column's parsed values are its text, so one aggregate
-  counts them again. CMS's DE-SynPUF carrier claims file hides 2 rows of `0` in
-  `LINE_PRCSG_IND_CD_1`, which its integer share would otherwise count. A column read as a number
-  needs no count: each value it parses holds the column's type, the modal value's included.
-- **`kept_values` still folds the least held value into a remainder under `k_min` rows.** The recode
-  leaves none, so the fold applies only where the pre-pass could not name the whole remainder, as
-  where a float's NaN took a counted place.
-- **It costs Polars one aggregate**, the distinct counts split from the catalog's first. Spark
-  already counts distinct values in a query of their own, so it costs Spark none. The projection is
-  not persisted: a comparison with fewer than `k_min` literals costs less than reading the table
-  back from disk.
+  counts them again. Otherwise a recoded value that parses as an integer would still count in the
+  integer share. A column read as a number needs no count: each value it parses holds the column's
+  type, the modal value's included.
+- **`floored_values` folds the least held value into a remainder under `k_min` rows, where the
+  pre-pass could not name the whole remainder**, as where a float's NaN took a counted place.
+- **The pre-pass is one aggregate of its own in each backend, run before the catalog's first.** The
+  projection is not persisted: a comparison with fewer than `k_min` literals costs less than reading
+  the table back from disk.
 
 ## A sampled profile counts distinct values in every row
 
