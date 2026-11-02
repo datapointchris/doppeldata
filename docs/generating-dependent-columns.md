@@ -221,7 +221,8 @@ under 1% of its own takes none.
 - **`given_null` holds the rates of the rows whose given column is null.** A null given is a
   value like any other, held to `k_min` rows. In a claims file whose later line items are empty,
   an empty line's processing indicator is null, and its amounts are zero far more often than a
-  filled line's. Without it, those rows drew the column's own rates, which mix both.
+  filled line's. A profile stating no `given_null` draws those rows at the column's own rates,
+  which mix both.
   - *Rejected:* the engine deducing the null rows' rates from the column's own and the stated
     rows'. A child whose null rate follows the given too leaves the zero rate's remainder over rows
     the profile does not count, and a reviewer cannot read a rate the profile never states.
@@ -235,12 +236,12 @@ under 1% of its own takes none.
   payment_type set aside for its Spearman with mta_tax, which no copula holds beside it`.
   - Each member's own values are tried against its partner's own, never its partner's warped
     scores. Two members each warped by their own given would otherwise each find the pair
-    unreachable against the other's warp, and both warps would stay. The claims file's line
-    amounts, warped by their line's processing indicator, then drew pairs the source holds near 0.6
-    at near none.
+    unreachable against the other's warp, and both warps would stay. The pair would then draw at
+    near none where the source holds it strongly, as line amounts each warped by their own line's
+    indicator are.
   - *Rejected:* measuring a rate's dependence over the rows holding a given value alone. It states
-    no rate given a null, so those rows drew the column's own mixed rates. And members warped by
-    other givens still collided, drawing their pairs far from the source's.
+    no rate given a null, so those rows would draw the column's own mixed rates. And members warped
+    by other givens would still collide.
 - **A curve or zero rate given a member of the column's own copula group is not drawn.** The
   group draws each member's level given every other member's. So among the rows holding one
   member's value, another member's levels are not uniform, and no warp of them holds the stated
@@ -334,7 +335,9 @@ after-image keeps its lags, expressions and lookups.
 
 ## `data check` measures each copula group and each conditional table
 
-`correlation_max_abs_diff` is the largest change in a Spearman value within one copula group.
+`correlation_max_abs_diff` is the change in a Spearman value within one copula group furthest past
+the threshold it is held to, as
+[checking generated data](checking-generated-data-and-profile-drift.md) describes.
 `conditional_kl` is a conditional table's KL divergence, weighted by each given value's share, and
 names the given value adding most. `data check --help` gives each one's default threshold. Each
 measures a pair of columns, so a `--thresholds` file sets it under `defaults` and is refused

@@ -28,8 +28,8 @@ use crate::rng::rng_for;
 use crate::rng::splitmix;
 
 /// The draws of `other` a rest row takes before it keeps one the list holds, where the rest is not
-/// drawn through [`UnlistedStrings`]. Where a share q of `other`'s draws land on a listed value, q^64
-/// of the rest rows keep one: about 1 in 850 at q = 0.9.
+/// drawn through [`UnlistedStrings`]. Where a share q of `other`'s draws land on a listed value,
+/// q^REST_DRAWS of the rest rows keep one.
 const REST_DRAWS: usize = 64;
 
 #[derive(Debug, Clone)]

@@ -198,20 +198,21 @@ table, naming its columns in `column` and `paired_with`.
   V is the generated data's, standing for PROFILE's too. The check asks whether the generated rows
   could be a sample of the source, and under that both share one V. A PROFILE stating no
   `sample_rows`, as one written by hand does, holds each pair to the threshold alone.
-- **z is the two-sided Bonferroni bound at a 5% family-wise level over the group's stated pairs,
-  and never under 3.** The row reports the group's worst pair, so z bounds a maximum over m pairs:
-  the normal quantile at 1 − 0.05/(2m), 3.65 at 192 pairs. Under 19 pairs that quantile falls
-  below 3, the standard errors the repo's other tolerances hold, so 3 stands there. The level is a
-  stated choice, the textbook family-wise one, and no data decided it.
+- **z is the two-sided Bonferroni bound at the family-wise level `CORRELATION_FAMILY_LEVEL` over
+  the group's stated pairs, and never under `CORRELATION_STANDARD_ERRORS`.** The row reports the
+  group's worst pair, so z bounds a maximum over m pairs: the normal quantile at 1 − level/(2m).
+  Over few pairs that quantile falls below the floor, the standard errors the repo's other
+  tolerances hold, so the floor stands there. The level is a stated choice, the textbook
+  family-wise one, and no data decided it.
 - **A sparse or tied pair is where the spread acts.** A claims column of later line amounts is
   zero on most rows, so its ranks are mostly ties and carry little of the pair's order. Such a
-  pair's value then has a standard deviation of about 0.09 over 20,000-row samples of the source.
-  The source fails a 0.05 threshold against its own profile there, and passes under its spread.
+  pair's value spreads far more over samples of the source than 1/√n, because zeros tie most
+  ranks. The source fails the threshold against its own profile there, and passes under its
+  spread.
   - *Rejected:* a standard error from the rows alone, about 1/√n. Both amounts are held on every
-    sampled row, so it gives about 0.007, and the ties go unread.
+    sampled row, so it counts each row as a full one, and the ties go unread.
   - *Rejected:* crediting the source's own distance from itself, as `ks` credits trimmed
-    extremes. A credit moves one threshold for the row, and the row is a maximum over pairs whose
-    spreads differ by more than ten times.
+    extremes. A credit moves the group's one threshold, and each pair's spread is its own.
 - **`conditional_kl` is the Kullback-Leibler divergence of each given value's shares from
   PROFILE's, weighted by the given value's share of PROFILE's rows, and summed.** The child values
   a row does not list count as one more value. The other profile's shares are smoothed by
@@ -258,7 +259,8 @@ first:
 ```
 
 *Rejected:* a row per pair for `correlation_max_abs_diff`. A copula holds its pairs through one
-matrix, so one pair drifting moves the group, and the row names which pair moved most.
+matrix, so one pair drifting moves the group, and the row names the pair furthest past what it
+is held to.
 
 ## Three metrics measure the files against the source's layout, scaled to the rows checked
 

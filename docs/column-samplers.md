@@ -184,7 +184,7 @@ every call, and it panics on lower-case input and on a `u8` overflow past about 
 generated address reaches anyone. That holds 3,007 × 474 × 3 = 4,275,954 addresses. *Rejected:*
 fake's `SafeEmail`. It is a first name at one of the three domains, so it holds 9,021 addresses.
 
-## A listed column's rest draws no value the list holds
+## A listed column's rest avoids the values the list holds, exactly where a DFA ranks its source
 
 A row drawn as `other_fraction` stands for a value outside `top_values` or `prefixes`. A listed
 value drawn there instead would raise that value's share and leave the rest a value short.
@@ -197,15 +197,15 @@ value drawn there instead would raise that value's share and leave the rest a va
   shape's unlisted strings are all taken.
 - **Every other rest draws again on a value the list holds**, up to `REST_DRAWS` times. A prefix
   list's rest is compared on its first characters. A provider, ICD-10-CM and characters are not
-  languages the DFA ranks. Where a share q of the source's draws is listed, q^64 of the rest's rows
-  keep a listed value.
+  languages the DFA ranks. Where a share q of the source's draws is listed, q^`REST_DRAWS` of the
+  rest's rows keep a listed value.
 - **The rest's variety is counted outside the list.** Each listed value takes one string from the
   count of each shape that holds it, so the value index targets strings the rest can still draw.
 
 *Rejected:* drawing a rest of whole values with replacement, and drawing again on a listed value.
 Two slots then collide on one string as uniform draws do, so a rest of a few rows over a few values
-falls short of the distinct count the profile states. The without-replacement draw costs one DFA
-build per listed column at plan time.
+falls short of the distinct count the profile states. The without-replacement draw builds one DFA
+per language of the rest's source at plan time.
 
 ## A key stated unique draws each string of its pattern or shapes at most once
 
