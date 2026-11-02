@@ -16,7 +16,7 @@ major_on_zero = false
 [tool.ruff]
 line-length = 140
 # maturin generates the extension's stub, and `task check-generated` compares it byte for byte.
-extend-exclude = ["*.md", "library/src/doppeldata/_core.pyi"]
+extend-exclude = ["*.md"]
 # The hooks pass files by name, which ruff lints despite an exclusion unless this is set.
 force-exclude = true
 # The library's floor is 3.11 while the workspace resolves at 3.13, so ruff
