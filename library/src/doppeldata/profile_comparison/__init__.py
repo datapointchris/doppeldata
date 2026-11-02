@@ -45,9 +45,12 @@ from doppeldata.profile_comparison.metrics import LAYOUT_METRICS
 from doppeldata.profile_comparison.metrics import METRICS
 from doppeldata.profile_comparison.metrics import Compared
 from doppeldata.profile_comparison.metrics import Document
+from doppeldata.profile_comparison.metrics import Measurement
+from doppeldata.profile_comparison.metrics import Metric
 from doppeldata.profile_comparison.metrics import Thresholded
 from doppeldata.profile_comparison.metrics import Unmeasured
 from doppeldata.profile_comparison.metrics import drawn_distinct
+from doppeldata.profile_comparison.metrics import furthest_past_in_each_group
 from doppeldata.profile_comparison.metrics import source_plan
 from doppeldata.profile_comparison.real_data_scores import DEFAULT_SAMPLE_ROWS
 from doppeldata.profile_comparison.reports import BundleCheckReport
@@ -631,19 +634,25 @@ def measured(source: Document, observed: Document, thresholds: Thresholds, *, un
 
     A metric the source states and the other profile cannot supply has a row with no value, passing as `unmeasured_passes`.
     """
-    return [
-        metric_row(
-            metric,
-            measurement.column,
-            measurement.compared,
-            thresholds.threshold(metric, measurement.column),
-            unmeasured_passes=unmeasured_passes,
-            paired_with=measurement.paired_with,
-            worst_given_value=measurement.given_value,
-        )
-        for metric in METRICS
-        for measurement in metric.measure(source, observed)
-    ]
+    rows = []
+    for metric in METRICS:
+
+        def threshold(measurement: Measurement, metric: Metric = metric) -> float:
+            return thresholds.threshold(metric, measurement.column)
+
+        for measurement in furthest_past_in_each_group(metric.bound, metric.measure(source, observed), threshold):
+            rows.append(
+                metric_row(
+                    metric,
+                    measurement.column,
+                    measurement.compared,
+                    threshold(measurement),
+                    unmeasured_passes=unmeasured_passes,
+                    paired_with=measurement.paired_with,
+                    worst_given_value=measurement.given_value,
+                )
+            )
+    return rows
 
 
 def declared_types(packs: list[EnabledPack]) -> dict[str, str]:

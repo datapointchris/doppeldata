@@ -10,6 +10,7 @@ import itertools
 import math
 import statistics
 from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from typing import Any
@@ -37,6 +38,10 @@ class Bound(enum.Enum):
 
     def holds(self, value: float, threshold: float) -> bool:
         return value <= threshold if self is Bound.AT_MOST else value >= threshold
+
+    def past(self, value: float, threshold: float) -> float:
+        """How far `value` lies past `threshold`, more than zero where it fails."""
+        return value - threshold if self is Bound.AT_MOST else threshold - value
 
     def held_to(self, threshold: float, compared: 'Compared') -> float:
         """The threshold `compared` is judged at: `threshold` moved toward passing by its `credit`, and an upper bound
@@ -70,12 +75,34 @@ class Unmeasured(NamedTuple):
 @dc.dataclass(frozen=True)
 class Measurement:
     """One metric's outcome for one column, or for the table where `column` is None. A metric of a pair names its
-    second column in `paired_with`, and one of a column given another the value it is worst within in `given_value`."""
+    second column in `paired_with`, and one of a column given another the value it is worst within in `given_value`.
+    Of the outcomes sharing a `group`, a report keeps the one `furthest_past_in_each_group` gives."""
 
     column: str | None
     compared: Compared | Unmeasured
     paired_with: str | None = None
     given_value: str | None = None
+    group: int | None = None
+
+
+def furthest_past_in_each_group(
+    bound: Bound, measurements: Iterable[Measurement], threshold: Callable[[Measurement], float]
+) -> list[Measurement]:
+    """Each measurement in no group, and of each group the one furthest past the threshold `Bound.held_to` holds it to
+    from `threshold`, an unmeasured one furthest, in the order each first appears."""
+
+    def past(measurement: Measurement) -> float:
+        if isinstance(measurement.compared, Unmeasured):
+            return math.inf
+        return bound.past(measurement.compared.value, bound.held_to(threshold(measurement), measurement.compared))
+
+    kept: dict[tuple[str, int], Measurement] = {}
+    for at, measurement in enumerate(measurements):
+        key = ('alone', at) if measurement.group is None else ('group', measurement.group)
+        held = kept.get(key)
+        if held is None or past(measurement) > past(held):
+            kept[key] = measurement
+    return list(kept.values())
 
 
 @dc.dataclass(frozen=True)
@@ -553,9 +580,9 @@ CORRELATION_STANDARD_ERRORS = 3.0
 
 
 def correlation_changes(source: Document, observed: Document) -> Iterator[Measurement]:
-    """For each Gaussian copula the source plans, the change in a Spearman correlation it states between two of the
-    copula's columns that lies furthest past the default threshold, or past its own least threshold where that is
-    more, as the pair it names. A pair the other profile states no correlation for lies furthest.
+    """For each Gaussian copula the source plans, the change in each Spearman correlation it states between two of the
+    copula's columns, grouped by the copula, so a report names the pair furthest past what it is held to. A pair the
+    other profile states no correlation for lies furthest.
 
     A pair's least threshold is as many standard errors of the change as `correlation_standard_errors` gives the group,
     where both profiles state the rows they measured it on and the other the influence of a row on it. Two samples of
@@ -568,22 +595,18 @@ def correlation_changes(source: Document, observed: Document) -> Iterator[Measur
         yield Measurement(None, planned)
         return
     found = spearman_entries(observed)
-    for group in planned.copula_groups():
+    for at, group in enumerate(planned.copula_groups()):
         pairs = [(a, b) for a, b in stated if a in group and b in group]
         standard_errors = correlation_standard_errors(len(pairs))
-        changes = []
         for a, b in pairs:
             value, theirs = stated[a, b]['value'], found.get((a, b))
             if theirs is not None:
                 least = standard_errors * change_spread(stated[a, b], theirs)
-                changes.append(
-                    Measurement(a, Compared(abs(theirs['value'] - value), value, theirs['value'], least_threshold=least), paired_with=b)
-                )
+                compared = Compared(abs(theirs['value'] - value), value, theirs['value'], least_threshold=least)
+                yield Measurement(a, compared, paired_with=b, group=at)
             else:
                 missing = f'the other profile states no Spearman correlation between {a} and {b}, which it writes from enough rows'
-                changes.append(Measurement(a, Unmeasured(missing, value), paired_with=b))
-        if changes:
-            yield max(changes, key=past_default_threshold)
+                yield Measurement(a, Unmeasured(missing, value), paired_with=b, group=at)
 
 
 def correlation_standard_errors(pairs: int) -> float:
@@ -600,13 +623,6 @@ def change_spread(stated: dict[str, Any], theirs: dict[str, Any]) -> float:
     if variance is None or not rows or not their_rows:
         return 0.0
     return math.sqrt(variance / rows + variance / their_rows)
-
-
-def past_default_threshold(change: Measurement) -> float:
-    """How far a change lies past what it is judged at under the default threshold, an unmeasured one furthest."""
-    if isinstance(change.compared, Unmeasured):
-        return math.inf
-    return change.compared.value - max(CORRELATION_THRESHOLD, change.compared.least_threshold)
 
 
 def spearman_entries(document: Document) -> dict[tuple[str, str], dict[str, Any]]:
