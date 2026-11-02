@@ -39,6 +39,7 @@ from doppeldata.privacy_policy import Policy
 from doppeldata.profile_comparison import real_data_scores
 from doppeldata.profile_comparison import side_by_side_html
 from doppeldata.profile_comparison.field_changes import column_changes
+from doppeldata.profile_comparison.field_changes import held_typing_changes
 from doppeldata.profile_comparison.field_changes import overflow_changes
 from doppeldata.profile_comparison.field_changes import source_changes
 from doppeldata.profile_comparison.metrics import LAYOUT_METRICS
@@ -311,6 +312,7 @@ def checked_table(
         against_scored = scored(real, data, named, fingerprint, columns, thresholds, data_named(against), sample_rows)
         metrics += against_scored.rows
     changes = column_changes(source, observed, writer_changes_pass=True, declaring=declared_types(packs), listing=listed_types(packs))
+    changes += held_typing_changes(observed, check_measures.held_typings)
     if applied is None:
         reported_scenario, expectations = None, []
     else:

@@ -381,12 +381,12 @@ A column's kind is the profiler's `ColumnKind`, read back from the `logical_type
 Arrow decimal type telling a decimal from a float.
 
 - **A check fails** on a column the data adds or drops, or holds as another kind or semantic type.
-- **Sampling alone never changes a semantic type.** DATA keeps PROFILE's typing of a column unless
-  a validator's share clears its cut by three standard errors of the gap between two samples'
-  shares. [How a column is given a semantic type](semantic-types-and-detector-packs.md) gives the
-  margin. So a claims column holding 94.5% five-digit codes stays untyped wherever its sample
-  lands, and keeps counting whole codes rather than a ZIP code's prefixes. Data that types
-  clear of the margin still fails, as a ZIP column generated as free text does.
+- **Sampling alone rarely changes a semantic type.** DATA keeps PROFILE's typing of a column unless
+  a validator's share clears its cut by a sampling margin. [How a column is given a semantic
+  type](semantic-types-and-detector-packs.md) gives the margin. So a column whose share sits within
+  the margin of the cut keeps PROFILE's typing. It keeps counting whole values rather than a ZIP
+  code's prefixes, and is listed as a passing `semantic_type_changed`. Data whose share clears the
+  margin still fails, as a ZIP column generated as free text does.
 - **A check lists and passes a change a writer alone causes.** A Parquet write given
   `timestamp_unit` casts every timestamp column to that unit, and no unit reproduces a source's
   INT96. Data written as CSV or JSON reads back at the text reader's types, so an `int32` column

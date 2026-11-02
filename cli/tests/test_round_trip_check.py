@@ -9,6 +9,7 @@ import doppeldata as sd
 import jsonschema
 import pyarrow as pa
 import pyarrow.compute as pc
+import pytest
 from doppeldata.published_schemas import schema_text
 
 ROWS = 20_000
@@ -115,20 +116,21 @@ def retypings(report: sd.CheckReport) -> list[tuple[str | None, str | None, bool
     ]
 
 
+def semantic_type(profile: sd.Profile) -> str | None:
+    return (profile.to_plain()['columns'][0].get('semantic') or {}).get('type')
+
+
 def test_a_share_sampling_carries_across_the_type_cut_keeps_the_profiles_typing_and_one_clear_of_it_fails_the_check():
     """A ZIP code's validator types at 95% of the sampled values, and two samples of 10,000 at that share lie about 0.3%
-    apart, so 94.6% and 95.3% hold one typing."""
+    apart, so a check holds 94.6% and 95.3% to one typing. A profile written against an earlier one types from its own
+    data, so the privacy policy treats a ZIP column as one."""
     untyped, typed = sd.profile(item_codes(9_460)), sd.profile(item_codes(9_900))
-    assert [
-        (column.get('semantic') or {}).get('type') for column in (untyped.to_plain()['columns'][0], typed.to_plain()['columns'][0])
-    ] == [
-        None,
-        'us_zip',
-    ]
-    assert sd.profile(item_codes(9_530)).to_plain()['columns'][0]['semantic']['type'] == 'us_zip'
+    assert [semantic_type(untyped), semantic_type(typed)] == [None, 'us_zip']
+    with pytest.warns(sd.EarlierProfileNotReused):
+        assert semantic_type(sd.profile(item_codes(9_530), edges_from=untyped)) == 'us_zip'
 
-    assert retypings(sd.check(untyped, item_codes(9_530))) == []
-    assert retypings(sd.check(typed, item_codes(9_460))) == []
+    assert retypings(sd.check(untyped, item_codes(9_530))) == [(None, 'us_zip', True)]
+    assert retypings(sd.check(typed, item_codes(9_460))) == [('us_zip', None, True)]
     assert retypings(sd.check(untyped, item_codes(9_900))) == [(None, 'us_zip', False)]
     assert retypings(sd.check(typed, item_codes(9_000))) == [('us_zip', None, False)]
 

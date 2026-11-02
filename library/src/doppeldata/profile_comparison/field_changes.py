@@ -11,6 +11,7 @@ from doppeldata.profile_comparison.metrics import Document
 from doppeldata.profile_format import LISTING_SECTIONS
 from doppeldata.profile_format import described_rows
 from doppeldata.profile_format import pointer
+from doppeldata.profiling.semantic_type_hold import HeldTyping
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.table_profile import profiled_kind
 
@@ -149,6 +150,26 @@ def retyped(source: Column, observed: Column, index: int, writer_changes_pass: b
             message += f'; {unconfirmed}, so it is listed and passes'
         at = pointer(('columns', index, 'semantic', 'type'))
         yield FieldChange(ChangeKind.SEMANTIC_TYPE_CHANGED, name, at, *semantic, unconfirmed is not None, message)
+
+
+def held_typing_changes(observed: Document, held: Mapping[str, HeldTyping]) -> list[FieldChange]:
+    """A listed, passing type change for each column a check's profile held to the source's typing, where its sample
+    alone types it otherwise, because sampling alone could carry its share that far across the cut. A column the
+    margin left with neither type differs from the source, and `column_changes` fails it."""
+    indices = {column['name']: index for index, column in enumerate(observed.get('columns') or [])}
+    return [
+        FieldChange(
+            ChangeKind.SEMANTIC_TYPE_CHANGED,
+            name,
+            pointer(('columns', indices[name], 'semantic', 'type')),
+            holding.earlier,
+            holding.alone,
+            True,
+            f'{holding.message(name)}, so it is listed and passes',
+        )
+        for name, holding in held.items()
+        if name in indices and holding.held == holding.earlier
+    ]
 
 
 def overflow_changes(source: Document, observed: Document) -> list[FieldChange]:

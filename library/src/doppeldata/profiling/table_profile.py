@@ -65,6 +65,8 @@ from doppeldata.profiling.recorded_counts import floored_values
 from doppeldata.profiling.recorded_counts import rate
 from doppeldata.profiling.recorded_counts import significant
 from doppeldata.profiling.recorded_counts import written_number
+from doppeldata.profiling.semantic_type_hold import FrozenTyping
+from doppeldata.profiling.semantic_type_hold import HeldTyping
 from doppeldata.profiling.statistic_catalog import COLUMN_STATISTICS
 from doppeldata.profiling.statistic_catalog import NUMERIC
 from doppeldata.profiling.statistic_catalog import PROFILED
@@ -165,9 +167,8 @@ Stat = Callable[[str], Any]
 
 @dc.dataclass(frozen=True)
 class FrozenLayout:
-    """An earlier profile's histogram edges and value lists, by column, which a re-profile counts its rows against, the
-    pairs of columns it states a dependence between, which a re-profile states again wherever its floors allow, and
-    each column's semantic type, which a re-profile keeps unless its sample clearly says otherwise."""
+    """An earlier profile's histogram edges and value lists, by column, which a re-profile counts its rows against, and
+    the pairs of columns it states a dependence between, which a re-profile states again wherever its floors allow."""
 
     # Each numeric column's histogram kind and edges.
     histograms: dict[str, tuple[str, tuple[float, ...]]] = dc.field(default_factory=dict)
@@ -179,19 +180,21 @@ class FrozenLayout:
     dependence_sample_rows: int = FIT_SAMPLE_ROWS
     # Whether a check measures how far one row moves each Spearman correlation it states again, which no other re-profile does.
     spearman_influence: bool = False
-    typings: dict[str, 'FrozenTyping'] = dc.field(default_factory=dict)
+    # Each column's semantic type, which a check's profile of DATA keeps unless its sample clearly says otherwise, and
+    # no other re-profile does, because a profile that is written types its columns from its own data.
+    typings: dict[str, FrozenTyping] = dc.field(default_factory=dict)
 
     @classmethod
     def of(cls, document: dict[str, Any], *, for_check: bool = False, dependence_sample_rows: int = FIT_SAMPLE_ROWS) -> 'FrozenLayout':
         """The layout `document` states. `for_check` adds what only a check measures: its conditional tables counted
-        without a floor, and the influence of a row on each Spearman correlation."""
+        without a floor, the influence of a row on each Spearman correlation, and each column's semantic type."""
         histograms, values, typings = {}, {}, {}
         described = described_rows(document)
-        # The detectors read a seeded sample of at most VALUE_SAMPLE_ROWS of the rows a profile describes.
-        typed_rows = min(VALUE_SAMPLE_ROWS, described) if described else None
+        typed_rows = value_sample_rows(described) if described else None
         for column in document.get('columns') or []:
-            sampled = round(typed_rows * (1 - (column.get('null_fraction') or 0.0))) if typed_rows else None
-            typings[column['name']] = FrozenTyping((column.get('semantic') or {}).get('type'), sampled)
+            if for_check:
+                sampled = round(typed_rows * (1 - (column.get('null_fraction') or 0.0))) if typed_rows else None
+                typings[column['name']] = FrozenTyping((column.get('semantic') or {}).get('type'), sampled)
             histogram = (column.get('numeric') or {}).get('histogram')
             if histogram and len(histogram['edges']) > 1:
                 histograms[column['name']] = (histogram['kind'], tuple(histogram['edges']))
@@ -230,13 +233,9 @@ class FrozenValues:
     section: str
 
 
-@dc.dataclass(frozen=True)
-class FrozenTyping:
-    """The semantic type an earlier profile gave a column, None where it left it untyped, and about how many sampled
-    values decided it, None where the profile states no rows, as one expanded from a dict of fakes does."""
-
-    type: str | None
-    sampled: int | None
+def value_sample_rows(described: int) -> int:
+    """The rows of the seeded sample grex and the detectors read, of a table holding `described` rows."""
+    return min(VALUE_SAMPLE_ROWS, described)
 
 
 @dc.dataclass(frozen=True)
@@ -257,11 +256,12 @@ def answered(backend: Backend, table: Table, requests: list[Request]) -> Answers
 @dc.dataclass(frozen=True)
 class CheckMeasures:
     """What a check measures of a table beside its profile, which no profile holds: each conditional table the frozen
-    layout states, counted without a floor, and the variance of one row's influence on each Spearman correlation it
-    states, by the correlation's columns."""
+    layout states, counted without a floor, the variance of one row's influence on each Spearman correlation it
+    states, by the correlation's columns, and each column whose typing the frozen layout held."""
 
     conditionals_without_floor: list[dict[str, Any]] = dc.field(default_factory=list)
     spearman_influence: dict[tuple[str, str], float] = dc.field(default_factory=dict)
+    held_typings: dict[str, HeldTyping] = dc.field(default_factory=dict)
 
 
 @dc.dataclass(frozen=True)
@@ -340,7 +340,8 @@ def profile_table(
     )
     document = withheld(document, policy, k_min, cell_floors)
     influence = spearman_influence(backend, profiled.dependence_sample, document, settings.frozen)
-    return ProfiledTable(document, profiled.every_row, profiled.every_row_recoded, profiled.specs, CheckMeasures(unfloored, influence))
+    measures = CheckMeasures(unfloored, influence, profiled.held_typings)
+    return ProfiledTable(document, profiled.every_row, profiled.every_row_recoded, profiled.specs, measures)
 
 
 def spearman_influence(
@@ -476,9 +477,11 @@ def profile_columns(
     }
     detection = importlib.import_module(SEMANTIC_TYPES_MODULE)
     detected = detection.detected_columns(specs, packs)
-    value_sample = backend.sample(table, VALUE_SAMPLE_ROWS, SAMPLE_SEED) if detected else None
+    value_sample = backend.sample(table, value_sample_rows(described), SAMPLE_SEED) if detected else None
     patterns = generalized_patterns(value_sample, shapes, stats, described, k_min)
-    typings = detection.column_typings(value_sample, detected, patterns, k_min, settings.code_lists, layout.typings) if value_sample else {}
+    typings, held_typings = (
+        detection.column_typings(value_sample, detected, patterns, k_min, settings.code_lists, layout.typings) if value_sample else ({}, {})
+    )
     treatments = {spec.name: column_treatment(column_facts(spec, typings.get(spec.name)), settings.policy) for spec in specs}
     binnings = {}
     for spec in specs:
@@ -544,6 +547,7 @@ def profile_columns(
         parsed_types=parsed_types,
         whole=whole,
         unrecoded=unrecoded,
+        held_typings=held_typings,
     )
     if json_root is None:
         return profiled
