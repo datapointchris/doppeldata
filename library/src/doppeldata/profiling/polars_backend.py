@@ -36,6 +36,8 @@ from doppeldata.profiling.expression_rule import counted_rows
 from doppeldata.profiling.first_blocks import FIRST_BLOCK_BYTES
 from doppeldata.profiling.first_blocks import first_block
 from doppeldata.profiling.recorded_counts import Recode
+from doppeldata.profiling.spearman_row_influence import InfluenceTerms
+from doppeldata.profiling.spearman_row_influence import row_influence
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
 from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT
@@ -619,13 +621,8 @@ def numeric_value(c: pl.Expr, kind: ColumnKind) -> pl.Expr:
 
 
 def spearman_influence_variance(pair: pl.LazyFrame) -> pl.LazyFrame:
-    """One row: the mean squared influence of a row of `pair` on the Spearman correlation of its `x` and `y`, over the
-    rows holding both, and the variance of each's mid-distribution function there, zero for a constant column.
-
-    Each column is read as its mid-distribution function less a half, `u` and `w`. A row's influence on their
-    covariance is its product, less three times the covariance, plus what it moves the other column's mean above it:
-    each `g`. On a variance it is its square, less three times the variance, plus twice the column's own mean above it:
-    each `h`. The correlation's influence follows from the three by the quotient rule."""
+    """One row: the mean squared `row_influence` of a row of `pair` on the Spearman correlation of its `x` and `y`, over
+    the rows holding both, and the variance of each's mid-distribution function there, zero for a constant column."""
     held = pair.filter(pl.col('x').is_not_null() & pl.col('y').is_not_null())
     rows = pl.len().cast(pl.Float64)
     centered = held.with_columns(
@@ -644,13 +641,10 @@ def spearman_influence_variance(pair: pl.LazyFrame) -> pl.LazyFrame:
     by_x = above(above(centered, 'x', 'w', 'g_x'), 'x', 'u', 'h_x')
     both = above(above(by_x, 'y', 'u', 'g_y'), 'y', 'w', 'h_y')
     u, w = pl.col('u'), pl.col('w')
-    covariance, spread_x, spread_y = (u * w).mean(), u.pow(2).mean(), w.pow(2).mean()
-    scale = (spread_x * spread_y).sqrt()
-    on_covariance = u * w + pl.col('g_x') + pl.col('g_y') - 3 * covariance
-    on_x = u.pow(2) + 2 * pl.col('h_x') - 3 * spread_x
-    on_y = w.pow(2) + 2 * pl.col('h_y') - 3 * spread_y
-    influence = on_covariance / scale - covariance / scale / 2 * (on_x / spread_x + on_y / spread_y)
-    return both.select(influence.pow(2).mean().alias('variance'), spread_x.alias('spread_x'), spread_y.alias('spread_y'))
+    covariance, spread_x, spread_y = (u * w).mean(), (u * u).mean(), (w * w).mean()
+    terms = InfluenceTerms(u, w, pl.col('g_x'), pl.col('h_x'), pl.col('g_y'), pl.col('h_y'))
+    influence = row_influence(terms, covariance, spread_x, spread_y)
+    return both.select((influence * influence).mean().alias('variance'), spread_x.alias('spread_x'), spread_y.alias('spread_y'))
 
 
 class PolarsOps:

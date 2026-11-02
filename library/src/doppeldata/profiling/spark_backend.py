@@ -50,6 +50,8 @@ from doppeldata.profiling.expression_rule import ExpressionCandidate
 from doppeldata.profiling.expression_rule import counted_rows
 from doppeldata.profiling.recorded_counts import Recode
 from doppeldata.profiling.sources import is_spark_frame
+from doppeldata.profiling.spearman_row_influence import InfluenceTerms
+from doppeldata.profiling.spearman_row_influence import row_influence
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
 from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT
@@ -937,12 +939,17 @@ class SparkBackend:
         return found
 
     def rank_correlation_influence(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[float | None]:
-        """Each pair's `spearman_influence_variance`, its two columns as `average_ranks` orders them."""
+        """Each pair's `spearman_influence_variances`, its two columns as `average_ranks` orders them, `PAIRS_PER_QUERY`
+        pairs to a query."""
+        if not pairs:
+            return []
         specs = {spec.name: spec for spec in self.schema(table)}
-        found = []
-        for a, b in pairs:
-            x, y = (Operand(column(name), specs[name], self.major).ordered for name in (a, b))
-            found.append(spearman_influence_variance(table.select(x.alias('x'), y.alias('y'))))
+        names = list(dict.fromkeys(name for pair in pairs for name in pair))
+        ordered = table.select(*(Operand(column(name), specs[name], self.major).ordered.alias(f'o{at}') for at, name in enumerate(names)))
+        found: list[float | None] = []
+        for start in range(0, len(pairs), PAIRS_PER_QUERY):
+            batch = pairs[start : start + PAIRS_PER_QUERY]
+            found += spearman_influence_variances(ordered, [(f'o{names.index(a)}', f'o{names.index(b)}') for a, b in batch])
         return found
 
     def cross_counts(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
@@ -1408,46 +1415,76 @@ def ordered_key(o: Operand, value: Any) -> Column:
     return sf.lit(value)
 
 
-def spearman_influence_variance(pair: DataFrame) -> float | None:
-    """The mean squared influence of a row of `pair` on the Spearman correlation of its `x` and `y`, over the rows
-    holding both, as `polars_backend.spearman_influence_variance` measures it, through windows ordered by each column.
-    None where either is constant over those rows."""
-    held = pair.where(sf.col('x').isNotNull() & sf.col('y').isNotNull())
-    rows = held.count()
-    if not rows:
-        return None
-    centered = held.select('x', 'y', mid_distribution('x', rows).alias('u'), mid_distribution('y', rows).alias('w'))
+def spearman_influence_variances(table: DataFrame, pairs: list[tuple[str, str]]) -> list[float | None]:
+    """The mean squared `row_influence` of a row of `table` on the Spearman correlation of each pair of its columns,
+    over the rows holding both, as `polars_backend.spearman_influence_variance` measures it. Each pair's rows holding
+    both are stacked under its index, its values as `sortable` holds them, so one set of windows partitioned by the pair
+    orders every pair, and one grouping measures them. None where either column is constant over those rows, or no row
+    holds both."""
+    if not pairs:
+        return []
+    types = {field.name: field.dataType for field in table.schema.fields}
+    stacked = table.select(
+        sf.inline(
+            sf.array(
+                *(
+                    sf.struct(sf.lit(at).alias('pair'), sortable(x, types[x]).alias('x'), sortable(y, types[y]).alias('y'))
+                    for at, (x, y) in enumerate(pairs)
+                )
+            )
+        )
+    ).where(sf.col('x').isNotNull() & sf.col('y').isNotNull())
+    rows = sf.count(sf.lit(1)).over(Window.partitionBy('pair'))
+    centered = stacked.select('pair', 'x', 'y', mid_distribution('x', rows).alias('u'), mid_distribution('y', rows).alias('w'))
     u, w = sf.col('u'), sf.col('w')
-    covariance, spread_x, spread_y = (float(value) for value in centered.agg(sf.avg(u * w), sf.avg(u * u), sf.avg(w * w)).collect()[0])
-    if not spread_x or not spread_y:
-        return None
-    above = {
-        name: rows_above(of, by, rows).alias(name)
-        for name, of, by in (('g_x', 'w', 'x'), ('h_x', 'u', 'x'), ('g_y', 'u', 'y'), ('h_y', 'w', 'y'))
-    }
-    moved = centered.select(u, w, *above.values())
-    scale = math.sqrt(spread_x * spread_y)
-    on_covariance = u * w + sf.col('g_x') + sf.col('g_y') - 3 * covariance
-    on_x = u * u + 2 * sf.col('h_x') - 3 * spread_x
-    on_y = w * w + 2 * sf.col('h_y') - 3 * spread_y
-    influence = on_covariance / scale - covariance / scale / 2 * (on_x / spread_x + on_y / spread_y)
-    variance = moved.agg(sf.avg(influence * influence)).collect()[0][0]
-    return float(variance) if variance is not None and math.isfinite(variance) else None
+    moved = centered.select(
+        'pair',
+        u,
+        w,
+        *(
+            rows_above(of, by, rows).alias(name)
+            for name, of, by in (('g_x', 'w', 'x'), ('h_x', 'u', 'x'), ('g_y', 'u', 'y'), ('h_y', 'w', 'y'))
+        ),
+        *(sf.avg(a * b).over(Window.partitionBy('pair')).alias(name) for name, a, b in (('c', u, w), ('s_x', u, u), ('s_y', w, w))),
+    )
+    terms = InfluenceTerms(*(sf.col(name) for name in ('u', 'w', 'g_x', 'h_x', 'g_y', 'h_y')))
+    # ANSI mode raises on a division by zero, so a constant column's zero variance is null, and so is its influence.
+    spread_x, spread_y = (sf.when(sf.col(name) != 0, sf.col(name)) for name in ('s_x', 's_y'))
+    influence = row_influence(terms, sf.col('c'), spread_x, spread_y)
+    measured = moved.groupBy('pair').agg(sf.avg(influence * influence).alias('variance')).collect()
+    found = {row['pair']: row['variance'] for row in measured}
+    return [float(variance) if (variance := found.get(at)) is not None and math.isfinite(variance) else None for at in range(len(pairs))]
 
 
-def mid_distribution(by: str, rows: int) -> Column:
-    """Each row's mid-distribution function in `by` over the frame's `rows` rows, less a half: its mean rank, a tie at the
+def sortable(name: str, data_type: st.DataType) -> Column:
+    """A column's value where one ordering sorts every type: a struct holding it as an integer, a real or text in that
+    field and null in the others, so the structs of one column sort and tie as its values do. Null where the value is."""
+    value = sf.col(name)
+    if isinstance(data_type, st.IntegralType | st.BooleanType):
+        kept = 'whole'
+    elif isinstance(data_type, st.FractionalType):
+        kept = 'real'
+    else:
+        kept = 'text'
+    fields = {'whole': 'long', 'real': 'double', 'text': 'string'}
+    held = ((value if field == kept else sf.lit(None)).cast(spark_type).alias(field) for field, spark_type in fields.items())
+    return sf.when(value.isNotNull(), sf.struct(*held))
+
+
+def mid_distribution(by: str, rows: Column) -> Column:
+    """Each row's mid-distribution function in `by` over its pair's `rows`, less a half: its mean rank, a tie at the
     mean of its first and last, less a half, over the rows."""
-    order = Window.orderBy(by)
+    order = Window.partitionBy('pair').orderBy(by)
     through = sf.count(sf.lit(1)).over(order.rangeBetween(Window.unboundedPreceding, Window.currentRow))
     return ((sf.rank().over(order) + through) / 2 - 0.5) / rows - 0.5
 
 
-def rows_above(of: str, by: str, rows: int) -> Column:
-    """Each row's sum of `of` over the rows above it in `by`, and half of it over the rows tied with it, over the rows."""
-    through = sf.sum(of).over(Window.orderBy(by).rangeBetween(Window.unboundedPreceding, Window.currentRow))
-    whole = sf.sum(of).over(Window.rowsBetween(Window.unboundedPreceding, Window.unboundedFollowing))
-    tied = sf.sum(of).over(Window.partitionBy(by))
+def rows_above(of: str, by: str, rows: Column) -> Column:
+    """Each row's sum of `of` over its pair's rows above it in `by`, and half of it over the rows tied with it, over
+    `rows`."""
+    through = sf.sum(of).over(Window.partitionBy('pair').orderBy(by).rangeBetween(Window.unboundedPreceding, Window.currentRow))
+    whole = sf.sum(of).over(Window.partitionBy('pair'))
+    tied = sf.sum(of).over(Window.partitionBy('pair', by))
     return (whole - through + tied / 2) / rows
 
 
