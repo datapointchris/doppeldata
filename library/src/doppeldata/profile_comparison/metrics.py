@@ -314,10 +314,12 @@ def rate_change(a: float | None, b: float | None, missing: str) -> Compared | Un
 
 
 def distinct_ratio_change(source: Column, observed: Column) -> Compared | Unmeasured | None:
-    """How far the observed distinct ratio falls outside the range `distinct_ratio_range` allows, relative to its nearer end.
+    """How far the observed distinct ratio falls outside the range `distinct_ratio_range` allows, relative to its nearer end,
+    or 0 where the observed count lies within one value of that end's nearest whole count.
 
-    At the source's own row count the range is the source's ratio, so the value is the relative change in ratio. A source
-    with no values has no ratio to measure against.
+    At the source's own row count the range is the source's ratio, so the value is the relative change in ratio. A distinct
+    count is whole, so a relative bound finer than one value would forbid any miss: within one value passes at any
+    threshold. A source with no values has no ratio to measure against.
     """
     ours, theirs = ((column.get('distinct') or {}) for column in (source, observed))
     a, b = ours.get('ratio'), theirs.get('ratio')
@@ -327,9 +329,14 @@ def distinct_ratio_change(source: Column, observed: Column) -> Compared | Unmeas
         return Unmeasured('the other profile counts no distinct values for the column, because it holds none', a)
     if not ours.get('approx_values') or not theirs.get('approx_values'):
         return Compared(abs(b - a) / a, a, b)
-    low, high = distinct_ratio_range(ours['approx_values'], a, theirs['approx_values'] / b)
-    outside = (low - b) / low if b < low else (b - high) / high if b > high else 0.0
-    return Compared(outside, a, b)
+    rows = theirs['approx_values'] / b
+    low, high = distinct_ratio_range(ours['approx_values'], a, rows)
+    if low <= b <= high:
+        return Compared(0.0, a, b)
+    end = low if b < low else high
+    if abs(theirs['approx_values'] - round(end * rows)) <= 1:
+        return Compared(0.0, a, b)
+    return Compared(abs(b - end) / end, a, b)
 
 
 def drawn_distinct(document: Document) -> Document:
@@ -653,7 +660,8 @@ METRICS = (
     ),
     Metric(
         'distinct_ratio_delta',
-        'how far the distinct values per row fall outside the range the source allows at this many rows, relative to it',
+        'how far the distinct values per row fall outside the range the source allows at this many rows, relative to it, '
+        'and 0 within one value of it',
         Bound.AT_MOST,
         0.10,
         per_column(distinct_ratio_change),

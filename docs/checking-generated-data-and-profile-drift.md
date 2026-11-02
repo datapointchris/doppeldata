@@ -140,6 +140,13 @@ checked:
 - **The value is how far the observed ratio falls outside that range**, relative to its nearer end,
   and 0 inside it. At n = N both ends are the source's ratio, so the value is the relative change
   in ratio.
+- **A count within one value of the nearer end's whole count is 0 too.** A distinct count is whole.
+  A relative bound of 0.1 on a count under 10 is finer than one value, so it would forbid any miss,
+  and no independent draw over a share of a few rows promises an exact count. So the bound is the
+  larger of the threshold and one value. The end is rounded to its nearest whole count first,
+  because a stated ratio carries four significant digits.
+- **That lets a column under 10 values miss one entirely.** `tvd` and the listed shares still catch
+  a missing value holding a real share, so only a value of a few rows slips past both.
 
 So the range widens as n moves from N, the same lower-bound stance `ks` takes. A column that drifts
 toward either reading passes, and only a count outside both fails. A few-valued column's lower end
