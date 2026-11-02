@@ -155,6 +155,10 @@ pub struct MetricResult {
     /// it, where `skipped_by` names the perturbation that moves it, and where `drawn_by` names the
     /// relationship that decides it.
     pub value: Option<f64>,
+    /// The threshold `value` is judged at. It is the one given, moved toward passing by any share
+    /// the source's own profile lies past it, as `boundary_adherence` credits the values trimmed
+    /// extremes leave beyond them. An upper bound is held no finer than the value can resolve, as
+    /// a distinct count is whole and `distinct_ratio_delta` never asks for less than one value.
     pub threshold: f64,
     /// Whether `value` passes at or below `threshold`, or at or above it.
     pub bound: Bound,

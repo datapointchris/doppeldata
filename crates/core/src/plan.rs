@@ -582,6 +582,7 @@ pub(crate) fn plan_context<'a>(table: &'a TableProfile, name: &'a str, seed: u64
         table: name,
         seed,
         rows: rows as f64,
+        row_count: Some(rows),
         source_rows: table.dataset.as_ref().and_then(|dataset| dataset.rows).map(|rows| rows as f64),
         described_rows: table.described_rows().map(|rows| rows as f64),
         k_min: table.privacy.as_ref().and_then(|privacy| privacy.k_min).unwrap_or(DEFAULT_K_MIN),

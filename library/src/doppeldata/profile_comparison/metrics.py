@@ -15,6 +15,7 @@ from typing import Any
 from typing import NamedTuple
 
 from doppeldata import _core
+from doppeldata.privacy_policy import applied_k_min
 from doppeldata.profile_format import LISTING_SECTIONS
 from doppeldata.profile_format import UngenerableProfile
 from doppeldata.profile_format import described_rows
@@ -36,13 +37,26 @@ class Bound(enum.Enum):
     def holds(self, value: float, threshold: float) -> bool:
         return value <= threshold if self is Bound.AT_MOST else value >= threshold
 
+    def held_to(self, threshold: float, compared: 'Compared') -> float:
+        """The threshold `compared` is judged at: `threshold` moved toward passing by its `credit`, and an upper bound
+        held no finer than its `least_threshold`."""
+        if self is Bound.AT_MOST:
+            return max(threshold + compared.credit, compared.least_threshold)
+        return threshold - compared.credit
+
 
 class Compared(NamedTuple):
-    """One column's value, and the statistic it compares where it compares one: the source profile's and the other's."""
+    """One column's value, and the statistic it compares where it compares one: the source profile's and the other's.
+
+    `credit` is how far the source's own profile already lies past any threshold, as trimmed extremes leave values
+    beyond them. `least_threshold` is the finest threshold the value can be held to, as a distinct count is whole.
+    """
 
     value: float
     expected: float | None = None
     observed: float | None = None
+    credit: float = 0.0
+    least_threshold: float = 0.0
 
 
 class Unmeasured(NamedTuple):
@@ -237,7 +251,7 @@ def total_variation(source: Document, observed: Document) -> Iterator[Measuremen
     """For each column, the share distance over a categorical column's values, or the largest over a date or
     timestamp's month, weekday and hour, beyond what sampling alone puts between two profiles of one distribution.
     """
-    k_min = (observed.get('privacy') or {}).get('k_min') or _core.DEFAULT_K_MIN
+    k_min = applied_k_min(observed.get('privacy') or {})
     for ours, theirs in shared_columns(source, observed):
         counts = described_values(source, ours), described_values(observed, theirs)
         inverse_values = sum(1 / count for count in counts if count)
@@ -316,8 +330,10 @@ def rate_change(a: float | None, b: float | None, missing: str) -> Compared | Un
 def distinct_ratio_change(source: Column, observed: Column) -> Compared | Unmeasured | None:
     """How far the observed distinct ratio falls outside the range `distinct_ratio_range` allows, relative to its nearer end.
 
-    At the source's own row count the range is the source's ratio, so the value is the relative change in ratio. A source
-    with no values has no ratio to measure against.
+    At the source's own row count the range is the source's ratio, so the value is the relative change in ratio. A distinct
+    count is whole, so the threshold is held no finer than one and a half values of the end's count. Half a value is
+    because that count need not be whole, and one value is a miss no draw over a few rows can rule out. A source with no
+    values has no ratio to measure against.
     """
     ours, theirs = ((column.get('distinct') or {}) for column in (source, observed))
     a, b = ours.get('ratio'), theirs.get('ratio')
@@ -327,9 +343,11 @@ def distinct_ratio_change(source: Column, observed: Column) -> Compared | Unmeas
         return Unmeasured('the other profile counts no distinct values for the column, because it holds none', a)
     if not ours.get('approx_values') or not theirs.get('approx_values'):
         return Compared(abs(b - a) / a, a, b)
-    low, high = distinct_ratio_range(ours['approx_values'], a, theirs['approx_values'] / b)
+    rows = theirs['approx_values'] / b
+    low, high = distinct_ratio_range(ours['approx_values'], a, rows)
+    end = low if b < low else high
     outside = (low - b) / low if b < low else (b - high) / high if b > high else 0.0
-    return Compared(outside, a, b)
+    return Compared(outside, a, b, least_threshold=1.5 / (end * rows))
 
 
 def drawn_distinct(document: Document) -> Document:
@@ -365,8 +383,30 @@ def distinct_ratio_range(count: int, ratio: float, rows: float) -> tuple[float, 
     return ratio, sampled / rows
 
 
-def boundary_adherence(source: Column, observed: Column) -> Compared | Unmeasured | None:
-    """The share of observed values inside the source's outer histogram edges, from the rows counted outside them.
+def boundary_adherences(source: Document, observed: Document) -> Iterator[Measurement]:
+    """For each column, the share of observed values inside the source's outer histogram edges, credited with the share
+    of the source's own values its extremes leave beyond them."""
+    k_min = applied_k_min(source.get('privacy') or {})
+    for ours, theirs in shared_columns(source, observed):
+        compared = boundary_adherence(ours, theirs, beyond_extremes_share(ours, described_values(source, ours), k_min))
+        if compared is not None:
+            yield Measurement(ours['name'], compared)
+
+
+def beyond_extremes_share(column: Column, values: float, k_min: int) -> float:
+    """The share of a source column's `values` its extremes' method leaves beyond them, on both sides together.
+
+    Trimmed extremes sit at rank k_min from each end, so up to k_min − 1 values lie beyond each by construction, and
+    exact extremes leave none. A profile stating no row count leaves no share.
+    """
+    method = ((column.get('numeric') or {}).get('extremes') or {}).get('method')
+    beyond_each = _core.rows_beyond_each_extreme(method, k_min) if method else None
+    return min(1.0, 2 * beyond_each / values) if beyond_each and values else 0.0
+
+
+def boundary_adherence(source: Column, observed: Column, credited: float) -> Compared | Unmeasured | None:
+    """The share of observed values inside the source's outer histogram edges, from the rows counted outside them. Its
+    credit is `credited`, the share the source's own values can lie outside them.
 
     The outer edges are the source's trimmed extremes, or half a unit beyond them in an integral column. Only a
     histogram counted against the source's edges carries `overflow`, so a profile binned afresh is Unmeasured.
@@ -379,7 +419,9 @@ def boundary_adherence(source: Column, observed: Column) -> Compared | Unmeasure
         return Unmeasured("the other profile was not counted against the source's histogram edges")
     outside = counted['overflow']['rows_below'] + counted['overflow']['rows_above']
     total = outside + sum(counted['bin_rows'])
-    return Compared(1 - outside / total) if total else Unmeasured('the other profile counts no values for the column')
+    if not total:
+        return Unmeasured('the other profile counts no values for the column')
+    return Compared(1 - outside / total, credit=credited)
 
 
 def relative_change(expected: float, observed: float | None, missing: str) -> Compared | Unmeasured:
@@ -627,17 +669,18 @@ METRICS = (
     ),
     Metric(
         'distinct_ratio_delta',
-        'how far the distinct values per row fall outside the range the source allows at this many rows, relative to it',
+        'how far the distinct values per row fall outside the range the source allows at this many rows, relative to it, '
+        'judged no finer than one value',
         Bound.AT_MOST,
         0.10,
         per_column(distinct_ratio_change),
     ),
     Metric(
         'boundary_adherence',
-        "the share of values inside the source's outer histogram edges",
+        "the share of values inside the source's outer histogram edges, judged less the share its extremes leave beyond them",
         Bound.AT_LEAST,
         0.99,
-        per_column(boundary_adherence),
+        boundary_adherences,
     ),
     Metric(
         'files_delta',

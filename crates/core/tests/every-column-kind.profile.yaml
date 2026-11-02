@@ -149,6 +149,69 @@ columns:
       quantiles: {p01: 0.4, p25: 2.0, p50: 4.0, p75: 7.5, p99: 30.0}
       extremes: {low: -5.0, high: 90.0}
       fit: {family: lognorm, params: {s: 0.8, loc: 0.2, scale: 4.0}}
+  # Independent draws over 140,000 integers reach about 62% distinct, under the ratio, so each row
+  # takes a band of its own: dealt by a permutation, rising, or falling with the row.
+  - name: near_unique_integer_dealt_by_row
+    physical_type: int64
+    distinct: {ratio: 0.98}
+    numeric:
+      integral: true
+      monotonic: none
+      quantiles: {p01: 1400, p50: 70000, p99: 138600}
+      extremes: {low: 1, high: 140000}
+  - name: near_unique_integer_rising_by_row
+    physical_type: int64
+    distinct: {ratio: 0.98}
+    numeric:
+      integral: true
+      monotonic: increasing
+      quantiles: {p01: 1400, p50: 70000, p99: 138600}
+      extremes: {low: 1, high: 140000}
+  - name: near_unique_integer_falling_by_row
+    physical_type: int32
+    distinct: {ratio: 0.98}
+    numeric:
+      integral: true
+      monotonic: decreasing
+      quantiles: {p01: 1400, p50: 70000, p99: 138600}
+      extremes: {low: 1, high: 140000}
+  # A thin lognormal tail holds too few cents for the ratio, so both tails mix in the straight line,
+  # at the weight its source's 140,000 rows need whatever the rows drawn.
+  - name: thin_fitted_tail_mixed_toward_straight
+    physical_type: double
+    distinct: {approx_values: 2030, ratio: 0.0145}
+    numeric:
+      scale: 2
+      quantiles: {p01: 3.98, p50: 8.0, p99: 16.1}
+      extremes: {low: 1.0, high: 400.0}
+      fit: {family: lognorm, params: {s: 0.3, loc: 0.0, scale: 8.0}}
+  # Eight distinct values, four listed and one more room between the extremes, so three hide beyond
+  # them. No zeros and no negatives are stated, so all three go above.
+  - name: top_values_hiding_none_below_a_low_of_one
+    physical_type: int32
+    distinct: {approx_values: 8, ratio: 0.04}
+    numeric:
+      integral: true
+      zero_fraction: 0.0
+      negative_fraction: 0.0
+      extremes: {low: 1, high: 5, method: trimmed_k}
+      quantiles: {p25: 2, p50: 2, p75: 3}
+      histogram: {kind: equal_depth, edges: [0.5, 1.5, 2.5, 3.5, 4.5, 5.5], bin_rows: [27, 93, 33, 22, 25]}
+      top_values: [{value: 2, fraction: 0.465}, {value: 3, fraction: 0.165}, {value: 1, fraction: 0.135}, {value: 4, fraction: 0.11}]
+      other_fraction: 0.125
+  # Three quantiles and fourteen bins, so the edges past p25 and p75 join the body and each fitted
+  # tail spans only the outermost bin.
+  - name: histogram_past_the_quantiles
+    physical_type: "decimal128(12, 2)"
+    numeric:
+      scale: 2
+      extremes: {low: 5.32, high: 483.77, method: trimmed_k}
+      quantiles: {p25: 20.62, p50: 47.76, p75: 131.96}
+      histogram:
+        kind: equal_depth
+        edges: [5.32, 10.73, 16.06, 19.91, 24.25, 35.38, 39.83, 47.76, 58.79, 83.64, 101.66, 203.05, 257.32, 347.58, 483.77]
+        bin_rows: [19, 12, 13, 12, 19, 12, 13, 12, 19, 12, 19, 12, 13, 13]
+      fit: {family: weibull_min, params: {c: 0.89285116, loc: 5.32, scale: 79.390565}}
   - name: timestamp_uniform
     physical_type: "timestamp[us]"
     temporal: {extremes: {low: "2024-01-01T00:00:00", high: "2024-12-31T23:59:59", granularity: second}}

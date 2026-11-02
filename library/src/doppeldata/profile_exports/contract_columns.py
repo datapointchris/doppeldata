@@ -17,6 +17,7 @@ from typing import Any
 from doppeldata import _core
 from doppeldata.bundle_generation import bundle_arguments
 from doppeldata.privacy_policy import DEFAULT_K_MIN
+from doppeldata.privacy_policy import applied_k_min
 from doppeldata.profile_exports.type_names import SEMANTIC_FORMATS
 from doppeldata.profile_exports.type_names import TYPE_MIX_JSON_TYPES
 from doppeldata.profile_exports.type_names import decimal_of
@@ -405,7 +406,7 @@ def contract_table(profile: Profile, type_mix: frozenset[str] | None) -> Contrac
     privacy = document.get('privacy') or {}
     identifiers = {entry['column'] for entry in privacy.get('suppressed') or [] if entry.get('reason') == 'identifier'}
     source = document.get('source') or {}
-    k_min = privacy.get('k_min') or DEFAULT_K_MIN
+    k_min = applied_k_min(privacy)
     declared = generated.get('declared')
     sampled = not seed and (generated.get('sample') or {}).get('strategy', 'full') != 'full'
     facts = TableFacts(
@@ -417,7 +418,7 @@ def contract_table(profile: Profile, type_mix: frozenset[str] | None) -> Contrac
         text_source=source.get('format') in TEXT_SOURCES,
         declared=None if declared is None else {path: frozenset(listed) for path, listed in declared.items()},
         sample=f'measured over a sample of {rows:,} rows' if sampled and rows else None,
-        floor=k_min if not seed and generated.get('engine') else None,
+        floor=k_min if not seed and generated.get('engine') and k_min > 1 else None,
         type_mix_pointers=type_mix,
     )
     keys = (document.get('dataset') or {}).get('keys') or {}

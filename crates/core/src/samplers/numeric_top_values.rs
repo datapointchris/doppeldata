@@ -150,7 +150,10 @@ fn outside_cdf(cdf: &InverseCdf, listed: &[(f64, f64)], rounding: Rounding) -> O
 /// more distinct values than its listed values and the lattice between its extremes can, the rest
 /// lie beyond the extremes, at most one for each row the extremes' method leaves beyond them. Each
 /// side's values share half those rows. They go above where the histogram's overflow counts rows
-/// only above, below where it counts them only below, and otherwise above and below in turn.
+/// only above, below where it counts them only below, and otherwise above and below in turn, the
+/// share one side has no room for going to the other. A side holds no zero where `zero_fraction`
+/// is stated 0 and no negative value where `negative_fraction` is, so an integer column with a low
+/// of 1 and both rates 0 hides nothing below.
 fn hidden_beyond(stats: &NumericStats, rounding: Rounding, listed: &[(f64, f64)], source: SourceCounts) -> Vec<(f64, f64)> {
     let extremes = stats.extremes.as_ref();
     let rows_beyond_each = extremes.and_then(|e| e.method).map(|method| method.rows_beyond_each(source.k_min));
@@ -175,15 +178,35 @@ fn hidden_beyond(stats: &NumericStats, rounding: Rounding, listed: &[(f64, f64)]
         .as_ref()
         .and_then(|h| h.overflow.as_ref())
         .map_or((0, 0), |o| (o.rows_below, o.rows_above));
-    let above = match (rows_below > 0, rows_above > 0) {
-        (false, true) => hidden,
-        (true, false) => 0,
-        _ => hidden.div_ceil(2),
+    let stated_none = |rate: Option<crate::profile::Rate>| rate.is_some_and(|rate| rate.0 == 0.0);
+    let (no_zeros, no_negatives) = (stated_none(stats.zero_fraction), stated_none(stats.negative_fraction));
+    let admitted = |point: f64| !((point == 0.0 && no_zeros) || (point < 0.0 && no_negatives));
+    // Each side's points outward from its extreme that the zero and negative rates admit, as many as
+    // could hide there. Zero is the only point a side can skip and still admit points past.
+    let outward = |extreme: f64, direction: f64| -> Vec<f64> {
+        (1..=hidden + 1)
+            .map(|step| extreme + direction * step as f64)
+            .filter(|&point| admitted(point))
+            .take(hidden as usize)
+            .collect()
+    };
+    let (below, above) = (outward(first, -1.0), outward(last, 1.0));
+    let room = |side: &Vec<f64>| side.len() as u64;
+    let (to_above, to_below) = match (rows_below > 0, rows_above > 0) {
+        (false, true) => (hidden.min(room(&above)), 0),
+        (true, false) => (0, hidden.min(room(&below))),
+        _ => {
+            let to_below = (hidden / 2).min(room(&below));
+            let to_above = (hidden - to_below).min(room(&above));
+            (to_above, (hidden - to_above).min(room(&below)))
+        }
     };
     let side_rows = rows_beyond_each as f64 / 2.0;
     let rate = |count: u64| side_rows / count as f64 / source.values;
-    let steps = |count: u64| 1..=count;
-    let mut values: Vec<(f64, f64)> = steps(above).map(|step| ((last + step as f64) / factor, rate(above))).collect();
-    values.extend(steps(hidden - above).map(|step| ((first - step as f64) / factor, rate(hidden - above))));
+    let mut values: Vec<(f64, f64)> = above[..to_above as usize]
+        .iter()
+        .map(|&point| (point / factor, rate(to_above)))
+        .collect();
+    values.extend(below[..to_below as usize].iter().map(|&point| (point / factor, rate(to_below))));
     values
 }

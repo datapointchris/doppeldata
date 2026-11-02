@@ -105,6 +105,7 @@
           "format": "double"
         },
         "threshold": {
+          "description": "The threshold `value` is judged at. It is the one given, moved toward passing by any share\nthe source's own profile lies past it, as `boundary_adherence` credits the values trimmed\nextremes leave beyond them. An upper bound is held no finer than the value can resolve, as\na distinct count is whole and `distinct_ratio_delta` never asks for less than one value.",
           "type": "number",
           "format": "double"
         },
