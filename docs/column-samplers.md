@@ -81,7 +81,7 @@ cargo run --release -p doppeldata-core --example throughput -- eight-columns --r
   lognormal fit, and with the fitted tail alone it held 3,744 values against the source's 4,197. At
   the weight that reaches the target, 0.19, its levels warped by each `payment_type`'s quantiles put
   13% more rows past p999 than the source holds, and the count rose to 4,643. At 0.37, where the
-  index binds, 20 seeds held 4,254 to 4,301.
+  index binds, 40 seeds held 4,236 to 4,345.
 - **The mix moves the tail's shape along with its count.** At 0.37, January's `tip_amount` puts 971
   rows between 100 and 200, where the source holds 46. Its standard deviation rises from 3.78 to
   4.46. Its `ks` holds at 0.019, because the profile states no point between p999, at 27.19, and
@@ -256,7 +256,8 @@ function of its index, no pool of values is held, and any block still generates 
   target, so a share drawing many rows for each value never holds more values than the profile
   states. The January 2025 taxi trips' `mta_tax` lists 4 values and states 9, so its other share of
   13 rows is to hold 5. Its K solves to 5.54. Rounded to 6, the share is expected to hold 5.31, so
-  some seeds hold 6. At 5 it holds all 5 with chance 0.68, and 16 of 20 seeds did.
+  some seeds hold 6. At 5 it holds all 5 with chance 0.68, 4 with chance 0.27 and 3 with chance
+  0.04. Over 40 seeds it held 5 on 26, 4 on 11 and 3 on 3.
 - **A source whose strings can be counted has its collisions counted too.** `m` distinct indices
   drawn into `S` equally likely strings give `S · (1 − e^(−m/S))` distinct strings, so the index
   target is raised to meet the value target. A pattern is counted from its syntax, as if every
