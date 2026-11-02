@@ -28,6 +28,7 @@ from doppeldata.profile_format import UngenerableProfile
 from doppeldata.profile_format import described_rows
 from doppeldata.profile_format import engine_plan
 from doppeldata.profile_format import listed_section
+from doppeldata.profile_format import recoded_values
 from doppeldata.profiling.recorded_counts import RATE_DIGITS
 from doppeldata.profiling.table_profile import MOMENT_DIGITS
 from doppeldata.seed_profiles.declared_columns import LIST_LENGTH_LEVELS
@@ -548,7 +549,11 @@ def contract_column(column: Mapping[str, Any], facts: TableFacts, pointer: str, 
         _, section = listed
         other = section.get('other_fraction') or 0.0
         found['values'] = tuple(entry['value'] for entry in section['top_values'])
-        found['values_share'] = completeness.of(Share(1 - other, held_rows, half_unit(other, RATE_DIGITS)))
+        listed_share = Share(1 - other, held_rows, half_unit(other, RATE_DIGITS))
+        if recoded_values(dict(column)):
+            # The floor wrote the rows of the values the list leaves out as the modal value's, so its 1 states none of them.
+            listed_share = floored_share(1.0, held_rows, 0.0, facts.floor or DEFAULT_K_MIN, None, 'holding a value the list leaves out')
+        found['values_share'] = completeness.of(listed_share)
     if string.get('pattern') and stated('pattern'):
         found['pattern'] = string['pattern']
         found['pattern_share'] = completeness.of(pattern_share(string['pattern'], string.get('shapes'), held_rows, facts.seed))

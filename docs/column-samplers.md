@@ -98,11 +98,12 @@ linear as it is drawn. It counts the profile's values apart from those beyond th
 determinism fixture's `top_values_with_one_beyond_the_extremes` reads "4 top values and 1 beyond
 the extremes, the rest from quantiles with linear tails".
 
-On the NYC yellow taxi trips for February to April 2024, `payment_type` holds six values. Value 5
-sits on 2 rows, which would leave `other` under `k_min` rows, so value 3's 64,979 rows fold into
-it. The extremes are 0 and 4, so the sixth value is drawn as 5, on 2 of 10M generated rows.
-`boundary_adherence` stays at 1.0. The taxi figures on this page come from this round trip, with
-each column's values counted by Polars from `taxi-generated/`:
+A list stating no `other_fraction` draws no value beyond the extremes, because those rows come out
+of it. On the NYC yellow taxi trips for February to April 2024, `payment_type` holds six values.
+Value 5 sits on 2 rows, so the privacy floor recodes them as value 1, the modal value. Value 3 stays
+listed on its 64,979 rows, and the generator draws the five listed values alone. The taxi figures on
+this page come from this round trip, with each column's values counted by Polars from
+`taxi-generated/`:
 
 ```bash
 doppeldata profile create yellow_tripdata_2024-02.parquet yellow_tripdata_2024-03.parquet \

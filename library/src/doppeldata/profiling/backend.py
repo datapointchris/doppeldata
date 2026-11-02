@@ -9,6 +9,7 @@ from typing import Any
 from typing import Protocol
 
 from doppeldata.profiling.expression_rule import ExpressionCandidate
+from doppeldata.profiling.recorded_counts import Recode
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.statistic_catalog import FrequencyKey
 from doppeldata.published_schemas import published_enum
@@ -287,6 +288,10 @@ class Backend(Protocol):
 
     def parse(self, table: Table, types: dict[str, ParsedType]) -> Table:
         """The text table with each named column parsed as its type. A value that does not parse becomes null."""
+        ...
+
+    def recoded(self, table: Table, recodes: dict[str, Recode]) -> Table:
+        """The table with each named column's recoded values rewritten as its modal value, at the column's own type."""
         ...
 
     def rank_correlations(self, table: Table, pairs: list[tuple[str, str]]) -> list[tuple[float | None, int]]:

@@ -47,6 +47,7 @@ from doppeldata.profile_comparison.metrics import Compared
 from doppeldata.profile_comparison.metrics import Document
 from doppeldata.profile_comparison.metrics import Thresholded
 from doppeldata.profile_comparison.metrics import Unmeasured
+from doppeldata.profile_comparison.metrics import drawn_distinct
 from doppeldata.profile_comparison.metrics import source_plan
 from doppeldata.profile_comparison.real_data_scores import DEFAULT_SAMPLE_ROWS
 from doppeldata.profile_comparison.reports import BundleCheckReport
@@ -299,7 +300,7 @@ def checked_table(
     fingerprint = (observed.get('generated') or {}).get('source_fingerprint')
     # A check vouches for the data, so a statistic the profile states and the data cannot supply fails.
     metrics = uncompared_malformed_rates(
-        measured(source, with_conditionals(observed, unfloored), thresholds, unmeasured_passes=False), applied
+        measured(drawn_distinct(source), with_conditionals(observed, unfloored), thresholds, unmeasured_passes=False), applied
     )
     against_scored = None
     if real is not None:

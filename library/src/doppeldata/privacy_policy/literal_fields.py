@@ -93,7 +93,8 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
     # An expression names columns and holds no data value, so only a timedelta's lag is read.
     | {'missing_token_fractions': FieldKind.MISSING_TOKENS, 'derived': FieldKind.LAG},
     'BooleanStats': {'true_fraction': FieldKind.BOOLEAN},
-    # `other_fraction` and `overflow` count what a top-value list leaves out, so they are read as part of it.
+    # `other_fraction`, `overflow` and `recoded_values` count what a top-value list leaves out, so they are read as part
+    # of it.
     'NumericStats': dict.fromkeys(
         (
             'integral',
@@ -104,6 +105,7 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
             'other_fraction',
             'overflow',
             'precision',
+            'recoded_values',
             'scale',
             'skew',
             'std',
@@ -118,7 +120,9 @@ FIELD_KINDS: dict[str, dict[str, FieldKind | None]] = {
         'sequence': FieldKind.SEQUENCE,
         'top_values': FieldKind.TOP_VALUES,
     },
-    'StringStats': dict.fromkeys(('case_fractions', 'charset', 'length', 'other_fraction', 'overflow', 'whitespace_edge_fraction'))
+    'StringStats': dict.fromkeys(
+        ('case_fractions', 'charset', 'length', 'other_fraction', 'overflow', 'recoded_values', 'whitespace_edge_fraction')
+    )
     | {'top_values': FieldKind.TOP_VALUES, 'prefixes': FieldKind.PREFIXES, 'shapes': FieldKind.SHAPES, 'pattern': FieldKind.PATTERN},
     'TemporalStats': dict.fromkeys(('format', 'gap_fraction', 'timezone'))
     | {

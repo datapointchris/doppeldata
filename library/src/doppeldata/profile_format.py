@@ -604,6 +604,13 @@ def listed_section(column: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
+def recoded_values(column: dict[str, Any]) -> int:
+    """How many values a column holds beyond its list that the privacy floor rewrote as the list's most held value, or
+    0. A list stating no other share holds every value only where this is 0."""
+    listing = listed_section(column)
+    return (listing[1].get('recoded_values') or 0) if listing else 0
+
+
 def described_rows(document: dict[str, Any]) -> int | None:
     """The rows a profile's rates are shares of: those its sample read, or else every row."""
     sample = (document.get('generated') or {}).get('sample') or {}

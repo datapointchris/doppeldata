@@ -21,6 +21,7 @@ from doppeldata.profile_format import described_rows
 from doppeldata.profile_format import engine_plan
 from doppeldata.profile_format import listed_section
 from doppeldata.profile_format import quantile_level
+from doppeldata.profile_format import recoded_values
 
 Document = dict[str, Any]
 Column = dict[str, Any]
@@ -329,6 +330,25 @@ def distinct_ratio_change(source: Column, observed: Column) -> Compared | Unmeas
     low, high = distinct_ratio_range(ours['approx_values'], a, theirs['approx_values'] / b)
     outside = (low - b) / low if b < low else (b - high) / high if b > high else 0.0
     return Compared(outside, a, b)
+
+
+def drawn_distinct(document: Document) -> Document:
+    """`document` with each recoded column's distinct count stated as the values its generator draws.
+
+    The privacy floor rewrites a remainder of fewer than k_min rows as the modal value, so data generated from the list
+    holds only the values it lists, and no other share. A diff of two profiles of data reads each at its own count.
+    """
+    columns = []
+    for column in document.get('columns') or []:
+        listing = listed_section(column)
+        if listing and recoded_values(column):
+            distinct = column['distinct']
+            listed = len(listing[1]['top_values'])
+            column = column | {
+                'distinct': distinct | {'approx_values': listed, 'ratio': distinct['ratio'] * listed / distinct['approx_values']}
+            }
+        columns.append(column)
+    return document | {'columns': columns}
 
 
 def distinct_ratio_range(count: int, ratio: float, rows: float) -> tuple[float, float]:

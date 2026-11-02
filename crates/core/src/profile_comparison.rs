@@ -167,7 +167,9 @@ pub struct MetricResult {
     /// and `bound` say whether it meets.
     pub decides: bool,
     /// The statistic the metric compares, as the source profile holds it, or the real data for a
-    /// score against it: A's, in a diff.
+    /// score against it: A's, in a diff. A check counts a column's distinct values as those its
+    /// list holds where the list states `recoded_values`, because data generated from it holds
+    /// no others.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected: Option<f64>,
     /// The same statistic in the data checked: B's, in a diff.

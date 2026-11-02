@@ -121,7 +121,7 @@
           "type": "boolean"
         },
         "expected": {
-          "description": "The statistic the metric compares, as the source profile holds it, or the real data for a\nscore against it: A's, in a diff.",
+          "description": "The statistic the metric compares, as the source profile holds it, or the real data for a\nscore against it: A's, in a diff. A check counts a column's distinct values as those its\nlist holds where the list states `recoded_values`, because data generated from it holds\nno others.",
           "type": [
             "number",
             "null"

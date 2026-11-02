@@ -1,5 +1,7 @@
 """How a count of rows is written into a profile: as a rate to a few significant digits, and only where k_min rows hold it."""
 
+import dataclasses as dc
+from collections.abc import Callable
 from typing import Any
 
 from doppeldata.profile_format import LARGEST_EXACT_INTEGER
@@ -12,15 +14,48 @@ NUMERIC_TOP_VALUES_THRESHOLD = 1_000
 RATE_DIGITS = 4
 
 
-def kept_values(counted: list[tuple[Any, int]], values: int, k_min: int) -> tuple[list[tuple[Any, int]], int]:
-    """The values at least k_min rows hold, and the rows of the rest, which are also never 1 to k_min - 1."""
+@dc.dataclass(frozen=True)
+class Recode:
+    """A listed column's values held by fewer than k_min rows altogether, and the modal value each is rewritten as."""
+
+    values: tuple[Any, ...]
+    modal: Any
+
+
+@dc.dataclass(frozen=True)
+class FlooredValues:
+    """The values a list keeps with the rows each holds, the rows of every other value, never 1 to k_min - 1, and the
+    recode that rewrote a smaller remainder, if one did."""
+
+    kept: list[tuple[Any, int]]
+    other: int
+    recode: Recode | None = None
+
+
+def floored_values(
+    counted: list[tuple[Any, int]], values: int, k_min: int, most_held: Callable[[int], list[tuple[Any, int]]] | None = None
+) -> FlooredValues:
+    """The values of `counted` at least k_min rows hold, and the rows of the rest.
+
+    A rest of 1 to k_min - 1 rows is never stated. Where `most_held`, the counts of the column's values most held first,
+    as many as asked, names every value of it, its rows join the most held kept value, the first where several tie.
+    That is global recoding, which the caller applies to the rows. Otherwise the least held kept value folds into the
+    rest, the last where several tie, until it holds k_min rows.
+    """
     kept = [(value, count) for value, count in counted if count >= k_min]
     other = values - sum(count for _, count in kept)
+    if kept and 0 < other < k_min and most_held is not None:
+        held = {value for value, _ in kept}
+        # A rest under k_min rows holds under k_min values, so the values most held past those kept name all of it.
+        rest = [(value, count) for value, count in most_held(len(kept) + k_min - 1) if value not in held]
+        if sum(count for _, count in rest) == other:
+            modal = max(range(len(kept)), key=lambda at: (kept[at][1], -at))
+            kept[modal] = (kept[modal][0], kept[modal][1] + other)
+            return FlooredValues(kept, 0, Recode(tuple(value for value, _ in rest), kept[modal][0]))
     while kept and 0 < other < k_min:
-        # The least held value folds in, and the last of them where several tie.
         smallest = min(range(len(kept)), key=lambda at: (kept[at][1], -at))
         other += kept.pop(smallest)[1]
-    return kept, other
+    return FlooredValues(kept, other)
 
 
 def rate(count: int, total: int) -> float:

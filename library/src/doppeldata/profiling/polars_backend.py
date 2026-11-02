@@ -35,6 +35,7 @@ from doppeldata.profiling.expression_rule import ExpressionCandidate
 from doppeldata.profiling.expression_rule import counted_rows
 from doppeldata.profiling.first_blocks import FIRST_BLOCK_BYTES
 from doppeldata.profiling.first_blocks import first_block
+from doppeldata.profiling.recorded_counts import Recode
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
 from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT
@@ -349,6 +350,16 @@ class PolarsBackend:
 
     def parse(self, table: pl.LazyFrame, types: dict[str, ParsedType]) -> pl.LazyFrame:
         return table.with_columns(parsed(pl.col(name), parsed_type).alias(name) for name, parsed_type in types.items())
+
+    def recoded(self, table: pl.LazyFrame, recodes: dict[str, Recode]) -> pl.LazyFrame:
+        dtypes = dict(table.collect_schema())
+        return table.with_columns(
+            pl.when(pl.col(name).is_in(pl.Series(recode.values, dtype=dtypes[name]).implode()))
+            .then(pl.lit(recode.modal, dtype=dtypes[name]))
+            .otherwise(pl.col(name))
+            .alias(name)
+            for name, recode in recodes.items()
+        )
 
     def average_ranks(self, table: pl.LazyFrame, names: list[str]) -> list[pl.Expr]:
         """Each named column's values as their average ranks over its own values, a null left null, aliased `r0`, `r1`

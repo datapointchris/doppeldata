@@ -781,10 +781,14 @@ pub struct NumericStats {
     pub monotonic: Option<Monotonic>,
     pub sequence: Option<Sequence>,
     /// Values at least `k_min` rows hold, in a column with few distinct values that is not an
-    /// identifier.
+    /// identifier. Every statistic counts a value `recoded_values` names as the most held of them.
     pub top_values: Option<Vec<NumericTopValue>>,
-    /// The share of values outside `top_values`.
+    /// The share of values outside `top_values`. The values `recoded_values` counts are not in it.
     pub other_fraction: Option<Rate>,
+    /// How many values the column holds beyond `top_values`, on fewer than `k_min` rows together,
+    /// which the profiler rewrote as the most held listed value before counting any statistic.
+    /// Absent where it rewrote none.
+    pub recoded_values: Option<u64>,
     /// Written when the value list was frozen from an earlier profile.
     pub overflow: Option<ValueOverflow>,
 }
@@ -901,10 +905,16 @@ pub struct StringStats {
     pub shapes: Option<Vec<Shape>>,
     /// A generalized regular expression, never an alternation of literals.
     pub pattern: Option<String>,
-    /// Values at least `k_min` rows hold, in a column that is not an identifier.
+    /// Values at least `k_min` rows hold, in a column that is not an identifier. Every statistic
+    /// counts a value `recoded_values` names as the most held of them.
     pub top_values: Option<Vec<TopValue>>,
-    /// The share of rows holding a value outside `top_values`.
+    /// The share of rows holding a value outside `top_values`. The values `recoded_values` counts
+    /// are not in it.
     pub other_fraction: Option<Rate>,
+    /// How many values the column holds beyond `top_values`, on fewer than `k_min` rows together,
+    /// which the profiler rewrote as the most held listed value before counting any statistic.
+    /// Absent where it rewrote none.
+    pub recoded_values: Option<u64>,
     /// The values' leading characters, counted in place of `top_values`, as a policy keeps a ZIP
     /// code's first three digits.
     pub prefixes: Option<Prefixes>,

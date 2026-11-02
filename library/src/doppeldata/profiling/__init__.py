@@ -447,7 +447,10 @@ def profiled_tables(
                 frozen=frozen,
                 type_mix_columns=type_mix_columns,
             )
-        members = [foreign_keys.BundleMember(name, table.table, table.specs, table.document) for name, table in profiled.items()]
+        members = [
+            foreign_keys.BundleMember(name, table.every_row, table.every_row_recoded, table.specs, table.document)
+            for name, table in profiled.items()
+        ]
         relationships = foreign_keys.relationships(backend, members, k_min) if related else foreign_keys.FoundRelationships()
     profiles = {name: Profile(table.document) for name, table in profiled.items()}
     return profiles, relationships, {name: table.conditionals_without_floor for name, table in profiled.items()}

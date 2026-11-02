@@ -137,6 +137,19 @@ toward either reading passes, and only a count outside both fails. A few-valued 
 falls near zero at a small n: a 5-value column in 100,000 rows, checked at 2,000, passes holding
 anywhere from 0.1 to 5 values. `tvd` is what checks its values there.
 
+`data check` reads a list stating `recoded_values` at the values it lists. The privacy floor recoded
+the rest, fewer than `k_min` rows together, into the modal value, so data generated from the list
+holds no others. So D and the source's ratio are the listed values', and so is the report's
+`expected`. `profile diff` compares two profiles of data, so it reads each at its own count, and two
+profiles of one source differ by 0. April 2024's taxi `congestion_surcharge` lists 3 of its 5
+values, and the check expects 3:
+
+```bash
+doppeldata profile create yellow_tripdata_2024-04.parquet --out april.profile.yaml
+doppeldata data generate april.profile.yaml --rows 3514289 --seed 0 --out april-generated/
+doppeldata data check april.profile.yaml april-generated/
+```
+
 Every kind of column is measured. A float column whose source holds cents, generated as continuous
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.
