@@ -24,12 +24,12 @@ def test_a_reviewer_changing_the_csv_delimiter_gets_one_dialect_change_at_its_wr
 def test_a_two_value_column_holding_one_value_more_or_less_passes_its_distinct_ratio_and_two_more_fails_it():
     earlier = Profile.load(ORDERS)
 
-    def region_delta(values: int) -> tuple[float, bool]:
+    def region_delta(values: int) -> tuple[float, float, bool]:
         document = copy.deepcopy(earlier.to_plain())
         region = next(column for column in document['columns'] if column['name'] == 'region')
         region['distinct'] = {'approx_values': values, 'ratio': values / document['dataset']['rows']}
         report = json.loads(diff(earlier, Profile(document)).to_json())
         row = next(row for row in report['metrics'] if row['metric'] == 'distinct_ratio_delta' and row['column'] == 'region')
-        return row['value'], row['passed']
+        return row['value'], row['threshold'], row['passed']
 
-    assert [region_delta(values) for values in (1, 3, 4)] == [(0.0, True), (0.0, True), (1.0, False)]
+    assert [region_delta(values) for values in (1, 3, 4)] == [(0.5, 0.75, True), (0.5, 0.75, True), (1.0, 0.75, False)]

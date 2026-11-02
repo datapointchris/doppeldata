@@ -537,7 +537,8 @@ def metric_row(
     relationship: str | None = None,
     decides: bool = True,
 ) -> MetricResult:
-    """One measure's row at `threshold`, its value written to `REPORT_DIGITS`. A row that decides nothing passes."""
+    """One measure's row at `threshold`, moved as `Bound.held_to` says, with its value and threshold written to
+    `REPORT_DIGITS`. A row that decides nothing passes."""
     if isinstance(compared, Unmeasured):
         passed = unmeasured_passes or not decides
         return MetricResult(
@@ -555,12 +556,13 @@ def metric_row(
             decides=decides,
         )
     written = significant(compared.value)
-    passed = measure.passes(written, threshold) or not decides
+    held_to = significant(measure.bound.held_to(threshold, compared))
+    passed = measure.passes(written, held_to) or not decides
     return MetricResult(
         measure.name,
         column,
         written,
-        threshold,
+        held_to,
         measure.bound,
         passed,
         expected=compared.expected,

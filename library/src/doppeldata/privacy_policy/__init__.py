@@ -6,6 +6,7 @@ from doppeldata.privacy_policy.column_treatment import DEFAULT_K_MIN
 from doppeldata.privacy_policy.column_treatment import ColumnFacts
 from doppeldata.privacy_policy.column_treatment import Policy
 from doppeldata.privacy_policy.column_treatment import Treatment
+from doppeldata.privacy_policy.column_treatment import applied_k_min
 from doppeldata.privacy_policy.column_treatment import column_treatment
 from doppeldata.privacy_policy.column_treatment import restricted_zip_prefixes
 from doppeldata.privacy_policy.file_check import ProfileFileCheck
@@ -29,6 +30,7 @@ __all__ = [
     'TableCheck',
     'Treatment',
     'Violation',
+    'applied_k_min',
     'audited_relationships',
     'column_treatment',
     'file_checks',

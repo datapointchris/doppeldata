@@ -113,15 +113,16 @@ other profile's histogram.
 
 - An overflow of 1 to `k_min − 1` rows is written as 0, so adherence overstates by at most
   `2 · (k_min − 1)` rows.
-- **The check credits the share of values the source's own extremes leave beyond them.** The
-  privacy floor puts a trimmed extreme at rank `k_min` from its end. So up to `k_min − 1` of the
-  source's values lie beyond each one by construction, and `exact` extremes leave none. A check
-  cannot ask for more adherence than the profile's construction allows. So the value is
-  `min(1, adherence + 2 · (k_min − 1) / values)`, over the source's values not null, and `expected`
-  reports `1 −` that credit.
+- **The threshold is lowered by the share of values the source's own extremes leave beyond
+  them.** The privacy floor puts a trimmed extreme at rank `k_min` from its end. So up to
+  `k_min − 1` of the source's values lie beyond each one by construction. `exact` extremes leave
+  none, and neither does a profile under policy `none`, whose extremes are the minimum and maximum.
+  A check cannot ask for more adherence than the profile's construction allows. So the row is
+  judged at `threshold − 2 · (k_min − 1) / values`, over the source's values not null, and reports
+  that threshold. Its value stays the share inside.
 - **The credit shrinks with the source's rows.** At the default `k_min` of 11 it is 0.1 at 200
-  values, 0.01 at 2,000, and 6 in a million at 3.4M. The bundled `orders` example profiled at 200
-  rows holds 4% of `quantity` beyond its own extremes, where the bound asks for 99% inside.
+  values, 0.01 at 2,000, and 6 in a million at 3.4M. A 200-row source can hold several percent of a
+  column beyond its own trimmed extremes, more than the 1% the default threshold allows.
 - A histogram not counted against the source's outer edges carries no `overflow` that
   measures them, so the column's `boundary_adherence` is unmeasured.
 
@@ -140,11 +141,12 @@ checked:
 - **The value is how far the observed ratio falls outside that range**, relative to its nearer end,
   and 0 inside it. At n = N both ends are the source's ratio, so the value is the relative change
   in ratio.
-- **A count within one value of the nearer end's whole count is 0 too.** A distinct count is whole.
-  A relative bound of 0.1 on a count under 10 is finer than one value, so it would forbid any miss,
-  and no independent draw over a share of a few rows promises an exact count. So the bound is the
-  larger of the threshold and one value. The end is rounded to its nearest whole count first,
-  because a stated ratio carries four significant digits.
+- **The threshold is never finer than one value.** A distinct count is whole. A relative bound of
+  0.1 on a count under 10 is finer than one value, so it would forbid any miss, and no independent
+  draw over a share of a few rows promises an exact count. So the row is judged at the larger of
+  the threshold and 1.5 values of the nearer end's count, and reports that threshold. The half
+  value is there because the end's count need not be whole, as a stated ratio carries four
+  significant digits.
 - **That lets a column under 10 values miss one entirely.** `tvd` and the listed shares still catch
   a missing value holding a real share, so only a value of a few rows slips past both.
 
@@ -389,7 +391,7 @@ Three scores sit beside a profile metric of a like name, and compare another thi
 | --- | --- | --- |
 | `ks`, at most | `KSComplement`, at least | 1 minus the Kolmogorov-Smirnov distance between the two samples' values. `ks` reads the profile's quantiles. |
 | `tvd`, at most | `TVComplement`, at least | 1 minus the total variation distance between the two samples' category shares. `tvd` reads the profile's value list. |
-| `boundary_adherence`, at least | `BoundaryAdherence`, at least | The share of the data's values inside the real sample's minimum and maximum. `boundary_adherence` reads the profile's outer histogram edges, and credits the values its trimmed extremes leave beyond them. |
+| `boundary_adherence`, at least | `BoundaryAdherence`, at least | The share of the data's values inside the real sample's minimum and maximum. `boundary_adherence` reads the profile's outer histogram edges, and lowers its threshold by the share its trimmed extremes leave beyond them. |
 
 - **REAL_DATA is read as DATA is**, through the profiler's readers. So `--against` reaches every source
   `profile create` reaches, and a CSV or JSON side is typed as `profile create` types it.

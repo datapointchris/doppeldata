@@ -56,13 +56,16 @@ $ doppeldata data check orders.profile.yaml generated/
 ...
 | distinct_ratio_delta | customer_id | 0.0037805 | ≤ 0.1 | 0.6746 | 0.6772 | yes |
 ...
-| boundary_adherence | amount | 1 | ≥ 0.99 | 0.999 | 1 | yes |
+| boundary_adherence | amount | 1 | ≥ 0.989 |  |  | yes |
 ...
 | files_delta |  | 0 | ≤ 0.1 | 1 | 1 | yes |
 | rows_per_file_delta |  | 0 | ≤ 0.1 | 20000 | 20000 | yes |
 ```
 
 - **`Expected` and `Observed` are the two profiles' values** where a metric compares one value.
+- **`Threshold` is the bound the row was judged at.** `boundary_adherence`'s is lowered by the
+  share the source's trimmed extremes leave beyond them, here 20 of 20,000 values. A
+  `distinct_ratio_delta` threshold is never finer than one value of the count.
 - **`data check --help` lists every metric with its summary and default threshold.** A metric
   appears where the profile states what it compares. A profile with a Spearman pair gets
   `correlation_max_abs_diff`, as [Read and edit how columns depend on each

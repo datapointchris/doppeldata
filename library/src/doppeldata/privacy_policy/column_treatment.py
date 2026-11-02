@@ -97,6 +97,12 @@ class Policy(enum.StrEnum):
         return None if self is Policy.NONE else given or DEFAULT_K_MIN
 
 
+def applied_k_min(privacy: dict[str, Any]) -> int:
+    """The rank from each end a profile's `privacy` section says its floor trimmed and folded at: its policy's k_min, or
+    1 under `none`, which keeps every value."""
+    return Policy(privacy.get('policy') or Policy.DEFAULT).k_min(privacy.get('k_min')) or 1
+
+
 class Treatment(enum.Enum):
     """The rule a column's literals are held to. Each but `AT_K_MIN` withholds some, with its `privacy.suppressed` reason."""
 
