@@ -23,6 +23,53 @@ each. A column's nulls are dropped first, so a column with nulls is validated on
 - **A column with fewer than `k_min` sampled values is left untyped.**
 - **Typing changes no statistic.** A typed column's values stay in the profile as profiled.
 
+## Against an earlier profile, a typing changes only where a share clears its cut by three standard errors
+
+`data check` profiles DATA against PROFILE, and `profile create --edges-from` profiles against an
+earlier file. A validator's share is measured on a sample, so a share near a cut lands on either
+side by chance. The CMS claims sample's `HCPCS_CD_1` holds 94.53% five-digit codes, a ZIP code's
+shape. Its source sample held 94.41%, and a sample of data generated from it 95.03%. A plain cut
+typed the generated side alone as `us_zip`, and the check failed it. A hard cut decided by a
+sample needs the allowance for sampling that `tvd` and `null_fraction_delta` already subtract.
+
+So typing against an earlier profile is a Schmitt trigger, a cut with hysteresis. At 10,000
+values a side and the 0.95 cut, a column's five-digit share types it so:
+
+```text
+  share                  0.9408     0.95     0.9592
+                            │         │         │
+  earlier us_zip     untyped│  us_zip, held     │ us_zip
+  earlier untyped    untyped│  untyped, held    │ us_zip
+  no earlier profile untyped│ untyped │ us_zip  │ us_zip
+```
+
+- **The cut falls by a margin for the type the earlier profile gave, and rises by as much for every
+  other type.** A column it left untyped takes a type only past the cut plus the margin. A typed
+  column keeps its type down to the cut less the margin.
+- **The margin is `HELD_TYPING_STANDARD_ERRORS` standard errors of the gap between two samples'
+  shares.** That is `3 · √(c(1 − c) · (1/n_a + 1/n_b))` at the cut c, either `ASSIGN_RATE` or
+  `HINTED_ASSIGN_RATE`. n_b is the values sampled now. n_a is the earlier profile's: its rows, or
+  `VALUE_SAMPLE_ROWS` where it holds more, less the column's nulls. At 10,000 values each and the
+  0.95 cut, the margin is 0.0092. Three standard errors is what the repo's other sampling
+  tolerances hold, as `CORRELATION_STANDARD_ERRORS` does.
+- **The gap is taken at the cut.** The earlier profile states only which side of the cut its share
+  fell. A share at the cut is the one sampling carries across it most easily.
+- **A profile stating no rows adds no n_a term.** Its type is a parameter, not a measurement.
+- **A column of few sampled values never takes a new type.** At the 0.95 cut, the cut plus the
+  margin passes 1 below about 340 values a side. A sample that small cannot tell 95% from all of
+  them.
+- **Every rule the type decides follows it.** The healthcare policy keeps a ZIP column's
+  three-digit prefixes only where it is typed `us_zip`. So a column held untyped counts its whole
+  values, as its source did, and `distinct_ratio_delta` compares like with like.
+- **A profile made with no earlier profile types at the plain cut**, so a source's own typing
+  leans on nothing.
+- **An info record names each column the margin held**, with its share and the margin. `data check
+  -v` prints it.
+
+*Rejected:* moving `ASSIGN_RATE`. The edge moves to whichever column sits near the new cut.
+
+*Rejected:* exempting code columns. Any code column near a validator's cut flips the same way.
+
 ## A name hint is a run of the column name's words
 
 A column name splits into lower-case words at underscores, hyphens, digits and case changes. So

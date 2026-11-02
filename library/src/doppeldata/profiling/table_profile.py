@@ -165,8 +165,9 @@ Stat = Callable[[str], Any]
 
 @dc.dataclass(frozen=True)
 class FrozenLayout:
-    """An earlier profile's histogram edges and value lists, by column, which a re-profile counts its rows against, and
-    the pairs of columns it states a dependence between, which a re-profile states again wherever its floors allow."""
+    """An earlier profile's histogram edges and value lists, by column, which a re-profile counts its rows against, the
+    pairs of columns it states a dependence between, which a re-profile states again wherever its floors allow, and
+    each column's semantic type, which a re-profile keeps unless its sample clearly says otherwise."""
 
     # Each numeric column's histogram kind and edges.
     histograms: dict[str, tuple[str, tuple[float, ...]]] = dc.field(default_factory=dict)
@@ -178,14 +179,19 @@ class FrozenLayout:
     dependence_sample_rows: int = FIT_SAMPLE_ROWS
     # Whether a check measures how far one row moves each Spearman correlation it states again, which no other re-profile does.
     spearman_influence: bool = False
+    typings: dict[str, 'FrozenTyping'] = dc.field(default_factory=dict)
 
     @classmethod
     def of(cls, document: dict[str, Any], *, for_check: bool = False, dependence_sample_rows: int = FIT_SAMPLE_ROWS) -> 'FrozenLayout':
         """The layout `document` states. `for_check` adds what only a check measures: its conditional tables counted
         without a floor, and the influence of a row on each Spearman correlation."""
-        histograms, values = {}, {}
+        histograms, values, typings = {}, {}, {}
         described = described_rows(document)
+        # The detectors read a seeded sample of at most VALUE_SAMPLE_ROWS of the rows a profile describes.
+        typed_rows = min(VALUE_SAMPLE_ROWS, described) if described else None
         for column in document.get('columns') or []:
+            sampled = round(typed_rows * (1 - (column.get('null_fraction') or 0.0))) if typed_rows else None
+            typings[column['name']] = FrozenTyping((column.get('semantic') or {}).get('type'), sampled)
             histogram = (column.get('numeric') or {}).get('histogram')
             if histogram and len(histogram['edges']) > 1:
                 histograms[column['name']] = (histogram['kind'], tuple(histogram['edges']))
@@ -199,7 +205,7 @@ class FrozenLayout:
                 baseline = max(0.0, other - drifted / held) if held else other
                 values[column['name']] = FrozenValues(tuple(entry['value'] for entry in section['top_values']), baseline, section_name)
         conditionals = FrozenConditional.all_in(document) if for_check else ()
-        return cls(histograms, values, FrozenPairs.of(document), conditionals, dependence_sample_rows, for_check)
+        return cls(histograms, values, FrozenPairs.of(document), conditionals, dependence_sample_rows, for_check, typings)
 
 
 def relisted_columns(earlier: dict[str, Any], now: dict[str, Any]) -> list[str]:
@@ -222,6 +228,15 @@ class FrozenValues:
     values: tuple[Any, ...]
     baseline_other_rate: float
     section: str
+
+
+@dc.dataclass(frozen=True)
+class FrozenTyping:
+    """The semantic type an earlier profile gave a column, None where it left it untyped, and about how many sampled
+    values decided it, None where the profile states no rows, as one expanded from a dict of fakes does."""
+
+    type: str | None
+    sampled: int | None
 
 
 @dc.dataclass(frozen=True)
@@ -463,7 +478,7 @@ def profile_columns(
     detected = detection.detected_columns(specs, packs)
     value_sample = backend.sample(table, VALUE_SAMPLE_ROWS, SAMPLE_SEED) if detected else None
     patterns = generalized_patterns(value_sample, shapes, stats, described, k_min)
-    typings = detection.column_typings(value_sample, detected, patterns, k_min, settings.code_lists) if value_sample else {}
+    typings = detection.column_typings(value_sample, detected, patterns, k_min, settings.code_lists, layout.typings) if value_sample else {}
     treatments = {spec.name: column_treatment(column_facts(spec, typings.get(spec.name)), settings.policy) for spec in specs}
     binnings = {}
     for spec in specs:

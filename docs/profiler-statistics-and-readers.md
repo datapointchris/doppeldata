@@ -188,6 +188,10 @@ parameters write two profiles, and those generate different tails.
   `new_value_rows` 500 of 2,000 rows, and `profile diff` reports it.
 - **Two profiles of one table then compare bin for bin**, which the round-trip check and drift
   detection read. Rebinning stays explicit, by profiling again without `edges_from`.
+- **Each column keeps the earlier profile's semantic type unless its sample clearly says
+  otherwise.** A validator's share must clear its cut by three standard errors of two samples'
+  gap to change it. [How a column is given a semantic type](semantic-types-and-detector-packs.md)
+  gives the margin.
 - **Every pair the earlier profile states is stated again, however weak, where `k_min` allows.**
   That covers its correlations, correlation ratios, conditional tables, conditional quantiles and
   rates. So `data

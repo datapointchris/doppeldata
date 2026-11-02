@@ -24,7 +24,9 @@ report.drifted                          # True
 ## Profile the later data against the earlier profile's edges
 
 `--edges-from A` counts the later data against A's histogram edges and value lists, so each bin
-and value compares one for one. Its overflow counts are what `boundary_adherence` reads.
+and value compares one for one. Its overflow counts are what `boundary_adherence` reads. Each
+column keeps A's semantic type unless a validator's share clears its cut by three standard
+errors, so a share near the cut does not report a type change by chance.
 
 ```text
 $ doppeldata profile create s3://your-bucket/orders-november/ --aws-profile analytics --edges-from october.profile.yaml --out november.profile.yaml

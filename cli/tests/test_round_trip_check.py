@@ -100,6 +100,39 @@ def test_a_copula_pair_moved_past_the_threshold_fails_it_and_passes_where_its_pr
     assert [judged(sample_rows) for sample_rows in (None, 200)] == [(False, False), (True, True)]
 
 
+def item_codes(five_digit: int) -> pa.Table:
+    """10,000 codes, `five_digit` of them five digits, a ZIP code's shape, and the rest a HCPCS Level II code's."""
+    draw = random.Random(7)
+    codes = [f'{draw.randrange(10**5):05d}' for _ in range(five_digit)]
+    codes += [f'G{draw.randrange(10**4):04d}' for _ in range(10_000 - five_digit)]
+    draw.shuffle(codes)
+    return pa.table({'item_code': codes})
+
+
+def retypings(report: sd.CheckReport) -> list[tuple[str | None, str | None, bool]]:
+    return [
+        (change.expected, change.observed, change.passed) for change in report.changes if change.change.value == 'semantic_type_changed'
+    ]
+
+
+def test_a_share_sampling_carries_across_the_type_cut_keeps_the_profiles_typing_and_one_clear_of_it_fails_the_check():
+    """A ZIP code's validator types at 95% of the sampled values, and two samples of 10,000 at that share lie about 0.3%
+    apart, so 94.6% and 95.3% hold one typing."""
+    untyped, typed = sd.profile(item_codes(9_460)), sd.profile(item_codes(9_900))
+    assert [
+        (column.get('semantic') or {}).get('type') for column in (untyped.to_plain()['columns'][0], typed.to_plain()['columns'][0])
+    ] == [
+        None,
+        'us_zip',
+    ]
+    assert sd.profile(item_codes(9_530)).to_plain()['columns'][0]['semantic']['type'] == 'us_zip'
+
+    assert retypings(sd.check(untyped, item_codes(9_530))) == []
+    assert retypings(sd.check(typed, item_codes(9_460))) == []
+    assert retypings(sd.check(untyped, item_codes(9_900))) == [(None, 'us_zip', False)]
+    assert retypings(sd.check(typed, item_codes(9_000))) == [('us_zip', None, False)]
+
+
 def test_the_orders_example_generated_at_a_tenth_of_its_rows_keeps_every_quantity_and_passes_its_check():
     """`data generate orders --rows 10000`: `quantity` lists none of its 10 values, and a short run still draws them all."""
     profile = sd.Profile.example('orders')
