@@ -47,6 +47,7 @@ use crate::samplers::BlockPosition;
 use crate::samplers::ColumnPlan;
 use crate::samplers::ColumnSite;
 use crate::samplers::FollowingColumns;
+use crate::samplers::PlanContext;
 use crate::samplers::column_plan;
 use crate::scenario::Cdc;
 use crate::scenario::CdcStyle;
@@ -161,7 +162,11 @@ pub(crate) fn plan(op: &Cdc, planning: &Planning<'_>, columns: &[ColumnPlan], fo
     fixed.extend(primary.iter().filter(|name| **name != key).cloned());
     let profile_columns = planning.table.columns.as_deref().unwrap_or_default();
     let sampler_table = planning.sampler_table();
-    let context = planning.sampler_context(&sampler_table);
+    // An update draws a value for each change rather than for a row of the table, so it takes no row's band.
+    let context = PlanContext {
+        row_count: None,
+        ..planning.sampler_context(&sampler_table)
+    };
     let mut updatable = Vec::new();
     for (index, field) in planning.schema.fields().iter().enumerate() {
         let Some(column) = profile_columns

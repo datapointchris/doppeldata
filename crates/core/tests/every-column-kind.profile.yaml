@@ -175,10 +175,11 @@ columns:
       monotonic: decreasing
       quantiles: {p01: 1400, p50: 70000, p99: 138600}
       extremes: {low: 1, high: 140000}
-  # A thin lognormal tail holds too few cents for the ratio, so both tails mix in the straight line.
+  # A thin lognormal tail holds too few cents for the ratio, so both tails mix in the straight line,
+  # at the weight its source's 140,000 rows need whatever the rows drawn.
   - name: thin_fitted_tail_mixed_toward_straight
     physical_type: double
-    distinct: {ratio: 0.0145}
+    distinct: {approx_values: 2030, ratio: 0.0145}
     numeric:
       scale: 2
       quantiles: {p01: 3.98, p50: 8.0, p99: 16.1}

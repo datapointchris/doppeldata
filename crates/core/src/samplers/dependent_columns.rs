@@ -61,6 +61,7 @@ use super::numeric::NumericOutput;
 use super::numeric::Rounding;
 use super::numeric::bounded_cdf;
 use super::numeric::quantile_knots;
+use super::own_description;
 use super::ranked_marginal::LevelWarp;
 use super::ranked_marginal::RankedMarginal;
 use super::ranked_marginal::with_zero_share;
@@ -1047,6 +1048,7 @@ impl DependentColumns {
                 notes[member].push(format!("ranked with {} in a Gaussian copula{repaired}{beyond}", others.join(", ")));
             }
         }
+        let mut unbanded = Vec::new();
         for index in 0..profile.len() {
             let (copula, curves, zeros) = (membership[index], curves[index].take(), zeros[index].take());
             if copula.is_none() && curves.is_none() && zeros.is_none() {
@@ -1055,10 +1057,8 @@ impl DependentColumns {
             let ValueSampler::Numeric(sampler) = &planner.columns[index].values else {
                 unreachable!("a ranked column is numeric")
             };
-            // A ranked level is the copula's or the parent's, so no row takes a band of its own.
-            if let Some(bands) = &sampler.by_row {
-                let own = described[index].take().unwrap_or_else(|| planner.columns[index].sampler.clone());
-                described[index] = Some(own.replace(bands.describe(), ""));
+            if sampler.by_row.is_some() {
+                unbanded.push(index);
             }
             draws[index].values = Some(ValueDraw::Ranked(Box::new(RankedDraw {
                 copula,
@@ -1071,6 +1071,13 @@ impl DependentColumns {
         }
         let order = topological_order(&planner.children);
         drop(planner);
+        // A ranked level is the copula's or the parent's, so no row takes a band of its own.
+        for index in unbanded {
+            if let ValueSampler::Numeric(sampler) = &mut columns[index].values {
+                sampler.by_row = None;
+            }
+            columns[index].sampler = own_description(&profile[index], &columns[index].values);
+        }
         for ((column, described), notes) in columns.iter_mut().zip(described).zip(notes) {
             if let Some(described) = described {
                 column.sampler = described;

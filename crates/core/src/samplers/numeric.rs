@@ -237,7 +237,8 @@ pub(crate) fn numeric_cdf(
         _ = knots.insert(top_level, top_value);
         match reaches.and_then(|fit| Some((fit.name, lower_tail(fit, low, top_level, top_value, straight)?))) {
             Some((family, tail)) => {
-                shape.lower = Some(family);
+                // At weight 1 a tail spanning to its extreme is the straight line alone.
+                shape.lower = (straight < 1.0 || low.is_none()).then_some(family);
                 _ = knots.extend(tail);
             }
             None => _ = knots.insert(0.0, low.unwrap_or(top_value)),
@@ -248,7 +249,7 @@ pub(crate) fn numeric_cdf(
         let reaches = fit.filter(|fit| high.is_none_or(|high| fit.support().1 >= high));
         match reaches.and_then(|fit| Some((fit.name, upper_tail(fit, level, value, high, straight)?))) {
             Some((family, tail)) => {
-                shape.upper = Some(family);
+                shape.upper = (straight < 1.0 || high.is_none()).then_some(family);
                 _ = knots.extend(tail);
             }
             None => _ = knots.insert(1.0, high.unwrap_or(value)),

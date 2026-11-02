@@ -208,6 +208,26 @@ impl<'a> PlanContext<'a> {
         };
         Some(DistinctTarget { distinct, filled_rows })
     }
+
+    /// The target the source's own rows set, the one its profile measured: its ratio over the source's
+    /// rows, drawn in `filled_rows` scaled to them. `None` where the profile states no positive ratio,
+    /// nor its rows or a count to derive them from, or this run draws no rows.
+    fn source_distinct_target(&self, distinct: Option<&Distinct>, filled_rows: f64, reads: &mut FieldReads) -> Option<DistinctTarget> {
+        let distinct = distinct?;
+        let ratio = reads.read("distinct_ratio", "/distinct/ratio", distinct.ratio)?.0;
+        if ratio <= 0.0 || self.rows <= 0.0 {
+            return None;
+        }
+        let count = reads.read("approx_values", "/distinct/approx_values", distinct.approx_values);
+        let source_rows = self
+            .source_rows
+            .or(count.map(|count| count as f64 / ratio))
+            .filter(|&rows| rows > 0.0)?;
+        Some(DistinctTarget {
+            distinct: ratio * source_rows,
+            filled_rows: filled_rows * source_rows / self.rows,
+        })
+    }
 }
 
 /// Why a sampler cannot be built, before the column's place in the profile is known.
@@ -813,10 +833,7 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
         return Err(site.refuse_as(ColumnFault::NotGeneratedYet, "/missing_token_fractions")(message));
     }
     let nulls = Some(Bernoulli::new(null_share)).filter(|null| !null.never());
-    let mut sampler = describe(column, &values);
-    if column.missing_token_fractions.as_ref().is_some_and(|tokens| !tokens.is_empty()) {
-        sampler.push_str(", with missing-value tokens as text");
-    }
+    let sampler = own_description(column, &values);
     let read_fields = reads.pointers(&site.pointer);
     let kind = values.kind();
     let field = match &type_mix {
@@ -841,6 +858,15 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
 fn text_field(name: &str, nullable: bool, mix: &TypeMix) -> FieldRef {
     let metadata = std::collections::HashMap::from([(TYPE_MIX_FIELD_KEY.to_string(), raw_type_name(mix.own).to_string())]);
     Arc::new(Field::new(name, DataType::Utf8, nullable).with_metadata(metadata))
+}
+
+/// What a plan prints for `column` drawn through `values` alone, before any dependence draws it.
+pub(crate) fn own_description(column: &Column, values: &ValueSampler) -> String {
+    let mut sampler = describe(column, values);
+    if column.missing_token_fractions.as_ref().is_some_and(|tokens| !tokens.is_empty()) {
+        sampler.push_str(", with missing-value tokens as text");
+    }
+    sampler
 }
 
 /// What draws `column`'s values through `values`, in a few words a plan prints.
@@ -947,12 +973,12 @@ fn snake_case(name: &str) -> String {
 }
 
 /// The least weight of the straight line a numeric column's fitted tails mix in for its index to hold
-/// its distinct target, from `sampler_with` building the column at a weight. A profile's distinct
+/// `target`, from `sampler_with` building the column against `target` at a weight. A profile's distinct
 /// count is measured and its fit is modeled, so a tail too thin to hold the count gives way as far as
 /// the count needs. An index holds the count once its bands are no more than the rows drawing them.
 /// With more, it caps nothing, and the count follows where the rows land, which a copula or a
-/// parent's warp moves. 0 where the fit alone reaches the target or no tail is fitted, and 1 where
-/// no weight lets the index hold it.
+/// parent's warp moves. 0 where the fit alone reaches the target, no tail is fitted, or the straight
+/// line reaches no more values than the fit. 1 where no weight lets the index hold it.
 fn tail_straight_share(target: DistinctTarget, sampler_with: impl Fn(f64) -> Result<NumericSampler, PlanError>) -> Result<f64, PlanError> {
     let fitted = sampler_with(0.0)?;
     let (reach, wanted) = fitted.fresh_reach(target);
@@ -1051,17 +1077,22 @@ fn value_sampler(
             seed: context.seed,
             key: keys.index,
         });
-        let sampler_with = |straight: f64, reads: &mut FieldReads| {
+        let sampler_with = |straight: f64, target: Option<DistinctTarget>, placement: Option<RowPlacement>, reads: &mut FieldReads| {
             let curve = numeric::numeric_cdf(&stats, fit.as_ref(), straight, reads)
                 .map_err(site.refuse_as(ColumnFault::InvalidQuantiles, "/numeric"))?;
             NumericSampler::new(curve, &stats, output, target, source, placement, reads)
                 .map_err(site.refuse_as(ColumnFault::UnusableRates, "/numeric/top_values"))
         };
-        let straight = match target {
-            Some(target) => tail_straight_share(target, |straight| sampler_with(straight, &mut FieldReads::default()))?,
+        // The tail's weight is solved at the source's own rows, so its shape is the profile's whatever
+        // the rows a run draws.
+        let at_source = target.and(context.source_distinct_target(column.distinct.as_ref(), filled_rows, &mut FieldReads::default()));
+        let straight = match at_source.or(target) {
+            Some(at_source) => tail_straight_share(at_source, |straight| {
+                sampler_with(straight, Some(at_source), None, &mut FieldReads::default())
+            })?,
             None => 0.0,
         };
-        return Ok(ValueSampler::Numeric(sampler_with(straight, reads)?));
+        return Ok(ValueSampler::Numeric(sampler_with(straight, target, placement, reads)?));
     }
     if let Some(output) = TemporalOutput::from_type(&scalar) {
         let gap_days = || rng_for(context.seed, keys.gap_days, 0);
