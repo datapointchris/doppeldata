@@ -559,6 +559,8 @@ pub struct Correlation {
     pub b: String,
     pub method: CorrelationMethod,
     pub value: f64,
+    /// The sampled rows holding both columns, which the value was measured on.
+    pub sample_rows: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
@@ -567,6 +569,8 @@ pub struct CorrelationRatio {
     pub a: String,
     pub b: String,
     pub value: f64,
+    /// The sampled rows holding both columns, which the value was measured on.
+    pub sample_rows: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -621,12 +625,15 @@ pub struct ConditionalFractions {
     /// The share of rows where `column` is null, among the rows holding each value of `given`.
     pub null_fraction: Option<BTreeMap<String, Rate>>,
     /// Both fractions over every value of `given` that the two maps do not list.
-    pub other: Option<OtherFractions>,
+    pub other: Option<GivenGroupFractions>,
+    /// Both fractions over the rows where `given` is null.
+    pub given_null: Option<GivenGroupFractions>,
 }
 
+/// The zero and null fractions of `column` among one group of `given`'s rows.
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct OtherFractions {
+pub struct GivenGroupFractions {
     pub zero_fraction: Option<Rate>,
     pub null_fraction: Option<Rate>,
 }

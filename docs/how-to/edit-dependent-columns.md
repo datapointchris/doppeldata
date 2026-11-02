@@ -123,7 +123,7 @@ $ doppeldata data check checkouts.profile.yaml generated/
 0 of 38 metrics failed.
 ...
 | ks | total | 0.001164 | ≤ 0.05 |  |  | yes |
-| correlation_max_abs_diff | quantity, unit_price | 0.0022 | ≤ 0.05 | -0.4 | -0.4022 | yes |
+| correlation_worst_pair_change | quantity, unit_price | 0.0022 | ≤ 0.05 | -0.4 | -0.4022 | yes |
 | conditional_kl | channel, region | 0.00104539 | ≤ 0.05 |  |  | yes |
 ```
 
@@ -136,7 +136,7 @@ doppeldata: E-DATA-014: the data missed its profile on 1 of 38 metrics and 0 of 
 
 ```text
 | ks | total | 0.086973 | ≤ 0.05 |  |  | **no** |
-| correlation_max_abs_diff | quantity, unit_price | 0.0032 | ≤ 0.05 | -0.7 | -0.7032 | yes |
+| correlation_worst_pair_change | quantity, unit_price | 0.0032 | ≤ 0.05 | -0.7 | -0.7032 | yes |
 ```
 
 Edit the statistics of a column computed from the edited ones too, or read its failure as the

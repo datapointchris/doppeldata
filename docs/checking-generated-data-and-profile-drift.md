@@ -172,17 +172,47 @@ Every kind of column is measured. A float column whose source holds cents, gener
 values, shows nowhere else: its quantiles and histogram shares match. A date range collapsed to a
 few days shows here too.
 
-## `correlation_max_abs_diff` and `conditional_kl` measure the dependence the generator draws
+## `correlation_worst_pair_change` and `conditional_kl` measure the dependence the generator draws
 
 Both read the pairs PROFILE states. The check's profile freezes those pairs, so it states each
 one again however weak it measures. Each metric writes one row per copula group or conditional
 table, naming its columns in `column` and `paired_with`.
 
-- **`correlation_max_abs_diff` is the largest change in a Spearman correlation within one Gaussian
-  copula.** The library plans PROFILE through the engine, which names each group, so the metric
-  measures exactly the pairs the generator draws together. A Spearman pair outside every group,
-  such as one holding a derived column or a timestamp, is not measured. The row names the pair
-  that moved most, with `expected` and `observed` its two values.
+- **`correlation_worst_pair_change` is the change in a Spearman correlation within one Gaussian
+  copula that lies furthest past what it is held to.** The library plans PROFILE through the engine, which
+  names each group, so the metric measures exactly the pairs the generator draws together. A
+  Spearman pair outside every group, such as one holding a derived column or a timestamp, is not
+  measured. The row names the pair, with `expected` and `observed` its two values and `threshold`
+  what it was held to.
+- **A pair is held to its own sampling spread where that is more than the threshold.** PROFILE and
+  the check each measure a pair on a sample, so two samples of the same data state it apart. The
+  check estimates how far by the infinitesimal jackknife:
+  1. Each column is read as its mid-distribution function over the rows holding both: its mean
+     rank less a half, over the rows.
+  2. Each row's influence on Spearman's ρ is its own term in the rank covariance and the two
+     variances, plus what it moves every other row's term, combined by the quotient rule.
+  3. V is the mean squared influence, over the check's sample. The change's standard error is
+     √(V/n_a + V/n_b), with n_a the `sample_rows` PROFILE states for the pair and n_b the check's.
+  4. The pair is held to z of those standard errors, or to the threshold where that is more.
+
+  V is the generated data's, standing for PROFILE's too. The check asks whether the generated rows
+  could be a sample of the source, and under that both share one V. A PROFILE stating no
+  `sample_rows`, as one written by hand does, holds each pair to the threshold alone.
+- **z is the two-sided Bonferroni bound at the family-wise level `CORRELATION_FAMILY_LEVEL` over
+  the group's stated pairs, and never under `CORRELATION_STANDARD_ERRORS`.** The row reports the
+  group's worst pair, so z bounds a maximum over m pairs: the normal quantile at 1 − level/(2m).
+  Over few pairs that quantile falls below the floor, the standard errors the repo's other
+  tolerances hold, so the floor stands there. The level is a stated choice, the textbook
+  family-wise one, and no data decided it.
+- **A sparse or tied pair is where the spread acts.** A claims column of later line amounts is
+  zero on most rows, so its ranks are mostly ties and carry little of the pair's order. Such a
+  pair's value spreads far more over samples of the source than 1/√n, because zeros tie most
+  ranks. The source fails the threshold against its own profile there, and passes under its
+  spread.
+  - *Rejected:* a standard error from the rows alone, about 1/√n. Both amounts are held on every
+    sampled row, so it counts each row as a full one, and the ties go unread.
+  - *Rejected:* crediting the source's own distance from itself, as `ks` credits trimmed
+    extremes. A credit moves the group's one threshold, and each pair's spread is its own.
 - **`conditional_kl` is the Kullback-Leibler divergence of each given value's shares from
   PROFILE's, weighted by the given value's share of PROFILE's rows, and summed.** The child values
   a row does not list count as one more value. The other profile's shares are smoothed by
@@ -200,11 +230,10 @@ table, naming its columns in `column` and `paired_with`.
   `profile diff` reads B's tables as B states them, since B is a file that keeps the floor.
 - **A check measures the generated data's correlations on `CHECKED_DEPENDENCE_SAMPLE_ROWS`, ten
   times PROFILE's sample.** PROFILE states each Spearman value from a seeded sample of
-  `FIT_SAMPLE_ROWS`. A second sample that size would double the variance of the difference between
-  the two. A sample's variance falls with its rows, so ten times the rows adds a tenth of PROFILE's.
-  The difference then spreads by √1.1 of PROFILE's own spread, within 5% of what every generated
-  row would give. Every row would cost a sort of every row per ranked column on a large Spark
-  output. The fits read a sample of `FIT_SAMPLE_ROWS` of those rows.
+  `FIT_SAMPLE_ROWS`. A second sample that size would double the variance of the change. Ten times
+  the rows adds a tenth of PROFILE's, within 5% of the spread every generated row would give.
+  Every row would cost a sort of every row per ranked column on a large Spark output. The fits
+  read a sample of `FIT_SAMPLE_ROWS` of those rows.
 
 300,000 rows generated from the committed fixture pass both:
 
@@ -212,12 +241,12 @@ table, naming its columns in `column` and `paired_with`.
 profile=crates/core/tests/every-column-kind.profile.yaml
 doppeldata data generate $profile --rows 300000 --out generated/
 doppeldata data check $profile generated/ --json \
-  | jq -c '.metrics[] | select(.metric == "correlation_max_abs_diff" or .metric == "conditional_kl")
+  | jq -c '.metrics[] | select(.metric == "correlation_worst_pair_change" or .metric == "conditional_kl")
            | {metric, column, paired_with, worst_given_value, value, passed}'
 ```
 
 ```json
-{"metric":"correlation_max_abs_diff","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.0083,"passed":true}
+{"metric":"correlation_worst_pair_change","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.0083,"passed":true}
 {"metric":"conditional_kl","column":"channel","paired_with":"region","worst_given_value":"north","value":0.0010055,"passed":true}
 ```
 
@@ -226,11 +255,12 @@ first:
 
 ```json
 {"metric":"conditional_kl","column":"channel","paired_with":"region","worst_given_value":"north","value":0.0882845,"passed":false}
-{"metric":"correlation_max_abs_diff","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.407373,"passed":false}
+{"metric":"correlation_worst_pair_change","column":"copula_amount","paired_with":"copula_weight","worst_given_value":null,"value":0.407373,"passed":false}
 ```
 
-*Rejected:* a row per pair for `correlation_max_abs_diff`. A copula holds its pairs through one
-matrix, so one pair drifting moves the group, and the row names which pair moved most.
+*Rejected:* a row per pair for `correlation_worst_pair_change`. A copula holds its pairs through
+one matrix, so one pair drifting moves the group, and the row names the pair furthest past what
+it is held to.
 
 ## Three metrics measure the files against the source's layout, scaled to the rows checked
 
@@ -307,7 +337,7 @@ tables, by the join the profiler runs. `check()` takes a `Bundle` and returns a
 - **The three are set under `defaults` in a thresholds file, never under `columns`.** Each
   measures a relationship between tables, so no column names it.
 - **A column a relationship draws skips every metric comparing which values it holds.** That is
-  `ks`, `tvd`, `zero_fraction_delta`, `boundary_adherence`, `correlation_max_abs_diff` and
+  `ks`, `tvd`, `zero_fraction_delta`, `boundary_adherence`, `correlation_worst_pair_change` and
   `conditional_kl`. Its row passes with `drawn_by` naming the relationship. The relationship
   deals out its parent's keys, so the values follow the parent's table rather than the child's
   profile. Its null rate and distinct values are still checked.

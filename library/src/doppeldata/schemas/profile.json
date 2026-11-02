@@ -1692,6 +1692,15 @@
         "value": {
           "type": "number",
           "format": "double"
+        },
+        "sample_rows": {
+          "description": "The sampled rows holding both columns, which the value was measured on.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "additionalProperties": false,
@@ -1731,6 +1740,15 @@
         "value": {
           "type": "number",
           "format": "double"
+        },
+        "sample_rows": {
+          "description": "The sampled rows holding both columns, which the value was measured on.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "additionalProperties": false,
@@ -1846,7 +1864,18 @@
           "description": "Both fractions over every value of `given` that the two maps do not list.",
           "anyOf": [
             {
-              "$ref": "#/$defs/OtherFractions"
+              "$ref": "#/$defs/GivenGroupFractions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "given_null": {
+          "description": "Both fractions over the rows where `given` is null.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GivenGroupFractions"
             },
             {
               "type": "null"
@@ -1860,7 +1889,8 @@
         "column"
       ]
     },
-    "OtherFractions": {
+    "GivenGroupFractions": {
+      "description": "The zero and null fractions of `column` among one group of `given`'s rows.",
       "type": "object",
       "properties": {
         "zero_fraction": {

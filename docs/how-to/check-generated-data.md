@@ -68,7 +68,7 @@ $ doppeldata data check orders.profile.yaml generated/
   `distinct_ratio_delta` threshold is never finer than one value of the count.
 - **`data check --help` lists every metric with its summary and default threshold.** A metric
   appears where the profile states what it compares. A profile with a Spearman pair gets
-  `correlation_max_abs_diff`, as [Read and edit how columns depend on each
+  `correlation_worst_pair_change`, as [Read and edit how columns depend on each
   other](edit-dependent-columns.md) shows.
 - **A check at another row count measures against the range the profile allows at that count.**
   The same profile generated at 200,000 rows passes too, with `customer_id`'s distinct ratio at

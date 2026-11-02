@@ -67,7 +67,7 @@ dataset:
   each holding one value on most rows reach a Spearman value near their comonotone bound only as
   the Pearson nears 1. The plan names such a pair: `its ties holding no copula at its Spearman
   with congestion_surcharge`. No matrix lifts the pair past what it holds at that Pearson. So
-  where that sits further under the stated value than `correlation_max_abs_diff` allows, `data
+  where that sits further under the stated value than `correlation_worst_pair_change` allows, `data
   check` fails the pair.
 - **A group draws each member's nulls apart from the other members, from the column its null rate
   is given.** In the New York yellow taxi trips, `congestion_surcharge` is null exactly where
@@ -120,9 +120,9 @@ alternating projections cannot take them. Qi and Sun's semismooth Newton method 
 build.
 
 *Rejected:* the minimax fit, holding the largest miss as low as it goes, which
-`correlation_max_abs_diff` measures. It needs a constrained solver. In the New York yellow taxi
-trips of March 2024, April 2024 and January 2025, each group's largest miss is a pair no Pearson
-holds. Minimax only moves that pair nearer its value at the cap, a few thousandths in each month.
+`correlation_worst_pair_change` measures. It needs a constrained solver. In the New York yellow
+taxi trips of March 2024, April 2024 and January 2025, each group's largest miss is a pair no
+Pearson holds. Minimax only moves that pair nearer its value at the cap, a few thousandths in each month.
 
 ## A conditional table draws a categorical column from the row its parent's value picks
 
@@ -208,6 +208,7 @@ under 1% of its own takes none.
       zero_fraction: {web: 0.02, store: 0.2}
       null_fraction: {phone: 0.15}
       other: {zero_fraction: 0.1, null_fraction: 0.01}
+      given_null: {zero_fraction: 0.6, null_fraction: 0.05}
 ```
 
 - **Each row of `quantiles` warps the column's own levels for rows holding that value.** Each
@@ -217,14 +218,30 @@ under 1% of its own takes none.
   no row, and a null, draw from `other`, else from the column's own levels.
 - **A zero rate places each row's run of zeros.** It is the rate given the row's value, else
   `other`'s, else the column's own. A null rate replaces the column's for the rows it covers.
+- **`given_null` holds the rates of the rows whose given column is null.** A null given is a
+  value like any other, held to `k_min` rows. In a claims file whose later line items are empty,
+  an empty line's processing indicator is null, and its amounts are zero far more often than a
+  filled line's. A profile stating no `given_null` draws those rows at the column's own rates,
+  which mix both.
+  - *Rejected:* the engine deducing the null rows' rates from the column's own and the stated
+    rows'. A child whose null rate follows the given too leaves the zero rate's remainder over rows
+    the profile does not count, and a reviewer cannot read a rate the profile never states.
 - **A copula member given a category reads its copula level through the category's warp**, so
   both dependencies hold. The category is drawn apart from the copula, so the member's ranks mix
   every category's warp. That lowers what each Pearson gives, so the member is calibrated against
   the mixed ranks, each category weighted by its share of the parent's rows.
 - **A warp gives way to a copula pair it would leave unreachable.** Where through its warps a
-  member's stated pair holds no Pearson its own values would hold, the copula keeps the pair and
-  the warps are not drawn. The plan says `its zero rate given payment_type set aside for its
-  Spearman with mta_tax, which no copula holds beside it`.
+  member's stated pair holds no Pearson, and both members' own marginals would hold one, the
+  copula keeps the pair and the warps are not drawn. The plan says `its zero rate given
+  payment_type set aside for its Spearman with mta_tax, which no copula holds beside it`.
+  - Each member's own values are tried against its partner's own, never its partner's warped
+    scores. Two members each warped by their own given would otherwise each find the pair
+    unreachable against the other's warp, and both warps would stay. The pair would then draw at
+    near none where the source holds it strongly, as line amounts each warped by their own line's
+    indicator are.
+  - *Rejected:* measuring a rate's dependence over the rows holding a given value alone. It states
+    no rate given a null, so those rows would draw the column's own mixed rates. And members warped
+    by other givens would still collide.
 - **A curve or zero rate given a member of the column's own copula group is not drawn.** The
   group draws each member's level given every other member's. So among the rows holding one
   member's value, another member's levels are not uniform, and no warp of them holds the stated
@@ -318,7 +335,9 @@ after-image keeps its lags, expressions and lookups.
 
 ## `data check` measures each copula group and each conditional table
 
-`correlation_max_abs_diff` is the largest change in a Spearman value within one copula group.
+`correlation_worst_pair_change` is the change in a Spearman value within one copula group
+furthest past the threshold it is held to, as
+[checking generated data](checking-generated-data-and-profile-drift.md) describes.
 `conditional_kl` is a conditional table's KL divergence, weighted by each given value's share, and
 names the given value adding most. `data check --help` gives each one's default threshold. Each
 measures a pair of columns, so a `--thresholds` file sets it under `defaults` and is refused

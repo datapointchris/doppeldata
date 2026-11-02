@@ -55,7 +55,7 @@ from doppeldata.scenario_format import Scenario
 
 # The metrics comparing which values a column holds, which a relationship drawing the column decides by its parent's
 # keys, dealing each count to a parent at random. Its null share and distinct values it keeps.
-DRAWN_KEY_METRICS = registered('ks', 'tvd', 'zero_fraction_delta', 'boundary_adherence', 'correlation_max_abs_diff', 'conditional_kl')
+DRAWN_KEY_METRICS = registered('ks', 'tvd', 'zero_fraction_delta', 'boundary_adherence', 'correlation_worst_pair_change', 'conditional_kl')
 
 
 def check_bundle(

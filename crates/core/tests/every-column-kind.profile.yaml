@@ -248,6 +248,11 @@ columns:
       shapes: [{shape: aaaaaaa, fraction: 1.0}]
   - name: stored_pattern
     string: {pattern: '^[A-Z]{3}-\d{4}$'}
+  # Its most common shape drawn through the pattern, the other at its share.
+  - name: pattern_beside_shapes
+    string:
+      pattern: '^\d{5}$'
+      shapes: [{shape: "99999", fraction: 0.9}, {shape: A9999, fraction: 0.1}]
   - name: card_with_check_digit
     null_fraction: 0.1
     quality: {invalid_fraction: 0.2}
@@ -537,5 +542,6 @@ dataset:
       zero_fraction: {web: 0.02, store: 0.2}
       null_fraction: {phone: 0.15}
       other: {zero_fraction: 0.1, null_fraction: 0.01}
+      given_null: {zero_fraction: 0.6, null_fraction: 0.05}
   dependencies:
     - {kind: functional, lhs: [region], rhs: region_code, table: {north: "N", south: "S", west: "W"}}

@@ -226,7 +226,7 @@ Each kind of field is admitted by one rule:
 | a sequence start | `follows the trimmed extreme` | the trimmed extreme at its end, less `k_min − 1` steps |
 | a conditional table | `cell >= k_min` | nothing: each value is one its column lists, and the entry's `min_rows` reaches `k_min` |
 | conditional quantiles, a lag | `k_min rows from each end` | nothing: the entry's `min_rows` reaches `k_min` |
-| conditional rates | `cell >= k_min` | nothing: each given value is one its column lists, and the entry's `min_rows` reaches `k_min` |
+| conditional rates | `cell >= k_min` | nothing: each given value is one its column lists, a null given's rates sit in `given_null`, and the entry's `min_rows` reaches `k_min` |
 | a functional dependency | `lhs >= k_min` | nothing: each lookup key and value is one its column lists, and the entry's `min_rows` reaches `k_min` |
 | a relationship's fan-out quantiles | `k_min rows from each end` | the parents between each quantile and the nearer end of the parent table's rows, its own counted |
 | a relationship's `orphan_fraction` and `containment` | `cell >= k_min` | the orphan rows, `orphan_fraction` times the child table's rows, which may be 0, and below `k_min` a `containment` of 1 |
@@ -251,8 +251,8 @@ keeps the keys.
 A conditional table's `values` counts its cells, and `min_rows` is the fewest rows a cell holds.
 The writer counts every cell over the rows profiled, and floors each one before the table is
 written. Conditional quantiles count each quantile, and their `min_rows` is the fewest rows any
-lies from its group's nearer end. Conditional rates count each rate, and their `min_rows` is the
-fewest rows any count beside a rate holds. A lag counts its quantiles, `min` and `max`. A
+lies from its group's nearer end. Conditional rates count each rate, `other`'s and `given_null`'s
+included, and their `min_rows` is the fewest rows any count beside a rate holds. A lag counts its quantiles, `min` and `max`. A
 dependency's `values` counts its lookup table's entries, and its `min_rows` is the fewest rows a
 listed left-hand value holds. One stating no table counts 1, at `k_min`. Its violation rate is counted only
 over the left-hand values at least `k_min` rows hold.

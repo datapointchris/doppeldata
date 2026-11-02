@@ -28,6 +28,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from doppeldata import Bundle
 from doppeldata import Profile
+from doppeldata.profile_format import GIVEN_LISTS
 from doppeldata.profile_format import read_document
 from doppeldata.published_schemas import published_fields
 
@@ -77,12 +78,12 @@ READ_FIELDS = {
     },
     'Keys': {'primary', 'candidates'},
     'Key': {'columns', 'uniqueness'},
-    'Correlation': {'a', 'b', 'method', 'value'},
-    'CorrelationRatio': {'a', 'b', 'value'},
+    'Correlation': {'a', 'b', 'method', 'value', 'sample_rows'},
+    'CorrelationRatio': {'a', 'b', 'value', 'sample_rows'},
     'Conditional': {'given', 'column', 'fractions', 'other_fractions'},
     'ConditionalQuantiles': {'given', 'column', 'quantiles', 'other'},
-    'ConditionalFractions': {'given', 'column', 'zero_fraction', 'null_fraction', 'other'},
-    'OtherFractions': {'zero_fraction', 'null_fraction'},
+    'ConditionalFractions': {'given', 'column', 'zero_fraction', 'null_fraction', 'other', 'given_null'},
+    'GivenGroupFractions': {'zero_fraction', 'null_fraction'},
     'Dependency': {'kind', 'lhs', 'rhs', 'violation_fraction', 'table'},
     'Relationship': {'from', 'to', 'containment', 'orphan_fraction', 'cardinality', 'fanout', 'inherited', 'ordinal'},
     'Fanout': {'quantiles', 'top_fractions', 'zipf_s'},
@@ -145,9 +146,12 @@ def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
         if key:
             yield 'keys', f'{role} {"+".join(key["columns"])}', key.get('uniqueness')
     for correlation in dataset.get('correlations') or []:
-        yield f'correlations {correlation["method"]}', f'{correlation["a"]} x {correlation["b"]}', correlation['value']
+        pair = f'{correlation["a"]} x {correlation["b"]}'
+        yield f'correlations {correlation["method"]}', pair, correlation['value']
+        yield f'correlations {correlation["method"]} sample_rows', pair, correlation.get('sample_rows')
     for ratio in dataset.get('correlation_ratios') or []:
         yield 'correlation_ratios', f'{ratio["a"]} x {ratio["b"]}', ratio['value']
+        yield 'correlation_ratios sample_rows', f'{ratio["a"]} x {ratio["b"]}', ratio.get('sample_rows')
     for conditional in dataset.get('conditionals') or []:
         rows = {
             **{f'{conditional["given"]}={given}': row for given, row in conditional['fractions'].items()},
@@ -157,15 +161,17 @@ def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
             for value, rate in row.items():
                 yield 'conditionals', f'{conditional_name(conditional)}: {conditional["column"]}={value} | {given}', rate
     for stated in dataset.get('conditional_quantiles') or []:
-        groups = {**{f'{stated["given"]}={given}': row for given, row in stated['quantiles'].items()}, '(other)': stated.get('other') or {}}
-        for given, quantiles in groups.items():
+        for parts, quantiles in GIVEN_LISTS['conditional_quantiles'].groups_at(stated):
+            given = f'{stated["given"]}={parts[1]}' if len(parts) == 2 else f'({parts[0]})'
             for level in quantiles:
                 yield 'conditional_quantiles', f'{conditional_name(stated)}: {level} | {given}', None
+    rate_list = GIVEN_LISTS['conditional_fractions']
     for stated in dataset.get('conditional_fractions') or []:
-        for rate in ('zero_fraction', 'null_fraction'):
+        for rate in rate_list.by_value:
             for given, value in (stated.get(rate) or {}).items():
                 yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | {stated["given"]}={given}', value
-            yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | (other)', (stated.get('other') or {}).get(rate)
+            for group in rate_list.unlisted_fields:
+                yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | ({group})', (stated.get(group) or {}).get(rate)
     for dependency in dataset.get('dependencies') or []:
         described = f'{dependency["kind"]} {"+".join(dependency["lhs"])} -> {dependency["rhs"]}'
         yield 'dependencies', described, dependency.get('violation_fraction')

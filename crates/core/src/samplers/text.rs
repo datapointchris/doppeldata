@@ -429,11 +429,13 @@ pub(crate) enum ShapeChar {
     Literal(char),
 }
 
-/// A stored shape's characters, and the share of values drawn in it.
+/// A stored shape's characters, the share of values drawn in it, and the pattern drawing it where the
+/// profile's pattern stands for this shape.
 #[derive(Debug, Clone)]
 pub(crate) struct Shape {
     chars: Vec<ShapeChar>,
     share: f64,
+    pattern: Option<Box<Pattern>>,
 }
 
 impl Shape {
@@ -447,15 +449,37 @@ impl Shape {
                 other => ShapeChar::Literal(other),
             })
             .collect();
-        Self { chars, share }
+        Self {
+            chars,
+            share,
+            pattern: None,
+        }
+    }
+
+    /// The shape drawn through `pattern`, whose strings are among the shape's.
+    pub(crate) fn through(self, pattern: Pattern) -> Self {
+        Self {
+            pattern: Some(Box::new(pattern)),
+            ..self
+        }
+    }
+
+    pub(crate) fn is_drawn_through_pattern(&self) -> bool {
+        self.pattern.is_some()
     }
 
     fn strings(&self) -> f64 {
-        self.leading_strings(self.chars.len())
+        match &self.pattern {
+            Some(pattern) => pattern.strings,
+            None => self.leading_strings(self.chars.len()),
+        }
     }
 
     /// The shape's strings as one regular expression, each character class an ASCII range.
     fn hir(&self) -> Hir {
+        if let Some(pattern) = &self.pattern {
+            return pattern.hir.clone();
+        }
         let range = |low: u8, high: u8| Hir::class(Class::Bytes(ClassBytes::new([ClassBytesRange::new(low, high)])));
         Hir::concat(
             self.chars
@@ -468,6 +492,18 @@ impl Shape {
                 })
                 .collect(),
         )
+    }
+
+    /// Whether `value` is one of the strings the shape's first `chars` characters hold.
+    fn holds(&self, value: &str, chars: usize) -> bool {
+        let classes = &self.chars[..chars.min(self.chars.len())];
+        value.chars().count() == classes.len()
+            && value.chars().zip(classes).all(|(c, &class)| match class {
+                ShapeChar::Upper => c.is_ascii_uppercase(),
+                ShapeChar::Lower => c.is_ascii_lowercase(),
+                ShapeChar::Digit => c.is_ascii_digit(),
+                ShapeChar::Literal(literal) => c == literal,
+            })
     }
 
     /// The distinct strings the shape's first `chars` characters can hold.
@@ -542,6 +578,16 @@ impl TextSource {
         }
     }
 
+    /// Each regular language the source draws from, beside its share of the draws: a pattern's, or each stored
+    /// shape's. None for any other source.
+    pub(crate) fn languages(&self) -> Option<Vec<(Hir, f64)>> {
+        match self {
+            Self::Pattern(pattern) => Some(vec![(pattern.hir.clone(), 1.0)]),
+            Self::Shapes { shapes, .. } => Some(shapes.iter().map(|shape| (shape.hir(), shape.share)).collect()),
+            _ => None,
+        }
+    }
+
     /// How many strings the source draws. A pattern's strings are counted as drawn equally often,
     /// though an alternation or a ranged repetition draws some more often than others.
     pub(crate) fn variety(&self) -> Variety {
@@ -579,13 +625,36 @@ impl TextSource {
         }
     }
 
+    /// [`Self::leading_variety`] less the strings `listed` holds, which a categorical column's rest draws again on.
+    /// Each listed value takes one string from each shape whose first `chars` characters hold it.
+    pub(crate) fn leading_variety_outside(&self, chars: usize, listed: &[&str]) -> Variety {
+        match self {
+            Self::Shapes { shapes, .. } => Variety::Strata(
+                shapes
+                    .iter()
+                    .map(|shape| Stratum {
+                        values: shape.leading_strings(chars) - listed.iter().filter(|value| shape.holds(value, chars)).count() as f64,
+                        share: shape.share,
+                    })
+                    .filter(|stratum| stratum.values > 0.0)
+                    .collect(),
+            ),
+            _ => self.leading_variety(chars),
+        }
+    }
+
     pub(crate) fn push(&self, rng: &mut ChaCha8Rng, out: &mut String) {
         match self {
             Self::Provider(provider) => push_provided(*provider, rng, out),
             Self::Icd10cm { dotted } => push_icd10cm(*dotted, rng, out),
             Self::Pattern(pattern) => pattern.push(rng, out),
             Self::Shapes { choice, shapes } => {
-                for &c in &shapes[choice.sample(rng)].chars {
+                let shape = &shapes[choice.sample(rng)];
+                if let Some(pattern) = &shape.pattern {
+                    pattern.push(rng, out);
+                    return;
+                }
+                for &c in &shape.chars {
                     match c {
                         ShapeChar::Upper => out.push(char::from(UPPER[below(rng, 26) as usize])),
                         ShapeChar::Lower => out.push(char::from(LOWER[below(rng, 26) as usize])),

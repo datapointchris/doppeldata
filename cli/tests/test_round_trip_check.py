@@ -1,5 +1,6 @@
 """A generated dataset checked against its profile. It sits here because profiling needs polars and pyarrow, which the CLI declares."""
 
+import copy
 import datetime as dt
 import json
 import random
@@ -75,6 +76,28 @@ def test_a_few_rows_outside_a_conditional_tables_cells_pass_conditional_kl_and_a
 
     report = sd.check(profile, tiered_regions({'north': 150, 'south': 90, 'west': 60}))
     assert ('conditional_kl', 'region') in failures(report)
+
+
+def test_a_copula_pair_moved_past_the_threshold_fails_it_and_passes_where_its_profile_measured_it_on_few_rows():
+    """Two samples of one distribution move a pair measured on few rows further than the threshold."""
+    draw = random.Random(7)
+    x = [draw.gauss(0, 1) for _ in range(ROWS)]
+    profile = sd.profile(pa.table({'x': x, 'y': [value + draw.gauss(0, 1) for value in x]}))
+    generated = pa.table(sd.generate(profile, rows=GENERATED_ROWS, seed=1))
+
+    def judged(sample_rows: int | None) -> tuple[bool, bool]:
+        document = copy.deepcopy(profile.to_plain())
+        stated = next(entry for entry in document['dataset']['correlations'] if entry['method'] == 'spearman')
+        stated['value'] -= 0.08
+        stated['sample_rows'] = sample_rows
+        if sample_rows is None:
+            del stated['sample_rows']
+        row = next(
+            result for result in sd.check(sd.Profile(document), generated).metrics if result.metric == 'correlation_worst_pair_change'
+        )
+        return row.threshold > 0.05, row.passed
+
+    assert [judged(sample_rows) for sample_rows in (None, 200)] == [(False, False), (True, True)]
 
 
 def test_the_orders_example_generated_at_a_tenth_of_its_rows_keeps_every_quantity_and_passes_its_check():

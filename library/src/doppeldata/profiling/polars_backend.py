@@ -36,6 +36,8 @@ from doppeldata.profiling.expression_rule import counted_rows
 from doppeldata.profiling.first_blocks import FIRST_BLOCK_BYTES
 from doppeldata.profiling.first_blocks import first_block
 from doppeldata.profiling.recorded_counts import Recode
+from doppeldata.profiling.spearman_row_influence import InfluenceTerms
+from doppeldata.profiling.spearman_row_influence import row_influence
 from doppeldata.profiling.statistic_catalog import ALL_STATISTICS
 from doppeldata.profiling.statistic_catalog import BOOLEAN_TEXT
 from doppeldata.profiling.statistic_catalog import DECIMAL_TEXT
@@ -383,6 +385,22 @@ class PolarsBackend:
             for value, held in zip(row[::2], row[1::2], strict=True)
         ]
 
+    def rank_correlation_influence(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[float | None]:
+        if not pairs:
+            return []
+        kinds = {spec.name: spec.kind for spec in self.schema(table)}
+        frames = [
+            spearman_influence_variance(
+                table.select(numeric_value(pl.col(a), kinds[a]).alias('x'), numeric_value(pl.col(b), kinds[b]).alias('y'))
+            )
+            for a, b in pairs
+        ]
+        found = []
+        for frame in pl.collect_all(frames, engine='streaming'):
+            variance, spread_x, spread_y = frame.row(0)
+            found.append(float(variance) if spread_x and spread_y and variance is not None and math.isfinite(variance) else None)
+        return found
+
     def cross_counts(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
         frames = [
             table.select(pl.col(a).cast(pl.String).alias('a'), pl.col(b).cast(pl.String).alias('b')).group_by('a', 'b').len()
@@ -600,6 +618,33 @@ def numeric_value(c: pl.Expr, kind: ColumnKind) -> pl.Expr:
     if kind is ColumnKind.FLOAT:
         return pl.when(c.is_finite()).then(c)
     return c
+
+
+def spearman_influence_variance(pair: pl.LazyFrame) -> pl.LazyFrame:
+    """One row: the mean squared `row_influence` of a row of `pair` on the Spearman correlation of its `x` and `y`, over
+    the rows holding both, and the variance of each's mid-distribution function there, zero for a constant column."""
+    held = pair.filter(pl.col('x').is_not_null() & pl.col('y').is_not_null())
+    rows = pl.len().cast(pl.Float64)
+    centered = held.with_columns(
+        u=(pl.col('x').rank('average').cast(pl.Float64) - 0.5) / rows - 0.5,
+        w=(pl.col('y').rank('average').cast(pl.Float64) - 0.5) / rows - 0.5,
+    )
+
+    def above(frame: pl.LazyFrame, by: str, of: str, name: str) -> pl.LazyFrame:
+        """Each row's sum of `of` over the rows above it in `by`, and half of it over the rows tied with it, over the rows."""
+        through = frame.sort(by).with_columns(pl.col(of).cum_sum().alias('_through'))
+        tied_or_below = pl.col('_through').last().over(by)
+        return through.with_columns(((pl.col(of).sum() - tied_or_below + pl.col(of).sum().over(by) / 2) / rows).alias(name)).drop(
+            '_through'
+        )
+
+    by_x = above(above(centered, 'x', 'w', 'g_x'), 'x', 'u', 'h_x')
+    both = above(above(by_x, 'y', 'u', 'g_y'), 'y', 'w', 'h_y')
+    u, w = pl.col('u'), pl.col('w')
+    covariance, spread_x, spread_y = (u * w).mean(), (u * u).mean(), (w * w).mean()
+    terms = InfluenceTerms(u, w, pl.col('g_x'), pl.col('h_x'), pl.col('g_y'), pl.col('h_y'))
+    influence = row_influence(terms, covariance, spread_x, spread_y)
+    return both.select((influence * influence).mean().alias('variance'), spread_x.alias('spread_x'), spread_y.alias('spread_y'))
 
 
 class PolarsOps:

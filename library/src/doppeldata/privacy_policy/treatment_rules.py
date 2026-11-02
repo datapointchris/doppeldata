@@ -188,12 +188,7 @@ def capped_age_quantiles(entry: dict[str, Any]) -> None:
 
 def age_quantile_groups(entry: dict[str, Any]) -> list[tuple[PointerParts, dict[str, Any]]]:
     """Each group of a conditional quantiles entry, by its parts below the entry."""
-    groups: list[tuple[PointerParts, dict[str, Any]]] = [
-        (('quantiles', given), held) for given, held in (entry.get('quantiles') or {}).items()
-    ]
-    if isinstance(entry.get('other'), dict):
-        groups.append((('other',), entry['other']))
-    return groups
+    return [(parts, group) for parts, group in GIVEN_LISTS['conditional_quantiles'].groups_at(entry) if isinstance(group, dict)]
 
 
 def lag_faults(table: dict[str, Any], column: ColumnLiterals, policy: Policy) -> list[RuleBreak]:
