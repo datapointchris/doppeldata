@@ -300,6 +300,13 @@ class Backend(Protocol):
         constant over those rows."""
         ...
 
+    def rank_correlation_influence(self, table: Table, pairs: list[tuple[str, str]]) -> list[float | None]:
+        """Each pair's variance of one row's influence on its Spearman correlation, by the infinitesimal jackknife over
+        the rows holding both, each column at its mid-distribution function over those rows: its mean rank less a half,
+        over the rows. The correlation's sampling variance is this over the rows. None where either column is constant
+        over them."""
+        ...
+
     def cross_counts(self, table: Table, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
         """Each pair's rows by its two values written as text, a null as None, over every row."""
         ...

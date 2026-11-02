@@ -1692,6 +1692,15 @@
         "value": {
           "type": "number",
           "format": "double"
+        },
+        "sample_rows": {
+          "description": "The sampled rows holding both columns, which the value was measured on.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "additionalProperties": false,
@@ -1731,6 +1740,15 @@
         "value": {
           "type": "number",
           "format": "double"
+        },
+        "sample_rows": {
+          "description": "The sampled rows holding both columns, which the value was measured on.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "additionalProperties": false,

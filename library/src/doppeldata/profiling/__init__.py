@@ -222,18 +222,19 @@ def profile_in_dialect(
     code_lists: Mapping[str, str | os.PathLike[str]] | None = None,
     type_mix_columns: Collection[str] = (),
     reuse_unchanged: bool = True,
-    count_frozen_conditionals_without_floor: bool = False,
+    for_check: bool = False,
     dependence_sample_rows: int = table_profile.FIT_SAMPLE_ROWS,
-) -> tuple[Profile, list[dict[str, Any]]]:
+) -> tuple[Profile, table_profile.CheckMeasures]:
     """`profile`, reading delimited `data` in `dialect` where one is given rather than in the dialect its files are
     sniffed in, as a check reads files whose manifest records how they were written. Each string column `type_mix_columns`
     names is typed by its text, as a check reads a column the engine generates as text in any format. A check sets
     `reuse_unchanged` False, because it measures the data, even data `edges_from` was made from.
 
-    Beside the profile, each conditional table `edges_from` states, counted cell for cell whatever its rows where
-    `count_frozen_conditionals_without_floor`. No floor holds those cells, so they never enter the profile. A check
-    sets it, and reports only the divergence they give. The correlations read a seeded sample of
-    `dependence_sample_rows` rows, which a check sets larger, so its sampling adds little to the earlier profile's."""
+    Beside the profile, where `for_check`, each conditional table `edges_from` states, counted cell for cell whatever
+    its rows, and the variance of one row's influence on each Spearman correlation it states. No floor holds either, so
+    they never enter the profile. A check sets it, and reports only what its metrics make of them. The correlations read
+    a seeded sample of `dependence_sample_rows` rows, which a check sets larger, so its sampling adds little to the
+    earlier profile's."""
     settings = run_settings(engine, spark, sample, policy, k_min, packs, code_lists)
     started = time.monotonic()
     listed, reading = listed_source(data, engine)
@@ -257,18 +258,14 @@ def profile_in_dialect(
         if changed is None:
             named = edges_from.path or edges_from.document.get('name')
             log.warning(f'{named} was made from these files with these settings, so it is returned unchanged')
-            return edges_from, []
+            return edges_from, table_profile.CheckMeasures()
         warnings.warn(EarlierProfileNotReused(changed), stacklevel=3)
     frozen = (
-        table_profile.FrozenLayout.of(
-            edges_from.to_plain(),
-            count_conditionals_without_floor=count_frozen_conditionals_without_floor,
-            dependence_sample_rows=dependence_sample_rows,
-        )
+        table_profile.FrozenLayout.of(edges_from.to_plain(), for_check=for_check, dependence_sample_rows=dependence_sample_rows)
         if edges_from is not None
         else None
     )
-    profiles, _, unfloored = profiled_tables(backend, [(source, readers)], settings, frozen, type_mix_columns=frozenset(type_mix_columns))
+    profiles, _, measures = profiled_tables(backend, [(source, readers)], settings, frozen, type_mix_columns=frozenset(type_mix_columns))
     only = profiles[source.name]
     sources.check_unchanged(listed)
     issues = only.validate()
@@ -284,7 +281,7 @@ def profile_in_dialect(
         relisted = table_profile.relisted_columns(edges_from.to_plain(), only.to_plain())
         if undescribed or missing or relisted:
             warnings.warn(ColumnsNotFrozen(undescribed, missing, relisted), stacklevel=3)
-    return only, unfloored[source.name]
+    return only, measures[source.name]
 
 
 def profile_tables(
@@ -425,11 +422,10 @@ def profiled_tables(
     *,
     related: bool = False,
     type_mix_columns: frozenset[str] = frozenset(),
-) -> tuple[dict[str, Profile], foreign_keys.FoundRelationships, dict[str, list[dict[str, Any]]]]:
+) -> tuple[dict[str, Profile], foreign_keys.FoundRelationships, dict[str, table_profile.CheckMeasures]]:
     """Each table's profile by its name, each source beside the readers that read it, and where `related`, the foreign
     keys between them, counted in the same session, which holds every table's rows until it ends. Each string column
-    `type_mix_columns` names is typed by its text. Last, each table's conditional tables `frozen` asks to count without
-    a floor."""
+    `type_mix_columns` names is typed by its text. Last, what `frozen` asks a check to measure of each table."""
     profiled: dict[str, table_profile.ProfiledTable] = {}
     # `none` holds no floor, so every statistic is computed over every row.
     k_min = settings.k_min or 1
@@ -453,7 +449,7 @@ def profiled_tables(
         ]
         relationships = foreign_keys.relationships(backend, members, k_min) if related else foreign_keys.FoundRelationships()
     profiles = {name: Profile(table.document) for name, table in profiled.items()}
-    return profiles, relationships, {name: table.conditionals_without_floor for name, table in profiled.items()}
+    return profiles, relationships, {name: table.check_measures for name, table in profiled.items()}
 
 
 def available_engine(engine: str) -> Engine:

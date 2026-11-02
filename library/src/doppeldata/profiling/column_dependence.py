@@ -307,10 +307,12 @@ def role(column: DependenceColumn) -> str | None:
     return None
 
 
-def measured_pairs(
-    backend: Backend, sample: Table, columns: list[DependenceColumn], k_min: int
-) -> list[tuple[str, str, str, float | None]]:
-    """Every pair's correlation on the sample, as `(a, b, method, value)` in the order of the columns. Two ranked
+MeasuredPair = tuple[str, str, str, float | None, int]
+
+
+def measured_pairs(backend: Backend, sample: Table, columns: list[DependenceColumn], k_min: int) -> list[MeasuredPair]:
+    """Every pair's correlation on the sample, as `(a, b, method, value, rows)` in the order of the columns, `rows` the
+    sampled rows holding both. Two ranked
     columns take Spearman's, and so do a ranked and a categorical integer column, which a copula can then hold. Two
     categorical ones take the bias-corrected Cramér's V, and a numeric and a categorical one
     the bias-corrected correlation ratio η of the numeric column's ranks, with the numeric column as `a`. The value is
@@ -331,16 +333,21 @@ def measured_pairs(
     category_pairs = [(first.name, second.name) for at, first in enumerate(categorical) for second in categorical[at + 1 :]]
     ratio_pairs = [(numeric.name, other.name) for numeric in ranked if numeric.spec.kind in NUMERIC for other in categorical]
     spread = {column.name: off_mode_share(column) for column in ranked}
-    found = [
-        (a, b, SPEARMAN, value if held >= least else None)
+    found: list[MeasuredPair] = [
+        (a, b, SPEARMAN, value if held >= least else None, held)
         for (a, b), (value, held) in zip(rank_pairs, backend.rank_correlations(sample, rank_pairs), strict=True)
     ]
+    for (a, b), cells in zip(category_pairs, backend.cross_counts(sample, category_pairs), strict=True):
+        held_cells = both_held(cells)
+        found.append((a, b, CRAMERS_V, sampled_v(held_cells, least), sum(count for _, _, count in held_cells)))
     found += [
-        (a, b, CRAMERS_V, sampled_v(both_held(cells), least))
-        for (a, b), cells in zip(category_pairs, backend.cross_counts(sample, category_pairs), strict=True)
-    ]
-    found += [
-        (a, b, CORRELATION_RATIO, correlation_ratio(groups) if enough_spread(groups, spread[a], least) else None)
+        (
+            a,
+            b,
+            CORRELATION_RATIO,
+            correlation_ratio(groups) if enough_spread(groups, spread[a], least) else None,
+            sum(count for count, _, _ in groups),
+        )
         for (a, b), groups in zip(ratio_pairs, backend.rank_moments(sample, ratio_pairs), strict=True)
     ]
     return found
@@ -412,26 +419,26 @@ def enough_spread(groups: list[tuple[int, float, float]], off_mode: float, least
 
 
 def kept_correlations(
-    found: list[tuple[str, str, str, float | None]], position: dict[str, int], frozen: FrozenPairs
+    found: list[MeasuredPair], position: dict[str, int], frozen: FrozenPairs
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Every pair whose correlation reaches the floor, the strongest kept, and every pair `frozen` holds, in the order
     of the columns: the dataset's `correlations`, and its `correlation_ratios`, whose `a` and `b` follow the columns'
-    order too."""
-    measured = [(a, b, method, value) for a, b, method, value in found if value is not None]
-    held = [(a, b, method, value) for a, b, method, value in measured if frozen.correlated(a, b, method)]
-    strong = [
-        (a, b, method, value) for a, b, method, value in measured if abs(value) >= CORRELATION_FLOOR and not frozen.correlated(a, b, method)
-    ]
+    order too. Each states the sampled rows it was measured on."""
+    measured = [(a, b, method, value, rows) for a, b, method, value, rows in found if value is not None]
+    held = [pair for pair in measured if frozen.correlated(*pair[:3])]
+    strong = [pair for pair in measured if abs(pair[3]) >= CORRELATION_FLOOR and not frozen.correlated(*pair[:3])]
     kept = held + sorted(strong, key=lambda pair: -abs(pair[3]))[: max(0, CORRELATIONS_KEPT - len(held))]
-    kept = [(a, b, method, value) if position[a] < position[b] else (b, a, method, value) for a, b, method, value in kept]
+    kept = [(a, b, method, value, rows) if position[a] < position[b] else (b, a, method, value, rows) for a, b, method, value, rows in kept]
     kept.sort(key=lambda pair: (position[pair[0]], position[pair[1]]))
     correlations = [
-        {'a': a, 'b': b, 'method': method, 'value': significant(value, RATE_DIGITS) + 0.0}
-        for a, b, method, value in kept
+        {'a': a, 'b': b, 'method': method, 'value': significant(value, RATE_DIGITS) + 0.0, 'sample_rows': rows}
+        for a, b, method, value, rows in kept
         if method != CORRELATION_RATIO
     ]
     ratios = [
-        {'a': a, 'b': b, 'value': significant(value, RATE_DIGITS) + 0.0} for a, b, method, value in kept if method == CORRELATION_RATIO
+        {'a': a, 'b': b, 'value': significant(value, RATE_DIGITS) + 0.0, 'sample_rows': rows}
+        for a, b, method, value, rows in kept
+        if method == CORRELATION_RATIO
     ]
     return correlations, ratios
 
@@ -473,7 +480,7 @@ def conditional_tables(
     sample: Table,
     described: Table,
     columns: list[DependenceColumn],
-    measured: list[tuple[str, str, str, float | None]],
+    measured: list[MeasuredPair],
     k_min: int,
     frozen: FrozenPairs,
     refused: frozenset[tuple[str, str]] = frozenset(),
@@ -486,7 +493,7 @@ def conditional_tables(
     is left out. The generator draws a column from one table, so a child keeps the pair `frozen` holds, else its
     strongest. The fewest rows a kept cell holds, by its given and child column."""
     by_name = {column.name: column for column in columns}
-    trials = [(a, b, value) for a, b, method, value in measured if method == CRAMERS_V]
+    trials = [(a, b, value) for a, b, method, value, _ in measured if method == CRAMERS_V]
     trials += listed_float_trials(backend, sample, columns, k_min)
     pairs: list[tuple[str, str, list[str], list[str]]] = []
     for a, b, value in trials:
@@ -619,7 +626,7 @@ def conditional_quantiles(
     backend: Backend,
     described: Table,
     columns: list[DependenceColumn],
-    measured: list[tuple[str, str, str, float | None]],
+    measured: list[MeasuredPair],
     k_min: int,
     frozen: FrozenPairs,
     copula: CopulaPairs,
@@ -637,7 +644,7 @@ def conditional_quantiles(
     """
     by_name = {column.name: column for column in columns}
     options: dict[str, list[tuple[bool, float, int, str]]] = {}
-    for at, (child, given, method, value) in enumerate(measured):
+    for at, (child, given, method, value, _) in enumerate(measured):
         held = frozen.gives('conditional_quantiles', given, child)
         parent, numeric = by_name[given], by_name[child]
         explained = value * value if value is not None else 0.0

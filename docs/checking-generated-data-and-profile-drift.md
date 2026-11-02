@@ -178,11 +178,40 @@ Both read the pairs PROFILE states. The check's profile freezes those pairs, so 
 one again however weak it measures. Each metric writes one row per copula group or conditional
 table, naming its columns in `column` and `paired_with`.
 
-- **`correlation_max_abs_diff` is the largest change in a Spearman correlation within one Gaussian
-  copula.** The library plans PROFILE through the engine, which names each group, so the metric
-  measures exactly the pairs the generator draws together. A Spearman pair outside every group,
-  such as one holding a derived column or a timestamp, is not measured. The row names the pair
-  that moved most, with `expected` and `observed` its two values.
+- **`correlation_max_abs_diff` is the change in a Spearman correlation within one Gaussian copula
+  that lies furthest past what it is held to.** The library plans PROFILE through the engine, which
+  names each group, so the metric measures exactly the pairs the generator draws together. A
+  Spearman pair outside every group, such as one holding a derived column or a timestamp, is not
+  measured. The row names the pair, with `expected` and `observed` its two values and `threshold`
+  what it was held to.
+- **A pair is held to its own sampling spread where that is more than the threshold.** PROFILE and
+  the check each measure a pair on a sample, so two samples of the same data state it apart. The
+  check estimates how far by the infinitesimal jackknife:
+  1. Each column is read as its mid-distribution function over the rows holding both: its mean
+     rank less a half, over the rows.
+  2. Each row's influence on Spearman's ρ is its own term in the rank covariance and the two
+     variances, plus what it moves every other row's term, combined by the quotient rule.
+  3. V is the mean squared influence, over the check's sample. The change's standard error is
+     √(V/n_a + V/n_b), with n_a the `sample_rows` PROFILE states for the pair and n_b the check's.
+  4. The pair is held to z of those standard errors, or to the threshold where that is more.
+
+  V is the generated data's, standing for PROFILE's too. The check asks whether the generated rows
+  could be a sample of the source, and under that both share one V. A PROFILE stating no
+  `sample_rows`, as one written by hand does, holds each pair to the threshold alone.
+- **z is the two-sided Bonferroni bound at a 5% family-wise level over the group's stated pairs,
+  and never under 3.** The row reports the group's worst pair, so z bounds a maximum over m pairs:
+  the normal quantile at 1 − 0.05/(2m), 3.65 at 192 pairs. Under 19 pairs that quantile falls
+  below 3, the standard errors the repo's other tolerances hold, so 3 stands there. The level is a
+  stated choice, the textbook family-wise one, and no data decided it.
+- **A sparse or tied pair is where the spread acts.** A claims column of later line amounts is
+  zero on most rows, so its ranks are mostly ties and carry little of the pair's order. Such a
+  pair's value then has a standard deviation of about 0.09 over 20,000-row samples of the source.
+  The source fails a 0.05 threshold against its own profile there, and passes under its spread.
+  - *Rejected:* a standard error from the rows alone, about 1/√n. Both amounts are held on every
+    sampled row, so it gives about 0.007, and the ties go unread.
+  - *Rejected:* crediting the source's own distance from itself, as `ks` credits trimmed
+    extremes. A credit moves one threshold for the row, and the row is a maximum over pairs whose
+    spreads differ by more than ten times.
 - **`conditional_kl` is the Kullback-Leibler divergence of each given value's shares from
   PROFILE's, weighted by the given value's share of PROFILE's rows, and summed.** The child values
   a row does not list count as one more value. The other profile's shares are smoothed by
@@ -200,11 +229,10 @@ table, naming its columns in `column` and `paired_with`.
   `profile diff` reads B's tables as B states them, since B is a file that keeps the floor.
 - **A check measures the generated data's correlations on `CHECKED_DEPENDENCE_SAMPLE_ROWS`, ten
   times PROFILE's sample.** PROFILE states each Spearman value from a seeded sample of
-  `FIT_SAMPLE_ROWS`. A second sample that size would double the variance of the difference between
-  the two. A sample's variance falls with its rows, so ten times the rows adds a tenth of PROFILE's.
-  The difference then spreads by √1.1 of PROFILE's own spread, within 5% of what every generated
-  row would give. Every row would cost a sort of every row per ranked column on a large Spark
-  output. The fits read a sample of `FIT_SAMPLE_ROWS` of those rows.
+  `FIT_SAMPLE_ROWS`. A second sample that size would double the variance of the change. Ten times
+  the rows adds a tenth of PROFILE's, within 5% of the spread every generated row would give.
+  Every row would cost a sort of every row per ranked column on a large Spark output. The fits
+  read a sample of `FIT_SAMPLE_ROWS` of those rows.
 
 300,000 rows generated from the committed fixture pass both:
 

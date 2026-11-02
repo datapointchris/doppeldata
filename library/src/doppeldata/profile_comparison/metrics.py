@@ -8,6 +8,7 @@ import dataclasses as dc
 import enum
 import itertools
 import math
+import statistics
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
@@ -544,35 +545,74 @@ def source_plan(source: Document) -> '_core.Plan | Unmeasured':
         return Unmeasured(f'the engine cannot plan the source profile: {issue.message} at {issue.field or "/"} [{issue.code}]')
 
 
+CORRELATION_THRESHOLD = 0.05
+# A copula group's pairs are judged together, so each is held at the Bonferroni bound for this family-wise level over
+# them, and never finer than this many standard errors.
+CORRELATION_FAMILY_LEVEL = 0.05
+CORRELATION_STANDARD_ERRORS = 3.0
+
+
 def correlation_changes(source: Document, observed: Document) -> Iterator[Measurement]:
-    """For each Gaussian copula the source plans, the largest change in a Spearman correlation it states between two of
-    the copula's columns, as the pair it names. A pair the other profile states no correlation for is the largest."""
-    stated = spearman_values(source)
+    """For each Gaussian copula the source plans, the change in a Spearman correlation it states between two of the
+    copula's columns that lies furthest past the default threshold, or past its own least threshold where that is
+    more, as the pair it names. A pair the other profile states no correlation for lies furthest.
+
+    A pair's least threshold is as many standard errors of the change as `correlation_standard_errors` gives the group,
+    where both profiles state the rows they measured it on and the other the influence of a row on it. Two samples of
+    the same data move a pair by about one standard error."""
+    stated = spearman_entries(source)
     if not stated:
         return
     planned = source_plan(source)
     if isinstance(planned, Unmeasured):
         yield Measurement(None, planned)
         return
-    found = spearman_values(observed)
+    found = spearman_entries(observed)
     for group in planned.copula_groups():
+        pairs = [(a, b) for a, b in stated if a in group and b in group]
+        standard_errors = correlation_standard_errors(len(pairs))
         changes = []
-        for (a, b), value in stated.items():
-            if a not in group or b not in group:
-                continue
-            if (a, b) in found:
-                changes.append(Measurement(a, Compared(abs(found[a, b] - value), value, found[a, b]), paired_with=b))
+        for a, b in pairs:
+            value, theirs = stated[a, b]['value'], found.get((a, b))
+            if theirs is not None:
+                least = standard_errors * change_spread(stated[a, b], theirs)
+                changes.append(
+                    Measurement(a, Compared(abs(theirs['value'] - value), value, theirs['value'], least_threshold=least), paired_with=b)
+                )
             else:
                 missing = f'the other profile states no Spearman correlation between {a} and {b}, which it writes from enough rows'
                 changes.append(Measurement(a, Unmeasured(missing, value), paired_with=b))
         if changes:
-            yield max(changes, key=lambda change: math.inf if isinstance(change.compared, Unmeasured) else change.compared.value)
+            yield max(changes, key=past_default_threshold)
 
 
-def spearman_values(document: Document) -> dict[tuple[str, str], float]:
+def correlation_standard_errors(pairs: int) -> float:
+    """How many standard errors of its change a pair of a copula group of `pairs` stated pairs may move: the two-sided
+    Bonferroni bound at `CORRELATION_FAMILY_LEVEL`, and at least `CORRELATION_STANDARD_ERRORS`."""
+    bonferroni = statistics.NormalDist().inv_cdf(1 - CORRELATION_FAMILY_LEVEL / (2 * max(pairs, 1)))
+    return max(CORRELATION_STANDARD_ERRORS, bonferroni)
+
+
+def change_spread(stated: dict[str, Any], theirs: dict[str, Any]) -> float:
+    """The standard error of the change between a correlation two profiles state, each from its own sample of the same
+    data: the variance of a row's influence the other measured, over each sample's rows. Nothing where either lacks one."""
+    variance, rows, their_rows = theirs.get('influence_variance'), stated.get('sample_rows'), theirs.get('sample_rows')
+    if variance is None or not rows or not their_rows:
+        return 0.0
+    return math.sqrt(variance / rows + variance / their_rows)
+
+
+def past_default_threshold(change: Measurement) -> float:
+    """How far a change lies past what it is judged at under the default threshold, an unmeasured one furthest."""
+    if isinstance(change.compared, Unmeasured):
+        return math.inf
+    return change.compared.value - max(CORRELATION_THRESHOLD, change.compared.least_threshold)
+
+
+def spearman_entries(document: Document) -> dict[tuple[str, str], dict[str, Any]]:
     """Each Spearman correlation the profile states, by its columns in the order it names them."""
     correlations = (document.get('dataset') or {}).get('correlations') or []
-    return {(entry['a'], entry['b']): entry['value'] for entry in correlations if entry.get('method') == 'spearman'}
+    return {(entry['a'], entry['b']): entry for entry in correlations if entry.get('method') == 'spearman'}
 
 
 # Each share of the other profile is smoothed by this before the divergence is taken, so a child value it holds no row
@@ -712,10 +752,11 @@ METRICS = (
     ),
     Metric(
         'correlation_max_abs_diff',
-        'the largest change in a Spearman correlation the source states between two columns of one Gaussian copula, '
-        'on the pair that moved most',
+        'the change in a Spearman correlation the source states between two columns of one Gaussian copula, on the pair '
+        'furthest past its threshold: this one, or the standard errors of the change a group of its pairs allows where '
+        'that is more',
         Bound.AT_MOST,
-        0.05,
+        CORRELATION_THRESHOLD,
         correlation_changes,
         pairs=True,
     ),

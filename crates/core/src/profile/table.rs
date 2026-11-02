@@ -559,6 +559,8 @@ pub struct Correlation {
     pub b: String,
     pub method: CorrelationMethod,
     pub value: f64,
+    /// The sampled rows holding both columns, which the value was measured on.
+    pub sample_rows: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
@@ -567,6 +569,8 @@ pub struct CorrelationRatio {
     pub a: String,
     pub b: String,
     pub value: f64,
+    /// The sampled rows holding both columns, which the value was measured on.
+    pub sample_rows: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

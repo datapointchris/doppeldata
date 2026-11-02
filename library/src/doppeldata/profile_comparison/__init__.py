@@ -74,6 +74,7 @@ from doppeldata.profiling.detector_packs import EnabledPack
 from doppeldata.profiling.detector_packs import enabled_packs
 from doppeldata.profiling.file_traits import WRITTEN_ENCODINGS
 from doppeldata.profiling.table_profile import CHECKED_DEPENDENCE_SAMPLE_ROWS
+from doppeldata.profiling.table_profile import CheckMeasures
 from doppeldata.scenario_format import InvalidScenario
 from doppeldata.scenario_format import Scenario
 from doppeldata.scenario_format import composed
@@ -284,7 +285,7 @@ def checked_table(
         warnings.simplefilter('ignore', PoorFits)
         warnings.simplefilter('ignore', ColumnsNotFrozen)
         # A check measures the data, so it profiles it even where the profile was made from these very files.
-        checked, unfloored = profile_in_dialect(
+        checked, check_measures = profile_in_dialect(
             data,
             dialect,
             policy=policy,
@@ -293,14 +294,14 @@ def checked_table(
             packs=[each.pack.name for each in packs],
             type_mix_columns=type_mix_column_names(source, planned if planned is not None else source_plan(source)),
             reuse_unchanged=False,
-            count_frozen_conditionals_without_floor=True,
+            for_check=True,
             dependence_sample_rows=CHECKED_DEPENDENCE_SAMPLE_ROWS,
         )
     observed = checked.to_plain()
     fingerprint = (observed.get('generated') or {}).get('source_fingerprint')
     # A check vouches for the data, so a statistic the profile states and the data cannot supply fails.
     metrics = uncompared_malformed_rates(
-        measured(drawn_distinct(source), with_conditionals(observed, unfloored), thresholds, unmeasured_passes=False), applied
+        measured(drawn_distinct(source), with_check_measures(observed, check_measures), thresholds, unmeasured_passes=False), applied
     )
     against_scored = None
     if real is not None:
@@ -334,10 +335,18 @@ def checked_table(
     return report
 
 
-def with_conditionals(observed: Document, conditionals: list[dict[str, Any]]) -> Document:
-    """`observed` holding `conditionals` as its conditional tables, for the metrics alone. They are counted without a
-    floor, and the report carries only the divergence they give and a given value the source already lists."""
-    return observed | {'dataset': (observed.get('dataset') or {}) | {'conditionals': conditionals}}
+def with_check_measures(observed: Document, measures: CheckMeasures) -> Document:
+    """`observed` holding the conditional tables `measures` counts without a floor, and each Spearman correlation the
+    variance of one row's influence on it as its `influence_variance`, for the metrics alone. No floor holds either, so
+    the report carries only the divergence the tables give, a given value the source already lists, and the threshold
+    a correlation is judged at."""
+    dataset = observed.get('dataset') or {}
+    influence = measures.spearman_influence
+    correlations = [
+        entry | {'influence_variance': influence[entry['a'], entry['b']]} if (entry['a'], entry['b']) in influence else entry
+        for entry in dataset.get('correlations') or []
+    ]
+    return observed | {'dataset': dataset | {'conditionals': measures.conditionals_without_floor, 'correlations': correlations}}
 
 
 def one_file_layout(results: list[MetricResult], written: Manifest | None) -> list[MetricResult]:

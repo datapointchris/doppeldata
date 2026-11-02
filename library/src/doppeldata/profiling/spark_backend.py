@@ -936,6 +936,15 @@ class SparkBackend:
                 found.append((value, held))
         return found
 
+    def rank_correlation_influence(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[float | None]:
+        """Each pair's `spearman_influence_variance`, its two columns as `average_ranks` orders them."""
+        specs = {spec.name: spec for spec in self.schema(table)}
+        found = []
+        for a, b in pairs:
+            x, y = (Operand(column(name), specs[name], self.major).ordered for name in (a, b))
+            found.append(spearman_influence_variance(table.select(x.alias('x'), y.alias('y'))))
+        return found
+
     def cross_counts(self, table: DataFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
         """Every pair's values as one stream of (pair, value, value), grouped once."""
         if not pairs:
@@ -1397,6 +1406,49 @@ def ordered_key(o: Operand, value: Any) -> Column:
     if isinstance(value, dt.date):
         return sf.lit((value - EPOCH.date()).days)
     return sf.lit(value)
+
+
+def spearman_influence_variance(pair: DataFrame) -> float | None:
+    """The mean squared influence of a row of `pair` on the Spearman correlation of its `x` and `y`, over the rows
+    holding both, as `polars_backend.spearman_influence_variance` measures it, through windows ordered by each column.
+    None where either is constant over those rows."""
+    held = pair.where(sf.col('x').isNotNull() & sf.col('y').isNotNull())
+    rows = held.count()
+    if not rows:
+        return None
+    centered = held.select('x', 'y', mid_distribution('x', rows).alias('u'), mid_distribution('y', rows).alias('w'))
+    u, w = sf.col('u'), sf.col('w')
+    covariance, spread_x, spread_y = (float(value) for value in centered.agg(sf.avg(u * w), sf.avg(u * u), sf.avg(w * w)).collect()[0])
+    if not spread_x or not spread_y:
+        return None
+    above = {
+        name: rows_above(of, by, rows).alias(name)
+        for name, of, by in (('g_x', 'w', 'x'), ('h_x', 'u', 'x'), ('g_y', 'u', 'y'), ('h_y', 'w', 'y'))
+    }
+    moved = centered.select(u, w, *above.values())
+    scale = math.sqrt(spread_x * spread_y)
+    on_covariance = u * w + sf.col('g_x') + sf.col('g_y') - 3 * covariance
+    on_x = u * u + 2 * sf.col('h_x') - 3 * spread_x
+    on_y = w * w + 2 * sf.col('h_y') - 3 * spread_y
+    influence = on_covariance / scale - covariance / scale / 2 * (on_x / spread_x + on_y / spread_y)
+    variance = moved.agg(sf.avg(influence * influence)).collect()[0][0]
+    return float(variance) if variance is not None and math.isfinite(variance) else None
+
+
+def mid_distribution(by: str, rows: int) -> Column:
+    """Each row's mid-distribution function in `by` over the frame's `rows` rows, less a half: its mean rank, a tie at the
+    mean of its first and last, less a half, over the rows."""
+    order = Window.orderBy(by)
+    through = sf.count(sf.lit(1)).over(order.rangeBetween(Window.unboundedPreceding, Window.currentRow))
+    return ((sf.rank().over(order) + through) / 2 - 0.5) / rows - 0.5
+
+
+def rows_above(of: str, by: str, rows: int) -> Column:
+    """Each row's sum of `of` over the rows above it in `by`, and half of it over the rows tied with it, over the rows."""
+    through = sf.sum(of).over(Window.orderBy(by).rangeBetween(Window.unboundedPreceding, Window.currentRow))
+    whole = sf.sum(of).over(Window.rowsBetween(Window.unboundedPreceding, Window.unboundedFollowing))
+    tied = sf.sum(of).over(Window.partitionBy(by))
+    return (whole - through + tied / 2) / rows
 
 
 def arrow_schema(table: DataFrame) -> pa.Schema:

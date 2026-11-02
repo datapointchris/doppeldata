@@ -77,8 +77,8 @@ READ_FIELDS = {
     },
     'Keys': {'primary', 'candidates'},
     'Key': {'columns', 'uniqueness'},
-    'Correlation': {'a', 'b', 'method', 'value'},
-    'CorrelationRatio': {'a', 'b', 'value'},
+    'Correlation': {'a', 'b', 'method', 'value', 'sample_rows'},
+    'CorrelationRatio': {'a', 'b', 'value', 'sample_rows'},
     'Conditional': {'given', 'column', 'fractions', 'other_fractions'},
     'ConditionalQuantiles': {'given', 'column', 'quantiles', 'other'},
     'ConditionalFractions': {'given', 'column', 'zero_fraction', 'null_fraction', 'other', 'given_null'},
@@ -145,9 +145,12 @@ def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
         if key:
             yield 'keys', f'{role} {"+".join(key["columns"])}', key.get('uniqueness')
     for correlation in dataset.get('correlations') or []:
-        yield f'correlations {correlation["method"]}', f'{correlation["a"]} x {correlation["b"]}', correlation['value']
+        pair = f'{correlation["a"]} x {correlation["b"]}'
+        yield f'correlations {correlation["method"]}', pair, correlation['value']
+        yield f'correlations {correlation["method"]} sample_rows', pair, correlation.get('sample_rows')
     for ratio in dataset.get('correlation_ratios') or []:
         yield 'correlation_ratios', f'{ratio["a"]} x {ratio["b"]}', ratio['value']
+        yield 'correlation_ratios sample_rows', f'{ratio["a"]} x {ratio["b"]}', ratio.get('sample_rows')
     for conditional in dataset.get('conditionals') or []:
         rows = {
             **{f'{conditional["given"]}={given}': row for given, row in conditional['fractions'].items()},

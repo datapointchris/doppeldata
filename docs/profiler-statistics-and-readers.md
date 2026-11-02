@@ -601,7 +601,9 @@ which `--sample` makes its sample.
   and a `sequence` take no part. Each column is ranked over its own values, then a pair is
   correlated over the rows holding both. A pair whose magnitude reaches `CORRELATION_FLOOR` is
   kept, the strongest `CORRELATIONS_KEPT` of both lists. `a` and `b` follow the columns' order, so
-  a correlation ratio's kinds tell which column is the category.
+  a correlation ratio's kinds tell which column is the category. Each entry's `sample_rows` is the
+  sampled rows it was measured on, which `data check` reads for the spread of a Spearman value.
+  A sparse column's pairs rest on far fewer rows than the sample holds.
 
   η is a list of its own because it is asymmetric, and a different statistic from Spearman's ρ and
   Cramér's V.

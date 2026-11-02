@@ -46,6 +46,7 @@ from doppeldata.profiling.backend import Source
 from doppeldata.profiling.backend import SourceFormat
 from doppeldata.profiling.backend import Table
 from doppeldata.profiling.backend import is_hidden
+from doppeldata.profiling.column_dependence import SPEARMAN
 from doppeldata.profiling.column_dependence import DependenceColumn
 from doppeldata.profiling.column_dependence import FrozenConditional
 from doppeldata.profiling.column_dependence import FrozenPairs
@@ -175,11 +176,13 @@ class FrozenLayout:
     conditionals: tuple[FrozenConditional, ...] = ()
     # The rows of the sample the correlations read, which a check sets larger.
     dependence_sample_rows: int = FIT_SAMPLE_ROWS
+    # Whether a check measures how far one row moves each Spearman correlation it states again, which no other re-profile does.
+    spearman_influence: bool = False
 
     @classmethod
-    def of(
-        cls, document: dict[str, Any], *, count_conditionals_without_floor: bool = False, dependence_sample_rows: int = FIT_SAMPLE_ROWS
-    ) -> 'FrozenLayout':
+    def of(cls, document: dict[str, Any], *, for_check: bool = False, dependence_sample_rows: int = FIT_SAMPLE_ROWS) -> 'FrozenLayout':
+        """The layout `document` states. `for_check` adds what only a check measures: its conditional tables counted
+        without a floor, and the influence of a row on each Spearman correlation."""
         histograms, values = {}, {}
         described = described_rows(document)
         for column in document.get('columns') or []:
@@ -195,8 +198,8 @@ class FrozenLayout:
                 held = described * (1 - (column.get('null_fraction') or 0.0)) if described else 0
                 baseline = max(0.0, other - drifted / held) if held else other
                 values[column['name']] = FrozenValues(tuple(entry['value'] for entry in section['top_values']), baseline, section_name)
-        conditionals = FrozenConditional.all_in(document) if count_conditionals_without_floor else ()
-        return cls(histograms, values, FrozenPairs.of(document), conditionals, dependence_sample_rows)
+        conditionals = FrozenConditional.all_in(document) if for_check else ()
+        return cls(histograms, values, FrozenPairs.of(document), conditionals, dependence_sample_rows, for_check)
 
 
 def relisted_columns(earlier: dict[str, Any], now: dict[str, Any]) -> list[str]:
@@ -237,16 +240,25 @@ def answered(backend: Backend, table: Table, requests: list[Request]) -> Answers
 
 
 @dc.dataclass(frozen=True)
+class CheckMeasures:
+    """What a check measures of a table beside its profile, which no profile holds: each conditional table the frozen
+    layout states, counted without a floor, and the variance of one row's influence on each Spearman correlation it
+    states, by the correlation's columns."""
+
+    conditionals_without_floor: list[dict[str, Any]] = dc.field(default_factory=list)
+    spearman_influence: dict[tuple[str, str], float] = dc.field(default_factory=dict)
+
+
+@dc.dataclass(frozen=True)
 class ProfiledTable:
     """A table's profile document, its every row at the types the profile gives its columns as read and as its lists
-    count them, and those columns. Beside the document, each conditional table the frozen layout asked for, counted
-    without a floor."""
+    count them, and those columns. Beside the document, what the frozen layout asked a check to measure."""
 
     document: dict[str, Any]
     every_row: Table
     every_row_recoded: Table
     specs: list[ColumnSpec]
-    conditionals_without_floor: list[dict[str, Any]] = dc.field(default_factory=list)
+    check_measures: CheckMeasures = dc.field(default_factory=CheckMeasures)
 
 
 def profile_table(
@@ -312,7 +324,26 @@ def profile_table(
         frozenset(spec.name for spec in profiled.specs if spec.kind is ColumnKind.FLOAT),
     )
     document = withheld(document, policy, k_min, cell_floors)
-    return ProfiledTable(document, profiled.every_row, profiled.every_row_recoded, profiled.specs, unfloored)
+    influence = spearman_influence(backend, profiled.dependence_sample, document, settings.frozen)
+    return ProfiledTable(document, profiled.every_row, profiled.every_row_recoded, profiled.specs, CheckMeasures(unfloored, influence))
+
+
+def spearman_influence(
+    backend: Backend, sample: Table | None, document: dict[str, Any], frozen: FrozenLayout
+) -> dict[tuple[str, str], float]:
+    """The variance of one row's influence on each Spearman correlation `document` states again from `frozen`, over
+    `sample`, the rows it was measured on, by its columns. Where `frozen` asks for none, or the variance is not finite,
+    a pair has none."""
+    if not frozen.spearman_influence or sample is None:
+        return {}
+    correlations = (document.get('dataset') or {}).get('correlations') or []
+    pairs = [
+        (entry['a'], entry['b'])
+        for entry in correlations
+        if entry['method'] == SPEARMAN and frozen.pairs.correlated(entry['a'], entry['b'], SPEARMAN)
+    ]
+    measured = zip(pairs, backend.rank_correlation_influence(sample, pairs), strict=True)
+    return {pair: variance for pair, variance in measured if variance is not None}
 
 
 def dataset_sections(
