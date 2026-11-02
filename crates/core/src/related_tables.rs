@@ -7,7 +7,6 @@
 //! second permutation. So a block needs nothing from any other block, and no pass over the data.
 
 mod fanout_counts;
-mod keyed_permutation;
 mod parent_blocks;
 
 use std::cmp::Reverse;
@@ -28,11 +27,11 @@ use arrow_select::interleave::interleave;
 use serde::Serialize;
 
 use self::fanout_counts::RankedCounts;
-use self::keyed_permutation::KeyedPermutation;
 use crate::identity::DatasetIdentity;
 use crate::identity::is_sha256;
 use crate::issue_codes;
 use crate::issue_codes::IssueCode;
+use crate::keyed_permutation::KeyedPermutation;
 use crate::plan::Plan;
 use crate::plan::PlanError;
 use crate::plan::TableInputs;

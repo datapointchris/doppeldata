@@ -42,6 +42,9 @@ script](how-to/drive-doppeldata-from-a-script.md) runs each of them.
 - **The engine records each field a sampler reads when it builds the sampler.** So the trace
   follows the branch the engine took: a text column drawn from a hinted pattern names
   `semantic/generator_hint/pattern`, and one drawn from its stored pattern names `string/pattern`.
+- **A key drawn with no value twice names the key, outside its column.** Its trace lists
+  `/dataset/keys/…/columns` and `uniqueness`, and the `generated` fields a stated 1 is read
+  against, where a fresh draw would list `distinct/ratio`.
 - **A value is read from the profile with the scenario's patch applied**, the document the engine
   planned from. A field the profile leaves out is left out of `parameters`, and reads as its
   default.

@@ -48,7 +48,7 @@ def schema(table: ContractTable, notes: list[str], bundle: bool) -> str:
     prefix = f'{table.name}.' if bundle else ''
     notes.extend(prefix + note.note for note in table.left_out() if note.fact != 'foreign_key')
     lines = [f'class {class_name(table.name)}(dy.Schema):']
-    primary = table.primary_key.columns if table.primary_key and table.primary_key.uniqueness.whole else ()
+    primary = table.primary_key.columns if table.primary_key and table.primary_key.whole else ()
     unique = table.unique_columns() - set(primary)
     for column, (attribute, aliased) in zip(table.columns, attribute_names(table.columns, RESERVED), strict=True):
         flags = {'primary_key': column.name in primary, 'unique': column.name in unique}
@@ -60,7 +60,7 @@ def schema(table: ContractTable, notes: list[str], bundle: bool) -> str:
         if column.held_format():
             notes.append(f'{prefix}{column.label}: the {column.held_format()} format, which dataframely has no check of')
     for key in table.stated_keys():
-        if len(key.columns) > 1 and key.uniqueness.whole and key.columns != primary:
+        if len(key.columns) > 1 and key.whole and key.columns != primary:
             lines += [
                 '',
                 '    @dy.rule()',

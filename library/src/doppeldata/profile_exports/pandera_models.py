@@ -54,7 +54,7 @@ def model(table: ContractTable, notes: list[str], bundle: bool) -> str:
         arguments += field_arguments(column, column.name in unique)
         lines.append(f'    {attribute}: {annotation} = pa.Field({", ".join(arguments)})')
         notes.extend(prefix + note for note in unchecked(column))
-    composite = [list(key.columns) for key in table.stated_keys() if len(key.columns) > 1 and key.uniqueness.whole]
+    composite = [list(key.columns) for key in table.stated_keys() if len(key.columns) > 1 and key.whole]
     if composite:
         lines += ['', '    class Config:', f'        unique = {composite[0]!r}']
         notes.extend(f'{prefix}{", ".join(key)}: the key, as a model holds one key of several columns' for key in composite[1:])

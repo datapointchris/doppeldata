@@ -25,6 +25,33 @@ pub struct TableProfile {
     pub columns: Option<Vec<Column>>,
 }
 
+impl TableProfile {
+    /// The rows the profile's rates are shares of: those its sample read, or else every row.
+    pub fn described_rows(&self) -> Option<u64> {
+        let rows_read = self
+            .generated
+            .as_ref()
+            .and_then(|g| g.sample.as_ref())
+            .and_then(|sample| sample.rows_read);
+        rows_read.or(self.dataset.as_ref().and_then(|dataset| dataset.rows))
+    }
+
+    /// Whether `key` holds for every row: it states no uniqueness, or states 1 of rows a profiler
+    /// read whole. A profiler writes a key that fewer than `k_min` rows break as 1, and a sample
+    /// leaves rows unread, so a 1 either one measured states nothing of those rows.
+    pub fn key_is_whole(&self, key: &Key) -> bool {
+        let Some(uniqueness) = key.uniqueness else { return true };
+        let generated = self.generated.as_ref();
+        let engine = generated.and_then(|g| g.engine);
+        let sampled = generated
+            .and_then(|g| g.sample.as_ref())
+            .is_some_and(|sample| sample.strategy != SampleStrategy::Full);
+        let read_whole =
+            engine == Some(Engine::Import) || self.described_rows().is_none_or(|rows| rows == 0) || (engine.is_none() && !sampled);
+        uniqueness.0 >= 1.0 && read_whole
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(inline)]

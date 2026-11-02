@@ -1415,6 +1415,18 @@ mod _core {
         doppeldata_core::pattern_problem(pattern)
     }
 
+    /// Whether each key the table profile states, its primary key first, holds for every row, as
+    /// the engine reads a key it refuses to draw a value of twice.
+    #[pyfunction]
+    fn whole_keys(profile_json: &str) -> PyResult<Vec<bool>> {
+        let profile: doppeldata_core::profile::TableProfile =
+            serde_json::from_str(profile_json).map_err(|error| not_the_profile_model("the profile", error))?;
+        let keys = profile.dataset.as_ref().and_then(|dataset| dataset.keys.as_ref());
+        let primary = keys.and_then(|keys| keys.primary.as_ref());
+        let candidates = keys.and_then(|keys| keys.candidates.as_ref()).into_iter().flatten();
+        Ok(primary.into_iter().chain(candidates).map(|key| profile.key_is_whole(key)).collect())
+    }
+
     /// The fewest and most characters each provider's values hold, by the provider's name, read
     /// from the lists and templates it draws from.
     #[pyfunction]

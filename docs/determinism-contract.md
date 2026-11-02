@@ -97,9 +97,10 @@ table, and its rows are the sum of its tables'.
   foreign key's slot is, so it draws from no stream of its own.
 - **A parent key is addressed at its row, never read back.** A `sequence` key is its formula, and a
   uuid key seeks its stream to the row. A key that is itself a foreign key takes its own
-  relationship's draw. Any other integer key is a sequence across its profiled extremes, and any
-  other string key draws from its `indexed_values` stream at the row. Any other key is refused as
-  `E-PROFILE-120`.
+  relationship's draw. Any other integer key is a sequence across its profiled extremes. A string
+  key stated unique and drawn from a pattern or shapes holds the string its row's rank names, and
+  any other string key draws from its `indexed_values` stream at the row. Any other key is refused
+  as `E-PROFILE-120`.
 - **An inherited column copies its parent row's value.** The child block generates the parent
   blocks its rows touch, cached per thread, so the copy is the value the parent's table writes.
 
@@ -113,7 +114,8 @@ Every (seed, table, column path, perturbation) derives its own ChaCha8 stream fr
 name. So adding, removing or reordering a column leaves every other column's values unchanged.
 
 Within a column, each kind of draw has its own stream: the values, the null mask, the missing-value
-tokens, the wrong check digits, a list's lengths and a drawn value's index. The values stream draws
+tokens, the wrong check digits, a list's lengths, a drawn value's index and a unique key's rank. A
+unique key's rank and wrong check digit are positioned at its row. The values stream draws
 a value for every row, a null row's included. So a column's values do not move when its null rate,
 its error rate or its tokens change. A nested
 field's streams are named by its dotted path, so it draws the same whatever its siblings are.

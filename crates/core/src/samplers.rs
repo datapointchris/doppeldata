@@ -17,6 +17,7 @@ mod text;
 mod text_cells;
 mod text_lengths;
 mod type_mix;
+mod unique_pattern_key;
 
 use std::sync::Arc;
 
@@ -29,6 +30,7 @@ use arrow_schema::Field;
 use arrow_schema::FieldRef;
 use arrow_schema::TimeUnit;
 use rand_distr::weighted::WeightedAliasIndex;
+use regex_syntax::hir::Hir;
 
 use self::categorical::CategoricalSampler;
 pub(crate) use self::dependent_columns::DependentColumns;
@@ -67,6 +69,8 @@ pub use self::type_mix::TYPE_MIX_FIELD_KEY;
 use self::type_mix::TypeMix;
 pub(crate) use self::type_mix::foreign_text;
 pub use self::type_mix::raw_type_name;
+use self::unique_pattern_key::KeyEnd;
+use self::unique_pattern_key::UniquePatternKey;
 use crate::physical_type;
 use crate::physical_type::Container;
 use crate::physical_type::PhysicalType;
@@ -75,11 +79,12 @@ use crate::plan::PlanError;
 use crate::profile::Column;
 use crate::profile::Distinct;
 use crate::profile::GeneratorHint;
-use crate::profile::Keys;
+use crate::profile::Key;
 use crate::profile::LogicalType;
 use crate::profile::Provider;
 use crate::profile::RawValueType;
 use crate::profile::StringStats;
+use crate::profile::TableProfile;
 use crate::rng::Bernoulli;
 use crate::rng::rng_for;
 use crate::rng::stream_key;
@@ -91,12 +96,18 @@ const DEFAULT_LIST_LENGTH: (f64, f64) = (0.0, 4.0);
 /// The most extra repeats a pattern's `*`, `+` or `{n,}` generates.
 const PATTERN_MAX_REPEAT: u32 = 16;
 
+/// The most repeats a pattern's unbounded repetition of `least` repeats or more draws, as
+/// rand_regex runs one given [`PATTERN_MAX_REPEAT`].
+pub(crate) fn unbounded_most(least: u32) -> u32 {
+    least.saturating_add(PATTERN_MAX_REPEAT)
+}
+
 pub use text::check_digit_holds;
 
 /// Why the engine cannot generate from `pattern`, as planning a profile that stores it refuses
 /// it, or None when it can.
 pub fn pattern_problem(pattern: &str) -> Option<String> {
-    text::compile_pattern(pattern, PATTERN_MAX_REPEAT).err()
+    text::compile_pattern(pattern).err()
 }
 
 /// Where a block sits: the seed, the block's number, and the dataset row its first row is.
@@ -121,18 +132,55 @@ pub(crate) struct PlanContext<'a> {
     /// The profile's `privacy.k_min`, or [`crate::profile::DEFAULT_K_MIN`] where it states none. It bounds the rows
     /// the trimmed extremes leave beyond them.
     pub(crate) k_min: u64,
-    /// The keys the profile states, whose columns' foreign text is each one row's own.
-    pub(crate) keys: Option<&'a Keys>,
+    /// The profile the columns are of, whose keys' columns draw foreign text each one row's own.
+    pub(crate) table_profile: &'a TableProfile,
 }
 
-impl PlanContext<'_> {
+/// How a key of one column is stated unique.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatedUnique {
+    /// Of every row, as [`TableProfile::key_is_whole`] reads it.
+    Whole,
+    /// Of 1 under a privacy floor or a sample, which leaves the few rows it did not count unstated.
+    Measured,
+}
+
+impl<'a> PlanContext<'a> {
+    /// Each key the profile states, beside its pointer.
+    fn stated_keys(&self) -> impl Iterator<Item = (String, &'a Key)> + use<'a> {
+        let keys = self.table_profile.dataset.as_ref().and_then(|dataset| dataset.keys.as_ref());
+        let primary = keys.and_then(|keys| keys.primary.as_ref());
+        let candidates = keys.and_then(|keys| keys.candidates.as_ref()).into_iter().flatten();
+        let primary = primary.map(|key| ("/dataset/keys/primary".to_string(), key));
+        primary.into_iter().chain(
+            candidates
+                .enumerate()
+                .map(|(at, key)| (format!("/dataset/keys/candidates/{at}"), key)),
+        )
+    }
+
     /// Whether `name` is a column of a key the profile states.
     fn is_key_column(&self, name: &str) -> bool {
-        let Some(keys) = self.keys else { return false };
-        keys.primary
-            .iter()
-            .chain(keys.candidates.iter().flatten())
-            .any(|key| key.columns.iter().any(|column| column == name))
+        self.stated_keys().any(|(_, key)| key.columns.iter().any(|column| column == name))
+    }
+
+    /// How the key `name` alone is stated unique, or None where it is no such key, or states a
+    /// uniqueness under 1. The key's fields are recorded as read, because they choose its draw.
+    fn stated_unique(&self, name: &str, reads: &mut FieldReads) -> Option<StatedUnique> {
+        let (pointer, key) = self.stated_keys().find(|(_, key)| key.columns == [name])?;
+        reads.read_outside("key_columns", format!("{pointer}/columns"), ());
+        let uniqueness = reads.read_outside("key_uniqueness", format!("{pointer}/uniqueness"), key.uniqueness);
+        if uniqueness.is_some_and(|uniqueness| uniqueness.0 < 1.0) {
+            return None;
+        }
+        if uniqueness.is_some() {
+            reads.read_outside("profiled_by", "/generated/engine".to_string(), ());
+            reads.read_outside("sample_strategy", "/generated/sample/strategy".to_string(), ());
+        }
+        Some(match self.table_profile.key_is_whole(key) {
+            true => StatedUnique::Whole,
+            false => StatedUnique::Measured,
+        })
     }
 
     /// The distinct values a column is to hold over the dataset, drawn in its `filled_rows`. At or
@@ -243,6 +291,8 @@ pub(crate) struct StreamKeys {
     type_mix: u64,
     /// The text of each row holding a share of another type.
     type_mix_text: u64,
+    /// The permutation taking a unique key's row to its rank among its pattern's strings.
+    key_rank: u64,
 }
 
 impl StreamKeys {
@@ -262,6 +312,7 @@ impl StreamKeys {
             given: key("given"),
             type_mix: key("type_mix"),
             type_mix_text: key("type_mix_text"),
+            key_rank: key("key_rank"),
         }
     }
 
@@ -346,18 +397,38 @@ impl ValueSampler {
     }
 }
 
-/// Each profile field a sampler's builder read, as a parameter's name and the field's pointer
-/// below the column, recorded where the builder reads it. So it names the branch the builder took.
+/// Each profile field a sampler's builder read, as a parameter's name and the field's pointer,
+/// recorded where the builder reads it. So it names the branch the builder took.
 #[derive(Debug, Default)]
-pub(crate) struct FieldReads(Vec<(&'static str, &'static str)>);
+pub(crate) struct FieldReads {
+    /// Fields of the column, by their pointer below it.
+    below: Vec<(&'static str, &'static str)>,
+    /// Fields outside the column, such as its key's, by their pointer in the profile.
+    outside: Vec<(&'static str, String)>,
+}
 
 impl FieldReads {
     /// `value`, the field at `pointer`, recorded as read under `name`.
     pub(crate) fn read<T>(&mut self, name: &'static str, pointer: &'static str, value: T) -> T {
-        if self.0.iter().all(|&(_, read)| read != pointer) {
-            self.0.push((name, pointer));
+        if self.below.iter().all(|&(_, read)| read != pointer) {
+            self.below.push((name, pointer));
         }
         value
+    }
+
+    /// As [`Self::read`], for a field outside the column at `pointer` in the profile.
+    fn read_outside<T>(&mut self, name: &'static str, pointer: String, value: T) -> T {
+        if self.outside.iter().all(|(_, read)| *read != pointer) {
+            self.outside.push((name, pointer));
+        }
+        value
+    }
+
+    /// Each field read, as a parameter's name and its pointer in the profile, for a column at
+    /// `column`.
+    fn pointers(self, column: &str) -> Vec<(&'static str, String)> {
+        let below = self.below.into_iter().map(|(name, below)| (name, format!("{column}{below}")));
+        below.chain(self.outside).collect()
     }
 }
 
@@ -383,16 +454,20 @@ pub(crate) struct ColumnPlan {
 }
 
 impl ColumnPlan {
-    /// Whether no two rows the column draws hold one value: a sequence with a step, or a uuid
-    /// drawn for each row, with no nulls.
-    pub(crate) fn draws_unique_values(&self) -> bool {
+    /// How many rows, from the first, the column draws with no two holding one value, with no
+    /// nulls: a key stated unique, its strings, or a sequence with a step or a uuid drawn for each
+    /// row, [`u128::MAX`]. None where any two rows may hold one value.
+    pub(crate) fn unique_rows(&self) -> Option<u128> {
         let unique = match &self.values {
-            ValueSampler::Sequence(sequence) => sequence.step != 0,
-            ValueSampler::Text(text) => text.index.is_none() && matches!(text.source, TextSource::Provider(Provider::Uuid)),
-            _ => false,
+            ValueSampler::Sequence(sequence) => (sequence.step != 0).then_some(u128::MAX),
+            ValueSampler::Text(text) => match &text.unique {
+                Some(key) => Some(key.strings()),
+                None => (text.index.is_none() && matches!(text.source, TextSource::Provider(Provider::Uuid))).then_some(u128::MAX),
+            },
+            _ => None,
         };
         let renders_its_own = self.type_mix.as_ref().is_none_or(TypeMix::renders_only);
-        unique && renders_its_own && self.nulls.is_none() && self.text_only.is_none()
+        unique.filter(|_| renders_its_own && self.nulls.is_none() && self.text_only.is_none())
     }
 
     pub(crate) fn generate(&self, at: &BlockPosition, rows: usize) -> ArrayRef {
@@ -520,7 +595,9 @@ impl ColumnPlan {
             }
             ValueSampler::Text(text) => {
                 text.by_row = true;
-                self.sampler = format!("{}, each row its own value", self.sampler);
+                if text.unique.is_none() {
+                    self.sampler = format!("{}, each row its own value", self.sampler);
+                }
                 RowKey::TextAtRow {
                     seed,
                     keys: self.keys,
@@ -736,11 +813,7 @@ fn column_plan_present(context: &PlanContext, column: &Column, site: &ColumnSite
     if column.missing_token_fractions.as_ref().is_some_and(|tokens| !tokens.is_empty()) {
         sampler.push_str(", with missing-value tokens as text");
     }
-    let read_fields = reads
-        .0
-        .into_iter()
-        .map(|(name, below)| (name, format!("{}{below}", site.pointer)))
-        .collect();
+    let read_fields = reads.pointers(&site.pointer);
     let kind = values.kind();
     let field = match &type_mix {
         Some(mix) => text_field(&column.name, may_be_null, mix),
@@ -829,6 +902,9 @@ fn describe(column: &Column, values: &ValueSampler) -> String {
             let mut description = describe_source(&text.source);
             if text.index.is_some() {
                 description.push_str(", at the profiled distinct ratio");
+            }
+            if let Some(unique) = &text.unique {
+                description.push_str(&format!(", no row repeating another, from its {}", unique.counted()));
             }
             if let Some(check_digit) = &text.check_digit {
                 description.push_str(&format!(", with a {:?} check digit", check_digit.kind).to_lowercase());
@@ -960,7 +1036,6 @@ fn value_sampler(
     let string = column.string.as_ref();
     let hint = column.semantic.as_ref().and_then(|s| s.generator_hint.as_ref());
     let source = text_source(string, hint, site, reads)?;
-    let target = context.distinct_target(column.distinct.as_ref(), filled_rows, reads);
     let categories = match reads.read("listed_values", "/string/top_values", listed_values(string)) {
         Some(top_values) => Some((
             top_values,
@@ -971,7 +1046,7 @@ fn value_sampler(
         )),
         None => match reads.read("listed_prefixes", "/string/prefixes", listed_prefixes(string)) {
             Some(prefixes) => {
-                let suffix = text::compile_pattern(&prefixes.suffix, PATTERN_MAX_REPEAT)
+                let suffix = text::compile_pattern(&prefixes.suffix)
                     .map_err(site.refuse_as(ColumnFault::InvalidPattern, "/string/prefixes/suffix"))?;
                 // A column written as prefixes counts its distinct prefixes, so the rest are drawn to hold as many.
                 let prefix_chars = prefixes
@@ -993,6 +1068,7 @@ fn value_sampler(
         },
     };
     if let Some((listed, other_fraction, suffix, field, other_variety)) = categories {
+        let target = context.distinct_target(column.distinct.as_ref(), filled_rows, reads);
         let values: Vec<_> = listed.iter().map(|top| (top.value.clone(), top.fraction.0)).collect();
         let other_fraction = other_fraction.map_or(0.0, |r| r.0);
         let listed = ListedValues::new(values, other_fraction).map_err(site.refuse_as(ColumnFault::UnusableRates, field))?;
@@ -1022,13 +1098,65 @@ fn value_sampler(
             invalid: Bernoulli::new(invalid_fraction),
         }
     });
+    let language = source.key_language().filter(|_| !site.nested);
+    let stated = language.as_ref().and_then(|_| context.stated_unique(&column.name, reads));
+    let unique = match (language, stated) {
+        (Some(language), Some(stated)) => {
+            let (field, drawn_from) = match (&source, hint.and_then(|hint| hint.pattern.as_ref())) {
+                (TextSource::Pattern(_), Some(_)) => (HINTED_PATTERN, "its pattern holds"),
+                (TextSource::Pattern(_), None) => (STORED_PATTERN, "its pattern holds"),
+                _ => (STORED_SHAPES, "its shapes hold"),
+            };
+            let end = match &check_digit {
+                Some(check_digit) => KeyEnd::BeforeCheckDigit(check_digit.kind),
+                None => KeyEnd::Whole,
+            };
+            let refuse =
+                |fault, message: String| site.refuse_as(fault, field)(format!("{:?} is a key stated unique{message}", column.name));
+            unique_key(&language, end, context.rows, stated, drawn_from, refuse)?
+        }
+        _ => None,
+    };
+    let index = match unique {
+        Some(_) => None,
+        None => context
+            .distinct_target(column.distinct.as_ref(), filled_rows, reads)
+            .and_then(|target| ValueIndex::for_distinct(target, &source.variety())),
+    };
     Ok(ValueSampler::Text(TextSampler {
-        index: target.and_then(|target| ValueIndex::for_distinct(target, &source.variety())),
+        index,
         by_row: false,
+        unique,
         source,
         check_digit,
         output,
     }))
+}
+
+/// The draw of a key stated unique from `language` over `rows`, refused where its automaton passes
+/// the bound or the rows outnumber its strings. A key [`StatedUnique::Measured`] draws fresh there
+/// instead, so it returns None.
+fn unique_key(
+    language: &Hir,
+    end: KeyEnd,
+    rows: f64,
+    stated: StatedUnique,
+    drawn_from: &str,
+    refuse: impl FnOnce(ColumnFault, String) -> PlanError,
+) -> Result<Option<Arc<UniquePatternKey>>, PlanError> {
+    let rows = rows.max(0.0).ceil() as u64;
+    let refusal = match UniquePatternKey::new(language, end) {
+        Ok(key) if u128::from(rows) <= key.strings() => return Ok(Some(Arc::new(key))),
+        Ok(key) => (
+            ColumnFault::KeyWiderThanPattern,
+            format!(" over {rows} rows, and {drawn_from} {}", key.counted()),
+        ),
+        Err(error) => (ColumnFault::KeyPatternTooComplex, format!(", and {error}")),
+    };
+    match stated {
+        StatedUnique::Whole => Err(refuse(refusal.0, refusal.1)),
+        StatedUnique::Measured => Ok(None),
+    }
 }
 
 /// The whole values a string column lists, which the categorical sampler draws before `prefixes`.
@@ -1046,6 +1174,10 @@ fn empty_numeric_stats() -> crate::profile::NumericStats {
     serde_json::from_value(serde_json::json!({})).expect("every numeric statistic is optional")
 }
 
+const HINTED_PATTERN: &str = "/semantic/generator_hint/pattern";
+const STORED_PATTERN: &str = "/string/pattern";
+const STORED_SHAPES: &str = "/string/shapes";
+
 /// Where a string column's generated values come from, most specific first: a provider, a
 /// pattern, the shapes, then characters of the profiled classes.
 fn text_source(
@@ -1057,30 +1189,28 @@ fn text_source(
     if let Some(provider) = reads.read("provider", "/semantic/generator_hint/provider", hint.and_then(|hint| hint.provider)) {
         if provider == Provider::Icd10cm {
             return Ok(TextSource::Icd10cm {
-                dotted: dominant_shape_is_dotted(reads.read("shapes", "/string/shapes", string.and_then(|s| s.shapes.as_deref()))),
+                dotted: dominant_shape_is_dotted(reads.read("shapes", STORED_SHAPES, string.and_then(|s| s.shapes.as_deref()))),
             });
         }
         return Ok(TextSource::Provider(provider));
     }
-    const HINTED: &str = "/semantic/generator_hint/pattern";
-    const STORED: &str = "/string/pattern";
-    let pattern = match reads.read("pattern", HINTED, hint.and_then(|hint| hint.pattern.as_deref())) {
-        Some(hinted) => Some((hinted, HINTED)),
+    let pattern = match reads.read("pattern", HINTED_PATTERN, hint.and_then(|hint| hint.pattern.as_deref())) {
+        Some(hinted) => Some((hinted, HINTED_PATTERN)),
         None => reads
-            .read("pattern", STORED, string.and_then(|s| s.pattern.as_deref()))
-            .map(|stored| (stored, STORED)),
+            .read("pattern", STORED_PATTERN, string.and_then(|s| s.pattern.as_deref()))
+            .map(|stored| (stored, STORED_PATTERN)),
     };
     if let Some((pattern, field)) = pattern {
-        let compiled = text::compile_pattern(pattern, PATTERN_MAX_REPEAT).map_err(site.refuse_as(ColumnFault::InvalidPattern, field))?;
+        let compiled = text::compile_pattern(pattern).map_err(site.refuse_as(ColumnFault::InvalidPattern, field))?;
         return Ok(TextSource::Pattern(Box::new(compiled)));
     }
     let shapes = reads
-        .read("shapes", "/string/shapes", string.and_then(|s| s.shapes.as_ref()))
+        .read("shapes", STORED_SHAPES, string.and_then(|s| s.shapes.as_ref()))
         .filter(|shapes| !shapes.is_empty());
     if let Some(shapes) = shapes {
         let choice = WeightedAliasIndex::new(shapes.iter().map(|shape| shape.fraction.0).collect())
             .map_err(|error| format!("shape rates are unusable: {error}"))
-            .map_err(site.refuse_as(ColumnFault::UnusableRates, "/string/shapes"))?;
+            .map_err(site.refuse_as(ColumnFault::UnusableRates, STORED_SHAPES))?;
         let total: f64 = shapes.iter().map(|shape| shape.fraction.0).sum();
         return Ok(TextSource::Shapes {
             choice,

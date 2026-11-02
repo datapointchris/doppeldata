@@ -8,7 +8,7 @@ use rand_chacha::ChaCha8Rng;
 
 /// The version of every sampler's draw order. It is part of a dataset's identity, and any change
 /// that alters a generated value for the same inputs raises it.
-pub const STREAM_VERSION: u32 = 15;
+pub const STREAM_VERSION: u32 = 16;
 
 /// The rows one block holds. A block's streams start fresh, so any thread can produce any block.
 pub const BLOCK_ROWS: u64 = 65_536;

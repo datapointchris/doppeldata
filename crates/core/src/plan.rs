@@ -125,6 +125,10 @@ pub enum ColumnFault {
     /// kind the dependence cannot apply to, a value its column's type cannot hold, or one that would make a
     /// column depend on itself.
     InvalidDependence,
+    /// A key stated unique is asked for more rows than its pattern holds strings.
+    KeyWiderThanPattern,
+    /// A key stated unique draws from a pattern whose automaton is too large to count its strings in.
+    KeyPatternTooComplex,
 }
 
 impl ColumnFault {
@@ -142,6 +146,8 @@ impl ColumnFault {
             Self::TokensExceedNullRate => &issue_codes::TOKENS_EXCEED_NULL_FRACTION,
             Self::UnknownColumn => &issue_codes::UNKNOWN_COLUMN,
             Self::InvalidDependence => &issue_codes::INVALID_DEPENDENCE,
+            Self::KeyWiderThanPattern => &issue_codes::KEY_WIDER_THAN_PATTERN,
+            Self::KeyPatternTooComplex => &issue_codes::KEY_PATTERN_TOO_COMPLEX,
         }
     }
 }
@@ -572,20 +578,14 @@ fn leaf_pointers(patch: &Value, at: &str, pointers: &mut Vec<String>) {
 /// What `table`'s column samplers are planned against for `rows` rows from `seed`, with streams
 /// named for `name`.
 pub(crate) fn plan_context<'a>(table: &'a TableProfile, name: &'a str, seed: u64, rows: u64) -> PlanContext<'a> {
-    let source_rows = table.dataset.as_ref().and_then(|dataset| dataset.rows);
-    let rows_read = table
-        .generated
-        .as_ref()
-        .and_then(|g| g.sample.as_ref())
-        .and_then(|sample| sample.rows_read);
     PlanContext {
         table: name,
         seed,
         rows: rows as f64,
-        source_rows: source_rows.map(|rows| rows as f64),
-        described_rows: rows_read.or(source_rows).map(|rows| rows as f64),
+        source_rows: table.dataset.as_ref().and_then(|dataset| dataset.rows).map(|rows| rows as f64),
+        described_rows: table.described_rows().map(|rows| rows as f64),
         k_min: table.privacy.as_ref().and_then(|privacy| privacy.k_min).unwrap_or(DEFAULT_K_MIN),
-        keys: table.dataset.as_ref().and_then(|dataset| dataset.keys.as_ref()),
+        table_profile: table,
     }
 }
 

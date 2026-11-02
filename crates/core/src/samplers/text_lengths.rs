@@ -11,12 +11,12 @@ use regex_syntax::ast::RepetitionKind;
 use regex_syntax::ast::RepetitionRange;
 use regex_syntax::ast::parse::Parser;
 
-use super::PATTERN_MAX_REPEAT;
 use super::text::EMAIL_DOMAINS;
 use super::text::HCPCS_LEVEL2_DIGITS;
 use super::text::ICD10CM_CATEGORY_DIGITS;
 use super::text::ICD10CM_EXTENSION_PER_MILLE;
 use super::text::ZIP_CODE_DIGITS;
+use super::unbounded_most;
 use crate::profile::Provider;
 
 /// The fewest and most characters a value holds.
@@ -256,7 +256,7 @@ pub fn pattern_within_lengths(pattern: &str, least: Option<usize>, most: Option<
             .iter()
             .map(|&(low, high)| match high {
                 Some(high) => (low.saturating_add(by).min(high), high),
-                None => (low.saturating_add(by), low.saturating_add(by).saturating_add(PATTERN_MAX_REPEAT)),
+                None => (low.saturating_add(by), unbounded_most(low.saturating_add(by))),
             })
             .collect()
     };
@@ -283,7 +283,7 @@ pub fn pattern_within_lengths(pattern: &str, least: Option<usize>, most: Option<
         let (low, high) = counts[index];
         let unchanged = match stated[index] {
             (stated_low, Some(stated_high)) => (low, high) == (stated_low, stated_high),
-            (stated_low, None) => low == stated_low && high == low.saturating_add(PATTERN_MAX_REPEAT),
+            (stated_low, None) => low == stated_low && high == unbounded_most(low),
         };
         if unchanged {
             continue;

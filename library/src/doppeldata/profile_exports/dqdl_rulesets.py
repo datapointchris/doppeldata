@@ -60,7 +60,7 @@ def table_rules(table: ContractTable, notes: list[str]) -> Iterator[str]:
     primary = table.primary_key
     for key in table.stated_keys():
         named = ' '.join(quoted(column) for column in key.columns)
-        if key.uniqueness.whole:
+        if key.whole:
             yield f'IsPrimaryKey {named}' if key is primary else f'IsUnique {named}'
         elif key.uniqueness.rows:
             yield f'Uniqueness {named} >= {number(key.uniqueness.least())}'

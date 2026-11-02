@@ -62,9 +62,9 @@ def schema_of(table: ContractTable) -> dict[str, Any]:
     if missing != ['']:
         schema['missingValues'] = missing
     primary = table.primary_key
-    if primary is not None and primary.uniqueness.whole:
+    if primary is not None and primary.whole:
         schema['primaryKey'] = list(primary.columns)
-    composite = [list(key.columns) for key in table.unique_keys if len(key.columns) > 1 and key.uniqueness.whole]
+    composite = [list(key.columns) for key in table.unique_keys if len(key.columns) > 1 and key.whole]
     if composite:
         schema['uniqueKeys'] = composite
     if notes:

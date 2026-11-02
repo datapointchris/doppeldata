@@ -307,8 +307,9 @@ generates what a local run does.
   null there.
 - **`cdc` keys every change by `key`, else the profile's one-column `dataset.keys.primary`.** A
   profile stating neither, or a primary key of several columns, is refused as `E-SCENARIO-106`. A
-  key column must draw unique values, such as a sequence or a UUID with no nulls, or it is refused
-  as `E-SCENARIO-102`.
+  key column must draw no value twice, with no nulls: a sequence, a UUID, or a key stated unique
+  drawn from a pattern or shapes. Any other is refused as `E-SCENARIO-102`. A full load and inserts
+  outnumbering a pattern key's strings is refused as `E-PROFILE-125`.
 - **`cdc` refuses `duplicates` and `malformed_rows` beside it**, as `E-SCENARIO-103`. A copied
   row would hold its key twice in the full load, and the stream's own faults are its two rates. An
   op writing the key, a `keys.primary` column, `Op` or the commit column is refused too, since
