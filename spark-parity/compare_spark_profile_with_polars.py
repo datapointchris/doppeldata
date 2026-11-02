@@ -28,6 +28,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from doppeldata import Bundle
 from doppeldata import Profile
+from doppeldata.profile_format import GIVEN_LISTS
 from doppeldata.profile_format import read_document
 from doppeldata.published_schemas import published_fields
 
@@ -160,16 +161,17 @@ def dataset_entries(dataset: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
             for value, rate in row.items():
                 yield 'conditionals', f'{conditional_name(conditional)}: {conditional["column"]}={value} | {given}', rate
     for stated in dataset.get('conditional_quantiles') or []:
-        groups = {**{f'{stated["given"]}={given}': row for given, row in stated['quantiles'].items()}, '(other)': stated.get('other') or {}}
-        for given, quantiles in groups.items():
+        for parts, quantiles in GIVEN_LISTS['conditional_quantiles'].groups_at(stated):
+            given = f'{stated["given"]}={parts[1]}' if len(parts) == 2 else f'({parts[0]})'
             for level in quantiles:
                 yield 'conditional_quantiles', f'{conditional_name(stated)}: {level} | {given}', None
+    rate_list = GIVEN_LISTS['conditional_fractions']
     for stated in dataset.get('conditional_fractions') or []:
-        for rate in ('zero_fraction', 'null_fraction'):
+        for rate in rate_list.by_value:
             for given, value in (stated.get(rate) or {}).items():
                 yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | {stated["given"]}={given}', value
-            yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | (other)', (stated.get('other') or {}).get(rate)
-            yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | (null)', (stated.get('given_null') or {}).get(rate)
+            for group in rate_list.unlisted_fields:
+                yield 'conditional_fractions', f'{conditional_name(stated)}: {rate} | ({group})', (stated.get(group) or {}).get(rate)
     for dependency in dataset.get('dependencies') or []:
         described = f'{dependency["kind"]} {"+".join(dependency["lhs"])} -> {dependency["rhs"]}'
         yield 'dependencies', described, dependency.get('violation_fraction')

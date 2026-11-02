@@ -248,6 +248,7 @@ def without_set_aside(sections: dict[str, Any], set_aside: list[str]) -> dict[st
     for pointer in set_aside:
         _, _, listed, at, *field = pointer.split('/')
         aside.setdefault((listed, int(at)), set()).add(field[0] if field else None)
+    rate_list = GIVEN_LISTS['conditional_fractions']
     kept: dict[str, Any] = {}
     for name, entries in sections.items():
         left = []
@@ -257,9 +258,9 @@ def without_set_aside(sections: dict[str, Any], set_aside: list[str]) -> dict[st
                 continue
             entry = {key: value for key, value in entry.items() if key not in fields}
             if name == 'conditional_fractions':
-                if not {'zero_fraction', 'null_fraction'} & entry.keys():
+                if not set(rate_list.by_value) & entry.keys():
                     continue
-                for group in ('other', 'given_null'):
+                for group in rate_list.unlisted_fields:
                     rates = {key: value for key, value in (entry.pop(group, None) or {}).items() if key not in fields}
                     if rates:
                         entry[group] = rates

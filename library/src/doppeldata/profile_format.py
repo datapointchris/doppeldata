@@ -113,11 +113,25 @@ class GivenList:
         """The values of the given column the entry lists."""
         return {key for field in self.by_value if isinstance(by := entry.get(field), dict) for key in by}
 
+    @property
+    def unlisted_fields(self) -> tuple[str, ...]:
+        """The fields holding the groups no listed value keys: every other value's, then each `beside`."""
+        return (self.other, *self.beside)
+
+    def groups_at(self, entry: dict[str, Any]) -> list[tuple[PointerParts, Any]]:
+        """The groups of literals the entry holds, each beside its parts below the entry: each listed value's, then each
+        of `unlisted_fields`. A field the entry lacks holds an empty group."""
+        listed: list[tuple[PointerParts, Any]] = []
+        for field in self.by_value:
+            by = entry.get(field) or {}
+            if not self.nested:
+                listed.append(((field,), by))
+            elif isinstance(by, dict):
+                listed += [((field, key), group) for key, group in by.items()]
+        return [*listed, *(((field,), entry.get(field) or {}) for field in self.unlisted_fields)]
+
     def groups(self, entry: dict[str, Any]) -> list[Any]:
-        """The groups of literals the entry holds, each listed value's, then every other value's, then each `beside`."""
-        fields = [entry.get(field) or {} for field in self.by_value]
-        listed = [group for by in fields if isinstance(by, dict) for group in by.values()] if self.nested else fields
-        return [*listed, entry.get(self.other) or {}, *(entry.get(field) or {} for field in self.beside)]
+        return [group for _, group in self.groups_at(entry)]
 
     def literals(self, entry: dict[str, Any]) -> int:
         return sum(len(group) for group in self.groups(entry) if isinstance(group, dict))
