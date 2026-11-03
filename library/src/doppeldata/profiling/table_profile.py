@@ -8,6 +8,7 @@ import math
 import random
 import warnings
 from collections.abc import Callable
+from collections.abc import Iterator
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 from typing import Any
@@ -180,21 +181,21 @@ class FrozenLayout:
     dependence_sample_rows: int = FIT_SAMPLE_ROWS
     # Whether a check measures how far one row moves each Spearman correlation it states again, which no other re-profile does.
     spearman_influence: bool = False
-    # Each column's semantic type, which a check's profile of DATA keeps unless its sample clearly says otherwise, and
-    # no other re-profile does, because a profile that is written types its columns from its own data.
+    # Each column's semantic type by its path, nested columns included, which a check's profile of DATA keeps unless its
+    # sample clearly says otherwise, and no other re-profile does, because a profile that is written types its columns
+    # from its own data.
     typings: dict[str, FrozenTyping] = dc.field(default_factory=dict)
 
     @classmethod
     def of(cls, document: dict[str, Any], *, for_check: bool = False, dependence_sample_rows: int = FIT_SAMPLE_ROWS) -> 'FrozenLayout':
         """The layout `document` states. `for_check` adds what only a check measures: its conditional tables counted
         without a floor, the influence of a row on each Spearman correlation, and each column's semantic type."""
-        histograms, values, typings = {}, {}, {}
+        histograms, values = {}, {}
+        typings: dict[str, FrozenTyping] = {}
         described = described_rows(document)
-        typed_rows = value_sample_rows(described) if described else None
         for column in document.get('columns') or []:
             if for_check:
-                sampled = round(typed_rows * (1 - (column.get('null_fraction') or 0.0))) if typed_rows else None
-                typings[column['name']] = FrozenTyping((column.get('semantic') or {}).get('type'), sampled)
+                typings |= dict(frozen_typings(column, column['name'], described))
             histogram = (column.get('numeric') or {}).get('histogram')
             if histogram and len(histogram['edges']) > 1:
                 histograms[column['name']] = (histogram['kind'], tuple(histogram['edges']))
@@ -209,6 +210,28 @@ class FrozenLayout:
                 values[column['name']] = FrozenValues(tuple(entry['value'] for entry in section['top_values']), baseline, section_name)
         conditionals = FrozenConditional.all_in(document) if for_check else ()
         return cls(histograms, values, FrozenPairs.of(document), conditionals, dependence_sample_rows, for_check, typings)
+
+
+def frozen_typings(column: dict[str, Any], path: str, rows: int | None, share: float = 1.0) -> Iterator[tuple[str, FrozenTyping]]:
+    """The semantic type a profile gives `column` and each column nested in it, by path. `rows` are those of the table
+    the column is read into, and `share` the part of them holding its key.
+
+    A struct's fields read the same table. An array's elements are a table of their own, of about the column's arrays
+    times their median length, because a profile states an element's count only through the length.
+    """
+    holding = share * (1 - (column.get('null_fraction') or 0.0))
+    sampled = round(value_sample_rows(rows) * holding) if rows else None
+    yield path, FrozenTyping((column.get('semantic') or {}).get('type'), sampled)
+    struct = column.get('struct') or {}
+    presence = struct.get('presence_fractions') or {}
+    for field in struct.get('fields') or []:
+        field_share = holding * presence.get(field['name'], 1.0)
+        yield from frozen_typings(field, json_paths.joined(path, field['name']), rows, field_share)
+    listed = column.get('list') or {}
+    if listed.get('element'):
+        median = (listed.get('length') or {}).get('p50')
+        item_rows = round(rows * holding * median) if rows and median else None
+        yield from frozen_typings(listed['element'], json_paths.joined(path, json_paths.ELEMENT), item_rows)
 
 
 def relisted_columns(earlier: dict[str, Any], now: dict[str, Any]) -> list[str]:
@@ -479,8 +502,11 @@ def profile_columns(
     detected = detection.detected_columns(specs, packs)
     value_sample = backend.sample(table, value_sample_rows(described), SAMPLE_SEED) if detected else None
     patterns = generalized_patterns(value_sample, shapes, stats, described, k_min)
+    column_paths = json_paths.column_paths(json_root) if json_root is not None else {}
     typings, held_typings = (
-        detection.column_typings(value_sample, detected, patterns, k_min, settings.code_lists, layout.typings) if value_sample else ({}, {})
+        detection.column_typings(value_sample, detected, patterns, k_min, settings.code_lists, layout.typings, column_paths)
+        if value_sample
+        else ({}, {})
     )
     treatments = {spec.name: column_treatment(column_facts(spec, typings.get(spec.name)), settings.policy) for spec in specs}
     binnings = {}
@@ -553,9 +579,10 @@ def profile_columns(
         return profiled
     json_table = json_profiled(backend, profiled, settings, json_root)
     if json_root.path:
-        return dc.replace(profiled, json=json_table)
+        return dc.replace(profiled, json=json_table, held_typings=json_table.held_typings)
     outside = [entry for entry in columns if entry['name'] not in paths]
-    return dc.replace(profiled, columns=json_paths.assembled(json_root, json_table) + outside, json=json_table)
+    assembled = json_paths.assembled(json_root, json_table) + outside
+    return dc.replace(profiled, columns=assembled, json=json_table, held_typings=json_table.held_typings)
 
 
 def column_facts(spec: ColumnSpec, typing: 'Typing | None') -> ColumnFacts:
@@ -623,7 +650,7 @@ def json_profiled(backend: Backend, profiled: ProfiledColumns, settings: ColumnS
             length = json_paths.length_column(node.column)
             requests += [Request(length, 'quantiles', LENGTH_LEVELS), Request(length, 'listed_value_counts', (0,))]
     stats = answered(backend, table, requests)
-    counts, lengths, elements = {}, {}, {}
+    counts, lengths, elements, held_typings = {}, {}, {}, dict(profiled.held_typings)
     for node in nodes:
         typed = json_paths.type_column(node.column)
         null, objects, arrays = stats[(typed, 'listed_value_counts')]
@@ -635,11 +662,13 @@ def json_profiled(backend: Backend, profiled: ProfiledColumns, settings: ColumnS
             lengths[node.column] = json_paths.ArrayLengths(stats[(length, 'listed_value_counts')][0], quantiles)
             items = settings.elements[node.path]
             item_rows = answered(backend, items, [Request(None, 'rows')])[(None, 'rows')]
-            item_settings = dc.replace(settings, frozen=FrozenLayout())
-            elements[node.path] = profile_columns(backend, items, item_settings, item_rows, {}, node.element).json
+            item_settings = dc.replace(settings, frozen=FrozenLayout(typings=settings.frozen.typings))
+            items_profiled = profile_columns(backend, items, item_settings, item_rows, {}, node.element)
+            elements[node.path] = items_profiled.json
+            held_typings |= items_profiled.held_typings
     entries = {column['name']: column for column in profiled.columns}
     return json_paths.ProfiledTable(
-        profiled.described, entries, counts, lengths, {path: table for path, table in elements.items() if table}
+        profiled.described, entries, counts, lengths, {path: table for path, table in elements.items() if table}, held_typings
     )
 
 

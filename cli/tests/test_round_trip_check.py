@@ -135,6 +135,26 @@ def test_a_share_sampling_carries_across_the_type_cut_keeps_the_profiles_typing_
     assert retypings(sd.check(typed, item_codes(9_000))) == [('us_zip', None, False)]
 
 
+def item_lines(tmp_path, five_digit: int) -> str:
+    """`item_codes`' codes as JSON lines, each the one element of a record's `lines`."""
+    path = tmp_path / f'{five_digit}.jsonl'
+    codes = item_codes(five_digit).column('item_code').to_pylist()
+    path.write_text(''.join(json.dumps({'lines': [{'code': code}]}) + '\n' for code in codes))
+    return str(path)
+
+
+def test_a_json_array_elements_type_change_fails_a_diff_and_a_check_holds_it_as_it_holds_a_columns(tmp_path):
+    untyped, flipped = sd.profile(item_lines(tmp_path, 9_460)), sd.profile(item_lines(tmp_path, 9_530))
+
+    diff = sd.diff(untyped, flipped)
+    assert retypings(diff) == [(None, 'us_zip', False)]
+    assert [(change.column, change.field) for change in diff.changes] == [
+        ('lines.element.code', '/columns/0/list/element/struct/fields/0/semantic/type')
+    ]
+    assert retypings(sd.check(untyped, item_lines(tmp_path, 9_530))) == [(None, 'us_zip', True)]
+    assert retypings(sd.check(untyped, item_lines(tmp_path, 9_900))) == [(None, 'us_zip', False)]
+
+
 def test_the_orders_example_generated_at_a_tenth_of_its_rows_keeps_every_quantity_and_passes_its_check():
     """`data generate orders --rows 10000`: `quantity` lists none of its 10 values, and a short run still draws them all."""
     profile = sd.Profile.example('orders')

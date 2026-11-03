@@ -39,6 +39,10 @@ class Move:
     def moves(self, metric: str, column: str | None) -> bool:
         return column in self.columns or metric in self.metrics
 
+    def writes(self, column: str | None) -> bool:
+        """Whether the perturbation writes `column`, or the top-level column a nested path sits in."""
+        return column is not None and any(column == written or column.startswith(f'{written}.') for written in self.columns)
+
 
 def moves(scenario: Scenario) -> list[Move]:
     plain = scenario.to_plain()
@@ -83,7 +87,7 @@ def attributed(changes: list[FieldChange], moved: list[Move]) -> list[FieldChang
     """Each failing change on a column a perturbation writes, passing, its message naming the perturbation."""
     kept = []
     for change in changes:
-        move = next((move for move in moved if change.column in move.columns), None)
+        move = next((move for move in moved if move.writes(change.column)), None)
         if move is not None and not change.passed:
             change = dc.replace(change, passed=True, message=f'{change.message}; perturbation {move.id} writes it, so it passes')
         kept.append(change)

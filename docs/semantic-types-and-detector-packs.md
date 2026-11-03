@@ -66,8 +66,10 @@ values a side and the 0.95 cut, a column's five-digit share types it so:
 - **The check lists each column the margin held as a passing `semantic_type_changed`.** Its
   `expected` is PROFILE's type and its `observed` the type DATA's sample alone gives. The message
   gives the share and the margin, and `data check -v` logs the same line.
-- **A JSON array's elements are typed afresh at the plain cut**, as their edges and value lists are
-  counted afresh.
+- **A JSON array's elements and object fields are held as a column is.** Their edges and value lists
+  are counted afresh. A profile gives an element's count only through its array's length, so the
+  margin takes the arrays times their median length as PROFILE's sample. A profile stating no median
+  adds no n_a term.
 
 *Rejected:* holding the typing wherever a profile is made against an earlier one, as `profile
 create --edges-from` does. A check's profile of DATA is never written, and a written profile's

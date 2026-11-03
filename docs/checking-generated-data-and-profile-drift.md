@@ -381,6 +381,15 @@ A column's kind is the profiler's `ColumnKind`, read back from the `logical_type
 Arrow decimal type telling a decimal from a float.
 
 - **A check fails** on a column the data adds or drops, or holds as another kind or semantic type.
+- **A list's element and a struct's fields are compared as a column is.** A change's `column` is the
+  nested path, such as `lines.element.code`, and its `field` the pointer into the profile, such as
+  `/columns/1/list/element/struct/fields/0/semantic/type`. A nested column of a source other than
+  JSON carries only its Arrow type, so only that type is compared there. A list or struct that one
+  profile states no nested columns for has none compared, and neither does a list holding no element
+  on either side.
+- **A check lists and passes a key only some of PROFILE's objects hold, where DATA holds it nowhere.**
+  A write of few rows may draw the key for none of them, and a JSON writer then leaves it out. A key
+  every object holds still fails.
 - **Sampling alone rarely changes a semantic type.** DATA keeps PROFILE's typing of a column unless
   a validator's share clears its cut by a sampling margin. [How a column is given a semantic
   type](semantic-types-and-detector-packs.md) gives the margin. So a column whose share sits within

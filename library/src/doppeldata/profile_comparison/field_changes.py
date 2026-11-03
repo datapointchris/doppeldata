@@ -9,8 +9,11 @@ from typing import Any
 from doppeldata.profile_comparison.metrics import Column
 from doppeldata.profile_comparison.metrics import Document
 from doppeldata.profile_format import LISTING_SECTIONS
+from doppeldata.profile_format import PointerParts
 from doppeldata.profile_format import described_rows
 from doppeldata.profile_format import pointer
+from doppeldata.profiling.json_paths import ELEMENT
+from doppeldata.profiling.json_paths import joined
 from doppeldata.profiling.semantic_type_hold import HeldTyping
 from doppeldata.profiling.statistic_catalog import ColumnKind
 from doppeldata.profiling.table_profile import profiled_kind
@@ -60,7 +63,8 @@ def packs_run(document: Document) -> frozenset[str]:
 def column_changes(
     source: Document, observed: Document, *, writer_changes_pass: bool, declaring: Mapping[str, str], listing: Mapping[str, str]
 ) -> list[FieldChange]:
-    """Columns added, dropped, or holding another kind, Arrow type or semantic type.
+    """Columns added, dropped, or holding another kind, Arrow type or semantic type, a list's element and a struct's
+    fields as a top-level column is.
 
     With `writer_changes_pass`, as a check sets it, a change a writer alone causes is listed and passes: an Arrow type,
     because a writer may store a column at another width or unit, a decimal read back from text as a float, and a string
@@ -72,29 +76,73 @@ def column_changes(
     passes too where `listing` names a code list the type is read from, and the two profiles record different contents
     for it, because only a run reading that list could confirm the type.
     """
-    ours = {column['name']: index for index, column in enumerate(source.get('columns') or [])}
-    theirs = {column['name']: index for index, column in enumerate(observed.get('columns') or [])}
-    changes = []
-    for name, index in ours.items():
-        if name not in theirs:
-            column = source['columns'][index]
-            message = f'{name} ({column.get("physical_type")}) is in the source profile and not in the other'
-            changes.append(
-                FieldChange(ChangeKind.COLUMN_DROPPED, name, pointer(('columns', index)), column_kind(column), None, False, message)
-            )
-    for name, index in theirs.items():
-        column = observed['columns'][index]
-        if name not in ours:
-            message = f'{name} ({column.get("physical_type")}) is not in the source profile'
-            changes.append(
-                FieldChange(ChangeKind.COLUMN_ADDED, name, pointer(('columns', index)), None, column_kind(column), False, message)
-            )
+    ran = packs_run(source), packs_run(observed)
+    read = code_lists_read(source), code_lists_read(observed)
+    typed = Typed(ran, declaring, read, listing)
+    return list(changes_among(top_level_columns(source), top_level_columns(observed), writer_changes_pass, typed))
+
+
+@dc.dataclass(frozen=True)
+class ColumnAt:
+    """One column of a profile, top-level or nested: where a JSON Pointer finds it, and its path, as a JSON source's
+    columns name it, such as `lines.element.code`."""
+
+    column: Column
+    at: PointerParts
+    path: str
+    presence: float = 1.0
+
+    @property
+    def measured(self) -> bool:
+        """Whether a profile's statistics reach the column. A nested column of a source other than JSON is stated only
+        by its Arrow type, so its kind and semantic type say nothing of the data."""
+        return self.path == self.column['name'] or 'logical_type' in self.column
+
+    def nested(self) -> list['ColumnAt']:
+        """The list element and each struct field directly inside the column, with no element where no list holds one,
+        because its entry then measures nothing."""
+        found = []
+        listed = self.column.get('list') or {}
+        holds_arrays = (self.column.get('null_fraction') or 0.0) < 1.0 and (listed.get('empty_fraction') or 0.0) < 1.0
+        if listed.get('element') and holds_arrays:
+            found.append(ColumnAt(listed['element'], (*self.at, 'list', 'element'), joined(self.path, ELEMENT)))
+        struct = self.column.get('struct') or {}
+        presence = struct.get('presence_fractions') or {}
+        for index, field in enumerate(struct.get('fields') or []):
+            at = (*self.at, 'struct', 'fields', index)
+            found.append(ColumnAt(field, at, joined(self.path, field['name']), presence.get(field['name'], 1.0)))
+        return found
+
+
+def top_level_columns(document: Document) -> list[ColumnAt]:
+    return [ColumnAt(column, ('columns', index), column['name']) for index, column in enumerate(document.get('columns') or [])]
+
+
+def changes_among(ours: list[ColumnAt], theirs: list[ColumnAt], writer_changes_pass: bool, typed: 'Typed') -> Iterator[FieldChange]:
+    """What differs between two sets of sibling columns, then between the columns nested in each pair both profiles state
+    nested columns for. A profile may state a list or struct's type and not what is inside it, which is no change.
+
+    With `writer_changes_pass`, a key only some of the source's objects hold passes when the data holds it nowhere,
+    because a write of few rows may draw it for none of them and a JSON writer then leaves the key out.
+    """
+    source = {each.path: each for each in ours}
+    observed = {each.path: each for each in theirs}
+    for path, each in source.items():
+        if path not in observed:
+            message = f'{path} ({each.column.get("physical_type")}) is in the source profile and not in the other'
+            drawn = writer_changes_pass and each.presence < 1.0
+            if drawn:
+                message += f'; {each.presence:.2%} of its objects hold the key, so it is listed and passes'
+            yield FieldChange(ChangeKind.COLUMN_DROPPED, path, pointer(each.at), column_kind(each.column), None, drawn, message)
+    for path, each in observed.items():
+        if path not in source:
+            message = f'{path} ({each.column.get("physical_type")}) is not in the source profile'
+            yield FieldChange(ChangeKind.COLUMN_ADDED, path, pointer(each.at), None, column_kind(each.column), False, message)
             continue
-        ran = packs_run(source), packs_run(observed)
-        read = code_lists_read(source), code_lists_read(observed)
-        typed = Typed(ran, declaring, read, listing)
-        changes += list(retyped(source['columns'][ours[name]], column, index, writer_changes_pass, typed))
-    return changes
+        yield from retyped(source[path], each, writer_changes_pass, typed)
+        inside = source[path].nested(), each.nested()
+        if all(inside):
+            yield from changes_among(*inside, writer_changes_pass, typed)
 
 
 @dc.dataclass(frozen=True)
@@ -128,47 +176,55 @@ def code_lists_read(document: Document) -> Mapping[str, str]:
     return lists
 
 
-def retyped(source: Column, observed: Column, index: int, writer_changes_pass: bool, typed: Typed) -> Iterator[FieldChange]:
-    name = observed['name']
+def retyped(ours: ColumnAt, theirs: ColumnAt, writer_changes_pass: bool, typed: Typed) -> Iterator[FieldChange]:
+    source, observed, name = ours.column, theirs.column, theirs.path
+    measured = ours.measured and theirs.measured
     kinds = column_kind(source), column_kind(observed)
-    if kinds[0] != kinds[1]:
+    if measured and kinds[0] != kinds[1]:
         message = f'{name} is {kinds[0]} in the source profile and {kinds[1]} in the other'
         passed = writer_changes_pass and ({*kinds} == TEXT_READ_KINDS or kinds[0] == ColumnKind.STRING.value)
-        yield FieldChange(ChangeKind.KIND_CHANGED, name, pointer(('columns', index, 'logical_type')), *kinds, passed, message)
+        yield FieldChange(ChangeKind.KIND_CHANGED, name, pointer((*theirs.at, 'logical_type')), *kinds, passed, message)
     types = source.get('physical_type'), observed.get('physical_type')
     if types[0] != types[1]:
         message = f'{name} is {types[0]} in the source profile and {types[1]} in the other'
-        at = pointer(('columns', index, 'physical_type'))
+        at = pointer((*theirs.at, 'physical_type'))
         yield FieldChange(ChangeKind.PHYSICAL_TYPE_CHANGED, name, at, *types, writer_changes_pass, message)
     blocks = source.get('semantic') or {}, observed.get('semantic') or {}
     semantic = blocks[0].get('type'), blocks[1].get('type')
-    if semantic[0] != semantic[1]:
+    if measured and semantic[0] != semantic[1]:
         source_type, observed_type = (f'as {kind}' if kind is not None else 'as no semantic type' for kind in semantic)
         message = f'{name} is detected {source_type} in the source profile and {observed_type} in the other'
         unconfirmed = typed.unconfirmed(blocks, semantic)
         if unconfirmed:
             message += f'; {unconfirmed}, so it is listed and passes'
-        at = pointer(('columns', index, 'semantic', 'type'))
+        at = pointer((*theirs.at, 'semantic', 'type'))
         yield FieldChange(ChangeKind.SEMANTIC_TYPE_CHANGED, name, at, *semantic, unconfirmed is not None, message)
+
+
+def every_column_at(columns: list[ColumnAt]) -> Iterator[ColumnAt]:
+    """Each of `columns`, and each column nested in one."""
+    for each in columns:
+        yield each
+        yield from every_column_at(each.nested())
 
 
 def held_typing_changes(observed: Document, held: Mapping[str, HeldTyping]) -> list[FieldChange]:
     """A listed, passing type change for each column a check's profile held to the source's typing, where its sample
     alone types it otherwise, because sampling alone could carry its share that far across the cut. A column the
     margin left with neither type differs from the source, and `column_changes` fails it."""
-    indices = {column['name']: index for index, column in enumerate(observed.get('columns') or [])}
+    pointers = {each.path: each.at for each in every_column_at(top_level_columns(observed))}
     return [
         FieldChange(
             ChangeKind.SEMANTIC_TYPE_CHANGED,
             name,
-            pointer(('columns', indices[name], 'semantic', 'type')),
+            pointer((*pointers[name], 'semantic', 'type')),
             holding.earlier,
             holding.alone,
             True,
             f'{holding.message(name)}, so it is listed and passes',
         )
         for name, holding in held.items()
-        if name in indices and holding.held == holding.earlier
+        if name in pointers and holding.held == holding.earlier
     ]
 
 

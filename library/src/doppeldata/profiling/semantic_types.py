@@ -127,9 +127,12 @@ def column_typings(
     k_min: int,
     code_lists: Mapping[str, SuppliedCodeList],
     earlier: Mapping[str, FrozenTyping],
+    paths: Mapping[str, str],
 ) -> tuple[dict[str, Typing], dict[str, HeldTyping]]:
     """Each typed column's typing, of `columns` as `detected_columns` gives them, beside the patterns grex stores for
-    them, and each column `earlier` held to another typing than its sample alone gives.
+    them, and each column `earlier` held to another typing than its sample alone gives, by its path.
+
+    `earlier` names a column by its path, which `paths` gives for a column of a JSON table, and otherwise by its name.
 
     A column with fewer than k_min sampled values is left untyped, as is one no candidate takes. The type is the one
     whose validator passes the most values, of those passing `plain_cut`. A tie goes to the hinted type, then to the
@@ -142,10 +145,11 @@ def column_typings(
         values = sample.column(column).drop_null().combine_chunks().cast(pa.string())
         if len(values) < k_min:
             continue
-        assigned, holding = assigned_candidate(column, values, detected.candidates, code_lists, earlier.get(column))
+        path = paths.get(column, column)
+        assigned, holding = assigned_candidate(path, values, detected.candidates, code_lists, earlier.get(path))
         if holding:
-            held[column] = holding
-            log.info(holding.message(column))
+            held[path] = holding
+            log.info(holding.message(path))
         if assigned:
             candidate, passed = assigned
             hint = written_hint(candidate, detected.kind, values, patterns.get(column))

@@ -14,6 +14,7 @@ from doppeldata.errors import SourceError
 from doppeldata.profiling.backend import HIDDEN_COLUMN_PREFIX
 from doppeldata.profiling.backend import JsonNode
 from doppeldata.profiling.recorded_counts import rate
+from doppeldata.profiling.semantic_type_hold import HeldTyping
 
 ELEMENT = 'element'
 # DuckDB's `json_type` for each JSON number and boolean, by the raw type it counts as.
@@ -90,6 +91,12 @@ def arrays(root: JsonNode) -> list[JsonNode]:
     return [node for node in table_nodes(root) if node.kind == 'array']
 
 
+def column_paths(root: JsonNode) -> dict[str, str]:
+    """Each column of the table `root` heads, with its path from the record. An element table's `element.code` is
+    `lines.element.code` in a record's `lines`."""
+    return {node.column: node.path for node in table_nodes(root)}
+
+
 @dc.dataclass(frozen=True)
 class TypeCounts:
     """One path's rows in its table by its JSON type: missing, an explicit null, an object or an array."""
@@ -111,7 +118,8 @@ class ArrayLengths:
 @dc.dataclass(frozen=True)
 class ProfiledTable:
     """One table of a JSON source profiled: each scalar's entry by its column, each path's type counts, each array's
-    lengths by its column, and each array's elements by its path.
+    lengths by its column, each array's elements by its path, and each typing an earlier profile held, by its path, in
+    the table and its elements.
     """
 
     rows: int
@@ -119,6 +127,7 @@ class ProfiledTable:
     counts: dict[str, TypeCounts]
     lengths: dict[str, ArrayLengths]
     elements: dict[str, 'ProfiledTable']
+    held_typings: dict[str, HeldTyping]
 
 
 def assembled(root: JsonNode, profiled: ProfiledTable) -> list[dict[str, Any]]:

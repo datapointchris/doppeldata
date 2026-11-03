@@ -9,7 +9,7 @@ import dataclasses as dc
 @dc.dataclass(frozen=True)
 class FrozenTyping:
     """The semantic type an earlier profile gave a column, None where it left it untyped, and about how many sampled
-    values decided it, None where the profile states no rows, as one expanded from a dict of fakes does."""
+    values decided it, None where the profile states no count of them, as one expanded from a dict of fakes does."""
 
     type: str | None
     sampled: int | None
