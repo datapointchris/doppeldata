@@ -86,31 +86,33 @@ if unmatched := sorted((BY_COLUMN ^ set(MEASURES)) | ((set(expected_metrics()) -
 def verified(document: dict[str, Any], data: Any) -> list[ExpectationResult]:
     """Each expectation `document` declares, measured on `data`, which is anything `doppeldata.profile` reads. One naming a
     column the data lacks fails, with `unmeasured` saying which."""
-    table = PolarsBackend().scan(sources.resolve(data))
-    held = table.collect_schema().names()
-    rows = table.select(pl.len()).collect(engine='streaming').item()
+    backend = PolarsBackend()
     perturbations = document.get('perturbations') or []
     results = []
-    for expectation in document.get('expect') or []:
-        metric = expectation['metric']
-        at_least, at_most = expectation.get('at_least'), expectation.get('at_most')
-        if metric in TABLE_MEASURES:
-            share = TABLE_MEASURES[metric](data)
-            value = significant(share) if share is not None else None
-            passed = value is not None and (at_least is None or value >= at_least) and (at_most is None or value <= at_most)
-            results.append(ExpectationResult(metric, None, at_least, at_most, value, passed, None if share is not None else NOT_DELIMITED))
-            continue
-        # A scenario's validation refuses a statistic of one column that names none.
-        column: str = expectation['column']
-        index = expected_perturbation(metric, column, perturbations)
-        perturbation = perturbations[index] if index is not None else {}
-        missing = [name for name in (column, perturbation.get('ingest')) if name is not None and name not in held]
-        if missing:
-            unmeasured = f'the data holds no column {missing[0]}'
-            results.append(ExpectationResult(metric, column, at_least, at_most, None, False, unmeasured))
-            continue
-        counted = MEASURES[metric](table, column, perturbation) if rows else 0
-        value = significant(counted / rows) if rows else 0.0
-        passed = (at_least is None or value >= at_least) and (at_most is None or value <= at_most)
-        results.append(ExpectationResult(metric, column, at_least, at_most, value, passed))
+    with backend.profiling():
+        table = backend.scan(sources.resolve(data))
+        held = table.collect_schema().names()
+        rows = table.select(pl.len()).collect(engine='streaming').item()
+        for expectation in document.get('expect') or []:
+            metric = expectation['metric']
+            at_least, at_most = expectation.get('at_least'), expectation.get('at_most')
+            if metric in TABLE_MEASURES:
+                share = TABLE_MEASURES[metric](data)
+                value = significant(share) if share is not None else None
+                passed = value is not None and (at_least is None or value >= at_least) and (at_most is None or value <= at_most)
+                unmeasured = None if share is not None else NOT_DELIMITED
+                results.append(ExpectationResult(metric, None, at_least, at_most, value, passed, unmeasured))
+                continue
+            # A scenario's validation refuses a statistic of one column that names none.
+            column: str = expectation['column']
+            index = expected_perturbation(metric, column, perturbations)
+            perturbation = perturbations[index] if index is not None else {}
+            missing = [name for name in (column, perturbation.get('ingest')) if name is not None and name not in held]
+            if missing:
+                results.append(ExpectationResult(metric, column, at_least, at_most, None, False, f'the data holds no column {missing[0]}'))
+                continue
+            counted = MEASURES[metric](table, column, perturbation) if rows else 0
+            value = significant(counted / rows) if rows else 0.0
+            passed = (at_least is None or value >= at_least) and (at_most is None or value <= at_most)
+            results.append(ExpectationResult(metric, column, at_least, at_most, value, passed))
     return results

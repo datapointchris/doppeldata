@@ -424,7 +424,7 @@ def profiled_tables(
     type_mix_columns: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, Profile], foreign_keys.FoundRelationships, dict[str, table_profile.CheckMeasures]]:
     """Each table's profile by its name, each source beside the readers that read it, and where `related`, the foreign
-    keys between them, counted in the same session, which holds every table's rows until it ends. Each string column
+    keys between them, counted in the same session, which keeps every table readable until it ends. Each string column
     `type_mix_columns` names is typed by its text. Last, what `frozen` asks a check to measure of each table."""
     profiled: dict[str, table_profile.ProfiledTable] = {}
     # `none` holds no floor, so every statistic is computed over every row.

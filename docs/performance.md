@@ -220,6 +220,77 @@ machine's load than the run's wall time does.
 - **The runs shared the machine at a load average of 34 to 42 on 16 threads**, so their wall
   times are left out.
 
+## A Polars profile of the claims peaks at 0.9 to 1.3 GB up to the full file and 1.65 GB on twice the file, where holding the table took 2 GB at 200,000 rows and 4 GB at 600,000
+
+`/usr/bin/time -f '%e %M'` over `doppeldata profile create --policy healthcare`, on the first rows
+of the CMS DE-SynPUF carrier claims 1A CSV, 142 columns, on Polars 2.0.0 and DuckDB 2.0.0. The runs
+shared the machine at a load average of 9 to 13 on 16 threads, and of 19 on the last row.
+
+| Rows | CSV size | Peak memory | Wall time |
+| --- | --- | --- | --- |
+| 200,000 | 100 MB | 1,019 MB | 34.0 s |
+| 600,000 | 299 MB | 921 MB | 48.2 s |
+| 2,370,667 | 1.2 GB | 1,253 MB | 98.9 s |
+| 4,741,334, the file twice | 2.4 GB | 1,650 MB | 440.2 s |
+
+- **Holding the table in memory peaked at 2,015 MB and 3,985 MB on the first two rows.** It held
+  about 5 KB a row, as 142 text columns of Polars string views. It ran in 30.7 s and 35.1 s, so the
+  stage and the batches take 11% longer at 200,000 rows and 37% longer at 600,000.
+- **The peak still grows past the full file, by about 175 bytes a row.** Twice the file peaks 397 MB
+  higher. What grows is not established. Per-pass traces, on a shared machine:
+
+  | Pass | Full file | Twice the file |
+  | --- | --- | --- |
+  | `sampled` | 1,258 MB | 1,711 MB |
+  | `aggregate` | 1,233 MB | 1,495 MB |
+  | `sample` | 1,085 MB | 1,507 MB |
+
+- **A batched pass's wall grows with the square of the rows until a batch is one column.** Twice the
+  rows halves the width, from 6 columns to 3. That doubles the queries, and each reads twice the
+  rows. On twice the file, a trace spent 146 s in `aggregate` and 111 s in `grouped_rates`, against
+  34 s and 43 s on the full file. The load also differed.
+- **`rank_correlations` over a 20,000-row sample adds about 950 MB if it holds every pair at once.**
+  So it cuts its pairs by the value budget.
+
+## `BATCH_VALUES`, `ROW_BY_ROW_COLUMNS` and the stage's row groups each sit where narrowing further saves little and costs time
+
+Each row profiles the whole claims file under `--policy healthcare`, on a shared machine with a
+tracer attached, so only rows beside each other compare.
+
+| `BATCH_VALUES` | `ROW_BY_ROW_COLUMNS` | `STAGE_ROW_GROUP_ROWS` | Peak memory | Wall time |
+| --- | --- | --- | --- | --- |
+| 16M | 32 | 20,480 | 1,572 MB | 121 s |
+| 16M | 16 | 20,480 | 1,258 MB | 147 s |
+| 16M | 16 | 8,192 | 1,169 MB | 162 s |
+| 8M | 16 | 20,480 | 1,184 MB | 185 s |
+
+- **`ROW_BY_ROW_COLUMNS` of 16 takes 314 MB off 32's peak.** Above it, `sample` and `distinct_rows`
+  set the peak, through the decoded row groups in flight.
+- **`BATCH_VALUES` of 16M reads 6 of the claims' columns at a time.** Halving it saves 74 MB and
+  takes a quarter longer, because each batch is its own query over the file.
+- **`STAGE_ROW_GROUP_ROWS` of 20,480 writes 120 MB for the file.** A row group of 8,192 rows saves
+  89 MB of peak, writes 132 MB and took 15 s longer.
+
+The copy to the stage is its own peak. On 600,000 rows, with ZSTD level 1, on the same shared
+machine:
+
+| Threads | Other setting | Peak memory | Wall time |
+| --- | --- | --- | --- |
+| 16 | row groups of 122,880 rows | 3,489 MB | 7.8 s |
+| 4 | row groups of 122,880 rows | 2,099 MB | 6.1 s |
+| 2 | row groups of 122,880 rows | 1,494 MB | 5.3 s |
+| 16 | `memory_limit` 1 GB | 875 MB | 19.4 s |
+| 16 | `memory_limit` 500 MB | 631 MB | 83.2 s |
+| 4 | `memory_limit` 256 MB | failed, out of memory | 28.5 s |
+| 1 | row groups of 122,880 rows | 807 MB | 12.4 s |
+| 1 | row groups of 20,480 rows | 353 MB | 10.3 s |
+
+- **One thread with small row groups beats each memory limit on peak and on time**, and sets no
+  limit a wide table could reach.
+- **On the whole file, one thread's peak is 656 to 738 MB, and
+  `allocator_bulk_deallocation_flush_threshold` of 16 MB holds it to 395 MB.** DuckDB accounts for
+  only 130 to 170 MB of the first, so the rest is what its allocator retains.
+
 ## Snappy writes no faster than ZSTD level 1, and a partition key of 50 values holds a write to one thread
 
 Each row is the writers' own example writing into memory, which keeps nothing:

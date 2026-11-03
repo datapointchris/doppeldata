@@ -2,14 +2,21 @@
 
 import contextlib
 import dataclasses as dc
+import functools
 import importlib
 import json
 import math
+import os
 import re
+import tempfile
 from collections.abc import Callable
 from collections.abc import Iterable
+from collections.abc import Iterator
+from collections.abc import Sequence
 from pathlib import PurePosixPath
 from typing import Any
+from typing import TypeVar
+from typing import cast
 
 import duckdb
 import polars as pl
@@ -57,11 +64,28 @@ from doppeldata.spark_polars_arrow_types import polars_arrow_type
 
 # Each translation takes the column, or its value from `ROW_STAGES` where one is named, and the request's argument.
 Translation = Callable[[pl.Expr, Any], pl.Expr]
+Item = TypeVar('Item')
+ColumnPass = TypeVar('ColumnPass', bound=Callable[..., list[Any]])
+
+# The values one batch of a pass over every row reads, as rows times columns, and always at least one column. Polars
+# holds every column of a query whose statistic it cannot stream, such as a quantile, so this bounds that query.
+BATCH_VALUES = 16_000_000
+# The columns read at once by a pass that goes row by row across all of them. Polars streams it, but every row group in
+# flight holds each column read, whatever the table's rows.
+ROW_BY_ROW_COLUMNS = 16
+# The rows of one row group of a staged file, which Polars decodes whole.
+STAGE_ROW_GROUP_ROWS = 20_480
 
 ROW_INDEX = '__doppeldata_row'
 ROW_STAGE = '__doppeldata_stage_{}'
 # Nothing downloads at run time, so DuckDB may use only the extensions its wheel links in.
 DUCKDB_CONFIG: dict[str, str | bool | int | float | list[str]] = {'autoinstall_known_extensions': False, 'autoload_known_extensions': False}
+# One thread, because a copy keeping the rows' order buffers batches while parallel readers outrun its writer. The flush
+# returns what the allocator retains, and no memory limit could then fail the copy of a wide table.
+STAGE_DUCKDB_CONFIG = DUCKDB_CONFIG | {'threads': 1, 'allocator_bulk_deallocation_flush_threshold': '16MB'}
+STAGE_DIRECTORY_PREFIX = 'doppeldata-stage-'
+# Usually a real disk, where the platform's own temporary directory is often a tmpfs held in memory.
+LARGE_TEMP_DIRECTORY = '/var/tmp'
 FILE_COLUMN = f'{HIDDEN_COLUMN_PREFIX}_file'
 # Imported by name, because it imports clevercsv and charset-normalizer, which only a delimited source needs.
 DELIMITED_DIALECT_MODULE = 'doppeldata.profiling.delimited_dialect'
@@ -193,15 +217,8 @@ POLARS_STATISTICS: dict[str, Translation] = {
     'raw_type_counts': lambda codes, _: counts_by(codes, range(len(READ_AS))),
     'json_raw_type_counts': lambda codes, _: counts_by(codes, range(len(READ_AS))),
     'padded_digits': lambda c, _: c.str.contains(PADDED_DIGITS_TEXT).sum(),
-    'unparsed_rows': lambda _, columns: unparsed_rows(columns),
-    'distinct_rows': lambda _, columns: pl.struct(list(columns)).hash().n_unique(),
     'unique_rows': lambda _, columns: pl.struct(list(columns)).is_unique().sum(),
 }
-
-untranslated = sorted({statistic.name for statistic in ALL_STATISTICS} - POLARS_STATISTICS.keys())
-untranslated += sorted(f'the raw type {raw}' for raw in set(RAW_TYPES) - (TEXT_MATCHERS.keys() & TEXT_CONVERTERS.keys()))
-if untranslated:
-    raise RuntimeError(f'the Polars backend has no translation for {", ".join(untranslated)}')
 
 
 def kind_of(dtype: pl.DataType) -> ColumnKind:
@@ -246,11 +263,105 @@ def reads(c: pl.Expr, parsed_type: ParsedType) -> pl.Expr:
     return read
 
 
-def unparsed_rows(columns: tuple[tuple[str, ParsedType], ...]) -> pl.Expr:
-    failing = [
-        pl.col(name).is_not_null() & ~reads(pl.col(name), parsed_type) for name, parsed_type in columns if parsed_type.raw_type != 'string'
+def in_batches(items: Sequence[Item], size: int) -> list[Sequence[Item]]:
+    return [items[at : at + size] for at in range(0, len(items), size)]
+
+
+def rows_of(table: pl.LazyFrame) -> int:
+    rows: int = table.select(pl.len()).collect(engine='streaming').item()
+    return rows
+
+
+def column_batches(items: list[Item], columns_of: Callable[[Item], Iterable[str]], rows: int) -> list[list[Item]]:
+    """`items` in order, cut so that each batch reads no more than `BATCH_VALUES` values of `rows` rows, or one item."""
+    width = max(1, BATCH_VALUES // max(rows, 1))
+    batches: list[list[Item]] = []
+    batch: list[Item] = []
+    held: set[str] = set()
+    for item in items:
+        columns = set(columns_of(item))
+        if batch and len(held | columns) > width:
+            batches.append(batch)
+            batch, held = [], set()
+        batch.append(item)
+        held |= columns
+    return [*batches, batch] if batch else batches
+
+
+def in_column_batches(method: ColumnPass) -> ColumnPass:
+    """A pass over items that each name their two columns first, answered in `column_batches` and joined in their order."""
+
+    @functools.wraps(method)
+    def batched(backend: 'PolarsBackend', table: pl.LazyFrame, items: list[Any], *rest: Any) -> list[Any]:
+        if not items:
+            return []
+        batches = column_batches(items, lambda item: item[:2], rows_of(table))
+        return [answer for batch in batches for answer in method(backend, table, batch, *rest)]
+
+    return cast(ColumnPass, batched)
+
+
+def request_columns(request: Request) -> set[str]:
+    """The columns a request's translation reads."""
+    named = {request.column} if request.column else set()
+    if request.statistic == 'unique_rows':
+        return set(request.argument)
+    if request.statistic == 'json_raw_type_counts':
+        return named | {request.argument[1]}
+    return named
+
+
+def rows_by_parts(table: pl.LazyFrame, parts: list[pl.Expr]) -> pl.DataFrame:
+    """Each expression's value at each row, one column each, in the table's order. Each is collected alone, so only its
+    own columns are read at once."""
+    collected = [table.select(part.alias(f'p{at}')).collect(engine='streaming') for at, part in enumerate(parts)]
+    return pl.concat(collected, how='horizontal')
+
+
+def distinct_rows(table: pl.LazyFrame, names: tuple[str, ...]) -> int:
+    parts = [pl.struct(list(batch)).hash() for batch in in_batches(names, ROW_BY_ROW_COLUMNS)]
+    distinct: int = rows_by_parts(table, parts).select(pl.struct(pl.all()).hash().n_unique()).item()
+    return distinct
+
+
+def unparsed_rows(table: pl.LazyFrame, columns: tuple[tuple[str, ParsedType], ...]) -> int:
+    typed = [(name, parsed_type) for name, parsed_type in columns if parsed_type.raw_type != 'string']
+    if not typed:
+        return 0
+    parts = [
+        pl.any_horizontal([pl.col(name).is_not_null() & ~reads(pl.col(name), parsed_type) for name, parsed_type in batch])
+        for batch in in_batches(typed, ROW_BY_ROW_COLUMNS)
     ]
-    return pl.any_horizontal(failing).sum() if failing else pl.lit(0)
+    unparsed: int = rows_by_parts(table, parts).select(pl.any_horizontal(pl.all()).sum()).item()
+    return unparsed
+
+
+# Statistics reading many columns within each row, each answered on its own rather than as one expression of a batch.
+ROW_BY_ROW_STATISTICS: dict[str, Callable[[pl.LazyFrame, Any], int]] = {'distinct_rows': distinct_rows, 'unparsed_rows': unparsed_rows}
+
+untranslated = sorted({statistic.name for statistic in ALL_STATISTICS} - POLARS_STATISTICS.keys() - ROW_BY_ROW_STATISTICS.keys())
+untranslated += sorted(f'the raw type {raw}' for raw in set(RAW_TYPES) - (TEXT_MATCHERS.keys() & TEXT_CONVERTERS.keys()))
+if untranslated:
+    raise RuntimeError(f'the Polars backend has no translation for {", ".join(untranslated)}')
+
+
+def batch_answers(table: pl.LazyFrame, requests: list[Request], column: Callable[[str | None], pl.Expr]) -> dict[Request, Any]:
+    staged = {
+        ROW_STAGE.format(index): ROW_STAGES[request.statistic](column(request.column), request.argument)
+        for index, request in enumerate(requests)
+        if request.statistic in ROW_STAGES
+    }
+
+    def operand(index: int, request: Request) -> pl.Expr:
+        name = ROW_STAGE.format(index)
+        return pl.col(name) if name in staged else column(request.column)
+
+    expressions = [
+        POLARS_STATISTICS[request.statistic](operand(index, request), request.argument).alias(f'r{index}')
+        for index, request in enumerate(requests)
+    ]
+    row = table.with_columns(**staged).select(expressions).collect(engine='streaming').row(0)
+    return dict(zip(requests, row, strict=True))
 
 
 def ancestor_partition_keys(source: Source) -> list[str]:
@@ -263,11 +374,16 @@ class PolarsBackend:
     name = 'polars'
     session_version: str | None = None
 
+    def __init__(self) -> None:
+        self.stage: ParquetStage | None = None
+
     def scan(self, source: Source) -> pl.LazyFrame:
         return self.read(source).table
 
     def read(self, source: Source) -> SourceRead:
-        read = SourceRead(pl.DataFrame(source.table).lazy()) if source.table is not None else read_files(source)
+        if self.stage is None:
+            raise RuntimeError('the Polars backend reads a source inside profiling(), which owns what it stages')
+        read = SourceRead(pl.DataFrame(source.table).lazy()) if source.table is not None else read_files(source, self.stage)
         return dc.replace(read, table=read.table.with_columns(cs.categorical().cast(pl.String), cs.enum().cast(pl.String)))
 
     def schema(self, table: pl.LazyFrame) -> list[ColumnSpec]:
@@ -303,22 +419,15 @@ class PolarsBackend:
                     return c.cast(pl.Int128)
             return c
 
-        staged = {
-            ROW_STAGE.format(index): ROW_STAGES[request.statistic](column(request.column), request.argument)
-            for index, request in enumerate(requests)
-            if request.statistic in ROW_STAGES
+        answers = {
+            request: ROW_BY_ROW_STATISTICS[request.statistic](table, request.argument)
+            for request in requests
+            if request.statistic in ROW_BY_ROW_STATISTICS
         }
-
-        def operand(index: int, request: Request) -> pl.Expr:
-            name = ROW_STAGE.format(index)
-            return pl.col(name) if name in staged else column(request.column)
-
-        expressions = [
-            POLARS_STATISTICS[request.statistic](operand(index, request), request.argument).alias(f'r{index}')
-            for index, request in enumerate(requests)
-        ]
-        row = table.with_columns(**staged).select(expressions).collect(engine='streaming').row(0)
-        return dict(zip(requests, row, strict=True))
+        by_column = [request for request in requests if request.statistic not in ROW_BY_ROW_STATISTICS]
+        for batch in column_batches(by_column, request_columns, rows_of(table)):
+            answers |= batch_answers(table, batch, column)
+        return answers
 
     def top_k(self, table: pl.LazyFrame, column: str, k: int, of: FrequencyKey = FrequencyKey.VALUE) -> list[tuple[Any, int]]:
         key = pl.col(column)
@@ -338,17 +447,28 @@ class PolarsBackend:
         return list(counted.iter_rows())
 
     def sample(self, table: pl.LazyFrame, n: int, seed: int) -> pa.Table:
-        rows = table.select(pl.len()).collect(engine='streaming').item()
+        rows = rows_of(table)
         if rows > n:
             picked = pl.int_range(0, rows, eager=True).sample(n, seed=seed).sort()
             table = table.with_row_index(ROW_INDEX).filter(pl.col(ROW_INDEX).is_in(picked.implode())).drop(ROW_INDEX)
-        return table.collect(engine='streaming').to_arrow()
+        parts = [
+            table.select(list(batch)).collect(engine='streaming')
+            for batch in in_batches(table.collect_schema().names(), ROW_BY_ROW_COLUMNS)
+        ]
+        return pl.concat(parts, how='horizontal').to_arrow() if parts else table.collect().to_arrow()
 
     def sampled(self, table: pl.LazyFrame, n: int, seed: int) -> pl.LazyFrame:
         return pl.DataFrame(self.sample(table, n, seed)).lazy()
 
-    def profiling(self) -> contextlib.AbstractContextManager[None]:
-        return contextlib.nullcontext()
+    @contextlib.contextmanager
+    def profiling(self) -> Iterator[None]:
+        """Every query reading a source, and the stage holding its text, whose files go on every exit but a kill."""
+        self.stage = ParquetStage()
+        try:
+            yield
+        finally:
+            self.stage.close()
+            self.stage = None
 
     def parse(self, table: pl.LazyFrame, types: dict[str, ParsedType]) -> pl.LazyFrame:
         return table.with_columns(parsed(pl.col(name), parsed_type).alias(name) for name, parsed_type in types.items())
@@ -373,17 +493,21 @@ class PolarsBackend:
         if not pairs:
             return []
         names = list(dict.fromkeys(name for pair in pairs for name in pair))
-        ranked = table.select(self.average_ranks(table, names))
-        measured = []
-        for index, (a, b) in enumerate(pairs):
-            first, second = pl.col(f'r{names.index(a)}'), pl.col(f'r{names.index(b)}')
-            both = first.is_not_null() & second.is_not_null()
-            measured += [pl.corr(first.filter(both), second.filter(both)).alias(f'c{index}'), both.sum().alias(f'n{index}')]
-        row = ranked.select(measured).collect().row(0)
-        return [
-            (float(value) if value is not None and math.isfinite(value) else None, int(held))
-            for value, held in zip(row[::2], row[1::2], strict=True)
-        ]
+        ranked = table.select(self.average_ranks(table, names)).collect(engine='streaming')
+        found: list[tuple[float | None, int]] = []
+        # A pair holds its two columns' ranks, filtered to the rows holding both, until its query ends.
+        for batch in in_batches(pairs, max(1, BATCH_VALUES // max(2 * ranked.height, 1))):
+            measured = []
+            for index, (a, b) in enumerate(batch):
+                first, second = pl.col(f'r{names.index(a)}'), pl.col(f'r{names.index(b)}')
+                both = first.is_not_null() & second.is_not_null()
+                measured += [pl.corr(first.filter(both), second.filter(both)).alias(f'c{index}'), both.sum().alias(f'n{index}')]
+            row = ranked.select(measured).row(0)
+            found += [
+                (float(value) if value is not None and math.isfinite(value) else None, int(held))
+                for value, held in zip(row[::2], row[1::2], strict=True)
+            ]
+        return found
 
     def rank_correlation_influence(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[float | None]:
         if not pairs:
@@ -401,6 +525,7 @@ class PolarsBackend:
             found.append(float(variance) if spread_x and spread_y and variance is not None and math.isfinite(variance) else None)
         return found
 
+    @in_column_batches
     def cross_counts(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, str | None, int]]]:
         frames = [
             table.select(pl.col(a).cast(pl.String).alias('a'), pl.col(b).cast(pl.String).alias('b')).group_by('a', 'b').len()
@@ -444,6 +569,7 @@ class PolarsBackend:
         row = [int(value or 0) for value in totals.collect(engine='streaming').row(0)]
         return [(row[index], row[len(rhs) + index], row[2 * len(rhs) + index]) for index in range(len(rhs))]
 
+    @in_column_batches
     def grouped_quantiles(
         self, table: pl.LazyFrame, requests: list[tuple[str, str, list[str], tuple[float, ...]]]
     ) -> list[list[tuple[str | None, int, list[float]]]]:
@@ -478,6 +604,7 @@ class PolarsBackend:
                         found[at].append((row['g'], int(row[f'n{at}']), [float(row[f'q{at}_{index}']) for index in levels]))
         return found
 
+    @in_column_batches
     def grouped_rates(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[list[tuple[str | None, int, int, int]]]:
         kinds = {spec.name: spec.kind for spec in self.schema(table)}
 
@@ -504,9 +631,8 @@ class PolarsBackend:
                     found[at].append((row['g'], int(row['n']), int(row[f'u{at}']), int(row[f'z{at}'] or 0)))
         return found
 
+    @in_column_batches
     def ordered_shares(self, table: pl.LazyFrame, pairs: list[tuple[str, str]]) -> list[tuple[int, int]]:
-        if not pairs:
-            return []
         epochs = self.epoch_micros(table, {name for pair in pairs for name in pair})
         counts = []
         for at, (first, second) in enumerate(pairs):
@@ -515,11 +641,10 @@ class PolarsBackend:
         row = table.select(counts).collect(engine='streaming').row(0)
         return [(int(held), int(ordered)) for held, ordered in zip(row[::2], row[1::2], strict=True)]
 
+    @in_column_batches
     def lag_quantiles(
         self, table: pl.LazyFrame, pairs: list[tuple[str, str]], levels: tuple[float, ...], k_min: int
     ) -> list[tuple[int, list[float], float | None, float | None]]:
-        if not pairs:
-            return []
         epochs = self.epoch_micros(table, {name for pair in pairs for name in pair})
         measured = []
         for at, (first, second) in enumerate(pairs):
@@ -682,7 +807,44 @@ def join_keys(table: pl.LazyFrame, names: list[str]) -> list[pl.Expr]:
     return [join_key(table, name).alias(f'key{at}') for at, name in enumerate(names)]
 
 
-def read_files(source: Source) -> SourceRead:
+def large_temp_directory() -> str:
+    """Where a large temporary file goes: `$TMPDIR`, else a directory usually on disk, else the platform's own."""
+    for directory in (os.environ.get('TMPDIR'), LARGE_TEMP_DIRECTORY):
+        if directory and os.access(directory, os.W_OK | os.X_OK):
+            return directory
+    return tempfile.gettempdir()
+
+
+class ParquetStage:
+    """The Parquet files DuckDB wrote one profile's text sources to, so their rows wait on disk for Polars to scan. The
+    directory holding them is made at the first file."""
+
+    def __init__(self) -> None:
+        self.directory: tempfile.TemporaryDirectory[str] | None = None
+        self.files = 0
+
+    def connected(self) -> duckdb.DuckDBPyConnection:
+        """A DuckDB session that writes a staged file, and spills anything else it must under the same directory."""
+        if self.directory is None:
+            self.directory = tempfile.TemporaryDirectory(prefix=STAGE_DIRECTORY_PREFIX, dir=large_temp_directory())
+        return duckdb.connect(config=STAGE_DUCKDB_CONFIG | {'temp_directory': self.directory.name})
+
+    def staged(self, connection: duckdb.DuckDBPyConnection, query: str, parameters: dict[str, Any]) -> pl.LazyFrame:
+        """`query`'s rows, in its order, written to a file of their own and scanned from it."""
+        if self.directory is None:
+            raise RuntimeError('a stage writes through the connection connected() opened')
+        self.files += 1
+        path = f'{self.directory.name}/{self.files}.parquet'
+        options = f'format parquet, compression zstd, compression_level 1, row_group_size {STAGE_ROW_GROUP_ROWS}'
+        connection.execute(f'copy ({query}) to {sql_text(path)} ({options})', parameters)
+        return pl.scan_parquet(path, glob=False, hive_partitioning=False)
+
+    def close(self) -> None:
+        if self.directory is not None:
+            self.directory.cleanup()
+
+
+def read_files(source: Source, stage: ParquetStage) -> SourceRead:
     """The source's files as one table, read far enough to find a file that is not of its format, and what reading them found."""
     format_name = source.format.value if source.format else 'a table'
     paths = [file.path for file in source.files]
@@ -698,9 +860,9 @@ def read_files(source: Source) -> SourceRead:
             case SourceFormat.ARROW:
                 read = SourceRead(pl.scan_ipc(paths, hive_partitioning=hive, credential_provider=credentials))
             case SourceFormat.CSV | SourceFormat.TSV:
-                read = read_delimited(source)
+                read = read_delimited(source, stage)
             case _:
-                read = read_json(source)
+                read = read_json(source, stage)
         table = read.table.drop(ancestor_partition_keys(source), strict=False)
         # Counting rows reads every file's footer, so a corrupt file fails here rather than mid-profile.
         table.select(pl.len()).collect(engine='streaming')
@@ -734,8 +896,8 @@ def first_line(error: Exception) -> str:
     return str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
 
 
-def read_delimited(source: Source) -> SourceRead:
-    """CSV or TSV read through DuckDB in the detected dialect with every column as text, handed to Polars.
+def read_delimited(source: Source, stage: ParquetStage) -> SourceRead:
+    """CSV or TSV read through DuckDB in the detected dialect with every column as text, staged for Polars to scan.
 
     A row DuckDB rejects is left out of the table and counted by its first error. A quoted empty field is an empty
     string, where a bare one is null.
@@ -760,14 +922,14 @@ def read_delimited(source: Source) -> SourceRead:
         'file_column': FILE_COLUMN,
         'hive': bool(source.partition_keys),
     }
-    with duckdb.connect(config=DUCKDB_CONFIG) as connection:
-        frame = selected(connection, query, parameters).pl()
+    with stage.connected() as connection:
+        table = stage.staged(connection, query, parameters)
         rejected = {error.lower().replace(' ', '_'): rows for error, rows in selected(connection, REJECTED_ROWS, {}).fetchall()}
-    return SourceRead(frame.drop(FILE_COLUMN).lazy(), dialect=found, rejected=rejected, file_rows=rows_by_file(frame, source))
+    return SourceRead(table.drop(FILE_COLUMN), dialect=found, rejected=rejected, file_rows=rows_by_file(table, source))
 
 
-def rows_by_file(frame: pl.DataFrame, source: Source) -> tuple[int, ...]:
-    counted = dict(frame.group_by(FILE_COLUMN).len().iter_rows())
+def rows_by_file(table: pl.LazyFrame, source: Source) -> tuple[int, ...]:
+    counted = dict(table.group_by(FILE_COLUMN).len().collect(engine='streaming').iter_rows())
     return tuple(counted.get(file.path, 0) for file in source.files)
 
 
@@ -781,8 +943,8 @@ def ends_each_line(block: bytes) -> bool:
     return bool(held) and not block.lstrip().startswith(b'[')
 
 
-def read_json(source: Source) -> SourceRead:
-    """JSON read through DuckDB, a flat column for each path and a table for each array's elements, handed to Polars."""
+def read_json(source: Source, stage: ParquetStage) -> SourceRead:
+    """JSON read through DuckDB, a flat column for each path and a table for each array's elements, staged for Polars to scan."""
     paths = [file.path for file in source.files]
     block = first_block(paths[0])
     lines = source.format is SourceFormat.NDJSON or ends_each_line(block)
@@ -791,23 +953,31 @@ def read_json(source: Source) -> SourceRead:
     layout = sql_text('newline_delimited' if lines else 'array' if block.lstrip().startswith(b'[') else 'auto')
     records = f'read_json_objects($paths, format = {layout}, filename = {sql_text(FILE_COLUMN)})'
     parameters = {'paths': paths}
-    with duckdb.connect(config=DUCKDB_CONFIG) as connection:
+    with stage.connected() as connection:
         structure = selected(connection, f'select json_group_structure(json) from {records}', parameters).fetchall()[0][0]
         root = json_paths.record_tree(json.loads(structure) if structure else {})
-        elements: dict[str, Any] = {}
-        frame = json_table(connection, f'select * from {records}', root, parameters, elements)
-        frame = frame.hstack(hive_values(connection, frame, source.partition_keys, root))
+        reading = JsonTableReading(connection, stage, parameters, {})
+        table = json_table(reading, f'select * from {records}', root, hive_values(source.partition_keys, root))
     return SourceRead(
-        frame.drop(FILE_COLUMN).lazy(),
-        file_rows=rows_by_file(frame, source),
-        json=JsonRead(root, elements, lines),
+        table.drop(FILE_COLUMN),
+        file_rows=rows_by_file(table, source),
+        json=JsonRead(root, reading.elements, lines),
     )
 
 
-def json_table(
-    connection: duckdb.DuckDBPyConnection, relation: str, root: JsonNode, parameters: dict[str, Any], elements: dict[str, Any]
-) -> pl.DataFrame:
-    """The table `root` heads, read from `relation`, with each array's elements read into `elements` by the array's path."""
+@dc.dataclass(frozen=True)
+class JsonTableReading:
+    """What every table of one JSON source is read with, and each array's element table by the array's path."""
+
+    connection: duckdb.DuckDBPyConnection
+    stage: ParquetStage
+    parameters: dict[str, Any]
+    elements: dict[str, Any]
+
+
+def json_table(reading: JsonTableReading, relation: str, root: JsonNode, hive: Sequence[str] = ()) -> pl.LazyFrame:
+    """The table `root` heads, read from `relation`, with each array's elements read into `elements` by the array's path,
+    and each of `hive`'s selections after its own columns."""
     selections = [FILE_COLUMN] if root.path == '' else []
     for node, path in json_paths_of(root):
         text = sql_text(path)
@@ -817,22 +987,19 @@ def json_table(
         elif node.kind == 'array' and node.element is not None:
             selections.append(f'json_array_length(json, {text})::bigint as {sql_name(json_paths.length_column(node.column))}')
             items = f'select unnest(json_extract(json, {sql_text(path + "[*]")})) as json from ({relation})'
-            elements[node.path] = json_table(connection, items, node.element, parameters, elements).lazy()
-    return selected(connection, f'select {", ".join(selections)} from ({relation})', parameters).pl()
+            reading.elements[node.path] = json_table(reading, items, node.element)
+    return reading.stage.staged(reading.connection, f'select {", ".join([*selections, *hive])} from ({relation})', reading.parameters)
 
 
-def hive_values(connection: duckdb.DuckDBPyConnection, frame: pl.DataFrame, keys: tuple[str, ...], root: JsonNode) -> list[pl.Series]:
-    """Each Hive key's text value in each record's file path, for a key no record holds as a field."""
+def hive_values(keys: tuple[str, ...], root: JsonNode) -> list[str]:
+    """The selection of each Hive key's text value in each record's file path, for a key no record holds as a field."""
     fields = {key for key, _ in root.fields}
     selections = []
     for key in keys:
         if key not in fields:
             directory = sql_text(f'/{re.escape(key)}=([^/]*)/')
-            selections.append(f'nullif(url_decode(regexp_extract(file, {directory}, 1)), {HIVE_NULL}) as {sql_name(key)}')
-    if not selections:
-        return []
-    connection.register('record_files', frame.select(pl.col(FILE_COLUMN).alias('file')))
-    return selected(connection, f'select {", ".join(selections)} from record_files', {}).pl().get_columns()
+            selections.append(f'nullif(url_decode(regexp_extract({FILE_COLUMN}, {directory}, 1)), {HIVE_NULL}) as {sql_name(key)}')
+    return selections
 
 
 def json_paths_of(root: JsonNode) -> list[tuple[JsonNode, str]]:
