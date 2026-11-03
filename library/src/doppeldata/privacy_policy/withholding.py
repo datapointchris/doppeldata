@@ -163,14 +163,14 @@ def audited_relationships(bundle: Bundle, policy: Policy, top_share_floors: Mapp
 
 
 def drop(document: dict[str, Any], path: PointerParts, kind: FieldKind, failing: set[PointerParts]) -> None:
-    """Remove a field. A quantile fails alone, so where some fail only those go; any other field goes whole, and a lag
-    takes its derivation with it."""
+    """Remove a field. A quantile fails alone, so where some fail only those go. A fault naming the field itself, as one
+    resting on no stated count does, takes all of it. Any other field goes whole, and a lag takes its derivation with it."""
     if kind is FieldKind.LAG:
         path = path[:-1]
     parent: Any = document
     for part in path[:-1]:
         parent = parent[part]
-    if kind is FieldKind.QUANTILES and failing:
+    if kind is FieldKind.QUANTILES and failing and path not in failing:
         for name in [name for name in parent[path[-1]] if (*path, name) in failing]:
             del parent[path[-1]][name]
         if parent[path[-1]]:

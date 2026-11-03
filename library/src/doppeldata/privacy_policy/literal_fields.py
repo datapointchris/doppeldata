@@ -215,27 +215,30 @@ def column_literals(table: dict[str, Any]) -> Iterator[ColumnLiterals]:
             yield from nested_literals(column, ('columns', index), described)
 
 
-def nested_literals(column: dict[str, Any], at: PointerParts, rows: float | None) -> Iterator[ColumnLiterals]:
+def nested_literals(column: dict[str, Any], at: PointerParts, rows: float | None, in_element: bool = False) -> Iterator[ColumnLiterals]:
     """The column and every field nested in it. `rows` are those holding the column's key.
 
     A struct field's are its parent's objects times the field's presence. An array element's are not stated by the
     file, which gives an array's length only by quantile, and an element's count is of elements rather than rows.
+    `in_element` marks a column inside an array's element, where even a count the file states is of elements.
     """
     held = rows * (1 - (column.get('null_fraction') or 0.0)) if rows is not None else None
-    yield ColumnLiterals(column, at, held, list(literal_fields(column, at, rows, held)))
+    yield ColumnLiterals(column, at, held, list(literal_fields(column, at, rows, held, in_element)))
     element = (column.get('list') or {}).get('element')
     if isinstance(element, dict):
-        yield from nested_literals(element, (*at, 'list', 'element'), None)
+        yield from nested_literals(element, (*at, 'list', 'element'), None, in_element=True)
     struct = column.get('struct') or {}
     presence = struct.get('presence_fractions') or {}
     for index, field in enumerate(struct.get('fields') or []):
         if isinstance(field, dict):
             share = presence.get(field.get('name'))
             keyed = held * share if held is not None and isinstance(share, int | float) else None
-            yield from nested_literals(field, (*at, 'struct', 'fields', index), keyed)
+            yield from nested_literals(field, (*at, 'struct', 'fields', index), keyed, in_element)
 
 
-def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None, held: float | None) -> Iterator[LiteralField]:
+def literal_fields(
+    column: dict[str, Any], at: PointerParts, rows: float | None, held: float | None, in_element: bool = False
+) -> Iterator[LiteralField]:
     """The column's literal-bearing fields. `rows` are the rows the profile describes, and `held` those holding a value."""
 
     def share(rate: Any, of: float | None) -> float | None:
@@ -268,6 +271,8 @@ def literal_fields(column: dict[str, Any], at: PointerParts, rows: float | None,
             for end in ('rows_below', 'rows_above')
             if end in overflow
         )
+        if in_element:
+            cells = tuple(dc.replace(cell, rows=None) for cell in cells)
         yield LiteralField((*at, 'numeric', 'histogram'), FieldKind.HISTOGRAM, len(histogram['bin_rows']), cells)
     if numeric.get('fit'):
         yield LiteralField((*at, 'numeric', 'fit'), FieldKind.FIT, len(numeric['fit'].get('params') or {}))

@@ -847,8 +847,9 @@ table of their own, profiled as a table is.
   1 generates as text, as a top-level column does.
 - **`source.json` records `max_depth` and `writer.explicit_nulls`**, which is true where any path
   holds a JSON null.
-- **An array's element keeps no literal under a checked policy.** Its values are counted by element,
-  so one record's eleven tags would pass a floor of rows. Its length and distinct count stay. A
+- **An array's element keeps no literal under a checked policy but a generalized pattern.** Its values
+  are counted by element, so one record's eleven tags would pass a floor of rows. A pattern rests on
+  no count. Its length, distinct count and moments stay. A
   struct field's literals are held to the rows of its parent's objects holding its key.
 
 ## A value a profile cannot hold is written as the nearest one it can

@@ -1,3 +1,5 @@
+import json
+
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
@@ -55,3 +57,14 @@ def test_nested_ndjson_records_type_mix_presence_and_field_values_the_engine_gen
     assert objects.field('zip').null_count == 0
     assert pc.mean(objects.field('apt').is_valid().cast(pa.int8())).as_py() == pytest.approx(1 / 3, abs=0.03)
     assert pc.unique(objects.field('st').drop_null()).to_pylist() == ['NC']
+
+
+def test_an_array_of_objects_holding_a_number_profiles_keeping_no_literal_counted_by_element(tmp_path):
+    records = ({'id': i, 'items': [{'sku': f'S{i % 7}', 'qty': i * j % 50} for j in range(1, 2 + i % 3)]} for i in range(300))
+    profile = profiled(tmp_path, 'orders.ndjson', '\n'.join(map(json.dumps, records)))
+    items = next(column for column in profile.to_plain()['columns'] if column['name'] == 'items')
+    fields = {field['name']: field for field in items['list']['element']['struct']['fields']}
+
+    assert not fields['qty']['numeric'].keys() & {'extremes', 'quantiles', 'histogram', 'top_values', 'fit'}
+    assert CliRunner().invoke(app, ['profile', 'check', str(tmp_path / 'orders.ndjson.profile.yaml')]).exit_code == 0
+    assert pa.table(generate(profile, rows=50)).column('items').null_count == 0

@@ -263,9 +263,10 @@ over the left-hand values at least `k_min` rows hold.
 first, then the policy. The rows a rate is taken of are `generated.sample.rows_read`, or else
 `dataset.rows`, less the column's `null_fraction`. A struct field's are its parent's objects times
 its share in `presence_fractions`, less its own `null_fraction`. An array element's are not stated, because the file gives
-an array's length only by quantile, and an element is counted by element rather than by row. So the
-writer withholds every literal an element holds. Every literal field must have an audit entry
-whose column, pointer, rule and value count match it, and must meet that rule. A dataset-level
+an array's length only by quantile, and an element is counted by element rather than by row. A
+histogram's `bin_rows` there count elements too, so they state no rows either. So the writer withholds
+every literal an element holds but a generalized pattern, which rests on no count. Every literal
+field must have an audit entry whose column, pointer, rule and value count match it, and must meet that rule. A dataset-level
 field's entry is in `dataset_audit`, matched by its pointer. A column the policy withholds from
 must hold nothing withheld, and an audit entry naming no literal field is reported too. Keys on a
 table of fewer than `k_min` rows are reported as `E-POLICY-004`.
