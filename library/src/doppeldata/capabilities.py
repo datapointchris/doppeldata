@@ -30,7 +30,11 @@ from doppeldata.short_profiles import providers
 
 # A key removed or a meaning changed raises this. A key added does not.
 SCHEMA_VERSION = 1
-EXIT_CODES = {'0': 'it ran, and any check it ran passed', **{str(status): meaning for status, meaning in EXIT_STATUSES.items()}}
+EXIT_CODES = {
+    '0': 'it ran, and any check it ran passed',
+    **{str(status): meaning for status, meaning in EXIT_STATUSES.items()},
+    '130': 'Ctrl-C stopped it, or SIGTERM stopped profile create, data check or data generate',
+}
 
 
 def capabilities(commands: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:

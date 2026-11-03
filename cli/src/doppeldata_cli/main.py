@@ -161,6 +161,16 @@ def stderr_logging() -> Iterator[None]:
         log.setLevel(level)
 
 
+@contextlib.contextmanager
+def stopped_as_ctrl_c() -> Iterator[None]:
+    """SIGTERM raises KeyboardInterrupt, so a write or a profile it stops removes what it made on the way out."""
+    terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, terminate)
+
+
 def logged_at(verbose: int, quiet: bool) -> None:
     """Set what stderr carries beside a refusal: warnings by default, each step at -v, each file and request at -vv, and
     only failures at -q. stdout is the same either way."""
@@ -738,6 +748,9 @@ def profile_create(
 
     Each file is read as its suffix's format. polars reads text formats from local files only. A directory or prefix whose
     folders hold unlike column names is refused, unless --tables writes a bundle of its tables.
+
+    polars copies every row of a CSV, TSV or JSON source to a temporary Parquet file while it profiles, under TMPDIR if that
+    is writable, else /var/tmp. Set TMPDIR to a directory with room for it. SIGKILL and SIGHUP leave the file behind.
     """
     logged_at(verbose, quiet)
     if tables and edges_from is not None:
@@ -745,11 +758,12 @@ def profile_create(
     writable_out(out)
     named_lists = named_files(code_lists or [], '--code-list')
     settings: dict[str, Any] = {'engine': engine, 'sample': sample, 'policy': policy, 'k_min': k_min, 'packs': packs or ()}
-    profiled: Profile | Bundle = (
-        profile_tables(data, **settings, code_lists=named_lists, aws_profile=aws_profile)
-        if tables
-        else profile(data, **settings, edges_from=edges_from, code_lists=named_lists, aws_profile=aws_profile)
-    )
+    with stopped_as_ctrl_c():
+        profiled: Profile | Bundle = (
+            profile_tables(data, **settings, code_lists=named_lists, aws_profile=aws_profile)
+            if tables
+            else profile(data, **settings, edges_from=edges_from, code_lists=named_lists, aws_profile=aws_profile)
+        )
     saved(profiled, out, as_json=as_json)
 
 
@@ -846,20 +860,24 @@ def data_check(
     Only --against reads the real data. Exits 0 when every metric, column and expectation passes, and 3 when one does not
     or the check could not finish.
 
+    polars copies every row of a CSV, TSV or JSON source to a temporary Parquet file while it profiles, under TMPDIR if that
+    is writable, else /var/tmp. Set TMPDIR to a directory with room for it. SIGKILL and SIGHUP leave the file behind.
+
     A bundle PROFILE checks each table under `DATA/<table>/` against its own profile, then measures each relationship by the
     relationship metrics below. It takes no --against.
     """
     logged_at(verbose, quiet)
-    report = check(
-        profile_name,
-        data,
-        thresholds=thresholds,
-        scenario=scenarios_named(scenario),
-        against=against,
-        against_sample=against_sample,
-        html=html,
-        aws_profile=aws_profile,
-    )
+    with stopped_as_ctrl_c():
+        report = check(
+            profile_name,
+            data,
+            thresholds=thresholds,
+            scenario=scenarios_named(scenario),
+            against=against,
+            against_sample=against_sample,
+            html=html,
+            aws_profile=aws_profile,
+        )
     typer.echo(report.to_json() if as_json else report.to_markdown(), nl=False)
     if not (report.passed and report.verified):
         raise CheckFailed(report)
@@ -1289,11 +1307,8 @@ def data_generate(
             dropped = 'it' if len(given) == 1 else 'them'
             message = f'{manifest} settles {" and ".join(given)}, and a regeneration takes each value it settles from it; drop {dropped}'
             raise doppeldata.InvalidArgument(issue_codes.SETTLED_BY_MANIFEST, message, field=given[0])
-        terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
-        try:
+        with stopped_as_ctrl_c():
             regenerated = doppeldata.regenerate(source, manifest, out, threads=threads, replace=replace, aws_profile=aws_profile)
-        finally:
-            signal.signal(signal.SIGTERM, terminate)
         if as_json:
             print_json(regenerated.document)
             return
@@ -1317,11 +1332,8 @@ def data_generate(
         'manifest_beside': manifest_beside,
         'aws_profile': aws_profile,
     }
-    terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
-    try:
+    with stopped_as_ctrl_c():
         written = doppeldata.write(source, out, threads=threads, replace=replace, **arguments)
-    finally:
-        signal.signal(signal.SIGTERM, terminate)
     if as_json:
         print_json(written.document)
         return

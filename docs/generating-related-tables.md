@@ -7,7 +7,7 @@ the child rows its relationship states, so joins, skew and orphans come out as t
 ## `profile create --tables` writes one bundle holding each table and every foreign key between them
 
 [Generate related tables](how-to/generate-related-tables.md) gives the commands. Over TPC-H at
-scale factor 1, `profile create --tables` took 45.7 s and 3.5 GB at peak, and wrote this
+scale factor 1, `profile create --tables` took 66.1 s and 3.2 GB at peak, and wrote this
 relationship among its nine tables:
 
 ```yaml

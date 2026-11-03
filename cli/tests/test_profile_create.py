@@ -10,6 +10,7 @@ from doppeldata import Profile
 from doppeldata import plan
 from doppeldata import profile
 from doppeldata.privacy_policy.file_check import table_check
+from doppeldata.profiling import table_profile
 from doppeldata_cli.main import app
 from typer.testing import CliRunner
 
@@ -271,3 +272,22 @@ def test_drifted_hive_folders_are_one_table_and_unlike_folders_are_refused_unles
     assert bundled.exit_code == 0, bundled.output
     tables = Bundle.load(tmp_path / 'mixed.yaml').tables
     assert {name: table.to_plain()['dataset']['rows'] for name, table in tables.items()} == {'customers': 60, 'orders': 120}
+
+
+def test_a_profile_that_fails_after_reading_a_csv_leaves_nothing_in_the_temporary_directory(tmp_path, monkeypatch):
+    temporary = tmp_path / 'temporary'
+    temporary.mkdir()
+    source = tmp_path / 'orders.csv'
+    source.write_text('order_id,amount\n1,2.5\n2,3.5\n')
+    monkeypatch.setenv('TMPDIR', str(temporary))
+    staged = []
+
+    def fails_halfway(*_, **__):
+        staged.extend(temporary.iterdir())
+        raise OSError('stopped halfway')
+
+    monkeypatch.setattr(table_profile, 'profile_columns', fails_halfway)
+    with pytest.raises(OSError, match='stopped halfway'):
+        profile(source)
+    assert staged
+    assert not list(temporary.iterdir())

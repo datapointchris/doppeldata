@@ -250,7 +250,7 @@ class ParsedType:
 
 
 class Backend(Protocol):
-    """A profiling engine. `aggregate` answers every request it is given, in as few queries as the engine compiles.
+    """A profiling engine. `aggregate` answers every request it is given, in as few queries as the engine can hold.
 
     A statistic of one column or of the whole table is a `statistic_catalog` entry that `aggregate` answers. One measured
     over pairs of columns, or across two tables, is a method of its own, because each engine shapes that query its own way.
@@ -283,7 +283,8 @@ class Backend(Protocol):
         ...
 
     def profiling(self) -> AbstractContextManager[None]:
-        """What every query of one profile runs inside, such as a Spark session's settings."""
+        """What every read and query of one profile runs inside, such as a Spark session's settings, or the temporary
+        files Polars scans a text source from."""
         ...
 
     def parse(self, table: Table, types: dict[str, ParsedType]) -> Table:
