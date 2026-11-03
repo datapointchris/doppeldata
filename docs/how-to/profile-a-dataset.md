@@ -48,10 +48,14 @@ writes JSON.
   `AWS_PROFILE` names it, then boto3's default chain.
 - **A source that changes while it is read fails the profile, exit 1.** The files are listed again
   after the last read, and any file whose size or revision moved is named.
-- **A CSV, TSV or JSON source is copied to a temporary Parquet file while it is profiled**, in a
-  `doppeldata-stage-*` directory under `$TMPDIR`, else `/var/tmp`. It leaves on any exit but a kill.
-  The CMS claims CSV of 1.2 GB takes 120 MB. A full disk fails the read as `E-DATA-009`, so set
-  `TMPDIR` where `/var/tmp` is short of space.
+- **On Polars, a CSV, TSV or JSON source is copied to a temporary Parquet file while it is
+  profiled**, in a `doppeldata-stage-*` directory under `$TMPDIR` if it is writable, else `/var/tmp`,
+  else the platform's temporary directory.
+  - **The file holds every row of the source.** It is removed when the command ends or gets Ctrl-C or
+    SIGTERM. SIGKILL and SIGHUP leave it behind, and nothing removes it later.
+  - **The file is smaller than the text, and how much smaller depends on how much the columns
+    repeat, so leave room for the source's own size.** A full disk fails as `E-IO-205`, naming
+    `TMPDIR`.
 
 ## `--help` prints every flag, and a page shows each one that changes the profile
 

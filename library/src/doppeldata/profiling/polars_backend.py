@@ -79,6 +79,8 @@ STAGE_ROW_GROUP_ROWS = 20_480
 ROW_INDEX = '__doppeldata_row'
 ROW_STAGE = '__doppeldata_stage_{}'
 FOLDED, PART = '__doppeldata_folded', '__doppeldata_part'
+STAGED_COLUMN = '__doppeldata_staged_{}'
+DUCKDB_INTERRUPTED = 'Query interrupted'
 # Nothing downloads at run time, so DuckDB may use only the extensions its wheel links in.
 DUCKDB_CONFIG: dict[str, str | bool | int | float | list[str]] = {'autoinstall_known_extensions': False, 'autoload_known_extensions': False}
 # One thread, because a copy keeping the rows' order buffers batches while parallel readers outrun its writer. The flush
@@ -492,7 +494,7 @@ class PolarsBackend:
 
     @contextlib.contextmanager
     def profiling(self) -> Iterator[None]:
-        """Every query reading a source, and the stage holding its text, whose files go on every exit but a kill."""
+        """Every query reading a source, and the stage holding its text, which is removed when this block unwinds."""
         self.stage = ParquetStage()
         try:
             yield
@@ -870,7 +872,16 @@ class ParquetStage:
         self.files += 1
         path = f'{self.directory.name}/{self.files}.parquet'
         options = f'format parquet, compression zstd, compression_level 1, row_group_size {STAGE_ROW_GROUP_ROWS}'
-        connection.execute(f'copy ({query}) to {sql_text(path)} ({options})', parameters)
+        try:
+            connection.execute(f'copy ({query}) to {sql_text(path)} ({options})', parameters)
+        except duckdb.IOException as error:
+            if self.directory.name not in str(error):
+                raise
+            message = (
+                f'a temporary copy of the source could not be written under {self.directory.name}: {first_line(error)}. '
+                'Set TMPDIR to a directory with room for it'
+            )
+            raise SourceError(issue_codes.LOCAL_IO, message, value=self.directory.name) from error
         return pl.scan_parquet(path, glob=False, hive_partitioning=False)
 
     def close(self) -> None:
@@ -903,6 +914,11 @@ def read_files(source: Source, stage: ParquetStage) -> SourceRead:
     except (pl.exceptions.PolarsError, duckdb.Error, OSError, pa.ArrowException) as error:
         message = f'{", ".join(source.roots)} could not be read as {format_name}: {first_line(error)}'
         raise SourceError(issue_codes.DATA_UNREADABLE, message) from error
+    except RuntimeError as error:
+        # DuckDB answers a KeyboardInterrupt that reaches a running COPY with this error in its place.
+        if first_line(error) == DUCKDB_INTERRUPTED:
+            raise KeyboardInterrupt from error
+        raise
     return dc.replace(read, table=table)
 
 
@@ -1009,30 +1025,34 @@ class JsonTableReading:
     elements: dict[str, Any]
 
 
-def json_table(reading: JsonTableReading, relation: str, root: JsonNode, hive: Sequence[str] = ()) -> pl.LazyFrame:
+def json_table(reading: JsonTableReading, relation: str, root: JsonNode, hive: Sequence[tuple[str, str]] = ()) -> pl.LazyFrame:
     """The table `root` heads, read from `relation`, with each array's elements read into `elements` by the array's path,
-    and each of `hive`'s selections after its own columns."""
-    selections = [FILE_COLUMN] if root.path == '' else []
+    and each of `hive`'s named selections after its own columns. Each is staged under a hidden name, because `COPY`
+    renames a column that differs from another only in case."""
+    selections = [(FILE_COLUMN, FILE_COLUMN)] if root.path == '' else []
     for node, path in json_paths_of(root):
         text = sql_text(path)
-        selections.append(f'json_type(json, {text}) as {sql_name(json_paths.type_column(node.column))}')
+        selections.append((json_paths.type_column(node.column), f'json_type(json, {text})'))
         if node.kind == 'scalar':
-            selections.append(f'json_extract_string(json, {text}) as {sql_name(node.column)}')
+            selections.append((node.column, f'json_extract_string(json, {text})'))
         elif node.kind == 'array' and node.element is not None:
-            selections.append(f'json_array_length(json, {text})::bigint as {sql_name(json_paths.length_column(node.column))}')
+            selections.append((json_paths.length_column(node.column), f'json_array_length(json, {text})::bigint'))
             items = f'select unnest(json_extract(json, {sql_text(path + "[*]")})) as json from ({relation})'
             reading.elements[node.path] = json_table(reading, items, node.element)
-    return reading.stage.staged(reading.connection, f'select {", ".join([*selections, *hive])} from ({relation})', reading.parameters)
+    named = [*selections, *hive]
+    hidden = {STAGED_COLUMN.format(at): name for at, (name, _) in enumerate(named)}
+    chosen = ', '.join(f'{selection} as {sql_name(alias)}' for alias, (_, selection) in zip(hidden, named, strict=True))
+    return reading.stage.staged(reading.connection, f'select {chosen} from ({relation})', reading.parameters).rename(hidden)
 
 
-def hive_values(keys: tuple[str, ...], root: JsonNode) -> list[str]:
-    """The selection of each Hive key's text value in each record's file path, for a key no record holds as a field."""
+def hive_values(keys: tuple[str, ...], root: JsonNode) -> list[tuple[str, str]]:
+    """The name and selection of each Hive key's text value in each record's file path, for a key no record holds as a field."""
     fields = {key for key, _ in root.fields}
     selections = []
     for key in keys:
         if key not in fields:
             directory = sql_text(f'/{re.escape(key)}=([^/]*)/')
-            selections.append(f'nullif(url_decode(regexp_extract({FILE_COLUMN}, {directory}, 1)), {HIVE_NULL}) as {sql_name(key)}')
+            selections.append((key, f'nullif(url_decode(regexp_extract({FILE_COLUMN}, {directory}, 1)), {HIVE_NULL})'))
     return selections
 
 

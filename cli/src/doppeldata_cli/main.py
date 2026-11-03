@@ -748,6 +748,9 @@ def profile_create(
 
     Each file is read as its suffix's format. polars reads text formats from local files only. A directory or prefix whose
     folders hold unlike column names is refused, unless --tables writes a bundle of its tables.
+
+    polars copies every row of a CSV, TSV or JSON source to a temporary Parquet file while it profiles, under TMPDIR if that
+    is writable, else /var/tmp. Set TMPDIR to a directory with room for it. SIGKILL and SIGHUP leave the file behind.
     """
     logged_at(verbose, quiet)
     if tables and edges_from is not None:
@@ -856,6 +859,9 @@ def data_check(
     skipped, naming it, and each expectation the scenario declares is measured.
     Only --against reads the real data. Exits 0 when every metric, column and expectation passes, and 3 when one does not
     or the check could not finish.
+
+    polars copies every row of a CSV, TSV or JSON source to a temporary Parquet file while it profiles, under TMPDIR if that
+    is writable, else /var/tmp. Set TMPDIR to a directory with room for it. SIGKILL and SIGHUP leave the file behind.
 
     A bundle PROFILE checks each table under `DATA/<table>/` against its own profile, then measures each relationship by the
     relationship metrics below. It takes no --against.

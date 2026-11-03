@@ -50,6 +50,7 @@ what raises it and its hint.
 | 2 | The call must change. Nothing was written. |
 | 3 | A check found what a person must act on: data missed its profile, or a profile breaks its policy |
 | 4 | A store or service never answered |
+| 130 | Ctrl-C stopped it, or SIGTERM stopped `profile create`, `data check` or `data generate`. It reports no code. |
 
 - **`exit_code` is read from the first issue's code, and nothing overrides it.** An error holding
   several issues ends on the first one's status. So the status `capabilities show` lists for a

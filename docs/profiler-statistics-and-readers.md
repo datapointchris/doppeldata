@@ -231,22 +231,23 @@ cost for nothing.
 also sniffs a dialect and records each malformed row in a rejects table, which Polars has no
 counterpart for.
 
-## A Polars profile holds its samples and one batch of columns, never the table
+## A Polars profile of a text source holds its samples and a batch of columns, not its rows
 
 Every statistic a profile stores is an aggregate or a sketch, and typing, patterns and correlations
 read a sample. So no pass needs the table in memory at once. Nothing streams on its own, though.
 Polars' streaming engine holds every column of a query in memory when one of its statistics cannot
 stream, such as a quantile or an exact distinct count. A query over 142 columns then holds 142
-columns, whatever reads them. Four things bound what one pass holds:
+columns, whatever reads them. These bound what one pass holds:
 
 - **A text source waits on disk.** DuckDB's `COPY` writes its rows to one Parquet file, which Polars
   scans, so a pass reads only the columns it names. The dialect, strict mode, the rejects table and
   the rule that a quoted empty field is an empty string while a bare one is null all stay in that
   read. A JSON source stages each table the same way, each array's elements among them.
-- **A pass over every row reads `BATCH_VALUES` values at a time**, as rows times columns, and always
-  at least one column. `aggregate` and each pass over pairs of columns cut their requests into such
-  batches. So a batch narrows as the table grows, and a table small enough for one batch runs as
-  one query.
+- **A batched pass over every row reads `BATCH_VALUES` values at a time**, as rows times columns,
+  and always at least one column. `aggregate` and the passes marked `in_column_batches` cut their
+  requests into such batches. The other passes over pairs run unbatched, because no measured peak
+  came from them. So a batch narrows as the table grows, and a table small enough for one batch runs
+  as one query.
 - **A pass going row by row across every column reads `ROW_BY_ROW_COLUMNS` at a time.** Those are
   `sample`, `distinct_rows` and `unparsed_rows`. Polars does stream them, but each row group in
   flight holds each column read. `distinct_rows` and `unparsed_rows` fold one hash or one flag a row
@@ -258,10 +259,15 @@ columns, whatever reads them. Four things bound what one pass holds:
   each `parse` and `recoded` rewrote, filters that table, and rewrites only the rows kept. Both read
   each row alone, so the sample holds the same values.
 
-**The peak is a constant plus about one column.** A table of over `BATCH_VALUES` rows reads one
-column a batch, and an exact quantile or distinct count still holds that column. *Rejected:* a
-sketch for those statistics, which would change what a profile states.
-[performance.md](performance.md) gives the peaks, the growth and how each constant was chosen.
+**On the claims CSV, the peak measured a constant plus about one column.** Over `BATCH_VALUES` rows
+a batch holds one item, which is one column or one pair. An exact quantile or distinct count still
+holds that column. A table passed in memory stays in memory. *Rejected:* a sketch for those
+statistics, which would change what a profile states. [performance.md](performance.md) gives the
+peaks, the growth and how each constant was chosen.
+
+**`BATCH_VALUES` counts values, not bytes, so the peak follows the file on long text.** A table
+well under the budget reads all its columns in one batch, whatever their size. 20 columns of 1 KB
+text peaked at 2.3 GB on a 1 GB CSV and 3.3 GB on a 2 GB CSV.
 
 The file keeps the rows in their order, so a seeded sample's row indexes pick the same rows. DuckDB's
 `preserve_insertion_order` stays on, and Polars reads row groups in order.
@@ -271,14 +277,20 @@ The file keeps the rows in their order, so a seeded sample's row indexes pick th
   `allocator_bulk_deallocation_flush_threshold` returns what DuckDB's allocator retains.
   *Rejected:* a `memory_limit`. It holds the peak too, but a limit too low for a wide table fails its
   read with an out-of-memory error.
-- **The file goes under `$TMPDIR`, else `/var/tmp`, else the platform's temporary directory.** `/tmp`
-  is a tmpfs on many Linux distributions, so a file there would sit in the memory this design frees.
-  `/var/tmp` is where `file-hierarchy(7)` puts large temporary files.
-- **`profiling()` owns the directory, named `doppeldata-stage-*`**, and removes it on every exit, an
-  exception included. `profile create` and `data check` raise `KeyboardInterrupt` on SIGTERM, as
-  `data generate` does, so a stopped run removes it too. A kill removes nothing, so the directory
-  stays until something sweeps it. *Rejected:* an unlinked file read through `/proc/self/fd`, which
-  only Linux has.
+- **The file goes under the first writable of `$TMPDIR`, `/var/tmp` and the platform's temporary
+  directory.** `/tmp` is a tmpfs on many Linux distributions, so a file there would sit in the memory
+  this design frees. `/var/tmp` is where `file-hierarchy(7)` puts large temporary files. A write that
+  fails there is the host's, so it reports `E-IO-205` and names `TMPDIR`, not `E-DATA-009`.
+- **`profiling()` owns the directory, named `doppeldata-stage-*`.** It removes the directory on a
+  return, an exception or a `KeyboardInterrupt`. `profile create` and `data check` raise
+  `KeyboardInterrupt` on SIGTERM, as `data generate` does. DuckDB answers one that reaches a running
+  `COPY` with `Query interrupted`, which `read_files` raises as `KeyboardInterrupt` again. A signal
+  Python does not handle leaves the directory until something sweeps it: SIGKILL, SIGHUP, and SIGTERM
+  outside `profile create`, `data check` and `data generate`. *Rejected:* an unlinked file read
+  through `/proc/self/fd`, which only Linux has.
+- **A column is staged under a hidden name and renamed on the scan.** `COPY` renames a column that
+  differs from another only in case, so a Hive key `Year` over a field `year` would otherwise lose its
+  name.
 - **Every size takes this one path.** *Rejected:* an in-memory read below some size, because it
   doubles what the backend has to keep equal. So a small file pays for its stage.
 

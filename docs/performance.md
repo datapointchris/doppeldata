@@ -220,7 +220,7 @@ machine's load than the run's wall time does.
 - **The runs shared the machine at a load average of 34 to 42 on 16 threads**, so their wall
   times are left out.
 
-## A Polars profile of the claims peaks at 0.8 to 1.1 GB up to four times the file, where holding the table took 2 GB at 200,000 rows and 4 GB at 600,000
+## A Polars profile of the claims peaks at 0.8 to 1.1 GB up to four times the file
 
 `/usr/bin/time -f '%e %M'` over `doppeldata profile create --policy healthcare`, on the first rows
 of the CMS DE-SynPUF carrier claims 1A CSV, 142 columns, on Polars 2.0.0 and DuckDB 2.0.0. The last
@@ -234,6 +234,11 @@ threads, so each wall time is an upper bound. A range is two runs.
 | 2,370,667 | 1.2 GB | 801 to 883 MB | 134 to 152 s |
 | 4,741,334, the file twice | 2.4 GB | 922 to 953 MB | 233 to 234 s |
 | 9,482,668, the file four times | 4.7 GB | 1,081 MB | 554 s |
+
+A traced figure below samples `/proc/self/statm` every 10 ms around each `PolarsBackend` method.
+Decay off is `_RJEM_MALLOC_CONF=dirty_decay_ms:0,muzzy_decay_ms:0`. These figures hold for the
+claims' short cells. [profiler-statistics-and-readers.md](profiler-statistics-and-readers.md) says
+what long text does.
 
 - **Holding the table in memory peaked at 2,018 MB and 4,003 MB on the first two rows.** It held
   about 5 KB a row, as 142 text columns of Polars string views. It ran in 32.6 s and 45.2 s, so the
@@ -274,8 +279,8 @@ machine at a load average of 12 to 28. A range is two or three runs, so it shows
 - **`STAGE_ROW_GROUP_ROWS` of 20,480 writes 120 MB for the file.** At 8 columns, a row group of 8,192
   rows saves about 20 MB of peak and writes 132 MB.
 
-The copy to the stage is its own peak. On 600,000 rows, with ZSTD level 1, on the same shared
-machine:
+The copy to the stage is its own peak. Each row runs `COPY` alone in a fresh process, on 600,000
+rows, with ZSTD level 1, on the same shared machine:
 
 | Threads | Other setting | Peak memory | Wall time |
 | --- | --- | --- | --- |
