@@ -72,12 +72,13 @@ ColumnPass = TypeVar('ColumnPass', bound=Callable[..., list[Any]])
 BATCH_VALUES = 16_000_000
 # The columns read at once by a pass that goes row by row across all of them. Polars streams it, but every row group in
 # flight holds each column read, whatever the table's rows.
-ROW_BY_ROW_COLUMNS = 16
+ROW_BY_ROW_COLUMNS = 8
 # The rows of one row group of a staged file, which Polars decodes whole.
 STAGE_ROW_GROUP_ROWS = 20_480
 
 ROW_INDEX = '__doppeldata_row'
 ROW_STAGE = '__doppeldata_stage_{}'
+FOLDED, PART = '__doppeldata_folded', '__doppeldata_part'
 # Nothing downloads at run time, so DuckDB may use only the extensions its wheel links in.
 DUCKDB_CONFIG: dict[str, str | bool | int | float | list[str]] = {'autoinstall_known_extensions': False, 'autoload_known_extensions': False}
 # One thread, because a copy keeping the rows' order buffers batches while parallel readers outrun its writer. The flush
@@ -311,17 +312,23 @@ def request_columns(request: Request) -> set[str]:
     return named
 
 
-def rows_by_parts(table: pl.LazyFrame, parts: list[pl.Expr]) -> pl.DataFrame:
-    """Each expression's value at each row, one column each, in the table's order. Each is collected alone, so only its
-    own columns are read at once."""
-    collected = [table.select(part.alias(f'p{at}')).collect(engine='streaming') for at, part in enumerate(parts)]
-    return pl.concat(collected, how='horizontal')
+def folded_by_parts(table: pl.LazyFrame, parts: list[pl.Expr], fold: pl.Expr) -> pl.Series:
+    """Each expression's value at each row, folded by `fold` over `FOLDED` and `PART` into one column as each arrives, in
+    the table's order. Each is collected alone, so only its own columns are read at once and only one answer waits."""
+
+    def answer(part: pl.Expr) -> pl.Series:
+        return table.select(part.alias(PART)).collect(engine='streaming').to_series()
+
+    first, *rest = parts
+    folded = answer(first).alias(FOLDED)
+    for part in rest:
+        folded = pl.DataFrame([folded, answer(part)]).select(fold.alias(FOLDED)).to_series()
+    return folded
 
 
 def distinct_rows(table: pl.LazyFrame, names: tuple[str, ...]) -> int:
     parts = [pl.struct(list(batch)).hash() for batch in in_batches(names, ROW_BY_ROW_COLUMNS)]
-    distinct: int = rows_by_parts(table, parts).select(pl.struct(pl.all()).hash().n_unique()).item()
-    return distinct
+    return folded_by_parts(table, parts, pl.struct(FOLDED, PART).hash()).n_unique()
 
 
 def unparsed_rows(table: pl.LazyFrame, columns: tuple[tuple[str, ParsedType], ...]) -> int:
@@ -332,7 +339,7 @@ def unparsed_rows(table: pl.LazyFrame, columns: tuple[tuple[str, ParsedType], ..
         pl.any_horizontal([pl.col(name).is_not_null() & ~reads(pl.col(name), parsed_type) for name, parsed_type in batch])
         for batch in in_batches(typed, ROW_BY_ROW_COLUMNS)
     ]
-    unparsed: int = rows_by_parts(table, parts).select(pl.any_horizontal(pl.all()).sum()).item()
+    unparsed: int = folded_by_parts(table, parts, pl.any_horizontal(FOLDED, PART)).to_frame().select(pl.col(FOLDED).sum()).item()
     return unparsed
 
 
@@ -370,12 +377,28 @@ def ancestor_partition_keys(source: Source) -> list[str]:
     return sorted(every - set(source.partition_keys))
 
 
+@dc.dataclass(frozen=True)
+class ColumnRewrite:
+    """A table a parse or a recode gave, which holds it so its id stays its own, and what it was rewritten from and how."""
+
+    table: pl.LazyFrame
+    read_from: pl.LazyFrame
+    columns: list[pl.Expr]
+
+
 class PolarsBackend:
     name = 'polars'
     session_version: str | None = None
 
     def __init__(self) -> None:
         self.stage: ParquetStage | None = None
+        self.rewrites: dict[int, ColumnRewrite] = {}
+
+    def rewritten(self, table: pl.LazyFrame, columns: list[pl.Expr]) -> pl.LazyFrame:
+        """`table` with `columns` rewritten row by row, remembered so that a sample of it can be drawn before the rewrite."""
+        result = table.with_columns(columns)
+        self.rewrites[id(result)] = ColumnRewrite(result, table, columns)
+        return result
 
     def scan(self, source: Source) -> pl.LazyFrame:
         return self.read(source).table
@@ -450,9 +473,16 @@ class PolarsBackend:
         rows = rows_of(table)
         if rows > n:
             picked = pl.int_range(0, rows, eager=True).sample(n, seed=seed).sort()
+            # A row index stops a filter moving below a rewrite, so each rewrite is put back above the filter by hand.
+            rewrites: list[list[pl.Expr]] = []
+            while rewrite := self.rewrites.get(id(table)):
+                rewrites.insert(0, rewrite.columns)
+                table = rewrite.read_from
             table = table.with_row_index(ROW_INDEX).filter(pl.col(ROW_INDEX).is_in(picked.implode())).drop(ROW_INDEX)
+            for columns in rewrites:
+                table = table.with_columns(columns)
         parts = [
-            table.select(list(batch)).collect(engine='streaming')
+            table.select(list(batch)).collect(engine='streaming').rechunk()
             for batch in in_batches(table.collect_schema().names(), ROW_BY_ROW_COLUMNS)
         ]
         return pl.concat(parts, how='horizontal').to_arrow() if parts else table.collect().to_arrow()
@@ -469,18 +499,22 @@ class PolarsBackend:
         finally:
             self.stage.close()
             self.stage = None
+            self.rewrites.clear()
 
     def parse(self, table: pl.LazyFrame, types: dict[str, ParsedType]) -> pl.LazyFrame:
-        return table.with_columns(parsed(pl.col(name), parsed_type).alias(name) for name, parsed_type in types.items())
+        return self.rewritten(table, [parsed(pl.col(name), parsed_type).alias(name) for name, parsed_type in types.items()])
 
     def recoded(self, table: pl.LazyFrame, recodes: dict[str, Recode]) -> pl.LazyFrame:
         dtypes = dict(table.collect_schema())
-        return table.with_columns(
-            pl.when(pl.col(name).is_in(pl.Series(recode.values, dtype=dtypes[name]).implode()))
-            .then(pl.lit(recode.modal, dtype=dtypes[name]))
-            .otherwise(pl.col(name))
-            .alias(name)
-            for name, recode in recodes.items()
+        return self.rewritten(
+            table,
+            [
+                pl.when(pl.col(name).is_in(pl.Series(recode.values, dtype=dtypes[name]).implode()))
+                .then(pl.lit(recode.modal, dtype=dtypes[name]))
+                .otherwise(pl.col(name))
+                .alias(name)
+                for name, recode in recodes.items()
+            ],
         )
 
     def average_ranks(self, table: pl.LazyFrame, names: list[str]) -> list[pl.Expr]:

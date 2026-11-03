@@ -237,7 +237,7 @@ Every statistic a profile stores is an aggregate or a sketch, and typing, patter
 read a sample. So no pass needs the table in memory at once. Nothing streams on its own, though.
 Polars' streaming engine holds every column of a query in memory when one of its statistics cannot
 stream, such as a quantile or an exact distinct count. A query over 142 columns then holds 142
-columns, whatever reads them. Three things bound what one pass holds:
+columns, whatever reads them. Four things bound what one pass holds:
 
 - **A text source waits on disk.** DuckDB's `COPY` writes its rows to one Parquet file, which Polars
   scans, so a pass reads only the columns it names. The dialect, strict mode, the rejects table and
@@ -249,13 +249,18 @@ columns, whatever reads them. Three things bound what one pass holds:
   one query.
 - **A pass going row by row across every column reads `ROW_BY_ROW_COLUMNS` at a time.** Those are
   `sample`, `distinct_rows` and `unparsed_rows`. Polars does stream them, but each row group in
-  flight holds each column read. `distinct_rows` and `unparsed_rows` collect one hash or one flag a
-  row per batch, then reduce those. `rank_correlations` reads a sample, and cuts its pairs by the
-  same budget, because each pair holds its two columns' ranks until the query ends.
+  flight holds each column read. `distinct_rows` and `unparsed_rows` fold one hash or one flag a row
+  into a single column as each batch arrives. `rank_correlations` reads a sample, and cuts its pairs
+  by the same budget, because each pair holds its two columns' ranks until the query ends.
+- **A sample is drawn below the parse.** A filter on a row index cannot move below a rewrite of the
+  columns, so a sample of 20,000 rows would otherwise parse every row. What that allocates and frees,
+  the allocator keeps for a while, so the peak would follow the rows. `PolarsBackend` remembers what
+  each `parse` and `recoded` rewrote, filters that table, and rewrites only the rows kept. Both read
+  each row alone, so the sample holds the same values.
 
-**The peak still grows with rows, far more slowly than holding the table.** A table of over
-`BATCH_VALUES` rows reads one column a batch, and an exact quantile or distinct count still holds
-that column. *Rejected:* a sketch for those statistics, which would change what a profile states.
+**The peak is a constant plus about one column.** A table of over `BATCH_VALUES` rows reads one
+column a batch, and an exact quantile or distinct count still holds that column. *Rejected:* a
+sketch for those statistics, which would change what a profile states.
 [performance.md](performance.md) gives the peaks, the growth and how each constant was chosen.
 
 The file keeps the rows in their order, so a seeded sample's row indexes pick the same rows. DuckDB's

@@ -220,56 +220,59 @@ machine's load than the run's wall time does.
 - **The runs shared the machine at a load average of 34 to 42 on 16 threads**, so their wall
   times are left out.
 
-## A Polars profile of the claims peaks at 0.9 to 1.3 GB up to the full file and 1.65 GB on twice the file, where holding the table took 2 GB at 200,000 rows and 4 GB at 600,000
+## A Polars profile of the claims peaks at 0.8 to 1.1 GB up to four times the file, where holding the table took 2 GB at 200,000 rows and 4 GB at 600,000
 
 `/usr/bin/time -f '%e %M'` over `doppeldata profile create --policy healthcare`, on the first rows
-of the CMS DE-SynPUF carrier claims 1A CSV, 142 columns, on Polars 2.0.0 and DuckDB 2.0.0. The runs
-shared the machine at a load average of 9 to 13 on 16 threads, and of 19 on the last row.
+of the CMS DE-SynPUF carrier claims 1A CSV, 142 columns, on Polars 2.0.0 and DuckDB 2.0.0. The last
+two rows repeat the file's rows. The runs shared the machine at a load average of 14 to 34 on 16
+threads, so each wall time is an upper bound. A range is two runs.
 
 | Rows | CSV size | Peak memory | Wall time |
 | --- | --- | --- | --- |
-| 200,000 | 100 MB | 1,019 MB | 34.0 s |
-| 600,000 | 299 MB | 921 MB | 48.2 s |
-| 2,370,667 | 1.2 GB | 1,253 MB | 98.9 s |
-| 4,741,334, the file twice | 2.4 GB | 1,650 MB | 440.2 s |
+| 200,000 | 100 MB | 998 MB | 34.2 s |
+| 600,000 | 299 MB | 891 MB | 57.5 s |
+| 2,370,667 | 1.2 GB | 801 to 883 MB | 134 to 152 s |
+| 4,741,334, the file twice | 2.4 GB | 922 to 953 MB | 233 to 234 s |
+| 9,482,668, the file four times | 4.7 GB | 1,081 MB | 554 s |
 
-- **Holding the table in memory peaked at 2,015 MB and 3,985 MB on the first two rows.** It held
-  about 5 KB a row, as 142 text columns of Polars string views. It ran in 30.7 s and 35.1 s, so the
-  stage and the batches take 11% longer at 200,000 rows and 37% longer at 600,000.
-- **The peak still grows past the full file, by about 175 bytes a row.** Twice the file peaks 397 MB
-  higher. What grows is not established. Per-pass traces, on a shared machine:
-
-  | Pass | Full file | Twice the file |
-  | --- | --- | --- |
-  | `sampled` | 1,258 MB | 1,711 MB |
-  | `aggregate` | 1,233 MB | 1,495 MB |
-  | `sample` | 1,085 MB | 1,507 MB |
-
-- **A batched pass's wall grows with the square of the rows until a batch is one column.** Twice the
-  rows halves the width, from 6 columns to 3. That doubles the queries, and each reads twice the
-  rows. On twice the file, a trace spent 146 s in `aggregate` and 111 s in `grouped_rates`, against
-  34 s and 43 s on the full file. The load also differed.
+- **Holding the table in memory peaked at 2,018 MB and 4,003 MB on the first two rows.** It held
+  about 5 KB a row, as 142 text columns of Polars string views. It ran in 32.6 s and 45.2 s, so the
+  stage and the batches take 5% longer at 200,000 rows and 27% longer at 600,000.
+- **The peak grows by about 35 bytes a row past the full file, a constant plus about one column.**
+  `distinct_rows`' hash and the count over it hold 17 bytes a row. At four times the file a batch
+  reads one column, which an exact quantile or distinct count holds.
+- **No one pass sets the peak.** Traced, `distinct_rows` is highest on the full file at 878 MB, and
+  `cross_counts` and `grouped_rates` on twice the file at 993 MB.
+- **Wall time follows the rows.** The same traces spent 574 s and 1,155 s of CPU, whose ratio load
+  moves little. On the same file, load alone moved a traced wall from 217 s to 462 s.
+- **Parsing every row before drawing a sample grew the peak through what the allocator kept.** The
+  sample's own rows hold 29 MB. Its pass still peaked at 924 to 971 MB on the full file and 1,236 to
+  1,381 MB on twice the file. With jemalloc's decay turned off, those read 443 to 471 MB and 501 to
+  521 MB. So `sample` draws its rows first, which takes that pass from 28 s of CPU to 5 s.
 - **`rank_correlations` over a 20,000-row sample adds about 950 MB if it holds every pair at once.**
   So it cuts its pairs by the value budget.
 
-## `BATCH_VALUES`, `ROW_BY_ROW_COLUMNS` and the stage's row groups each sit where narrowing further saves little and costs time
+## `ROW_BY_ROW_COLUMNS` of 8 saves about 240 MB against 16, and the other two constants sit where moving them saves little
 
-Each row profiles the whole claims file under `--policy healthcare`, on a shared machine with a
-tracer attached, so only rows beside each other compare.
+Each row profiles the whole claims file under `--policy healthcare` with no tracer, on a shared
+machine at a load average of 12 to 28. A range is two or three runs, so it shows that load's reach.
 
 | `BATCH_VALUES` | `ROW_BY_ROW_COLUMNS` | `STAGE_ROW_GROUP_ROWS` | Peak memory | Wall time |
 | --- | --- | --- | --- | --- |
-| 16M | 32 | 20,480 | 1,572 MB | 121 s |
-| 16M | 16 | 20,480 | 1,258 MB | 147 s |
-| 16M | 16 | 8,192 | 1,169 MB | 162 s |
-| 8M | 16 | 20,480 | 1,184 MB | 185 s |
+| 16M | 8 | 20,480 | 849 to 925 MB | 117 to 137 s |
+| 16M | 8 | 8,192 | 860 to 861 MB | 117 to 126 s |
+| 16M | 16 | 20,480 | 1,079 to 1,156 MB | 103 to 131 s |
+| 16M | 16 | 8,192 | 933 MB | 108 s |
+| 16M | 32 | 20,480 | 1,364 MB | 127 s |
+| 32M | 16 | 20,480 | 1,295 MB | 109 s |
+| 8M | 16 | 20,480 | 1,146 MB | 114 s |
 
-- **`ROW_BY_ROW_COLUMNS` of 16 takes 314 MB off 32's peak.** Above it, `sample` and `distinct_rows`
-  set the peak, through the decoded row groups in flight.
-- **`BATCH_VALUES` of 16M reads 6 of the claims' columns at a time.** Halving it saves 74 MB and
-  takes a quarter longer, because each batch is its own query over the file.
-- **`STAGE_ROW_GROUP_ROWS` of 20,480 writes 120 MB for the file.** A row group of 8,192 rows saves
-  89 MB of peak, writes 132 MB and took 15 s longer.
+- **Walls overlap across the 8 and 16 column rows**, so 8's saving comes at no cost load lets this
+  table see.
+- **`BATCH_VALUES` of 16M reads 6 of the claims' columns at a time.** At 16 columns, 32M adds about
+  170 MB and 8M saves nothing, because the row by row passes set that peak.
+- **`STAGE_ROW_GROUP_ROWS` of 20,480 writes 120 MB for the file.** At 8 columns, a row group of 8,192
+  rows saves about 20 MB of peak and writes 132 MB.
 
 The copy to the stage is its own peak. On 600,000 rows, with ZSTD level 1, on the same shared
 machine:

@@ -174,8 +174,8 @@ default policy, on a host other work shared, so each time is an upper bound.
 
 | Data | Rows | Columns | Polars | Spark |
 | --- | --- | --- | --- | --- |
-| taxi trips, three Parquet files | 10,104,443 | 19 | 23 s, 3.1 GB peak | 209 s |
-| carrier claims, one CSV | 2,370,667 | 142 | 71 s, 12 GB peak | 937 s |
+| taxi trips, three Parquet files | 10,104,443 | 19 | 35 s, 2.0 GB peak | 209 s |
+| carrier claims, one CSV | 2,370,667 | 142 | 113 s, 0.9 GB peak | 937 s |
 
 Polars computes each pass as streaming queries over the files, a batch of columns at a time. Spark
 runs a query per pass over a table persisted to disk, and a CSV adds the passes that type its text.
