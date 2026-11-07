@@ -67,6 +67,32 @@ malformed-file-readers/
   platform, and a dataset must regenerate to the same bits anywhere. `crates/clippy.toml` refuses
   them.
 
+## Every AWS call goes through three modules
+
+A call reaching AWS passes through one named function for each step. Credentials, timeouts,
+retries and the meaning of a failure are then settled once, and a test stubs them in one place.
+A new AWS call goes through these modules. No other module imports boto3, and every client is
+built from `aws_session()` with `CLIENT_CONFIG`.
+
+- **`library/src/doppeldata/aws_sessions.py` builds every boto3 session.** `require_boto3`
+  refuses a missing boto3 before any module importing it loads. `aws_session` builds the session
+  from the profile a call chose, and it is the only place boto3 is imported.
+- **`library/src/doppeldata/aws_access.py` holds what every client shares.** Each client is built
+  with its `CLIENT_CONFIG`, which sets the timeouts and retries. `AWS_ERRORS`, `CREDENTIAL_ERRORS`
+  and `unanswered` sort a failure into an answer from the service or no answer at all. `answered`
+  and `no_answer` word each kind for a message.
+- **`library/src/doppeldata/s3_access.py` is the one door to S3.** `reading_client` makes the
+  client every listing, head and ranged read uses. `s3_store_settings` gives the engine's object
+  store the credentials, region and endpoint for a write. A Spark write calls it on each executor,
+  so every executor resolves credentials through its own boto3 chain.
+
+Three paths reach AWS outside `s3_access`, and these are the only ones:
+
+- **Glue**: `seed_profiles/glue_catalog.py` builds its client from `aws_session()` with
+  `CLIENT_CONFIG`, and classifies failures through `aws_access`.
+- **Polars** reads S3 with the credential provider `aws_sessions.polars_credentials` returns.
+- **`crates/writers`** uploads through `object_store`, with the settings `s3_store_settings` gives.
+
 ## Library code must run on Python 3.11
 
 The library's floor is the Python of the oldest Glue in `docs/aws-glue-support.md`, while `uv sync`
