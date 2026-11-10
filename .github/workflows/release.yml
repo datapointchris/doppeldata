@@ -48,41 +48,26 @@ jobs:
       ref: ${{ needs.release.outputs.tag }}
       version: ${{ needs.release.outputs.version }}
 
-  # A separate job, so the index credentials are reachable from these steps
-  # only. In the same workflow, because a tag pushed with GITHUB_TOKEN starts no
-  # other workflow run.
+  # In the same workflow as the release, because a tag pushed with
+  # GITHUB_TOKEN starts no other workflow run. The shared workflow is a job
+  # apart from the release, so the index credentials reach its steps alone.
+  #
+  # It skips each file the index already holds, so re-running a publish that
+  # failed partway uploads the rest.
+  #
+  # The library's wheels come from `build`, one per platform, which is skipped
+  # when the release cut nothing. The CLI is built at the tag, so
+  # uv-dynamic-versioning names the tag exactly and the CLI requires the
+  # library at the same version.
   publish:
     needs: [release, build]
-    runs-on: ubuntu-26.04
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.release.outputs.tag }}
-
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: library-${{ needs.release.outputs.version }}-*
-          path: dist
-          merge-multiple: true
-
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          version: "0.12.24"
-
-      # Built at the tag, so uv-dynamic-versioning names the tag exactly and the
-      # CLI requires the library at the same version.
-      - run: uv build --package doppeldata-cli --out-dir dist
-
-      # The index rejects a second upload of a filename it already holds and
-      # offers no yank, so every file is checked while the upload is still
-      # avoidable.
-      - run: uv run --no-project --with twine twine check dist/*
-
-      # --check-url skips a file the index already holds. A re-run of a publish
-      # that failed partway through its upload then finishes it, where the
-      # index's 409 for that file would otherwise stop the job.
-      - name: Publish to the package index
-        run: uv publish --publish-url https://pypi.ichrisbirch.com/ --check-url https://pypi.ichrisbirch.com/simple/ dist/*
-        env:
-          UV_PUBLISH_USERNAME: ${{ secrets.PYPI_ICB_USERNAME }}
-          UV_PUBLISH_PASSWORD: ${{ secrets.PYPI_ICB_PASSWORD }}
+    uses: datapointchris/reusable-workflows/.github/workflows/python-publish.yml@v1
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      artifacts: library-${{ needs.release.outputs.version }}-*
+      packages: doppeldata-cli
+      publish-url: https://pypi.ichrisbirch.com/
+      check-url: https://pypi.ichrisbirch.com/simple/
+    secrets:
+      username: ${{ secrets.PYPI_ICB_USERNAME }}
+      password: ${{ secrets.PYPI_ICB_PASSWORD }}
