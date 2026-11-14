@@ -1036,7 +1036,12 @@ def json_table(reading: JsonTableReading, relation: str, root: JsonNode, hive: S
         if node.kind == 'scalar':
             selections.append((node.column, f'json_extract_string(json, {text})'))
         elif node.kind == 'array' and node.element is not None:
-            selections.append((json_paths.length_column(node.column), f'json_array_length(json, {text})::bigint'))
+            selections.append(
+                (
+                    json_paths.length_column(node.column),
+                    f"case when json_type(json, {text}) = 'ARRAY' then json_array_length(json, {text}) end::bigint",
+                )
+            )
             items = f'select unnest(json_extract(json, {sql_text(path + "[*]")})) as json from ({relation})'
             reading.elements[node.path] = json_table(reading, items, node.element)
     named = [*selections, *hive]
