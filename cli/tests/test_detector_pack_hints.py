@@ -1,3 +1,5 @@
+from typing import Any
+
 import pyarrow as pa
 import pytest
 from doppeldata import Profile
@@ -18,7 +20,7 @@ def test_every_shipped_pack_hint_generates_values_its_own_validator_passes(pack_
     detectors = [detector for detector in load(pack_name).pack.detectors if detector.generator_hint]
     columns = []
     for index, detector in enumerate(detectors):
-        column = {
+        column: dict[str, Any] = {
             'name': f'{detector.type}_{index}',
             'physical_type': 'string',
             'semantic': {'type': detector.type, 'generator_hint': dict(detector.generator_hint)},

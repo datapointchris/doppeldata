@@ -34,6 +34,8 @@ def test_a_synthetic_table_is_the_same_every_run_differs_by_test_and_seed_and_it
     assert printed_sha256s(failed) == run
     assert run['first'] != run['second']
     assert printed_sha256s(pytester.runpytest('-s', '-p', 'no:cacheprovider', '--doppeldata-seed', '9'))['first'] != run['first']
-    seed = re.search(r'rerun with --doppeldata-seed (\d+)', failed.stdout.str()).group(1)
+    named = re.search(r'rerun with --doppeldata-seed (\d+)', failed.stdout.str())
+    assert named, 'a failing run names the seed that reproduces it'
+    seed = named.group(1)
     rerun = pytester.runpytest('-s', '-p', 'no:cacheprovider', '--doppeldata-seed', seed, '-k', 'second')
     assert printed_sha256s(rerun)['second'] == run['second']

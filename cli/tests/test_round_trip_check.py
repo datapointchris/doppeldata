@@ -110,7 +110,7 @@ def item_codes(five_digit: int) -> pa.Table:
     return pa.table({'item_code': codes})
 
 
-def retypings(report: sd.CheckReport) -> list[tuple[str | None, str | None, bool]]:
+def retypings(report: sd.CheckReport | sd.DiffReport) -> list[tuple[str | None, str | None, bool]]:
     return [
         (change.expected, change.observed, change.passed) for change in report.changes if change.change.value == 'semantic_type_changed'
     ]

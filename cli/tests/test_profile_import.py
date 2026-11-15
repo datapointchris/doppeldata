@@ -105,5 +105,5 @@ def test_an_odcs_contract_with_a_bounded_primary_key_imports_to_a_seed_drawing_d
     assert rows['order_id'].to_list() == list(range(1, 1001))
     assert set(rows['status']) <= {'placed', 'shipped'}
     assert rows['ordered_on'].null_count() == 0
-    assert dt.date(2025, 1, 1) <= rows['ordered_on'].min() and rows['ordered_on'].max() <= dt.date(2025, 12, 31)
+    assert rows['ordered_on'].is_between(dt.date(2025, 1, 1), dt.date(2025, 12, 31)).all()
     assert rows['email'].drop_nulls().str.contains('@').all()
