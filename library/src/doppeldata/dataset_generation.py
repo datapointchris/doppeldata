@@ -167,16 +167,22 @@ class WriteChoices:
                 issue_codes.UNKNOWN_PARTITION_STYLE, message, field='partition_style', value=self.partition_style, valid=valid
             )
 
-    def engine_json(self, profile: Profile, scenario: Scenario | None = None) -> str:
+    def engine_choices(self, profile_path: Path | None, scenario_record: dict[str, Any] | None) -> dict[str, Any]:
+        """The write options every write gives the engine: each choice made, the profile's path and the scenario's record.
+        A table's and a bundle's write both start from it, so a choice reaches the engine the same way from either."""
         chosen = {key: value for key, value in dc.asdict(self).items() if value is not None and key != 'embed_profile'}
+        if profile_path is not None:
+            chosen['profile_path'] = str(profile_path)
+        if scenario_record is not None:
+            chosen['scenario'] = scenario_record
+        return chosen
+
+    def engine_json(self, profile: Profile, scenario: Scenario | None = None) -> str:
+        chosen = self.engine_choices(profile.path, manifest_record(scenario) if scenario is not None else None)
         if self.embed_profile:
             chosen['embedded_profile'] = rfc8785.dumps(profile.to_plain()).decode()
             if scenario is not None:
                 chosen['embedded_scenario'] = scenario.canonical().decode()
-        if profile.path:
-            chosen['profile_path'] = str(profile.path)
-        if scenario is not None:
-            chosen['scenario'] = manifest_record(scenario)
         return json.dumps(chosen)
 
 

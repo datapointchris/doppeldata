@@ -222,13 +222,7 @@ def prepared_bundle_write(
     scenarios = table_scenarios(scenario, bundle)
     arguments = bundle_arguments(bundle, run.seed, run.scale, scenarios)
     engine = arguments.plan()
-    record = scenarios_record(scenarios)
-    chosen = {key: value for key, value in dc.asdict(choices).items() if value is not None and key != 'embed_profile'}
-    if bundle.path is not None:
-        chosen['profile_path'] = str(bundle.path)
-    if record is not None:
-        chosen['scenario'] = record
-    choices_json = json.dumps(chosen)
+    choices_json = json.dumps(choices.engine_choices(bundle.path, scenarios_record(scenarios)))
     tables = []
     for name, table in engine.tables():
         options = table.write_options(choices_json)
