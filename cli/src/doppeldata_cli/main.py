@@ -64,6 +64,7 @@ from doppeldata.scenario_reference import scenario_listing
 from doppeldata.scenario_reference import scenario_reference
 from doppeldata.seed_profiles.importers import IMPORT_KINDS
 from doppeldata.seed_profiles.importers import import_seed
+from typer._click.core import ParameterSource
 from typer._click.exceptions import NoArgsIsHelpError
 from typer._click.exceptions import NoSuchOption
 from typer._click.exceptions import UsageError
@@ -1201,6 +1202,13 @@ def bundle_plan_text(planned: BundleWritePlan) -> str:
     return '\n'.join(lines)
 
 
+# The parameters of data generate a regeneration from --manifest still takes. Every other one gives a value the manifest
+# settles, so one given beside --manifest is refused.
+REGENERATION_INPUTS = frozenset(
+    {'out', 'profile_name', 'columns', 'manifest', 'replace', 'threads', 'aws_profile', 'verbose', 'quiet', 'as_json'}
+)
+
+
 @data_app.command(
     'generate',
     no_args_is_help=True,
@@ -1217,6 +1225,7 @@ def bundle_plan_text(planned: BundleWritePlan) -> str:
     ),
 )
 def data_generate(
+    ctx: typer.Context,
     out: OutOption,
     profile_name: ProfileOrColumnsArgument = None,
     columns: ColumnsOption = None,
@@ -1288,21 +1297,14 @@ def data_generate(
     logged_at(verbose, quiet)
     source = profile_or_columns(profile_name, column_names(columns))
     if manifest is not None:
-        settled = {
-            '--rows': rows is not None,
-            '--seed': seed is not None,
-            '--scale': scale is not None,
-            '--scenario': bool(scenario),
-            '--format': file_format is not None,
-            '--file-rows': file_rows is not None,
-            '--partition-by': bool(partition_by),
-            '--no-partitions': no_partitions,
-            '--partition-style': partition_style is not None,
-            '--writer': writer is not None,
-            '--embed-profile': embed_profile,
-            '--manifest-beside': manifest_beside,
-        }
-        given = [flag for flag, held in settled.items() if held]
+        defaults = (ParameterSource.DEFAULT, ParameterSource.DEFAULT_MAP)
+        given = [
+            spelled(parameter)
+            for parameter in ctx.command.params
+            if parameter.name is not None
+            and parameter.name not in REGENERATION_INPUTS
+            and ctx.get_parameter_source(parameter.name) not in defaults
+        ]
         if given:
             dropped = 'it' if len(given) == 1 else 'them'
             message = f'{manifest} settles {" and ".join(given)}, and a regeneration takes each value it settles from it; drop {dropped}'

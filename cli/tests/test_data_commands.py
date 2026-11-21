@@ -38,14 +38,19 @@ def test_data_generate_to_one_file_with_manifest_then_with_replace_alone_leaves_
 
 
 def test_data_generate_manifest_writes_the_dataset_again_and_names_a_file_whose_record_differs(tmp_path):
-    """`--manifest` regenerates a dataset written under a scenario with every file matching. A record edited after the write
-    exits 1, naming that file."""
+    """`--manifest` regenerates a dataset written under a scenario with every file matching, and refuses a flag giving a
+    value the manifest settles. A record edited after the write exits 1, naming that file."""
     runner = CliRunner()
     first = tmp_path / 'first'
     write = ['data', 'generate', 'orders', '--scenario', 'hot-key', '--rows', '3000', '--file-rows', '1000', '--out', f'{first}/']
     written = runner.invoke(app, write)
     assert written.exit_code == 0, written.output
-    again = runner.invoke(app, ['data', 'generate', 'orders', '--manifest', str(first / '_manifest.json'), '--out', f'{tmp_path}/again/'])
+    regenerate = ['data', 'generate', 'orders', '--manifest', str(first / '_manifest.json')]
+    settled = runner.invoke(app, [*regenerate, '--out', f'{tmp_path}/settled/', '--no-partitions', '--seed', '5', '--json'])
+    assert settled.exit_code == 2, settled.output
+    issues = [json.loads(line)['error'] for line in settled.stderr.splitlines()]
+    assert [(issue['code'], issue['field']) for issue in issues] == [('E-USAGE-026', '--seed')]
+    again = runner.invoke(app, [*regenerate, '--out', f'{tmp_path}/again/'])
     assert again.exit_code == 0, again.output
     recorded = json.loads((first / '_manifest.json').read_text())
     regenerated = json.loads((tmp_path / 'again' / '_manifest.json').read_text())
