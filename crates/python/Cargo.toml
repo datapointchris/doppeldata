@@ -28,8 +28,7 @@ pyo3 = { version = "0.30", features = ["experimental-inspect"] }
 # Tables and readers cross into Python as pyo3-arrow's own classes, which carry the Arrow PyCapsule
 # interface, so the library needs no Arrow package installed. Its major must build on the arrow the
 # engine pins. Its default buffer_protocol feature stays on, because the crate does not build without it.
-# Arrow 60 support is on pyo3-arrow's main branch and unreleased, so this pins that commit.
-pyo3-arrow = { git = "https://github.com/kylebarron/arro3", rev = "51a208fd81d3b35da54a15a860d3823748eb37e6" }
+pyo3-arrow = "0.21"
 # Builds the S3 store, and calls a Python credential provider for it, so S3 credentials come from
 # boto3's chain. Its default feature only warns about stores from other extensions, which the
 # library never takes.
